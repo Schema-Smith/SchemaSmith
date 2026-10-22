@@ -11,9 +11,17 @@ namespace SchemaShears;
 
 public static class Program
 {
+    internal static readonly FirstRunSetting[] FirstRunSettings =
+    [
+        new(SettingsKeys.SourcePath, "the product folder to carve from"),
+        new(SettingsKeys.ManifestPath, "the file listing what the patch includes"),
+        new(SettingsKeys.OutputPath, "where to write the patch")
+    ];
+
     public static void Main(string[] args)
     {
         CommandLineParser.HandleCommonSwitches("SchemaShears", ToolSpecificSwitches);
+        if (GettingStarted.ShowIfUnconfigured("SchemaShears", "carves a patch package out of a product", FirstRunSettings, args)) return;
 
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;

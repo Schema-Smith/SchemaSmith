@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
 using Microsoft.Extensions.Configuration;
@@ -1038,5 +1039,116 @@ WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSum
         Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(0), "Removed nonclustered index should be gone");
 
         conn.Close();
+    }
+
+    private List<string> ViewGrants(IDbCommand cmd)
+    {
+        cmd.CommandText = $@"
+SELECT p.state_desc COLLATE DATABASE_DEFAULT + ' ' + p.permission_name COLLATE DATABASE_DEFAULT + ISNULL(' (' + c.name COLLATE DATABASE_DEFAULT + ')', '') + ' TO ' + USER_NAME(p.grantee_principal_id) COLLATE DATABASE_DEFAULT
+  FROM sys.database_permissions p
+  LEFT JOIN sys.columns c ON c.object_id = p.major_id AND c.column_id = p.minor_id
+ WHERE p.class = 1 AND p.major_id = OBJECT_ID('[{_schema}].[vTestSummary]') AND p.grantee_principal_id = USER_ID('iv_perm_user')
+ ORDER BY 1";
+        return ReadStrings(cmd);
+    }
+
+    private List<string> ViewProperties(IDbCommand cmd)
+    {
+        cmd.CommandText = $@"
+SELECT ISNULL(c.name COLLATE DATABASE_DEFAULT + ':', '') + ep.name COLLATE DATABASE_DEFAULT + '=' + CONVERT(NVARCHAR(200), ep.value) COLLATE DATABASE_DEFAULT
+  FROM sys.extended_properties ep
+  LEFT JOIN sys.columns c ON c.object_id = ep.major_id AND c.column_id = ep.minor_id
+ WHERE ep.class = 1 AND ep.major_id = OBJECT_ID('[{_schema}].[vTestSummary]') AND ep.name <> 'SchemaSmith_Product'
+ ORDER BY 1";
+        return ReadStrings(cmd);
+    }
+
+    private static List<string> ReadStrings(IDbCommand cmd)
+    {
+        var results = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) results.Add(reader.GetString(0));
+        return results;
+    }
+
+    [Test]
+    public void DefinitionChange_KeepsPermissionsAndExtendedProperties_OnTheRecreatedView()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+
+        EnsureViewDropped(cmd);
+        RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
+        cmd.CommandText = $@"
+IF USER_ID('iv_perm_user') IS NULL CREATE USER iv_perm_user WITHOUT LOGIN;
+GRANT SELECT ON [{_schema}].[vTestSummary] TO iv_perm_user;
+DENY UPDATE ON [{_schema}].[vTestSummary] TO iv_perm_user;
+GRANT SELECT ([Name]) ON [{_schema}].[vTestSummary] TO iv_perm_user WITH GRANT OPTION;
+EXEC sp_addextendedproperty 'MS_Description', 'kept view', 'SCHEMA', '{_schema}', 'VIEW', 'vTestSummary';
+EXEC sp_addextendedproperty 'MS_Description', 'kept column', 'SCHEMA', '{_schema}', 'VIEW', 'vTestSummary', 'COLUMN', 'Id';";
+        cmd.ExecuteNonQuery();
+        var grantsBefore = ViewGrants(cmd);
+        var propertiesBefore = ViewProperties(cmd);
+        Assert.Multiple(() =>
+        {
+            Assert.That(grantsBefore, Has.Count.EqualTo(3), "setup: the three permissions must be on the view before the change, or the comparison below is vacuous");
+            Assert.That(propertiesBefore, Has.Count.EqualTo(2), "setup: both extended properties must be on the view before the change");
+        });
+        cmd.CommandText = $"SELECT OBJECT_ID('[{_schema}].[vTestSummary]')";
+        var objectIdBefore = (int)cmd.ExecuteScalar()!;
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithWhereClause());
+
+        cmd.CommandText = $"SELECT OBJECT_ID('[{_schema}].[vTestSummary]')";
+        Assert.That((int)cmd.ExecuteScalar()!, Is.Not.EqualTo(objectIdBefore), "A definition change drops and re-creates the view; without that the assertions below are vacuous.");
+        Assert.Multiple(() =>
+        {
+            Assert.That(ViewGrants(cmd), Is.EqualTo(grantsBefore),
+                "DROP VIEW takes every permission with it, so the re-created view has to get each GRANT, DENY, grant option and column permission back.");
+            Assert.That(ViewProperties(cmd), Is.EqualTo(propertiesBefore),
+                "Extended properties on the view and its columns are not in the package, so the re-create is the only thing that can carry them.");
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.extended_properties WHERE major_id = OBJECT_ID('[{_schema}].[vTestSummary]') AND minor_id = 0 AND name = 'SchemaSmith_Product'";
+            Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(1), "The quench's own ownership property is written once, by the quench, and the reapply must neither duplicate it nor fail on it.");
+        });
+
+        conn.Close();
+    }
+
+    private static string ViewDefinitionWithDescription(string description) =>
+        ViewDefinitionWithTwoIndexes().Replace("\"Name\":\"[vTestSummary]\",", "\"Name\":\"[vTestSummary]\",\"Description\":\"" + description + "\",");
+
+    private string ViewDescription(IDbCommand cmd)
+    {
+        cmd.CommandText = $"SELECT CONVERT(NVARCHAR(MAX), ep.value) FROM sys.extended_properties ep WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.name = 'MS_Description' AND ep.major_id = OBJECT_ID('[{_schema}].[vTestSummary]')";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    [Test]
+    public void ADeclaredDescription_IsSet_ChangedInPlace_LeftAloneWhenOmitted_AndRemovedByAnEmptyString()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithDescription("the summary"));
+        Assert.That(ViewDescription(cmd), Is.EqualTo("the summary"), "set on create");
+        cmd.CommandText = $"SELECT OBJECT_ID('[{_schema}].[vTestSummary]')";
+        var objectId = (int)cmd.ExecuteScalar()!;
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithDescription("the nightly summary"));
+        Assert.That(ViewDescription(cmd), Is.EqualTo("the nightly summary"), "a change converges in place");
+        cmd.CommandText = $"SELECT OBJECT_ID('[{_schema}].[vTestSummary]')";
+        Assert.That((int)cmd.ExecuteScalar()!, Is.EqualTo(objectId), "a description change never re-creates the view");
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
+        Assert.That(ViewDescription(cmd), Is.EqualTo("the nightly summary"), "omitted means the description is not managed, so the database's stays");
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithDescription(""));
+        Assert.That(ViewDescription(cmd), Is.Null, "an empty string is the request to remove it");
+        EnsureViewDropped(cmd);
     }
 }

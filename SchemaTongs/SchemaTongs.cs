@@ -78,9 +78,12 @@ public class SchemaTongs
     private bool _includeFullTextStopLists;
     private bool _includeDDLTriggers;
     private bool _includeXmlSchemaCollections;
+    // TRANSITIONAL (ScriptDynamicDependencyRemovalForFunctions, deprecated in 2.8): the setting is read only to warn
+    // that it does nothing. Delete the field, the warning and the SettingsKeys entry two releases past 2.8 GA.
     private bool _scriptDynamicDependencyRemovalForFunctions;
     private bool _includeIndexedViews;
     private bool _includeSynonyms;
+    private bool _includeSecurityPolicies;
 
     // PostgreSQL specific
     private bool _includeDomainTypes;
@@ -95,9 +98,15 @@ public class SchemaTongs
     private bool _includeMaterializedViews;
     private bool _includeCollations;
     private bool _includePublications;
+    private bool _includeRangeTypes;
+    private bool _includeTextSearchConfigurations;
+    private bool _includeOperators;
+    private bool _includeCasts;
+    private bool _includeEventTriggers;
 
     // MySQL specific
     private bool _includeEvents;
+    private bool _includePackages;
 
     // Orphan handling
     private OrphanHandlingMode _orphanHandlingMode;
@@ -119,6 +128,7 @@ public class SchemaTongs
     // JSON model via ModelXmlSerializer.FromIngestXml. Resolved per source in CastSqlServerObjects from
     // best-effort version detection (defaults to Json when the version is unknown).
     private IngestEncoding _ingestEncoding = IngestEncoding.Json;
+    private ModuleSyntax _moduleSyntax = ModuleSyntax.CreateOrAlter;
 
     public SchemaTongs(Platform platform)
     {
@@ -136,7 +146,7 @@ public class SchemaTongs
         _folderMappingConfig = new FolderMappingConfig(config, _platform);
         _folderMappingConfig.Validate();
 
-        var templateFile = Path.Combine(_templatePath, "Template.json");
+        var templateFile = Path.Join(_templatePath, "Template.json");
         if (!FileWrapper.GetFromFactory().Exists(templateFile)) return;
 
         var template = JsonHelper.Load<Template>(templateFile);
@@ -168,7 +178,7 @@ public class SchemaTongs
                                       $"Extracting to '{templateFolder.FolderPath}' per template definition.");
                 }
             }
-            else
+            else if (!RepositoryHelper.FoldersWrittenOnUse.Contains(type))
             {
                 if (defaultSlots.TryGetValue(type, out var slot))
                 {
@@ -237,6 +247,22 @@ public class SchemaTongs
         var connectionFactory = GetConnectionFactory();
         var connection = connectionFactory.GetDbConnection(connectionString);
         connection.Open();
+        // The extraction routines say what they leave out through a warning message (a temporal foreign key on
+        // PostgreSQL, a bound rule on SQL Server); without a listener the message dies in the driver and the package
+        // is silently short of it.
+        if (connection is NpgsqlConnection npgsql)
+            npgsql.Notice += (_, e) =>
+            {
+                if (string.Equals(e.Notice.Severity, "WARNING", StringComparison.OrdinalIgnoreCase))
+                    _progressLog.Warn($"    WARNING: {e.Notice.MessageText}");
+            };
+        if (connection is SqlConnection sqlServer)
+            sqlServer.InfoMessage += (_, e) =>
+            {
+                foreach (SqlError error in e.Errors)
+                    if (error.Class <= 10 && error.Message.StartsWith("WARNING: ", StringComparison.Ordinal))
+                        _progressLog.Warn($"    {error.Message}");
+            };
         return connection;
     }
 
@@ -275,6 +301,7 @@ public class SchemaTongs
     // Detected SOURCE server major, kept so extraction queries can gate a filter on a catalog column
     // that does not exist on older servers. 0 until version detection has run.
     private int _sourceMajor;
+    private bool _sourceReportsXmlCompression;
 
     /// <summary>
     /// Whether the SOURCE server can report XML_COMPRESSION. It DEPLOYS from SQL Server 2022 but only
@@ -284,7 +311,7 @@ public class SchemaTongs
     /// extraction that structurally cannot see it strip a property the server is honouring.
     /// </summary>
     private bool SourceCanReportXmlCompression =>
-        _platform == Platform.SqlServer && _sourceMajor >= 17 && _ingestEncoding != IngestEncoding.Xml;
+        _platform == Platform.SqlServer && _sourceReportsXmlCompression && _ingestEncoding != IngestEncoding.Xml;
 
     /// <summary>
     /// Excludes a LIVE ledger view (<c>&lt;table&gt;_Ledger</c>), which a ledger table generates and
@@ -562,9 +589,14 @@ public class SchemaTongs
                 _includeDDLTriggers = config[SettingsKeys.ShouldCast.DdlTriggers]?.ToLower() != "false";
                 _includeXmlSchemaCollections = config[SettingsKeys.ShouldCast.XmlSchemaCollections]?.ToLower() != "false";
                 _scriptDynamicDependencyRemovalForFunctions = config[SettingsKeys.ShouldCast.ScriptDynamicDependencyRemovalForFunctions]?.ToLower() == "true";
+                if (_scriptDynamicDependencyRemovalForFunctions)
+                    _progressLog.Warn("ShouldCast:ScriptDynamicDependencyRemovalForFunctions is deprecated and does nothing: SchemaQuench drops the schema-bound " +
+                                      "dependents a changed function blocks on and later steps put them back. Remove the setting.");
                 _includeIndexedViews = config[SettingsKeys.ShouldCast.IndexedViews]?.ToLower() != "false";
                 _includeSequences = config[SettingsKeys.ShouldCast.Sequences]?.ToLower() != "false";
                 _includeSynonyms = config[SettingsKeys.ShouldCast.Synonyms]?.ToLower() != "false";
+                _includeSecurityPolicies = config[SettingsKeys.ShouldCast.SecurityPolicies]?.ToLower() != "false";
+                _moduleSyntax = ReadModuleSyntax(config[SettingsKeys.ShouldCast.ModuleSyntax]);
                 break;
 
             case Platform.PostgreSQL:
@@ -581,6 +613,11 @@ public class SchemaTongs
                 _includeMaterializedViews = config[SettingsKeys.ShouldCast.MaterializedViews]?.ToLower() != "false";
                 _includeCollations = config[SettingsKeys.ShouldCast.Collations]?.ToLower() != "false";
                 _includePublications = config[SettingsKeys.ShouldCast.Publications]?.ToLower() != "false";
+                _includeRangeTypes = config[SettingsKeys.ShouldCast.RangeTypes]?.ToLower() != "false";
+                _includeTextSearchConfigurations = config[SettingsKeys.ShouldCast.TextSearchConfigurations]?.ToLower() != "false";
+                _includeOperators = config[SettingsKeys.ShouldCast.Operators]?.ToLower() != "false";
+                _includeCasts = config[SettingsKeys.ShouldCast.Casts]?.ToLower() != "false";
+                _includeEventTriggers = config[SettingsKeys.ShouldCast.EventTriggers]?.ToLower() != "false";
                 break;
 
             case Platform.MySQL:
@@ -591,6 +628,7 @@ public class SchemaTongs
                 // MariaDb-only: MySQL has no native SEQUENCE object, so the flag stays false on plain MySQL
                 // regardless of config — there is nothing for ShouldCast:Sequences to mean there.
                 _includeSequences = _platform == Platform.MariaDb && config[SettingsKeys.ShouldCast.Sequences]?.ToLower() != "false";
+                _includePackages = _platform == Platform.MariaDb && config[SettingsKeys.ShouldCast.Packages]?.ToLower() != "false";
                 break;
         }
 
@@ -654,6 +692,14 @@ public class SchemaTongs
                                   "(publications are database-scoped — CREATE PUBLICATION has no schema " +
                                   "qualifier). Move them to a regular template earlier in TemplateOrder.");
                 _includePublications = false;
+            }
+            if (_includeCasts || _includeEventTriggers)
+            {
+                _progressLog.Warn("ShouldCast.Casts and ShouldCast.EventTriggers are ignored in schema-template extraction mode " +
+                                  "(casts and event triggers are database-scoped and have no schema). Move them to a regular " +
+                                  "template earlier in TemplateOrder.");
+                _includeCasts = false;
+                _includeEventTriggers = false;
             }
         }
     }
@@ -732,7 +778,7 @@ public class SchemaTongs
 
     private void BuildFileIndexes()
     {
-        var templateFile = Path.Combine(_templatePath, "Template.json");
+        var templateFile = Path.Join(_templatePath, "Template.json");
         if (!FileWrapper.GetFromFactory().Exists(templateFile)) return;
 
         var template = JsonHelper.Load<Template>(templateFile);
@@ -1009,6 +1055,7 @@ public class SchemaTongs
                 if (_includeIndexedViews) folders.Add("Indexed Views");
                 if (_includeSequences) folders.Add(ResolveFolderName("Sequences", ScriptObjectType.Sequences));
                 if (_includeSynonyms) folders.Add(ResolveFolderName("Synonyms", ScriptObjectType.Synonyms));
+                if (_includeSecurityPolicies) folders.Add(ResolveFolderName("SecurityPolicies", ScriptObjectType.SecurityPolicies));
                 break;
 
             case Platform.PostgreSQL:
@@ -1030,6 +1077,11 @@ public class SchemaTongs
                 if (_includeMaterializedViews) folders.Add("Materialized Views");
                 if (_includeCollations) folders.Add(ResolveFolderName("Collations", ScriptObjectType.Collations));
                 if (_includePublications) folders.Add(ResolveFolderName("Publications", ScriptObjectType.Publications));
+                if (_includeRangeTypes) folders.Add(ResolveFolderName("Range Types", ScriptObjectType.RangeTypes));
+                if (_includeTextSearchConfigurations) folders.Add(ResolveFolderName("Text Search Configurations", ScriptObjectType.TextSearchConfigurations));
+                if (_includeOperators) folders.Add(ResolveFolderName("Operators", ScriptObjectType.Operators));
+                if (_includeCasts) folders.Add(ResolveFolderName("Casts", ScriptObjectType.Casts));
+                if (_includeEventTriggers) folders.Add(ResolveFolderName("Event Triggers", ScriptObjectType.EventTriggers));
                 break;
 
             case Platform.MySQL:
@@ -1038,6 +1090,7 @@ public class SchemaTongs
                 if (_includeTableTriggers) folders.Add(ResolveFolderName("Triggers", ScriptObjectType.Triggers));
                 if (_includeEvents) folders.Add(ResolveFolderName("Events", ScriptObjectType.Events));
                 if (_includeSequences) folders.Add(ResolveFolderName("Sequences", ScriptObjectType.Sequences)); // MariaDb-only; _includeSequences is gated in LoadShouldCastSettings
+                if (_includePackages) folders.Add(ResolveFolderName("Packages", ScriptObjectType.Packages)); // MariaDb-only, likewise
                 break;
         }
 
@@ -1106,6 +1159,7 @@ public class SchemaTongs
                         info.CompatibilityLevel, info.ServerComparable);
                 sourceMajor = info?.ServerComparable ?? 0;
                 _sourceMajor = sourceMajor;
+                _sourceReportsXmlCompression = _platform == Platform.SqlServer && ForgeKindler.ReportsXmlCompression(versionCmd);
             }
 
             _progressLog.Info("Kindling The Forge");
@@ -1116,6 +1170,9 @@ public class SchemaTongs
                                         allowReadOnlyTarget: true);
 
             if (_includeTables) ExtractTableDefinitions(command, targetDb);
+            // Always Encrypted arrived in 2016 (major 13); below it there are no keys to read.
+            if (_includeTables && !_isSchemaTemplate && sourceMajor is 0 or >= 13) ScriptSqlServerAlwaysEncryptedKeys(command, targetDb);
+            if (_includeTables && !_isSchemaTemplate) ScriptSqlServerPartitionSchemes(command, targetDb);
             if (_includeSchemas) ScriptSqlServerSchemas(command);
             if (_includeUserDefinedTypes) ScriptSqlServerUserDefinedTypes(command);
             if (_includeUserDefinedFunctions) ScriptSqlServerFunctions(command);
@@ -1130,6 +1187,8 @@ public class SchemaTongs
             // Sequences arrived in SQL Server 2012 (major 11); 2008 R2 has no sys.sequences, so there is nothing to cast.
             if (_includeSequences && sourceMajor is 0 or >= 11) ScriptSqlServerSequences(command);
             if (_includeSynonyms) ScriptSqlServerSynonyms(command);
+            // Row-level security arrived in SQL Server 2016 (major 13).
+            if (_includeSecurityPolicies && sourceMajor is 0 or >= 13) ScriptSqlServerSecurityPolicies(command);
         }
         finally
         {
@@ -1291,14 +1350,20 @@ SELECT s.name AS SchemaName, t.name AS TypeName,
 
     private void ScriptSqlServerTableTypes(IDbCommand command, string castPath)
     {
-        command.CommandText = @"
-SELECT s.name AS SchemaName, tt.name AS TypeName, tt.type_table_object_id
+        // Every clause the type can carry: identity, computed, DEFAULT, COLLATE, named indexes (2014+) with HASH,
+        // INCLUDE and a filter, IGNORE_DUP_KEY and MEMORY_OPTIMIZED. The memory-optimized column and sys.hash_indexes
+        // do not exist before 2014, so they are read only there.
+        var memoryOptimized = _sourceMajor >= 12;
+        command.CommandText = $@"
+SELECT s.name AS SchemaName, tt.name AS TypeName, tt.type_table_object_id,
+       {(memoryOptimized ? "tt.is_memory_optimized" : "CONVERT(BIT, 0)")} AS IsMemoryOptimized,
+       CONVERT(NVARCHAR(128), DATABASEPROPERTYEX(DB_NAME(), 'Collation')) AS DatabaseCollation
   FROM sys.table_types tt
   JOIN sys.schemas s ON tt.schema_id = s.schema_id
  WHERE tt.is_user_defined = 1
  ORDER BY s.name, tt.name";
 
-        var tableTypes = new List<(string Schema, string Name, int ObjectId)>();
+        var tableTypes = new List<(string Schema, string Name, int ObjectId, bool IsMemoryOptimized, string DatabaseCollation)>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
@@ -1307,129 +1372,121 @@ SELECT s.name AS SchemaName, tt.name AS TypeName, tt.type_table_object_id
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
                 if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
-                tableTypes.Add((schema, name, reader.GetInt32(2)));
+                tableTypes.Add((schema, name, reader.GetInt32(2), reader.GetBoolean(3), reader.IsDBNull(4) ? "" : reader.GetString(4)));
             }
         }
 
-        foreach (var (schema, name, objectId) in tableTypes)
+        foreach (var (schema, name, objectId, isMemoryOptimized, databaseCollation) in tableTypes)
         {
             command.CommandText = $@"
 SELECT c.name, TYPE_NAME(c.user_type_id) AS TypeName,
        c.max_length, c.precision, c.scale, c.is_nullable,
        c.is_identity, c.is_computed,
        ts.name AS UserTypeName, tss.name AS UserTypeSchema,
-       c.column_id
+       c.collation_name,
+       CONVERT(VARCHAR(50), ic.seed_value) AS Seed, CONVERT(VARCHAR(50), ic.increment_value) AS Increment,
+       cc.definition AS ComputedDefinition, cc.is_persisted,
+       dc.definition AS DefaultDefinition
   FROM sys.columns c
   LEFT JOIN sys.types ts ON c.user_type_id = ts.user_type_id AND ts.is_user_defined = 1
   LEFT JOIN sys.schemas tss ON ts.schema_id = tss.schema_id
+  LEFT JOIN sys.identity_columns ic ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+  LEFT JOIN sys.computed_columns cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id
+  LEFT JOIN sys.default_constraints dc ON dc.parent_object_id = c.object_id AND dc.parent_column_id = c.column_id
  WHERE c.object_id = {objectId}
  ORDER BY c.column_id";
 
-            var columns = new List<(string Name, string TypeName, short MaxLength, byte Precision, byte Scale, bool IsNullable, bool IsIdentity, bool IsComputed, string UserTypeName, string UserTypeSchema)>();
+            var columnLines = new List<string>();
             using (var reader = command.ExecuteReader())
             {
                 while (reader.Read())
                 {
-                    columns.Add((
-                        reader.GetString(0),
-                        reader.GetString(1),
-                        reader.GetInt16(2),
-                        reader.GetByte(3),
-                        reader.GetByte(4),
-                        reader.GetBoolean(5),
-                        reader.GetBoolean(6),
-                        reader.GetBoolean(7),
-                        reader.IsDBNull(8) ? null : reader.GetString(8),
-                        reader.IsDBNull(9) ? null : reader.GetString(9)
-                    ));
+                    var columnName = $"[{Identifier.EscapeDelimited(reader.GetString(0), Platform.SqlServer)}]";
+                    if (reader.GetBoolean(7))
+                    {
+                        columnLines.Add($"\t{columnName} AS {reader.GetString(13)}{(reader.GetBoolean(14) ? " PERSISTED" : "")}");
+                        continue;
+                    }
+                    var typeSpec = reader.IsDBNull(8)
+                        ? FormatBaseType(reader.GetString(1), reader.GetInt16(2), reader.GetByte(3), reader.GetByte(4))
+                        : $"[{Identifier.EscapeDelimited(reader.GetString(9), Platform.SqlServer)}].[{Identifier.EscapeDelimited(reader.GetString(8), Platform.SqlServer)}]";
+                    var collation = !reader.IsDBNull(10) && !reader.GetString(10).Equals(databaseCollation, StringComparison.OrdinalIgnoreCase)
+                        ? $" COLLATE {reader.GetString(10)}" : "";
+                    var nullability = reader.GetBoolean(5) ? " NULL" : " NOT NULL";
+                    var defaultSpec = reader.IsDBNull(15) ? "" : $" DEFAULT {reader.GetString(15)}";
+                    var identity = reader.GetBoolean(6) ? $" IDENTITY({reader.GetString(11)}, {reader.GetString(12)})" : "";
+                    columnLines.Add($"\t{columnName} {typeSpec}{collation}{nullability}{defaultSpec}{identity}");
                 }
             }
 
             command.CommandText = $@"
-SELECT i.name, i.type_desc, i.is_unique, i.is_primary_key,
-       ic.column_id, c.name AS ColumnName, ic.is_descending_key
+SELECT i.name, i.index_id, i.type_desc, i.is_unique, i.is_primary_key, i.is_unique_constraint, i.ignore_dup_key,
+       i.filter_definition, {(memoryOptimized ? "hi.bucket_count" : "CONVERT(INT, NULL)")} AS BucketCount,
+       ic.is_included_column, c.name AS ColumnName, ic.is_descending_key
   FROM sys.indexes i
   JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
   JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+  {(memoryOptimized ? "LEFT JOIN sys.hash_indexes hi ON hi.object_id = i.object_id AND hi.index_id = i.index_id" : "")}
  WHERE i.object_id = {objectId}
    AND i.type > 0
- ORDER BY i.index_id, ic.key_ordinal";
+ ORDER BY i.index_id, ic.is_included_column, ic.key_ordinal";
 
-            var indexes = new Dictionary<string, (string TypeDesc, bool IsUnique, bool IsPrimaryKey, List<(string ColumnName, bool IsDescending)> Columns)>();
+            // A PRIMARY KEY or UNIQUE constraint on a table type cannot be named, so only a plain index keeps its name.
+            var indexes = new List<(int Id, string Name, string TypeDesc, bool IsUnique, bool IsPrimaryKey, bool IsUniqueConstraint, bool IgnoreDupKey, string Filter, int? BucketCount, List<string> Keys, List<string> Includes)>();
             using (var reader = command.ExecuteReader())
             {
                 while (reader.Read())
                 {
-                    var indexName = reader.IsDBNull(0) ? "" : reader.GetString(0);
-                    var typeDesc = reader.GetString(1);
-                    var isUnique = reader.GetBoolean(2);
-                    var isPrimaryKey = reader.GetBoolean(3);
-                    var columnName = reader.GetString(5);
-                    var isDescending = reader.GetBoolean(6);
-
-                    if (!indexes.ContainsKey(indexName))
-                        indexes[indexName] = (typeDesc, isUnique, isPrimaryKey, new List<(string, bool)>());
-                    indexes[indexName].Columns.Add((columnName, isDescending));
+                    var indexId = reader.GetInt32(1);
+                    if (indexes.Count == 0 || indexes[^1].Id != indexId)
+                        indexes.Add((indexId, reader.GetBoolean(4) || reader.GetBoolean(5) || reader.IsDBNull(0) ? null : reader.GetString(0),
+                            reader.GetString(2), reader.GetBoolean(3), reader.GetBoolean(4), reader.GetBoolean(5), reader.GetBoolean(6),
+                            reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetInt32(8), [], []));
+                    var column = $"[{Identifier.EscapeDelimited(reader.GetString(10), Platform.SqlServer)}]";
+                    if (reader.GetBoolean(9)) indexes[^1].Includes.Add(column);
+                    // A hash index takes no sort order: ASC or DESC on its key is refused.
+                    else indexes[^1].Keys.Add(column + (indexes[^1].TypeDesc.Contains("HASH", StringComparison.OrdinalIgnoreCase) ? "" : reader.GetBoolean(11) ? " DESC" : " ASC"));
                 }
             }
 
             command.CommandText = $@"
-SELECT cc.name, cc.definition
+SELECT cc.definition
   FROM sys.check_constraints cc
  WHERE cc.parent_object_id = {objectId}
  ORDER BY cc.name";
-
-            var checkConstraints = new List<(string Name, string Definition)>();
+            var checks = new List<string>();
             using (var reader = command.ExecuteReader())
             {
-                while (reader.Read())
-                    checkConstraints.Add((reader.GetString(0), reader.GetString(1)));
+                while (reader.Read()) checks.Add(reader.GetString(0));
             }
 
-            var lines = new List<string>();
-            lines.Add($"CREATE TYPE [{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(name, Platform.SqlServer)}] AS TABLE(");
-
-            for (var i = 0; i < columns.Count; i++)
+            var constraintLines = new List<string>();
+            foreach (var index in indexes)
             {
-                var col = columns[i];
-                string typeSpec;
-                if (col.UserTypeName != null)
-                    typeSpec = $"[{Identifier.EscapeDelimited(col.UserTypeSchema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(col.UserTypeName, Platform.SqlServer)}]";
-                else
-                    typeSpec = FormatBaseType(col.TypeName, col.MaxLength, col.Precision, col.Scale);
-
-                var nullSpec = col.IsNullable ? "NULL" : "NOT NULL";
-                var comma = (i < columns.Count - 1 || indexes.Count > 0 || checkConstraints.Count > 0) ? "," : "";
-                lines.Add($"\t[{Identifier.EscapeDelimited(col.Name, Platform.SqlServer)}] {typeSpec} {nullSpec}{comma}");
-            }
-
-            var constraintEntries = new List<string>();
-            foreach (var kvp in indexes)
-            {
-                var idx = kvp.Value;
-                var colList = string.Join(",\r\n", idx.Columns.Select(c => $"\t[{Identifier.EscapeDelimited(c.ColumnName, Platform.SqlServer)}] " + (c.IsDescending ? "DESC" : "ASC")));
-
-                if (idx.IsPrimaryKey)
-                    constraintEntries.Add($"\tPRIMARY KEY {idx.TypeDesc} \r\n(\r\n{colList}\r\n)");
+                var keys = string.Join(", ", index.Keys);
+                var with = new List<string>();
+                if (index.IgnoreDupKey) with.Add("IGNORE_DUP_KEY = ON");
+                if (index.BucketCount is > 0) with.Add($"BUCKET_COUNT = {index.BucketCount}");
+                var withClause = with.Count > 0 ? $" WITH ({string.Join(", ", with)})" : "";
+                if (index.IsPrimaryKey)
+                    constraintLines.Add($"\tPRIMARY KEY {index.TypeDesc} ({keys}){withClause}");
+                else if (index.IsUniqueConstraint)
+                    constraintLines.Add($"\tUNIQUE {index.TypeDesc} ({keys}){withClause}");
+                else if (index.Name == null)
+                    constraintLines.Add($"\t{(index.IsUnique ? "UNIQUE " : "")}{index.TypeDesc} ({keys}){withClause}");
                 else
                 {
-                    var unique = idx.IsUnique ? "UNIQUE " : "";
-                    constraintEntries.Add($"\t{unique}{idx.TypeDesc} \r\n(\r\n{colList}\r\n)");
+                    var include = index.Includes.Count > 0 ? $" INCLUDE ({string.Join(", ", index.Includes)})" : "";
+                    var filter = index.Filter != null ? $" WHERE {index.Filter}" : "";
+                    constraintLines.Add($"\tINDEX [{Identifier.EscapeDelimited(index.Name, Platform.SqlServer)}] {(index.IsUnique ? "UNIQUE " : "")}{index.TypeDesc} ({keys}){include}{filter}{withClause}");
                 }
             }
+            foreach (var check in checks)
+                constraintLines.Add($"\tCHECK {check}");
 
-            foreach (var cc in checkConstraints)
-                constraintEntries.Add($"\tCHECK {cc.Definition}");
-
-            for (var i = 0; i < constraintEntries.Count; i++)
-            {
-                var suffix = i < constraintEntries.Count - 1 ? "," : "";
-                lines.Add(constraintEntries[i] + suffix);
-            }
-
-            lines.Add(")");
-
-            var createScript = string.Join("\r\n", lines);
+            var body = string.Join(",\r\n", columnLines.Concat(constraintLines));
+            var createScript = $"CREATE TYPE [{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(name, Platform.SqlServer)}] AS TABLE(\r\n{body}\r\n)" +
+                               (isMemoryOptimized ? "\r\nWITH (MEMORY_OPTIMIZED = ON)" : "");
 
             var script = $"IF NOT EXISTS (SELECT * FROM sys.types st JOIN sys.schemas ss ON st.schema_id = ss.schema_id WHERE st.name = N'{EscapeSql(name)}' AND ss.name = N'{EscapeSql(schema)}')\r\n" +
                          createScript;
@@ -1448,17 +1505,23 @@ SELECT cc.name, cc.definition
         var castPath = GetCastPath(ScriptObjectType.Sequences, "Sequences");
         DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
 
+        // The values are sql_variant and a DECIMAL(38, 0) sequence's bounds overflow the driver's decimal, so they are
+        // converted to text on the server. The type keeps its precision and an alias type keeps its name; CACHE is
+        // written when it is explicit (NO CACHE, or a size), and the server default otherwise.
         command.CommandText = @"
-SELECT s.name AS SchemaName, sq.name AS SequenceName, TYPE_NAME(sq.system_type_id) AS DataType,
-       sq.start_value, sq.increment, sq.minimum_value, sq.maximum_value, sq.is_cycling
+SELECT s.name AS SchemaName, sq.name AS SequenceName,
+       CASE WHEN t.is_user_defined = 1 THEN QUOTENAME(SCHEMA_NAME(t.schema_id)) + '.' + QUOTENAME(t.name)
+            WHEN TYPE_NAME(sq.system_type_id) IN ('decimal', 'numeric') THEN TYPE_NAME(sq.system_type_id) + '(' + CONVERT(VARCHAR(5), sq.precision) + ')'
+            ELSE TYPE_NAME(sq.system_type_id) END AS DataType,
+       CONVERT(VARCHAR(50), sq.start_value) AS StartValue, CONVERT(VARCHAR(50), sq.increment) AS Increment,
+       CONVERT(VARCHAR(50), sq.minimum_value) AS MinValue, CONVERT(VARCHAR(50), sq.maximum_value) AS MaxValue,
+       sq.is_cycling, sq.is_cached, sq.cache_size
   FROM sys.sequences sq
   JOIN sys.schemas s ON sq.schema_id = s.schema_id
+  JOIN sys.types t ON t.user_type_id = sq.user_type_id
  ORDER BY s.name, sq.name";
 
-        // start_value/increment/minimum_value/maximum_value are sql_variant (a sequence can be any exact
-        // numeric type) — read via ToString() rather than a numeric conversion so a DECIMAL/NUMERIC-typed
-        // sequence's value round-trips as a literal instead of risking overflow or truncation.
-        var sequences = new List<(string Schema, string Name, string DataType, string StartValue, string Increment, string MinValue, string MaxValue, bool IsCycling)>();
+        var sequences = new List<(string Schema, string Name, string DataType, string StartValue, string Increment, string MinValue, string MaxValue, bool IsCycling, bool IsCached, int? CacheSize)>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
@@ -1467,15 +1530,14 @@ SELECT s.name AS SchemaName, sq.name AS SequenceName, TYPE_NAME(sq.system_type_i
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
                 if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
-                sequences.Add((schema, name, reader.GetString(2),
-                    reader.GetValue(3).ToString(), reader.GetValue(4).ToString(),
-                    reader.GetValue(5).ToString(), reader.GetValue(6).ToString(),
-                    reader.GetBoolean(7)));
+                sequences.Add((schema, name, reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6),
+                    reader.GetBoolean(7), reader.GetBoolean(8), reader.IsDBNull(9) ? null : reader.GetInt32(9)));
             }
         }
 
-        foreach (var (schema, name, dataType, startValue, increment, minValue, maxValue, isCycling) in sequences)
+        foreach (var (schema, name, dataType, startValue, increment, minValue, maxValue, isCycling, isCached, cacheSize) in sequences)
         {
+            var cache = !isCached ? "\r\n\tNO CACHE" : cacheSize is > 0 ? $"\r\n\tCACHE {cacheSize}" : "";
             var createScript =
                 $"CREATE SEQUENCE [{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(name, Platform.SqlServer)}]\r\n" +
                 $"\tAS {dataType}\r\n" +
@@ -1483,7 +1545,7 @@ SELECT s.name AS SchemaName, sq.name AS SequenceName, TYPE_NAME(sq.system_type_i
                 $"\tINCREMENT BY {increment}\r\n" +
                 $"\tMINVALUE {minValue}\r\n" +
                 $"\tMAXVALUE {maxValue}\r\n" +
-                $"\t{(isCycling ? "CYCLE" : "NO CYCLE")}";
+                $"\t{(isCycling ? "CYCLE" : "NO CYCLE")}{cache}";
 
             // CREATE SEQUENCE has no IF NOT EXISTS form on SQL Server (unlike PostgreSQL); guard with the
             // same catalog-existence check the Schemas/DataTypes folders use above.
@@ -1496,6 +1558,117 @@ SELECT s.name AS SchemaName, sq.name AS SequenceName, TYPE_NAME(sq.system_type_i
             FileWrapper.GetFromFactory().WriteAllText(fileName, script);
             _stats.Sequences++;
         }
+    }
+
+    // The catalog's own description of a policy, used twice so the two can only agree: on the source it becomes the
+    // expected value written into the script, and on the target the script recomputes it to decide whether to re-create.
+    internal const string SecurityPolicySignatureSql =
+        "SELECT CONVERT(NVARCHAR(1), p.is_enabled) + CONVERT(NVARCHAR(1), p.is_schema_bound) + CONVERT(NVARCHAR(1), p.is_not_for_replication) + " +
+        "ISNULL((SELECT N'|' + sp.predicate_type_desc + N':' + ISNULL(sp.operation_desc, N'') + N':' + QUOTENAME(OBJECT_SCHEMA_NAME(sp.target_object_id)) + N'.' + " +
+        "QUOTENAME(OBJECT_NAME(sp.target_object_id)) + N':' + sp.predicate_definition FROM sys.security_predicates sp WHERE sp.[object_id] = p.[object_id] " +
+        "ORDER BY OBJECT_SCHEMA_NAME(sp.target_object_id), OBJECT_NAME(sp.target_object_id), sp.predicate_type_desc, sp.operation_desc, sp.predicate_definition " +
+        "FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), N'') FROM sys.security_policies p WHERE p.[object_id] = OBJECT_ID(@policy)";
+
+    // Row-level security policies, one script each. Creating one where it is missing is not enough, since a changed
+    // predicate would never apply, and re-creating it on every deploy would switch the security off for a moment.
+    // So the script compares the live policy with the extracted one and re-creates it only when they differ, inside a
+    // transaction, so a reader never sees the table unprotected.
+    private void ScriptSqlServerSecurityPolicies(IDbCommand command)
+    {
+        _progressLog.Info("Casting Security Policies");
+        var castPath = GetCastPath(ScriptObjectType.SecurityPolicies, "SecurityPolicies");
+
+        command.CommandText = @"
+SELECT SCHEMA_NAME(p.[schema_id]), p.[name], p.is_enabled, p.is_schema_bound, p.is_not_for_replication,
+       sp.predicate_type_desc, sp.operation_desc, OBJECT_SCHEMA_NAME(sp.target_object_id), OBJECT_NAME(sp.target_object_id), sp.predicate_definition
+  FROM sys.security_policies p
+  LEFT JOIN sys.security_predicates sp ON sp.[object_id] = p.[object_id]
+ ORDER BY SCHEMA_NAME(p.[schema_id]), p.[name], sp.security_predicate_id";
+        var rows = new List<(string Schema, string Name, bool Enabled, bool SchemaBound, bool NotForReplication, string Type, string Operation, string TargetSchema, string Target, string Definition)>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                rows.Add((reader.GetString(0), reader.GetString(1), reader.GetBoolean(2), reader.GetBoolean(3), reader.GetBoolean(4),
+                          reader.IsDBNull(5) ? null : reader.GetString(5), reader.IsDBNull(6) ? null : reader.GetString(6),
+                          reader.IsDBNull(7) ? null : reader.GetString(7), reader.IsDBNull(8) ? null : reader.GetString(8), reader.IsDBNull(9) ? null : reader.GetString(9)));
+
+        foreach (var policy in rows.GroupBy(r => (r.Schema, r.Name))
+                     .Where(g => ShouldExtractFromSchema(g.Key.Schema))
+                     .Where(g => _objectsToCast.Length == 0 || _objectsToCast.Contains(g.Key.Name.ToLower()) || _objectsToCast.Contains($"{g.Key.Schema}.{g.Key.Name}".ToLower())))
+        {
+            var qualified = $"[{Identifier.EscapeDelimited(policy.Key.Schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(policy.Key.Name, Platform.SqlServer)}]";
+            command.CommandText = "DECLARE @policy NVARCHAR(600) = @p; " + SecurityPolicySignatureSql;
+            command.Parameters.Clear();
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = "@p";
+            parameter.Value = qualified;
+            command.Parameters.Add(parameter);
+            var signature = command.ExecuteScalar()?.ToString() ?? "";
+            command.Parameters.Clear();
+
+            var first = policy.First();
+            var predicates = string.Join(",\r\n  ", policy.Where(p => p.Type != null).Select(p =>
+                $"ADD {p.Type} PREDICATE {StripOuterParentheses(p.Definition)} ON [{Identifier.EscapeDelimited(p.TargetSchema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(p.Target, Platform.SqlServer)}]" +
+                (string.IsNullOrEmpty(p.Operation) ? "" : " " + p.Operation)));
+            var create = $"CREATE SECURITY POLICY {qualified}\r\n  {predicates}\r\n  WITH (STATE = {(first.Enabled ? "ON" : "OFF")}, SCHEMABINDING = {(first.SchemaBound ? "ON" : "OFF")})" +
+                         (first.NotForReplication ? " NOT FOR REPLICATION" : "");
+
+            var script =
+                "IF OBJECT_ID('sys.security_policies') IS NULL\r\n" +
+                $"  RAISERROR('  Security policy {EscapeSql(qualified)} skipped: row-level security needs SQL Server 2016', 10, 1) WITH NOWAIT\r\n" +
+                "ELSE\r\nBEGIN\r\n" +
+                $"  DECLARE @policy NVARCHAR(600) = N'{EscapeSql(qualified)}', @v_Live NVARCHAR(MAX)\r\n" +
+                $"  SET @v_Live = ({SecurityPolicySignatureSql})\r\n" +
+                $"  IF @v_Live IS NULL OR @v_Live <> N'{EscapeSql(signature)}'\r\n" +
+                "  BEGIN\r\n" +
+                "  BEGIN TRY\r\n" +
+                "    BEGIN TRANSACTION\r\n" +
+                $"    IF @v_Live IS NOT NULL EXEC(N'DROP SECURITY POLICY {EscapeSql(qualified)}')\r\n" +
+                $"    EXEC(N'{EscapeSql(create)}')\r\n" +
+                "    COMMIT\r\n" +
+                "  END TRY\r\n" +
+                "  BEGIN CATCH\r\n" +
+                "    IF @@TRANCOUNT > 0 ROLLBACK\r\n" +
+                "    DECLARE @v_Error NVARCHAR(2048) = ERROR_MESSAGE()\r\n" +
+                "    RAISERROR(@v_Error, 16, 1)\r\n" +
+                "  END CATCH\r\n" +
+                "  END\r\n" +
+                "END\r\n";
+
+            if (_stats.SecurityPolicies == 0) DeclareFolderWrittenOnUse(ScriptObjectType.SecurityPolicies, castPath);
+            var fileName = ResolveOutputPath(castPath, EncodeObjectFileName(policy.Key.Schema, policy.Key.Name, ".sql"));
+            script = RewriteSqlBodyForSchemaTemplate(script, fileName);
+            _progressLog.Info($"  Casting {fileName}");
+            FileWrapper.GetFromFactory().WriteAllText(fileName, script);
+            _stats.SecurityPolicies++;
+        }
+    }
+
+    // A folder in FoldersWrittenOnUse joins the template's ScriptFolders with the first object extracted into it.
+    private void DeclareFolderWrittenOnUse(ScriptObjectType type, string castPath)
+    {
+        DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
+        var templateFile = Path.Join(_templatePath, "Template.json");
+        if (!FileWrapper.GetFromFactory().Exists(templateFile)) return;
+        var template = JsonHelper.Load<Template>(templateFile);
+        if (template.ScriptFolders.Any(f => f.ObjectType == type)) return;
+        var folder = Template.GetDefaultTemplateFolders(_platform, _isSchemaTemplate).First(f => f.ObjectType == type);
+        template.ScriptFolders.Add(new TemplateFolder { FolderPath = ResolveFolderName(folder.FolderPath, type), QuenchSlot = folder.QuenchSlot, ObjectType = type });
+        WritePackageObject(templateFile, template, "templates");
+    }
+
+    // The catalog wraps each predicate in one pair of parentheses that CREATE SECURITY POLICY does not take.
+    internal static string StripOuterParentheses(string definition)
+    {
+        var text = definition.Trim();
+        if (text.Length < 2 || text[0] != '(' || text[^1] != ')') return text;
+        var depth = 0;
+        for (var i = 0; i < text.Length - 1; i++)
+        {
+            if (text[i] == '(') depth++;
+            else if (text[i] == ')') depth--;
+            if (depth == 0) return text;
+        }
+        return text[1..^1].Trim();
     }
 
     private void ScriptSqlServerSynonyms(IDbCommand command)
@@ -1575,59 +1748,6 @@ SELECT s.name AS SchemaName, o.name AS ObjectName, CONVERT(BIT, ISNULL(sm.is_sch
         {
             var sql = ScriptSqlServerProgrammableObject(command, schema, name, "FUNCTION");
             if (sql == null) continue;
-
-            if (_scriptDynamicDependencyRemovalForFunctions)
-            {
-                var dependencyBlock =
-                    $"\r\nDECLARE @v_SearchTerm VARCHAR(2000) = '%{name}%'\r\n" +
-                    "DECLARE @v_SQL VARCHAR(MAX) = (SELECT STRING_AGG(Task, ';' + CHAR(13) + CHAR(10)) \r\n" +
-                    "                                 FROM (SELECT 'ALTER TABLE [' + OBJECT_SCHEMA_NAME(cc.parent_object_id) + '].[' + OBJECT_NAME(cc.parent_object_id) + '] DROP CONSTRAINT IF EXISTS [' + OBJECT_NAME(cc.[name]) + ']' AS Task\r\n" +
-                    "                                         FROM sys.check_constraints cc\r\n" +
-                    "                                         WHERE cc.[definition] LIKE @v_SearchTerm\r\n" +
-                    "                                            OR EXISTS (SELECT *\r\n" +
-                    "                                                         FROM sys.computed_columns cc2\r\n" +
-                    "                                                         WHERE cc2.[definition] LIKE @v_SearchTerm\r\n" +
-                    "                                                           AND cc2.[object_id] = cc.parent_object_id\r\n" +
-                    "                                                           AND cc2.column_id = cc.parent_column_id)\r\n" +
-                    "                                       UNION ALL\r\n" +
-                    "                                       SELECT 'ALTER TABLE [' + OBJECT_SCHEMA_NAME(dc.parent_object_id) + '].[' + OBJECT_NAME(dc.parent_object_id) + '] DROP CONSTRAINT IF EXISTS [' + OBJECT_NAME(dc.[name]) + ']'\r\n" +
-                    "                                         FROM sys.default_constraints dc\r\n" +
-                    "                                         WHERE dc.[definition] LIKE @v_SearchTerm\r\n" +
-                    "                                            OR EXISTS (SELECT *\r\n" +
-                    "                                                         FROM sys.computed_columns cc\r\n" +
-                    "                                                         WHERE cc.[definition] LIKE @v_SearchTerm\r\n" +
-                    "                                                           AND cc.[object_id] = dc.parent_object_id\r\n" +
-                    "                                                           AND cc.column_id = dc.parent_column_id)\r\n" +
-                    "                                       UNION ALL\r\n" +
-                    "                                       SELECT 'ALTER TABLE [' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '].[' + OBJECT_NAME(fk.parent_object_id) + '] DROP CONSTRAINT IF EXISTS [' + OBJECT_NAME(fk.[name]) + ']'\r\n" +
-                    "                                         FROM sys.foreign_keys fk\r\n" +
-                    "                                         WHERE EXISTS (SELECT *\r\n" +
-                    "                                                         FROM sys.computed_columns cc\r\n" +
-                    "                                                         JOIN sys.foreign_key_columns fc ON fk.[object_id] = fk.[object_id]\r\n" +
-                    "                                                                                        AND ((fc.parent_object_id = cc.[object_id] AND fc.parent_column_id = cc.column_id)\r\n" +
-                    "                                                                                          OR (fc.referenced_object_id = cc.[object_id] AND fc.referenced_column_id = cc.column_id))\r\n" +
-                    "                                                         WHERE cc.[definition] LIKE @v_SearchTerm)\r\n" +
-                    "                                       UNION ALL\r\n" +
-                    "                                       SELECT 'DROP INDEX IF EXISTS [' + si.[name] + '] ON [' + OBJECT_SCHEMA_NAME(si.[object_id]) + '].[' + OBJECT_NAME(si.[object_id]) + ']'\r\n" +
-                    "                                         FROM sys.indexes si\r\n" +
-                    "                                         WHERE si.filter_definition LIKE @v_SearchTerm\r\n" +
-                    "                                            OR EXISTS (SELECT *\r\n" +
-                    "                                                         FROM sys.computed_columns cc\r\n" +
-                    "                                                         JOIN sys.index_columns ic ON ic.[object_id] = si.[object_id]\r\n" +
-                    "                                                                                  AND ic.index_id = si.index_id\r\n" +
-                    "                                                                                  AND ic.column_id = cc.column_id\r\n" +
-                    "                                                         WHERE cc.[definition] LIKE @v_SearchTerm\r\n" +
-                    "                                                           AND cc.[object_id] = si.[object_id])\r\n" +
-                    "                                       UNION ALL\r\n" +
-                    "                                       SELECT 'ALTER TABLE [' + OBJECT_SCHEMA_NAME(cc.[object_id]) + '].[' + OBJECT_NAME(cc.[object_id]) + '] DROP COLUMN IF EXISTS [' + cc.[name] + ']'\r\n" +
-                    "                                         FROM sys.computed_columns cc\r\n" +
-                    "                                         WHERE cc.[definition] LIKE @v_SearchTerm) x) + ';'\r\n" +
-                    "EXEC(@v_SQL) -- Remove any dependencies before updating the function\r\n" +
-                    "GO\r\n";
-
-                var firstGoEnd = sql.IndexOf("GO\r\n\r\n") + 4;
-                sql = sql.Substring(0, firstGoEnd) + dependencyBlock + sql.Substring(firstGoEnd);
-            }
 
             if (schemaBound) DirectoryWrapper.GetFromFactory().CreateDirectory(sbCastPath);
             var fileName = ResolveOutputPath(schemaBound ? sbCastPath : castPath, EncodeObjectFileName(schema, name, ".sql"));
@@ -1733,6 +1853,48 @@ SELECT s.name AS SchemaName, o.name AS ObjectName
             ValidateAndHandleScript(command.Connection, fileName, sql, ScriptObjectType.Procedures);
             _stats.Procedures++;
         }
+
+        WarnNumberedProcedures(command, procedures);
+    }
+
+    // A numbered procedure (dbo.p;2 and on, deprecated since 2008) shares its name with dbo.p, whose definition is the
+    // only one SchemaTongs reads, so each later number would be lost without a word.
+    private void WarnNumberedProcedures(IDbCommand command, List<(string Schema, string Name)> procedures)
+    {
+        command.CommandText = @"
+SELECT OBJECT_SCHEMA_NAME(np.[object_id]), OBJECT_NAME(np.[object_id]), np.procedure_number
+  FROM sys.numbered_procedures np
+ WHERE np.procedure_number > 1
+ ORDER BY 1, 2, 3";
+        var numbered = new List<string>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                if (procedures.Contains((reader.GetString(0), reader.GetString(1))))
+                    numbered.Add($"{reader.GetString(0)}.{reader.GetString(1)};{reader.GetInt16(2)}");
+        foreach (var procedure in numbered)
+        {
+            _progressLog.Warn($"  WARNING: {procedure} is a numbered procedure, which a package cannot declare; only its ;1 is extracted");
+            _stats.SkippedObjects++;
+        }
+    }
+
+    // FileTables (2012) and external tables (2016) are tables SQL Server builds from something outside the table
+    // definition, a FILESTREAM share or an external data source, so a table file of their columns would deploy as an
+    // ordinary table. Each is named, counted as skipped, and left out.
+    private void WarnSqlServerTablesNotExtracted(IDbCommand command)
+    {
+        if (_sourceMajor is > 0 and < 11) return;
+        command.CommandText = "SELECT SCHEMA_NAME([schema_id]), [name], 'a FileTable' FROM sys.tables WHERE is_filetable = 1" +
+                              (_sourceMajor is 0 or >= 13 ? " UNION ALL SELECT SCHEMA_NAME([schema_id]), [name], 'an external table' FROM sys.tables WHERE is_external = 1" : "") +
+                              " ORDER BY 1, 2";
+        using var reader = command.ExecuteReader();
+        while (reader.Read())
+        {
+            var (schema, name, kind) = (reader.GetString(0), reader.GetString(1), reader.GetString(2));
+            if (!ShouldExtractFromSchema(schema)) continue;
+            _progressLog.Warn($"  WARNING: {schema}.{name} is {kind}, which a package cannot declare; not extracted");
+            _stats.SkippedObjects++;
+        }
     }
 
     private void ScriptSqlServerTableTriggers(IDbCommand command)
@@ -1768,6 +1930,7 @@ SELECT s.name AS TableSchema, pt.name AS TableName, tr.name AS TriggerName
         {
             var sql = ScriptSqlServerProgrammableObject(command, tableSchema, triggerName, "TRIGGER", "TRIGGER", tableName);
             if (sql == null) continue;
+            sql += SqlServerTriggerTail(command, tableSchema, tableName, triggerName);
 
             var escapedSchema = Regex.Escape(tableSchema);
             var escapedTable = Regex.Escape(tableName);
@@ -1788,6 +1951,192 @@ SELECT s.name AS TableSchema, pt.name AS TableName, tr.name AS TriggerName
         }
     }
 
+    internal const string AlwaysEncryptedKeysScript = "AlwaysEncryptedKeys.sql";
+
+    // The column master and column encryption keys an Always Encrypted column needs before its table can be created.
+    // Neither is modelled, so they go to a generated prerequisite script that creates only what is missing and runs
+    // ahead of the tables. Rewritten in full on every extraction; removed when the database no longer has keys.
+    private void ScriptSqlServerAlwaysEncryptedKeys(IDbCommand command, string targetDb)
+    {
+        var masterKeys = new List<(string Name, string Provider, string Path, bool Enclave, byte[] Signature)>();
+        command.CommandText = @"
+IF COL_LENGTH('sys.column_master_keys', 'allow_enclave_computations') IS NOT NULL
+  EXEC sp_executesql N'SELECT [name], key_store_provider_name, key_path, allow_enclave_computations, [signature] FROM sys.column_master_keys ORDER BY [name]'
+ELSE
+  SELECT [name], key_store_provider_name, key_path, CAST(0 AS BIT), CAST(NULL AS VARBINARY(MAX)) FROM sys.column_master_keys ORDER BY [name]";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                masterKeys.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), !reader.IsDBNull(3) && Convert.ToBoolean(reader.GetValue(3)),
+                                reader.IsDBNull(4) ? null : (byte[])reader.GetValue(4)));
+
+        var encryptionKeys = new List<(string Name, string MasterKey, string Algorithm, byte[] Value)>();
+        command.CommandText = @"
+SELECT k.[name], m.[name], v.encryption_algorithm_name, v.encrypted_value
+  FROM sys.column_encryption_keys k
+  JOIN sys.column_encryption_key_values v ON v.column_encryption_key_id = k.column_encryption_key_id
+  JOIN sys.column_master_keys m ON m.column_master_key_id = v.column_master_key_id
+ ORDER BY k.[name], m.[name]";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                encryptionKeys.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2), (byte[])reader.GetValue(3)));
+
+        var folder = Path.Join(_templatePath, Template.PrerequisitesFolder);
+        var file = Path.Join(folder, AlwaysEncryptedKeysScript);
+        var files = FileWrapper.GetFromFactory();
+        if (masterKeys.Count == 0)
+        {
+            if (files.Exists(file) && GeneratedScript.IsGenerated(files.ReadAllText(file))) files.Delete(file);
+            return;
+        }
+
+        _progressLog.Info("Casting Always Encrypted Keys");
+        string Quote(string name) => "[" + Identifier.EscapeDelimited(name, Platform.SqlServer) + "]";
+        string Hex(byte[] bytes) => "0x" + Convert.ToHexString(bytes);
+        string Exec(string sql) => $"EXEC(N'{EscapeSql(sql)}')";
+
+        var sb = new StringBuilder();
+        sb.Append($"-- The Always Encrypted keys of {targetDb}, written by SchemaTongs on every extraction: change the source database,\r\n");
+        sb.Append("-- not this file. A key is created only where it is missing; one that exists is left as it is. KEY_PATH names a\r\n");
+        sb.Append("-- certificate or vault key outside the database, which any client that reads the encrypted columns needs access to.\r\n");
+        sb.Append("IF OBJECT_ID('sys.column_master_keys') IS NULL\r\n");
+        sb.Append("  RAISERROR('  Always Encrypted keys skipped: they need SQL Server 2016', 10, 1) WITH NOWAIT\r\n");
+        sb.Append("ELSE\r\nBEGIN\r\n");
+        sb.Append(string.Concat(masterKeys.Select(key =>
+            $"  IF NOT EXISTS (SELECT 1 FROM sys.column_master_keys WHERE [name] = N'{EscapeSql(key.Name)}')\r\n    " +
+            Exec($"CREATE COLUMN MASTER KEY {Quote(key.Name)} WITH (KEY_STORE_PROVIDER_NAME = N'{EscapeSql(key.Provider)}', KEY_PATH = N'{EscapeSql(key.Path)}'" +
+                 (key.Enclave && key.Signature != null ? $", ENCLAVE_COMPUTATIONS (SIGNATURE = {Hex(key.Signature)})" : "") + ")") + "\r\n")));
+        sb.Append(string.Concat(encryptionKeys.GroupBy(k => k.Name).Select(key =>
+            $"  IF NOT EXISTS (SELECT 1 FROM sys.column_encryption_keys WHERE [name] = N'{EscapeSql(key.Key)}')\r\n    " +
+            Exec($"CREATE COLUMN ENCRYPTION KEY {Quote(key.Key)} WITH VALUES " +
+                 string.Join(", ", key.Select(v => $"(COLUMN_MASTER_KEY = {Quote(v.MasterKey)}, ALGORITHM = '{EscapeSql(v.Algorithm)}', ENCRYPTED_VALUE = {Hex(v.Value)})"))) + "\r\n")));
+        sb.Append("END\r\n");
+
+        DirectoryWrapper.GetFromFactory().CreateDirectory(folder);
+        EnsurePrerequisitesFolder();
+        _progressLog.Info($"  Casting {file}");
+        files.WriteAllText(file, GeneratedScript.Stamp(sb.ToString()));
+    }
+
+    internal const string PartitionSchemesScript = "PartitionSchemes.sql";
+
+    // The partition functions and schemes the database's tables and indexes are stored on. The package names a scheme on a
+    // table or index but never creates one, so a partitioned package failed on an empty database. They go to a generated
+    // prerequisite script that creates only what is missing: an existing function or scheme is the operator's, boundaries
+    // and all, and is left exactly as it is. Rewritten on every extraction; removed when nothing is partitioned.
+    private void ScriptSqlServerPartitionSchemes(IDbCommand command, string targetDb)
+    {
+        var functions = new List<(string Name, string Type, bool Right)>();
+        command.CommandText = @"
+SELECT DISTINCT pf.[name], t.[name] +
+       CASE WHEN t.[name] IN ('varchar', 'char', 'varbinary', 'binary')
+            THEN '(' + CASE WHEN pp.max_length = -1 THEN 'max' ELSE CAST(pp.max_length AS VARCHAR(10)) END + ')'
+            WHEN t.[name] IN ('nvarchar', 'nchar')
+            THEN '(' + CASE WHEN pp.max_length = -1 THEN 'max' ELSE CAST(pp.max_length / 2 AS VARCHAR(10)) END + ')'
+            WHEN t.[name] IN ('decimal', 'numeric') THEN '(' + CAST(pp.[precision] AS VARCHAR(10)) + ',' + CAST(pp.scale AS VARCHAR(10)) + ')'
+            WHEN t.[name] IN ('datetime2', 'time', 'datetimeoffset') THEN '(' + CAST(pp.scale AS VARCHAR(10)) + ')'
+            ELSE '' END,
+       pf.boundary_value_on_right
+  FROM sys.indexes i
+  JOIN sys.objects o ON o.[object_id] = i.[object_id] AND o.is_ms_shipped = 0
+  JOIN sys.partition_schemes ps ON ps.data_space_id = i.data_space_id
+  JOIN sys.partition_functions pf ON pf.function_id = ps.function_id
+  JOIN sys.partition_parameters pp ON pp.function_id = pf.function_id AND pp.parameter_id = 1
+  JOIN sys.types t ON t.user_type_id = pp.user_type_id
+ ORDER BY pf.[name]";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                functions.Add((reader.GetString(0), reader.GetString(1), Convert.ToBoolean(reader.GetValue(2))));
+
+        var folder = Path.Join(_templatePath, Template.PrerequisitesFolder);
+        var file = Path.Join(folder, PartitionSchemesScript);
+        var files = FileWrapper.GetFromFactory();
+        if (functions.Count == 0)
+        {
+            if (files.Exists(file) && GeneratedScript.IsGenerated(files.ReadAllText(file))) files.Delete(file);
+            return;
+        }
+
+        // Each boundary as a literal of its own type: the value is a sql_variant, and the default conversion of a date or
+        // a float loses precision.
+        var boundaries = new List<(string Function, string Value)>();
+        command.CommandText = @"
+SELECT pf.[name],
+       CASE WHEN rv.[value] IS NULL THEN 'NULL'
+            WHEN v.bt IN ('tinyint', 'smallint', 'int', 'bigint', 'bit', 'decimal', 'numeric') THEN CONVERT(NVARCHAR(4000), rv.[value])
+            WHEN v.bt IN ('money', 'smallmoney') THEN CONVERT(NVARCHAR(4000), CONVERT(MONEY, rv.[value]), 2)
+            WHEN v.bt IN ('float', 'real') THEN CONVERT(NVARCHAR(4000), CONVERT(FLOAT, rv.[value]), 2)
+            WHEN v.bt = 'date' THEN N'''' + CONVERT(NVARCHAR(30), CONVERT(DATE, rv.[value]), 23) + N''''
+            WHEN v.bt IN ('datetime', 'smalldatetime') THEN N'''' + CONVERT(NVARCHAR(30), CONVERT(DATETIME, rv.[value]), 126) + N''''
+            WHEN v.bt = 'datetime2' THEN N'''' + CONVERT(NVARCHAR(40), CONVERT(DATETIME2(7), rv.[value]), 126) + N''''
+            WHEN v.bt = 'datetimeoffset' THEN N'''' + CONVERT(NVARCHAR(40), CONVERT(DATETIMEOFFSET(7), rv.[value]), 126) + N''''
+            WHEN v.bt = 'time' THEN N'''' + CONVERT(NVARCHAR(20), CONVERT(TIME(7), rv.[value])) + N''''
+            WHEN v.bt IN ('binary', 'varbinary') THEN CONVERT(NVARCHAR(4000), CONVERT(VARBINARY(8000), rv.[value]), 1)
+            ELSE N'N''' + REPLACE(CONVERT(NVARCHAR(4000), rv.[value]), N'''', N'''''') + N'''' END
+  FROM sys.partition_functions pf
+  JOIN sys.partition_range_values rv ON rv.function_id = pf.function_id
+ CROSS APPLY (SELECT CONVERT(SYSNAME, SQL_VARIANT_PROPERTY(rv.[value], 'BaseType')) AS bt) v
+ ORDER BY pf.[name], rv.boundary_id";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                boundaries.Add((reader.GetString(0), reader.GetString(1)));
+
+        var schemes = new List<(string Name, string Function, string FileGroup)>();
+        command.CommandText = @"
+SELECT ps.[name], pf.[name], fg.[name]
+  FROM sys.partition_schemes ps
+  JOIN sys.partition_functions pf ON pf.function_id = ps.function_id
+  JOIN sys.destination_data_spaces dds ON dds.partition_scheme_id = ps.data_space_id
+  JOIN sys.filegroups fg ON fg.data_space_id = dds.data_space_id
+ WHERE ps.data_space_id IN (SELECT i.data_space_id FROM sys.indexes i JOIN sys.objects o ON o.[object_id] = i.[object_id] AND o.is_ms_shipped = 0)
+ ORDER BY ps.[name], dds.destination_id";
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                schemes.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+
+        _progressLog.Info("Casting Partition Schemes");
+        string Quote(string name) => "[" + Identifier.EscapeDelimited(name, Platform.SqlServer) + "]";
+        string Exec(string sql) => $"EXEC(N'{EscapeSql(sql)}')";
+
+        var sb = new StringBuilder();
+        sb.Append($"-- The partition functions and schemes the tables of {targetDb} are stored on, written by SchemaTongs on every\r\n");
+        sb.Append("-- extraction: change the source database, not this file. One is created only where it is missing; one that exists is\r\n");
+        sb.Append("-- left as it is, boundaries and all. The filegroups are the source's and must exist on the target.\r\n");
+        foreach (var function in functions)
+            sb.Append($"IF NOT EXISTS (SELECT 1 FROM sys.partition_functions WHERE [name] = N'{EscapeSql(function.Name)}')\r\n  " +
+                      Exec($"CREATE PARTITION FUNCTION {Quote(function.Name)} ({function.Type}) AS RANGE {(function.Right ? "RIGHT" : "LEFT")} FOR VALUES (" +
+                           string.Join(", ", boundaries.Where(b => b.Function == function.Name).Select(b => b.Value)) + ")") + "\r\n");
+        foreach (var scheme in schemes.GroupBy(x => (x.Name, x.Function)))
+        {
+            var fileGroups = scheme.Select(x => x.FileGroup).ToList();
+            // ALL TO also marks a NEXT USED filegroup, so it is written only where the source has that extra destination.
+            var partitions = boundaries.Count(b => b.Function == scheme.Key.Function) + 1;
+            var to = fileGroups.All(fg => fg == "PRIMARY") && fileGroups.Count == partitions + 1
+                ? "ALL TO ([PRIMARY])"
+                : "TO (" + string.Join(", ", fileGroups.Select(Quote)) + ")";
+            sb.Append($"IF NOT EXISTS (SELECT 1 FROM sys.partition_schemes WHERE [name] = N'{EscapeSql(scheme.Key.Name)}')\r\n  " +
+                      Exec($"CREATE PARTITION SCHEME {Quote(scheme.Key.Name)} AS PARTITION {Quote(scheme.Key.Function)} {to}") + "\r\n");
+        }
+
+        DirectoryWrapper.GetFromFactory().CreateDirectory(folder);
+        EnsurePrerequisitesFolder();
+        _progressLog.Info($"  Casting {file}");
+        files.WriteAllText(file, GeneratedScript.Stamp(sb.ToString()));
+    }
+
+    // A template that lists its folders runs only those, so one extracted before the Prerequisites folder existed gets it
+    // added, first, the first time a prerequisite is written.
+    private void EnsurePrerequisitesFolder()
+    {
+        var templateFile = Path.Join(_templatePath, "Template.json");
+        if (!FileWrapper.GetFromFactory().Exists(templateFile)) return;
+        var template = JsonHelper.Load<Template>(templateFile);
+        if (template == null || template.ScriptFolders.Count == 0
+            || template.ScriptFolders.Any(f => string.Equals(f.FolderPath, Template.PrerequisitesFolder, StringComparison.OrdinalIgnoreCase))) return;
+        template.ScriptFolders.Insert(0, new TemplateFolder { FolderPath = Template.PrerequisitesFolder, QuenchSlot = TemplateQuenchSlot.Objects });
+        _progressLog.Info($"  Adding the {Template.PrerequisitesFolder} folder to {templateFile}");
+        WritePackageObject(templateFile, template, "templates");
+    }
+
     private void ScriptSqlServerFullTextCatalogs(IDbCommand command)
     {
         _progressLog.Info("Casting FullText Catalog Scripts");
@@ -1795,25 +2144,25 @@ SELECT s.name AS TableSchema, pt.name AS TableName, tr.name AS TriggerName
         DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
 
         command.CommandText = @"
-SELECT name
+SELECT name, is_accent_sensitivity_on, is_default
   FROM sys.fulltext_catalogs
  ORDER BY name";
 
-        var catalogs = new List<string>();
+        var catalogs = new List<(string Name, bool AccentSensitive, bool IsDefault)>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
             {
                 var name = reader.GetString(0);
                 if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
-                catalogs.Add(name);
+                catalogs.Add((name, reader.GetBoolean(1), reader.GetBoolean(2)));
             }
         }
 
-        foreach (var name in catalogs)
+        foreach (var (name, accentSensitive, isDefault) in catalogs)
         {
-            var script = $"IF NOT EXISTS (SELECT * FROM sysfulltextcatalogs ftc WHERE ftc.name = N'{EscapeSql(name)}')\r\n" +
-                         $"CREATE FULLTEXT CATALOG [{Identifier.EscapeDelimited(name, Platform.SqlServer)}] ";
+            var script = $"IF NOT EXISTS (SELECT * FROM sys.fulltext_catalogs ftc WHERE ftc.name = N'{EscapeSql(name)}')\r\n" +
+                         $"CREATE FULLTEXT CATALOG [{Identifier.EscapeDelimited(name, Platform.SqlServer)}] WITH ACCENT_SENSITIVITY = {(accentSensitive ? "ON" : "OFF")}{(isDefault ? " AS DEFAULT" : "")}";
 
             var fileName = ResolveOutputPath(castPath, EncodeFileName(name, ".sql"));
             _progressLog.Info($"  Casting {fileName}");
@@ -1879,6 +2228,37 @@ SELECT stopword, language
         }
     }
 
+    // A trigger's enabled state and its first/last order are not part of its definition, so a disabled trigger or one
+    // set first or last came back enabled and unordered on the next deploy. The tail carries that state in its own
+    // batches after the module.
+    private string SqlServerTriggerTail(IDbCommand command, string tableSchema, string tableName, string triggerName)
+    {
+        var trigger = $"[{Identifier.EscapeDelimited(tableSchema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(triggerName, Platform.SqlServer)}]";
+        var table = $"[{Identifier.EscapeDelimited(tableSchema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(tableName, Platform.SqlServer)}]";
+        command.CommandText = $@"
+SELECT tr.is_disabled,
+       OBJECTPROPERTY(tr.object_id, 'ExecIsFirstInsertTrigger'), OBJECTPROPERTY(tr.object_id, 'ExecIsLastInsertTrigger'),
+       OBJECTPROPERTY(tr.object_id, 'ExecIsFirstUpdateTrigger'), OBJECTPROPERTY(tr.object_id, 'ExecIsLastUpdateTrigger'),
+       OBJECTPROPERTY(tr.object_id, 'ExecIsFirstDeleteTrigger'), OBJECTPROPERTY(tr.object_id, 'ExecIsLastDeleteTrigger')
+  FROM sys.triggers tr
+ WHERE tr.object_id = OBJECT_ID(N'{EscapeSql(trigger)}')";
+        bool disabled;
+        var flags = new int[6];
+        using (var reader = command.ExecuteReader())
+        {
+            if (!reader.Read()) return "";
+            disabled = reader.GetBoolean(0);
+            for (var i = 0; i < flags.Length; i++) flags[i] = reader.IsDBNull(i + 1) ? 0 : reader.GetInt32(i + 1);
+        }
+
+        var tail = "";
+        if (disabled) tail += $"DISABLE TRIGGER {trigger} ON {table}\r\nGO\r\n";
+        var orders = new[] { ("First", "INSERT", flags[0]), ("Last", "INSERT", flags[1]), ("First", "UPDATE", flags[2]), ("Last", "UPDATE", flags[3]), ("First", "DELETE", flags[4]), ("Last", "DELETE", flags[5]) };
+        foreach (var (order, statement, set) in orders)
+            if (set == 1) tail += $"EXEC sp_settriggerorder @triggername = N'{EscapeSql(trigger)}', @order = N'{order}', @stmttype = N'{statement}'\r\nGO\r\n";
+        return tail.Length == 0 ? "" : "\r\n" + tail;
+    }
+
     private void ScriptSqlServerDDLTriggers(IDbCommand command)
     {
         _progressLog.Info("Casting Database DDL Trigger Scripts");
@@ -1905,7 +2285,7 @@ SELECT tr.name AS TriggerName
         foreach (var triggerName in triggers)
         {
             command.CommandText = $@"
-SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
+SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier, tr.is_disabled
   FROM sys.sql_modules sm
   JOIN sys.triggers tr ON sm.object_id = tr.object_id
  WHERE tr.parent_class = 0 AND tr.name = '{EscapeSql(triggerName)}'";
@@ -1913,6 +2293,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
             string definition = null;
             bool usesAnsiNulls = true;
             bool usesQuotedIdentifier = true;
+            bool disabled = false;
 
             using (var reader = command.ExecuteReader())
             {
@@ -1927,6 +2308,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
                     definition = reader.GetString(0);
                     usesAnsiNulls = reader.GetBoolean(1);
                     usesQuotedIdentifier = reader.GetBoolean(2);
+                    disabled = reader.GetBoolean(3);
                 }
             }
 
@@ -1939,13 +2321,16 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
 
             var createMatch = Regex.Match(definition, @"(?<!\w)CREATE(\s+)TRIGGER\b", RegexOptions.IgnoreCase);
             if (createMatch.Success)
-                definition = definition.Substring(0, createMatch.Index) + "CREATE OR ALTER" + createMatch.Value.Substring("CREATE".Length) + definition.Substring(createMatch.Index + createMatch.Length);
+                definition = WithOrAlter(definition, createMatch);
 
             var escapedName = Regex.Escape(triggerName);
             var namePattern = $@"(?<=TRIGGER\s+)\[?{escapedName}\]?";
             definition = Regex.Replace(definition, namePattern, $"[{Identifier.EscapeDelimited(triggerName, Platform.SqlServer)}]", RegexOptions.IgnoreCase);
 
             definition = Regex.Replace(definition, @"(?<=\bAS[ \t]*\r\n)([ \t]*)(?=\S)", "$1\r\n");
+
+            if (_moduleSyntax == ModuleSyntax.Legacy)
+                definition = ConvertToLegacyModuleForm(definition, null, triggerName);
 
             var extProps = GetExtendedProperties(command, "TRIGGER", triggerName);
 
@@ -1960,6 +2345,8 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
 
             if (extProps.Length > 0)
                 sql += extProps + "\r\nGO\r\n";
+            if (disabled)
+                sql += $"\r\nDISABLE TRIGGER [{Identifier.EscapeDelimited(triggerName, Platform.SqlServer)}] ON DATABASE\r\nGO\r\n";
 
             var fileName = ResolveOutputPath(castPath, EncodeFileName(triggerName, ".sql"));
             if (ShouldSkipKnownBadScript(fileName)) { _stats.DDLTriggers++; continue; }
@@ -2012,14 +2399,45 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
         }
     }
 
+    // The object's name as its stored definition spells it. After sp_rename the catalog name changes but the stored
+    // text does not, so the two disagree and a script written from the text would create the old name.
+    private static readonly Regex CreateHeaderName = new(
+        @"(?<!\w)CREATE\s+(OR\s+ALTER\s+)?(PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\s+(?<full>(\[[^\]]+\]|""[^""]+""|[\w$#@]+)(\s*\.\s*(\[[^\]]+\]|""[^""]+""|[\w$#@]+))?)",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    internal static string DefinedObjectName(string definition)
+    {
+        var match = CreateHeaderName.Match(definition);
+        if (!match.Success) return null;
+        var full = match.Groups["full"].Value;
+        var last = full.LastIndexOf('.');
+        return (last >= 0 ? full[(last + 1)..] : full).Trim().Trim('[', ']', '"');
+    }
+
+    internal static string ReplaceDefinedName(string definition, string schemaName, string objectName)
+    {
+        var match = CreateHeaderName.Match(definition);
+        if (!match.Success) return definition;
+        var full = match.Groups["full"];
+        return definition[..full.Index] + $"[{Identifier.EscapeDelimited(schemaName, Platform.SqlServer)}].[{Identifier.EscapeDelimited(objectName, Platform.SqlServer)}]" + definition[(full.Index + full.Length)..];
+    }
+
+    // SQL Server stores a CREATE OR ALTER module with the two words cut out and the whitespace around them kept, so a gap
+    // of three or more is where they were. They go back into it: inserted ahead of it, each round trip through the
+    // server widened the gap by two.
+    internal static string WithOrAlter(string definition, Match createMatch)
+    {
+        var gap = createMatch.Groups[1].Value;
+        var header = gap.Length >= 3 ? $"CREATE{gap[0]}OR{gap[1]}ALTER{gap[2..]}" : "CREATE OR ALTER" + gap;
+        return definition[..createMatch.Index] + header + definition[(createMatch.Index + "CREATE".Length + gap.Length)..];
+    }
+
     internal static string ConvertToCreateOrAlter(string definition, string schemaName, string objectName)
     {
         var createMatch = Regex.Match(definition,
-            @"(?<!\w)CREATE(\s+)(PROCEDURE|FUNCTION|VIEW|TRIGGER)\b",
+            @"(?<!\w)CREATE(\s+)(PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\b",
             RegexOptions.IgnoreCase);
-        var result = createMatch.Success
-            ? definition.Substring(0, createMatch.Index) + "CREATE OR ALTER" + createMatch.Value.Substring("CREATE".Length) + definition.Substring(createMatch.Index + createMatch.Length)
-            : definition;
+        var result = createMatch.Success ? WithOrAlter(definition, createMatch) : definition;
 
         var escapedSchema = Regex.Escape(schemaName);
         var escapedName = Regex.Escape(objectName);
@@ -2029,6 +2447,57 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
             result = result.Substring(0, match.Index) + $"[{Identifier.EscapeDelimited(schemaName, Platform.SqlServer)}].[{Identifier.EscapeDelimited(objectName, Platform.SqlServer)}]" + result.Substring(match.Index + match.Length);
 
         return result;
+    }
+
+    private ModuleSyntax ReadModuleSyntax(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return ModuleSyntax.CreateOrAlter;
+        if (Enum.TryParse<ModuleSyntax>(value.Trim(), true, out var syntax) && Enum.IsDefined(syntax)) return syntax;
+        _progressLog.Warn($"ShouldCast:ModuleSyntax '{value}' is not CreateOrAlter or Legacy; modules are written with CREATE OR ALTER.");
+        return ModuleSyntax.CreateOrAlter;
+    }
+
+    // The form every supported version accepts: a guarded stub creates the object when it is missing, then ALTER carries
+    // the real body. The stub mirrors the kind, a function's shape and a trigger's first event, because ALTER cannot
+    // change those and the stub must be creatable wherever the real object is. A null schema is a database trigger.
+    internal static string ConvertToLegacyModuleForm(string definition, string schemaName, string objectName, string parentTableName = null)
+    {
+        var header = Regex.Match(definition, @"(?<!\w)CREATE\s+(OR\s+ALTER\s+)?(?<kind>PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\b", RegexOptions.IgnoreCase);
+        if (!header.Success) return definition;
+
+        var name = $"[{Identifier.EscapeDelimited(objectName, Platform.SqlServer)}]";
+        var qualified = schemaName == null ? name : $"[{Identifier.EscapeDelimited(schemaName, Platform.SqlServer)}].{name}";
+        var guard = $"IF OBJECT_ID(N'{EscapeSql(qualified)}') IS NULL";
+        string stub;
+        switch (header.Groups["kind"].Value.ToUpperInvariant())
+        {
+            case "VIEW":
+                stub = $"CREATE VIEW {qualified} AS SELECT 1 AS x";
+                break;
+            case "FUNCTION":
+                stub = Regex.IsMatch(definition, @"\bRETURNS\s+@\w+\s+TABLE\b", RegexOptions.IgnoreCase) ? $"CREATE FUNCTION {qualified}() RETURNS @t TABLE (x INT) AS BEGIN RETURN END"
+                    : Regex.IsMatch(definition, @"\bRETURNS\s+TABLE\b", RegexOptions.IgnoreCase) ? $"CREATE FUNCTION {qualified}() RETURNS TABLE AS RETURN SELECT 1 AS x"
+                    : $"CREATE FUNCTION {qualified}() RETURNS INT AS BEGIN RETURN 0 END";
+                break;
+            case "TRIGGER" when parentTableName != null:
+            {
+                var firing = Regex.Match(definition, @"\b(?<mode>AFTER|FOR|INSTEAD\s+OF)\s+(?<event>INSERT|UPDATE|DELETE)\b", RegexOptions.IgnoreCase);
+                var mode = firing.Success && firing.Groups["mode"].Value.StartsWith("INSTEAD", StringComparison.OrdinalIgnoreCase) ? "INSTEAD OF" : "AFTER";
+                var firstEvent = firing.Success ? firing.Groups["event"].Value.ToUpperInvariant() : "INSERT";
+                stub = $"CREATE TRIGGER {qualified} ON [{Identifier.EscapeDelimited(schemaName, Platform.SqlServer)}].[{Identifier.EscapeDelimited(parentTableName, Platform.SqlServer)}] {mode} {firstEvent} AS RETURN";
+                break;
+            }
+            case "TRIGGER":
+                guard = $"IF NOT EXISTS (SELECT 1 FROM sys.triggers WHERE parent_class = 0 AND name = N'{EscapeSql(objectName)}')";
+                stub = $"CREATE TRIGGER {qualified} ON DATABASE FOR DDL_DATABASE_LEVEL_EVENTS AS RETURN";
+                break;
+            default:
+                stub = $"CREATE PROCEDURE {qualified} AS RETURN";
+                break;
+        }
+
+        var altered = definition[..header.Index] + "ALTER " + header.Groups["kind"].Value + definition[(header.Index + header.Length)..];
+        return $"{guard} EXEC('{EscapeSql(stub)}')\r\nGO\r\n\r\n{altered}";
     }
 
     internal string ScriptSqlServerProgrammableObject(IDbCommand command, string schemaName, string objectName,
@@ -2068,9 +2537,19 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
         if (!definition.Contains("\r\n"))
             definition = definition.Replace("\n", "\r\n");
 
+        var definedName = DefinedObjectName(definition);
+        if (definedName != null && !definedName.Equals(objectName, StringComparison.OrdinalIgnoreCase))
+        {
+            _progressLog.Warn($"  WARNING: {schemaName}.{objectName} was renamed with sp_rename; its stored definition still creates {definedName}. The script is written under the current name; check the body for the old one.");
+            definition = ReplaceDefinedName(definition, schemaName, objectName);
+        }
+
         definition = ConvertToCreateOrAlter(definition, schemaName, objectName);
 
         definition = Regex.Replace(definition, @"(?<=\bAS[ \t]*\r\n)([ \t]*)(?=\S)", "$1\r\n");
+
+        if (_moduleSyntax == ModuleSyntax.Legacy)
+            definition = ConvertToLegacyModuleForm(definition, schemaName, objectName, level2ParentName);
 
         var level1Name = level2Type != null ? level2ParentName : objectName;
         var extPropsLevel1Type = level2Type != null ? "TABLE" : level1Type;
@@ -2237,11 +2716,93 @@ SELECT s.name AS SchemaName, v.name AS ViewName
             if (_includeMaterializedViews) CastPostgreSqlMaterializedViews(command);
             if (_includeCollations) CastPostgreSqlCollations(command);
             if (_includePublications) CastPostgreSqlPublications(command);
+            if (_includeRangeTypes) CastPostgreSqlRangeTypes(command);
+            if (_includeTextSearchConfigurations) CastPostgreSqlTextSearchConfigurations(command);
+            if (_includeOperators) CastPostgreSqlOperators(command);
+            if (_includeCasts) CastPostgreSqlCasts(command);
+            if (_includeEventTriggers) CastPostgreSqlEventTriggers(command);
+            LogPostgreSqlExtensionMembersSkipped(command);
+            LogPostgreSqlDeclinedKinds(command);
         }
         finally
         {
             connection.Close();
         }
+    }
+
+    // An installed extension's members (pg_depend deptype 'e') belong to the extension, not the package: extracting
+    // them wrote pg_trgm's thirty functions under Functions/ and PostGIS's spatial_ref_sys under Tables/, which then
+    // deployed as if the package owned them. Every enumeration query below carries this predicate for its catalog.
+    private static string PostgreSqlNotExtensionMember(string classRegclass, string oidExpression) =>
+        $"NOT EXISTS (SELECT 1 FROM pg_depend xd WHERE xd.classid = '{classRegclass}'::regclass AND xd.objid = {oidExpression} AND xd.deptype = 'e')";
+
+    // Also not what the engine created along with another object (deptype 'i'): a range type's constructor functions
+    // (LANGUAGE internal) and its multirange casts come back with the type.
+    private static string PostgreSqlNotEngineOwned(string classRegclass, string oidExpression) =>
+        $"NOT EXISTS (SELECT 1 FROM pg_depend xd WHERE xd.classid = '{classRegclass}'::regclass AND xd.objid = {oidExpression} AND xd.deptype IN ('e', 'i'))";
+
+    // PG-009's declined kinds need support functions compiled into a server library, so a package cannot create one on an
+    // empty database. They are named rather than silently absent; an extension's own are in its line above.
+    private void LogPostgreSqlDeclinedKinds(IDbCommand command)
+    {
+        const string userSchema = "n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith') AND n.nspname NOT LIKE 'pg_temp_%' AND n.nspname NOT LIKE 'pg_toast_temp_%'";
+        command.CommandText = $@"
+SELECT 'base type' AS Kind, n.nspname AS SchemaName, t.typname AS Name
+  FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+ WHERE t.typtype = 'b' AND {userSchema} AND {PostgreSqlNotEngineOwned("pg_type", "t.oid")}
+UNION ALL
+SELECT 'operator class', n.nspname, c.opcname || ' (' || am.amname || ')'
+  FROM pg_opclass c JOIN pg_namespace n ON n.oid = c.opcnamespace JOIN pg_am am ON am.oid = c.opcmethod
+ WHERE {userSchema} AND {PostgreSqlNotExtensionMember("pg_opclass", "c.oid")}
+UNION ALL
+SELECT 'operator family', n.nspname, f.opfname || ' (' || am.amname || ')'
+  FROM pg_opfamily f JOIN pg_namespace n ON n.oid = f.opfnamespace JOIN pg_am am ON am.oid = f.opfmethod
+ WHERE {userSchema} AND {PostgreSqlNotExtensionMember("pg_opfamily", "f.oid")}
+   -- An operator class created without FAMILY makes a family of its own name, which the class's line already covers.
+   AND NOT EXISTS (SELECT 1 FROM pg_opclass c WHERE c.opcfamily = f.oid AND c.opcname = f.opfname AND c.opcnamespace = f.opfnamespace)
+UNION ALL
+SELECT 'text search parser', n.nspname, p.prsname
+  FROM pg_ts_parser p JOIN pg_namespace n ON n.oid = p.prsnamespace
+ WHERE {userSchema} AND {PostgreSqlNotExtensionMember("pg_ts_parser", "p.oid")}
+UNION ALL
+SELECT 'text search template', n.nspname, tp.tmplname
+  FROM pg_ts_template tp JOIN pg_namespace n ON n.oid = tp.tmplnamespace
+ WHERE {userSchema} AND {PostgreSqlNotExtensionMember("pg_ts_template", "tp.oid")}
+ ORDER BY 1, 2, 3;
+";
+        var declined = new List<(string Kind, string Name)>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+                if (ShouldExtractFromSchema(reader.GetString(1)))
+                    declined.Add((reader.GetString(0), $"{reader.GetString(1)}.{reader.GetString(2)}"));
+        foreach (var (kind, name) in declined)
+        {
+            _progressLog.Warn($"  Skipping {kind} {name}: it needs support functions compiled into a server library, so a package cannot create it");
+            _stats.SkippedObjects++;
+        }
+    }
+
+    private void LogPostgreSqlExtensionMembersSkipped(IDbCommand command)
+    {
+        command.CommandText = @"
+SELECT e.extname, COUNT(*) AS members
+  FROM pg_depend d
+  JOIN pg_extension e ON e.oid = d.refobjid
+  WHERE d.refclassid = 'pg_extension'::regclass
+    AND d.deptype = 'e'
+    AND e.extname <> 'plpgsql'
+  GROUP BY e.extname
+  ORDER BY e.extname;
+";
+        var skipped = new List<(string Extension, long Members)>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read())
+            {
+                var extension = reader["extname"]?.ToString();
+                if (!string.IsNullOrEmpty(extension)) skipped.Add((extension, Convert.ToInt64(reader["members"] ?? 0)));
+            }
+        foreach (var (extension, members) in skipped)
+            _progressLog.Info($"  Skipping {members} objects owned by extension {extension} (an extension's members are not extracted; the extension itself is a prerequisite of the target)");
     }
 
     private void CastPostgreSqlTableDefinitions(IDbCommand command, string targetDb)
@@ -2254,25 +2815,41 @@ SELECT s.name AS SchemaName, v.name AS ViewName
         // relkind and relispartition let the loop below tell a partitioned parent (relkind = 'p')
         // and its partitions (relispartition = true) apart from an ordinary table — both need
         // different handling than a plain table once enumerated (see the skip below).
-        command.CommandText = @"
-SELECT t.schemaname, t.tablename, c.relkind, c.relispartition
+        // relpersistence 'u' is an UNLOGGED table, which the model carries as Persistence: Unlogged; only a temporary
+        // table ('t') is left out.
+        command.CommandText = $@"
+SELECT t.schemaname, t.tablename, c.relkind, c.relispartition,
+       CASE WHEN c.reloftype <> 0 THEN FORMAT_TYPE(c.reloftype, NULL) END AS of_type,
+       CASE WHEN NOT c.relispartition THEN (SELECT STRING_AGG(pn.nspname || '.' || p.relname, ', ' ORDER BY i.inhseqno)
+                                              FROM pg_inherits i
+                                              JOIN pg_class p ON p.oid = i.inhparent
+                                              JOIN pg_namespace pn ON pn.oid = p.relnamespace
+                                             WHERE i.inhrelid = c.oid) END AS inherits_from
   FROM pg_tables t
   JOIN pg_class c ON c.relname = t.tablename
                  AND c.relnamespace = (SELECT n.oid FROM pg_namespace n WHERE n.nspname = t.schemaname)
-                 AND c.relpersistence = 'p'
+                 AND c.relpersistence IN ('p', 'u')
   WHERE t.schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
+    AND {PostgreSqlNotExtensionMember("pg_class", "c.oid")}
   ORDER BY t.schemaname, t.tablename;
 ";
 
         _progressLog.Info("Casting Table Structures");
-        var tables = new List<(string Schema, string Table, string RelKind, bool IsPartitionChild)>();
+        var tables = new List<(string Schema, string Table, string RelKind, bool IsPartitionChild, string Refusal)>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
             {
                 var sch = reader["schemaname"].ToString();
                 if (!ShouldExtractFromSchema(sch)) continue;
-                tables.Add((sch, reader["tablename"].ToString(), reader["relkind"].ToString(), Convert.ToBoolean(reader["relispartition"])));
+                // PG-008. Neither shape is modelled: written as a plain table, a child would lose the parent's columns
+                // and a typed table its type.
+                var refusal = reader["of_type"] is string ofType
+                    ? $"is a typed table (OF {ofType}) — typed tables are not modeled; skipped rather than emitted as a table that no longer follows its type."
+                    : reader["inherits_from"] is string parents
+                        ? $"inherits from {parents} — table inheritance is not modeled; skipped rather than emitted as an unrelated standalone table. The parent is extracted, and DataTongs reads only its own rows."
+                        : null;
+                tables.Add((sch, reader["tablename"].ToString(), reader["relkind"].ToString(), Convert.ToBoolean(reader["relispartition"]), refusal));
             }
         }
 
@@ -2280,9 +2857,17 @@ SELECT t.schemaname, t.tablename, c.relkind, c.relispartition
         DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
         var resolver = new TableFileResolver(castPath, _platform, _isSchemaTemplate, IsVariantActive);
 
-        foreach (var (schema, table, relKind, isPartitionChild) in tables)
+        foreach (var (schema, table, relKind, isPartitionChild, refusal) in tables)
         {
             if (_objectsToCast.Length > 0 && !_objectsToCast.Contains($"{schema}.{table}".ToLower()) && !_objectsToCast.Contains(table.ToLower())) continue;
+
+            // A warning and a skip, not an error: the rest of the database extracts, and the run exits 1 as for any skip.
+            if (refusal != null)
+            {
+                _progressLog.Warn($"    WARNING: {schema}.{table} {refusal}");
+                _stats.SkippedObjects++;
+                continue;
+            }
 
             // SchemaSmith does not model PostgreSQL declarative partitioning (see the growth-up spike
             // findings) and the generator query cannot see a partitioned parent at all (relkind = 'p'
@@ -2427,7 +3012,7 @@ SELECT 'Schemas' AS Folder,
     /// </summary>
     private void CastPostgreSqlDomainTypes(IDbCommand command)
     {
-        command.CommandText = @"
+        command.CommandText = $@"
 SELECT n.nspname AS SchemaName, t.typname AS TypeName
   FROM pg_type t
   JOIN pg_namespace n ON n.oid = t.typnamespace
@@ -2435,6 +3020,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
     AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND n.nspname NOT LIKE 'pg_temp_%'
     AND n.nspname NOT LIKE 'pg_toast_temp_%'
+    AND {PostgreSqlNotExtensionMember("pg_type", "t.oid")}
   ORDER BY n.nspname, t.typname;
 ";
         _progressLog.Info("Casting Domain Type Structures");
@@ -2490,7 +3076,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
     /// </summary>
     private void CastPostgreSqlEnumTypes(IDbCommand command)
     {
-        command.CommandText = @"
+        command.CommandText = $@"
 SELECT n.nspname AS SchemaName, t.typname AS TypeName
   FROM pg_type t
   JOIN pg_namespace n ON n.oid = t.typnamespace
@@ -2498,6 +3084,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
     AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND n.nspname NOT LIKE 'pg_temp_%'
     AND n.nspname NOT LIKE 'pg_toast_temp_%'
+    AND {PostgreSqlNotExtensionMember("pg_type", "t.oid")}
   ORDER BY n.nspname, t.typname;
 ";
         _progressLog.Info("Casting Enum Type Structures");
@@ -2544,29 +3131,34 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
 
     private void CastPostgreSqlCompositeTypes(IDbCommand command)
     {
+        // Attribute names are quoted and a collation that differs from the type's own is written out; both were lost
+        // and a reserved-word attribute made the script fail. The old pg_type_is_visible filter also skipped every
+        // composite type in a schema that was not on the search_path, which is any named schema.
         command.CommandText = @"
 SELECT 'Composite Types' AS Folder,
        ns.nspname || '.' || t.typname AS FullName,
-       '
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = ''' || ns.nspname || ''' AND t.typname = ''' || t.typname || ''') THEN
-        CREATE TYPE ""' || ns.nspname || '"".""' || t.typname || '""  AS (' || STRING_AGG(a.attname || ' ' || FORMAT_TYPE(a.atttypid, a.atttypmod), ', ' ORDER BY a.attnum) || ');
-    END IF;
-END
-$$;' AS Code
+       E'\nDO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = ' || QUOTE_LITERAL(ns.nspname) || ' AND t.typname = ' || QUOTE_LITERAL(t.typname) || E') THEN\n        CREATE TYPE ' ||
+       QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(t.typname) || ' AS (' ||
+       STRING_AGG(QUOTE_IDENT(a.attname) || ' ' || FORMAT_TYPE(a.atttypid, a.atttypmod) ||
+                  CASE WHEN a.attcollation <> 0 AND a.attcollation <> ty.typcollation
+                       THEN ' COLLATE ' || QUOTE_IDENT(cn.nspname) || '.' || QUOTE_IDENT(co.collname) ELSE '' END,
+                  ', ' ORDER BY a.attnum) ||
+       E');\n    END IF;\nEND\n$$;' AS Code
   FROM pg_type t
   JOIN pg_class c ON t.typrelid = c.oid
   JOIN pg_attribute a ON c.oid = a.attrelid
+  JOIN pg_type ty ON ty.oid = a.atttypid
+  LEFT JOIN pg_collation co ON co.oid = a.attcollation
+  LEFT JOIN pg_namespace cn ON cn.oid = co.collnamespace
   JOIN pg_namespace ns ON t.typnamespace = ns.oid
   WHERE t.typtype = 'c'
+    AND c.relkind = 'c'
     AND a.attnum > 0
-    AND pg_type_is_visible(t.oid)
+    AND NOT a.attisdropped
     AND ns.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND ns.nspname NOT LIKE 'pg_temp_%'
     AND ns.nspname NOT LIKE 'pg_toast_temp_%'
-    AND NOT EXISTS (SELECT * FROM pg_Tables tbl WHERE tbl.schemaname = ns.nspname AND tbl.tablename = t.typname)
-    AND NOT EXISTS (SELECT * FROM pg_views v WHERE v.schemaname = ns.nspname AND v.viewname = t.typname)
+    AND " + PostgreSqlNotExtensionMember("pg_type", "t.oid") + @"
   GROUP BY ns.nspname, t.typname;
 ";
         PerformPostgreSqlCasting(command, "Composite Types");
@@ -2574,16 +3166,18 @@ $$;' AS Code
 
     private void CastPostgreSqlCollations(IDbCommand command)
     {
-        // QUOTE_IDENT/QUOTE_LITERAL build the Code text rather than hand-doubled quote literals — each
-        // returns its value already correctly escaped, so no nested-quote arithmetic is needed here.
-        // Best-effort: libc-provider collations round-trip via LC_COLLATE/LC_CTYPE. ICU-provider
-        // collations (collprovider = 'i') fall back to collcollate as the LOCALE value, which covers
-        // pg_import_system_collations-derived ICU rows but not every hand-authored ICU nuance.
-        command.CommandText = @"
+        // The catalog moved the ICU locale twice (collcollate below 15, colliculocale on 15-16, colllocale from 17),
+        // added RULES on 16 and the builtin provider on 17, so the text is chosen by the server's version.
+        var version = PostgreSqlServerVersionNum(command);
+        var locale = version >= 170000 ? "c.colllocale" : version >= 150000 ? "c.colliculocale" : "c.collcollate";
+        var rules = version >= 160000 ? "COALESCE(', RULES = ' || QUOTE_LITERAL(c.collicurules), '')" : "''";
+        command.CommandText = $@"
 SELECT 'Collations' AS Folder,
        n.nspname || '.' || c.collname AS FullName,
        'CREATE COLLATION IF NOT EXISTS ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.collname) || ' (' ||
-       CASE WHEN c.collprovider = 'i' THEN 'PROVIDER = icu, LOCALE = ' || QUOTE_LITERAL(COALESCE(c.collcollate, c.collname))
+       CASE c.collprovider
+            WHEN 'i' THEN 'PROVIDER = icu, LOCALE = ' || QUOTE_LITERAL(COALESCE({locale}, c.collname)) || {rules}
+            WHEN 'b' THEN 'PROVIDER = builtin, LOCALE = ' || QUOTE_LITERAL({locale})
             ELSE 'LC_COLLATE = ' || QUOTE_LITERAL(c.collcollate) || ', LC_CTYPE = ' || QUOTE_LITERAL(c.collctype)
        END ||
        CASE WHEN c.collisdeterministic = false THEN ', DETERMINISTIC = false' ELSE '' END ||
@@ -2592,10 +3186,16 @@ SELECT 'Collations' AS Folder,
   JOIN pg_namespace n ON c.collnamespace = n.oid
                      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
                      AND n.nspname NOT LIKE 'pg_temp_%'
-                     AND n.nspname NOT LIKE 'pg_toast_temp_%';
+                     AND n.nspname NOT LIKE 'pg_toast_temp_%'
+  WHERE {PostgreSqlNotExtensionMember("pg_collation", "c.oid")};
 ";
         PerformPostgreSqlCasting(command, "Collations");
     }
+
+    // server_version_num's shape (17.5 is 170005), from the version the driver already read at connect time; a
+    // connection that is not Npgsql's (a test double) is treated as the newest server.
+    private static int PostgreSqlServerVersionNum(IDbCommand command) =>
+        command.Connection is NpgsqlConnection npgsql ? npgsql.PostgreSqlVersion.Major * 10000 + Math.Max(npgsql.PostgreSqlVersion.Minor, 0) : int.MaxValue;
 
     private void CastPostgreSqlFunctions(IDbCommand command)
     {
@@ -2604,36 +3204,78 @@ SELECT CASE p.prokind
             WHEN 'f' THEN CASE WHEN prorettype = (SELECT oid FROM pg_type WHERE typname = 'trigger') THEN 'Trigger ' ELSE '' END || 'Functions'
             WHEN 'w' THEN 'Window Functions'
             END AS Folder,
-       n.nspname || '.' || p.proname AS FullName,
+       n.nspname || '.' || p.proname ||
+       CASE WHEN COUNT(*) OVER (PARTITION BY p.pronamespace, p.proname) > 1
+            THEN '(' || COALESCE((SELECT STRING_AGG(FORMAT_TYPE(u.t, NULL), ', ' ORDER BY u.n) FROM UNNEST(p.proargtypes::oid[]) WITH ORDINALITY AS u(t, n)), '') || ')' ELSE '' END AS FullName,
+       n.nspname || '.' || p.proname AS BaseName,
        PG_GET_FUNCTIONDEF(p.oid) AS Code
   FROM pg_proc p
   JOIN pg_namespace n ON p.pronamespace = n.oid
                      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
                      AND n.nspname NOT LIKE 'pg_temp_%'
                      AND n.nspname NOT LIKE 'pg_toast_temp_%'
-  WHERE p.prokind IN ('f', 'w');
+  WHERE p.prokind IN ('f', 'w')
+    AND " + PostgreSqlNotEngineOwned("pg_proc", "p.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Functions");
     }
 
     private void CastPostgreSqlAggregates(IDbCommand command)
     {
+        // pg_dump's shape: the declared argument list, every support function schema-qualified, the quoted initial
+        // condition, and the final, combine, serial, moving-aggregate, sort-operator, parallel and hypothetical
+        // clauses. The old text used the state type as the argument list and left the condition unquoted.
         command.CommandText = @"
+WITH fn AS (SELECT f.oid, QUOTE_IDENT(fn.nspname) || '.' || QUOTE_IDENT(f.proname) AS qname
+              FROM pg_proc f JOIN pg_namespace fn ON fn.oid = f.pronamespace)
 SELECT 'Aggregates' AS Folder,
-       n.nspname || '.' || p.proname AS FullName,
-       'CREATE OR REPLACE AGGREGATE ' || n.nspname || '.' || p.proname || '(' || FORMAT_TYPE(a.aggtranstype, null) || ') '
-       || '(sfunc = ' || a.aggtransfn
-       || ', stype = ' || FORMAT_TYPE(a.aggtranstype, null)
-       || CASE WHEN op.oprname IS NULL THEN '' ELSE ', sortop = ' || op.oprname END
-       || CASE WHEN a.agginitval IS NULL THEN '' ELSE ', initcond = ' || a.agginitval END
-       || ')' AS Code
+       n.nspname || '.' || p.proname ||
+       CASE WHEN COUNT(*) OVER (PARTITION BY p.pronamespace, p.proname) > 1
+            THEN '(' || COALESCE((SELECT STRING_AGG(FORMAT_TYPE(u.t, NULL), ', ' ORDER BY u.n) FROM UNNEST(p.proargtypes::oid[]) WITH ORDINALITY AS u(t, n)), '') || ')' ELSE '' END AS FullName,
+       n.nspname || '.' || p.proname AS BaseName,
+       'CREATE OR REPLACE AGGREGATE ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(p.proname) || '(' || PG_GET_FUNCTION_IDENTITY_ARGUMENTS(p.oid) || ') (' ||
+       E'\n    SFUNC = ' || sf.qname ||
+       E',\n    STYPE = ' || FORMAT_TYPE(a.aggtranstype, NULL) ||
+       CASE WHEN a.aggtransspace > 0 THEN E',\n    SSPACE = ' || a.aggtransspace ELSE '' END ||
+       COALESCE(E',\n    FINALFUNC = ' || ff.qname ||
+                CASE WHEN a.aggfinalextra THEN E',\n    FINALFUNC_EXTRA' ELSE '' END ||
+                CASE WHEN a.aggkind = 'n' AND a.aggfinalmodify = 's' THEN E',\n    FINALFUNC_MODIFY = SHAREABLE'
+                     WHEN a.aggkind = 'n' AND a.aggfinalmodify = 'w' THEN E',\n    FINALFUNC_MODIFY = READ_WRITE'
+                     WHEN a.aggkind <> 'n' AND a.aggfinalmodify = 'r' THEN E',\n    FINALFUNC_MODIFY = READ_ONLY'
+                     WHEN a.aggkind <> 'n' AND a.aggfinalmodify = 's' THEN E',\n    FINALFUNC_MODIFY = SHAREABLE'
+                     ELSE '' END, '') ||
+       COALESCE(E',\n    COMBINEFUNC = ' || cf.qname, '') ||
+       COALESCE(E',\n    SERIALFUNC = ' || srf.qname, '') ||
+       COALESCE(E',\n    DESERIALFUNC = ' || dsf.qname, '') ||
+       COALESCE(E',\n    INITCOND = ' || QUOTE_LITERAL(a.agginitval), '') ||
+       COALESCE(E',\n    MSFUNC = ' || msf.qname || E',\n    MINVFUNC = ' || minv.qname || E',\n    MSTYPE = ' || FORMAT_TYPE(a.aggmtranstype, NULL) ||
+                CASE WHEN a.aggmtransspace > 0 THEN E',\n    MSSPACE = ' || a.aggmtransspace ELSE '' END ||
+                COALESCE(E',\n    MFINALFUNC = ' || mff.qname ||
+                         CASE WHEN a.aggmfinalextra THEN E',\n    MFINALFUNC_EXTRA' ELSE '' END ||
+                         CASE WHEN a.aggmfinalmodify = 's' THEN E',\n    MFINALFUNC_MODIFY = SHAREABLE'
+                              WHEN a.aggmfinalmodify = 'w' THEN E',\n    MFINALFUNC_MODIFY = READ_WRITE' ELSE '' END, '') ||
+                COALESCE(E',\n    MINITCOND = ' || QUOTE_LITERAL(a.aggminitval), ''), '') ||
+       COALESCE(E',\n    SORTOP = OPERATOR(' || QUOTE_IDENT(opn.nspname) || '.' || op.oprname || ')', '') ||
+       CASE p.proparallel WHEN 's' THEN E',\n    PARALLEL = SAFE' WHEN 'r' THEN E',\n    PARALLEL = RESTRICTED' ELSE '' END ||
+       CASE WHEN a.aggkind = 'h' THEN E',\n    HYPOTHETICAL' ELSE '' END ||
+       E'\n);' AS Code
   FROM pg_proc p
   JOIN pg_namespace n ON p.pronamespace = n.oid
   JOIN pg_aggregate a ON a.aggfnoid = p.oid
+  JOIN fn sf ON sf.oid = a.aggtransfn
+  LEFT JOIN fn ff ON ff.oid = a.aggfinalfn
+  LEFT JOIN fn cf ON cf.oid = a.aggcombinefn
+  LEFT JOIN fn srf ON srf.oid = a.aggserialfn
+  LEFT JOIN fn dsf ON dsf.oid = a.aggdeserialfn
+  LEFT JOIN fn msf ON msf.oid = a.aggmtransfn
+  LEFT JOIN fn minv ON minv.oid = a.aggminvtransfn
+  LEFT JOIN fn mff ON mff.oid = a.aggmfinalfn
   LEFT JOIN pg_operator op ON op.oid = a.aggsortop
+  LEFT JOIN pg_namespace opn ON opn.oid = op.oprnamespace
   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND n.nspname NOT LIKE 'pg_temp_%'
-    AND n.nspname NOT LIKE 'pg_toast_temp_%';
+    AND n.nspname NOT LIKE 'pg_toast_temp_%'
+    AND " + PostgreSqlNotExtensionMember("pg_proc", "p.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Aggregates");
     }
@@ -2642,14 +3284,18 @@ SELECT 'Aggregates' AS Folder,
     {
         command.CommandText = @"
 SELECT 'Procedures' AS Folder,
-       n.nspname || '.' || p.proname AS FullName,
+       n.nspname || '.' || p.proname ||
+       CASE WHEN COUNT(*) OVER (PARTITION BY p.pronamespace, p.proname) > 1
+            THEN '(' || COALESCE((SELECT STRING_AGG(FORMAT_TYPE(u.t, NULL), ', ' ORDER BY u.n) FROM UNNEST(p.proargtypes::oid[]) WITH ORDINALITY AS u(t, n)), '') || ')' ELSE '' END AS FullName,
+       n.nspname || '.' || p.proname AS BaseName,
        PG_GET_FUNCTIONDEF(p.oid) AS Code
   FROM pg_proc p
   JOIN pg_namespace n ON p.pronamespace = n.oid
                      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
                      AND n.nspname NOT LIKE 'pg_temp_%'
                      AND n.nspname NOT LIKE 'pg_toast_temp_%'
-  WHERE p.prokind = 'p';
+  WHERE p.prokind = 'p'
+    AND " + PostgreSqlNotExtensionMember("pg_proc", "p.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Procedures");
     }
@@ -2679,7 +3325,7 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
     AND NOT EXISTS (SELECT 1 FROM pg_depend d
                     WHERE d.objid = s.oid
                       AND d.classid = 'pg_class'::regclass
-                      AND d.deptype IN ('i', 'a'))
+                      AND d.deptype IN ('i', 'a', 'e'))
   ORDER BY n.nspname, s.relname;
 ";
         _progressLog.Info("Casting Sequence Structures");
@@ -2726,33 +3372,209 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
 
     private void CastPostgreSqlPublications(IDbCommand command)
     {
-        // Best-effort: covers publish=insert/update/delete/truncate (all PG10+, below the PG12 floor)
-        // and FOR ALL TABLES / FOR TABLE. PG13's publish_via_partition_root is not emitted — a target
-        // above the floor without partitioned-root publishing loses only that one clause on re-extract.
-        // CREATE PUBLICATION has no IF NOT EXISTS form, so the guarded create goes through a DO $$ ... $$
-        // block (like Composite/Enum Types above). QUOTE_IDENT/QUOTE_LITERAL supply every interpolated
-        // value pre-escaped, and every literal chunk below opens and closes with exactly one quote each —
-        // no hand-doubled nested quoting, unlike the older ""schema""."" pattern elsewhere in this file.
-        command.CommandText = @"
+        // The catalog grew by version: publish_via_partition_root on 13; a row filter, a column list and TABLES IN
+        // SCHEMA on 15; publish_generated_columns on 18. The text is chosen by the server's version, and a publication
+        // with no tables is written without a FOR clause. CREATE PUBLICATION has no IF NOT EXISTS form, so the guarded
+        // create goes through a DO $$ ... $$ block. The column list comes from pg_publication_rel.prattrs, which is
+        // NULL when none was declared; pg_publication_tables.attnames lists every column either way.
+        var version = PostgreSqlServerVersionNum(command);
+        var columnList = version >= 150000
+            ? "COALESCE(' (' || (SELECT STRING_AGG(QUOTE_IDENT(att.attname), ', ' ORDER BY att.attnum) FROM pg_attribute att WHERE att.attrelid = pr.prrelid AND att.attnum = ANY(pr.prattrs)) || ')', '')"
+            : "''";
+        var rowFilter = version >= 150000 ? "COALESCE(' WHERE ' || PG_GET_EXPR(pr.prqual, pr.prrelid), '')" : "''";
+        var schemas = version >= 150000
+            ? "(SELECT STRING_AGG(QUOTE_IDENT(sn.nspname), ', ') FROM pg_publication_namespace pn JOIN pg_namespace sn ON sn.oid = pn.pnnspid WHERE pn.pnpubid = p.oid)"
+            : "NULL::text";
+        var viaRoot = version >= 130000 ? "CASE WHEN p.pubviaroot THEN ', publish_via_partition_root = true' ELSE '' END" : "''";
+        var generated = version >= 180000 ? "CASE WHEN p.pubgencols = 's' THEN ', publish_generated_columns = stored' ELSE '' END" : "''";
+        command.CommandText = $@"
 SELECT 'Publications' AS Folder,
        p.pubname AS FullName,
        E'\nDO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = ' || QUOTE_LITERAL(p.pubname) ||
-       E') THEN\n        CREATE PUBLICATION ' || QUOTE_IDENT(p.pubname) || ' ' ||
-       CASE WHEN p.puballtables THEN 'FOR ALL TABLES '
-            ELSE 'FOR TABLE ' || COALESCE(STRING_AGG(DISTINCT QUOTE_IDENT(pt.schemaname) || '.' || QUOTE_IDENT(pt.tablename), ', '), '') || ' '
+       E') THEN\n        CREATE PUBLICATION ' || QUOTE_IDENT(p.pubname) ||
+       CASE WHEN p.puballtables THEN ' FOR ALL TABLES'
+            WHEN t.tables IS NULL AND s.schemas IS NULL THEN ''
+            ELSE ' FOR ' || CONCAT_WS(', ', 'TABLE ' || t.tables, 'TABLES IN SCHEMA ' || s.schemas)
        END ||
-       'WITH (publish = ' || QUOTE_LITERAL(CONCAT_WS(',',
+       ' WITH (publish = ' || QUOTE_LITERAL(CONCAT_WS(', ',
             CASE WHEN p.pubinsert THEN 'insert' END,
             CASE WHEN p.pubupdate THEN 'update' END,
             CASE WHEN p.pubdelete THEN 'delete' END,
             CASE WHEN p.pubtruncate THEN 'truncate' END)) ||
+       {viaRoot} || {generated} ||
        E');\n    END IF;\nEND\n$$;' AS Code
   FROM pg_publication p
-  LEFT JOIN pg_publication_tables pt ON pt.pubname = p.pubname
- WHERE p.pubname NOT LIKE 'pg\_%'
- GROUP BY p.pubname, p.puballtables, p.pubinsert, p.pubupdate, p.pubdelete, p.pubtruncate;
+  LEFT JOIN LATERAL (
+       SELECT STRING_AGG(QUOTE_IDENT(rn.nspname) || '.' || QUOTE_IDENT(rc.relname) || {columnList} || {rowFilter}, ', ' ORDER BY rn.nspname, rc.relname) AS tables
+         FROM pg_publication_rel pr
+         JOIN pg_class rc ON rc.oid = pr.prrelid
+         JOIN pg_namespace rn ON rn.oid = rc.relnamespace
+        WHERE pr.prpubid = p.oid) t ON true
+  LEFT JOIN LATERAL (SELECT {schemas} AS schemas) s ON true
+ WHERE p.pubname NOT LIKE 'pg\_%';
 ";
         PerformPostgreSqlCasting(command, "Publications");
+    }
+
+    // pg_dump's shape: the operator class and collation only where they differ from the subtype's defaults, the
+    // support functions, and (14+) a multirange type not named by the engine's rule (the first "range" becomes
+    // "multirange", or "_multirange" is appended). CREATE TYPE has no IF NOT EXISTS, so the create is guarded; ALTER TYPE
+    // cannot change a range type, so an existing one is left as it is.
+    private void CastPostgreSqlRangeTypes(IDbCommand command)
+    {
+        var multirange = PostgreSqlServerVersionNum(command) >= 140000
+            ? @"COALESCE((SELECT ', MULTIRANGE_TYPE_NAME = ' || QUOTE_IDENT(mn.nspname) || '.' || QUOTE_IDENT(mt.typname)
+                   FROM pg_type mt JOIN pg_namespace mn ON mn.oid = mt.typnamespace
+                  WHERE mt.oid = r.rngmultitypid
+                    AND (mt.typnamespace <> t.typnamespace
+                         OR mt.typname <> CASE WHEN STRPOS(t.typname, 'range') > 0 THEN REGEXP_REPLACE(t.typname, 'range', 'multirange') ELSE t.typname || '_multirange' END)), '')"
+            : "''";
+        command.CommandText = $@"
+SELECT 'Range Types' AS Folder,
+       n.nspname || '.' || t.typname AS FullName,
+       E'DO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = ' || QUOTE_LITERAL(n.nspname) || ' AND t.typname = ' || QUOTE_LITERAL(t.typname) || E') THEN\n        CREATE TYPE ' ||
+       QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(t.typname) || ' AS RANGE (SUBTYPE = ' || FORMAT_TYPE(r.rngsubtype, NULL) ||
+       CASE WHEN NOT oc.opcdefault THEN ', SUBTYPE_OPCLASS = ' || QUOTE_IDENT(ocn.nspname) || '.' || QUOTE_IDENT(oc.opcname) ELSE '' END ||
+       CASE WHEN r.rngcollation <> 0 AND r.rngcollation <> st.typcollation
+            THEN ', COLLATION = ' || QUOTE_IDENT(cn.nspname) || '.' || QUOTE_IDENT(co.collname) ELSE '' END ||
+       COALESCE(', CANONICAL = ' || (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = r.rngcanonical), '') ||
+       COALESCE(', SUBTYPE_DIFF = ' || (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = r.rngsubdiff), '') ||
+       {multirange} ||
+       E');\n    END IF;\nEND\n$$;' AS Code
+  FROM pg_range r
+  JOIN pg_type t ON t.oid = r.rngtypid
+  JOIN pg_namespace n ON n.oid = t.typnamespace
+  JOIN pg_type st ON st.oid = r.rngsubtype
+  JOIN pg_opclass oc ON oc.oid = r.rngsubopc
+  JOIN pg_namespace ocn ON ocn.oid = oc.opcnamespace
+  LEFT JOIN pg_collation co ON co.oid = r.rngcollation
+  LEFT JOIN pg_namespace cn ON cn.oid = co.collnamespace
+ WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
+   AND n.nspname NOT LIKE 'pg_temp_%'
+   AND n.nspname NOT LIKE 'pg_toast_temp_%'
+   AND {PostgreSqlNotExtensionMember("pg_type", "t.oid")};
+";
+        PerformPostgreSqlCasting(command, "Range Types");
+    }
+
+    // A configuration is a parser and a token-to-dictionaries map. The script creates any dictionary it maps to outside
+    // pg_catalog (each guarded, so two configurations sharing one are fine), creates the configuration where it is
+    // missing, then replaces every mapping, so a re-run puts back a mapping changed by hand. The parser is create-time.
+    private void CastPostgreSqlTextSearchConfigurations(IDbCommand command)
+    {
+        command.CommandText = @"
+SELECT 'Text Search Configurations' AS Folder,
+       n.nspname || '.' || c.cfgname AS FullName,
+       COALESCE((SELECT STRING_AGG(E'DO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_ts_dict d JOIN pg_namespace n ON n.oid = d.dictnamespace WHERE n.nspname = ' || QUOTE_LITERAL(dn.nspname) || ' AND d.dictname = ' || QUOTE_LITERAL(d.dictname) || E') THEN\n        CREATE TEXT SEARCH DICTIONARY ' ||
+                                   QUOTE_IDENT(dn.nspname) || '.' || QUOTE_IDENT(d.dictname) || ' (TEMPLATE = ' || QUOTE_IDENT(tn.nspname) || '.' || QUOTE_IDENT(tp.tmplname) ||
+                                   COALESCE(', ' || d.dictinitoption, '') || E');\n    END IF;\nEND\n$$;\n', '' ORDER BY dn.nspname, d.dictname)
+                   FROM pg_ts_dict d
+                   JOIN pg_namespace dn ON dn.oid = d.dictnamespace
+                   JOIN pg_ts_template tp ON tp.oid = d.dicttemplate
+                   JOIN pg_namespace tn ON tn.oid = tp.tmplnamespace
+                  WHERE dn.nspname <> 'pg_catalog'
+                    AND d.oid IN (SELECT m.mapdict FROM pg_ts_config_map m WHERE m.mapcfg = c.oid)), '') ||
+       E'DO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_ts_config c JOIN pg_namespace n ON n.oid = c.cfgnamespace WHERE n.nspname = ' || QUOTE_LITERAL(n.nspname) || ' AND c.cfgname = ' || QUOTE_LITERAL(c.cfgname) || E') THEN\n        CREATE TEXT SEARCH CONFIGURATION ' ||
+       QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.cfgname) || ' (PARSER = ' || QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.prsname) || E');\n    END IF;\nEND\n$$;\n' ||
+       'ALTER TEXT SEARCH CONFIGURATION ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.cfgname) || ' DROP MAPPING IF EXISTS FOR ' ||
+       (SELECT STRING_AGG(QUOTE_IDENT(tt.alias), ', ' ORDER BY tt.tokid) FROM TS_TOKEN_TYPE(c.cfgparser) tt) || E';\n' ||
+       COALESCE((SELECT STRING_AGG('ALTER TEXT SEARCH CONFIGURATION ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.cfgname) || ' ADD MAPPING FOR ' || g.tokens || ' WITH ' || g.dicts || E';\n', '' ORDER BY g.first_token)
+                   FROM (SELECT STRING_AGG(QUOTE_IDENT(tt.alias), ', ' ORDER BY tt.tokid) AS tokens, MIN(tt.tokid) AS first_token, md.dicts
+                           FROM (SELECT m.maptokentype,
+                                        STRING_AGG(QUOTE_IDENT(dn.nspname) || '.' || QUOTE_IDENT(d.dictname), ', ' ORDER BY m.mapseqno) AS dicts
+                                   FROM pg_ts_config_map m
+                                   JOIN pg_ts_dict d ON d.oid = m.mapdict
+                                   JOIN pg_namespace dn ON dn.oid = d.dictnamespace
+                                  WHERE m.mapcfg = c.oid
+                                  GROUP BY m.maptokentype) md
+                           JOIN TS_TOKEN_TYPE(c.cfgparser) tt ON tt.tokid = md.maptokentype
+                          GROUP BY md.dicts) g), '') AS Code
+  FROM pg_ts_config c
+  JOIN pg_namespace n ON n.oid = c.cfgnamespace
+  JOIN pg_ts_parser p ON p.oid = c.cfgparser
+  JOIN pg_namespace pn ON pn.oid = p.prsnamespace
+ WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
+   AND n.nspname NOT LIKE 'pg_temp_%'
+   AND n.nspname NOT LIKE 'pg_toast_temp_%'
+   AND " + PostgreSqlNotExtensionMember("pg_ts_config", "c.oid") + @";
+";
+        PerformPostgreSqlCasting(command, "Text Search Configurations");
+    }
+
+    // One file per signature, named schema.op(left, right) with NONE for a missing side. CREATE OPERATOR has no IF NOT
+    // EXISTS; the guard looks for a real operator, not the shell another operator's COMMUTATOR or NEGATOR leaves, because
+    // CREATE OPERATOR fills a shell in. An existing operator is left as it is (ALTER OPERATOR changes only some options).
+    private void CastPostgreSqlOperators(IDbCommand command)
+    {
+        command.CommandText = @"
+SELECT 'Operators' AS Folder,
+       n.nspname || '.' || o.oprname || '(' || CASE WHEN o.oprleft = 0 THEN 'NONE' ELSE FORMAT_TYPE(o.oprleft, NULL) END || ', ' || CASE WHEN o.oprright = 0 THEN 'NONE' ELSE FORMAT_TYPE(o.oprright, NULL) END || ')' AS FullName,
+       E'DO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_operator o JOIN pg_namespace n ON n.oid = o.oprnamespace WHERE n.nspname = ' || QUOTE_LITERAL(n.nspname) || ' AND o.oprname = ' || QUOTE_LITERAL(o.oprname) ||
+       ' AND o.oprleft = ' || CASE WHEN o.oprleft = 0 THEN '0' ELSE QUOTE_LITERAL(FORMAT_TYPE(o.oprleft, NULL)) || '::regtype' END ||
+       ' AND o.oprright = ' || CASE WHEN o.oprright = 0 THEN '0' ELSE QUOTE_LITERAL(FORMAT_TYPE(o.oprright, NULL)) || '::regtype' END ||
+       E' AND o.oprcode <> 0) THEN\n        CREATE OPERATOR ' || QUOTE_IDENT(n.nspname) || '.' || o.oprname || ' (FUNCTION = ' ||
+       (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = o.oprcode) ||
+       CASE WHEN o.oprleft <> 0 THEN ', LEFTARG = ' || FORMAT_TYPE(o.oprleft, NULL) ELSE '' END ||
+       CASE WHEN o.oprright <> 0 THEN ', RIGHTARG = ' || FORMAT_TYPE(o.oprright, NULL) ELSE '' END ||
+       COALESCE((SELECT ', COMMUTATOR = OPERATOR(' || QUOTE_IDENT(cn.nspname) || '.' || co.oprname || ')' FROM pg_operator co JOIN pg_namespace cn ON cn.oid = co.oprnamespace WHERE co.oid = o.oprcom), '') ||
+       COALESCE((SELECT ', NEGATOR = OPERATOR(' || QUOTE_IDENT(nn.nspname) || '.' || ng.oprname || ')' FROM pg_operator ng JOIN pg_namespace nn ON nn.oid = ng.oprnamespace WHERE ng.oid = o.oprnegate), '') ||
+       COALESCE((SELECT ', RESTRICT = ' || QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = o.oprrest), '') ||
+       COALESCE((SELECT ', JOIN = ' || QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = o.oprjoin), '') ||
+       CASE WHEN o.oprcanhash THEN ', HASHES' ELSE '' END ||
+       CASE WHEN o.oprcanmerge THEN ', MERGES' ELSE '' END ||
+       E');\n    END IF;\nEND\n$$;' AS Code
+  FROM pg_operator o
+  JOIN pg_namespace n ON n.oid = o.oprnamespace
+ WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
+   AND n.nspname NOT LIKE 'pg_temp_%'
+   AND n.nspname NOT LIKE 'pg_toast_temp_%'
+   AND o.oprcode <> 0
+   AND " + PostgreSqlNotExtensionMember("pg_operator", "o.oid") + @";
+";
+        PerformPostgreSqlCasting(command, "Operators");
+    }
+
+    // A cast has no schema; it is named by its two types. Only user casts (past the bootstrap oid range) and not the
+    // multirange casts the engine creates with a range type. CREATE CAST has no IF NOT EXISTS, so the create is guarded.
+    private void CastPostgreSqlCasts(IDbCommand command)
+    {
+        command.CommandText = @"
+SELECT 'Casts' AS Folder,
+       FORMAT_TYPE(c.castsource, NULL) || ' AS ' || FORMAT_TYPE(c.casttarget, NULL) AS FullName,
+       E'DO $$\nBEGIN\n    IF NOT EXISTS (SELECT 1 FROM pg_cast WHERE castsource = ' || QUOTE_LITERAL(FORMAT_TYPE(c.castsource, NULL)) || '::regtype AND casttarget = ' || QUOTE_LITERAL(FORMAT_TYPE(c.casttarget, NULL)) ||
+       E'::regtype) THEN\n        CREATE CAST (' || FORMAT_TYPE(c.castsource, NULL) || ' AS ' || FORMAT_TYPE(c.casttarget, NULL) || ') ' ||
+       CASE c.castmethod
+            WHEN 'f' THEN 'WITH FUNCTION ' || (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) || '(' || OIDVECTORTYPES(p.proargtypes) || ')' FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = c.castfunc)
+            WHEN 'i' THEN 'WITH INOUT'
+            ELSE 'WITHOUT FUNCTION' END ||
+       CASE c.castcontext WHEN 'a' THEN ' AS ASSIGNMENT' WHEN 'i' THEN ' AS IMPLICIT' ELSE '' END ||
+       E';\n    END IF;\nEND\n$$;' AS Code
+  FROM pg_cast c
+ WHERE c.oid >= 16384
+   AND " + PostgreSqlNotEngineOwned("pg_cast", "c.oid") + @";
+";
+        PerformPostgreSqlCasting(command, "Casts");
+    }
+
+    // Dropped and re-created on every deploy, like table triggers, then set to its enabled state, which is not part of
+    // the definition. Creating one needs a superuser.
+    private void CastPostgreSqlEventTriggers(IDbCommand command)
+    {
+        command.CommandText = @"
+SELECT 'Event Triggers' AS Folder,
+       e.evtname AS FullName,
+       'DROP EVENT TRIGGER IF EXISTS ' || QUOTE_IDENT(e.evtname) || E';\nCREATE EVENT TRIGGER ' || QUOTE_IDENT(e.evtname) || ' ON ' || QUOTE_IDENT(e.evtevent) ||
+       COALESCE(' WHEN TAG IN (' || (SELECT STRING_AGG(QUOTE_LITERAL(u.tag), ', ' ORDER BY u.ord) FROM UNNEST(e.evttags) WITH ORDINALITY AS u(tag, ord)) || ')', '') ||
+       E'\n    EXECUTE FUNCTION ' || (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = e.evtfoid) || '();' ||
+       CASE e.evtenabled
+            WHEN 'D' THEN E'\nALTER EVENT TRIGGER ' || QUOTE_IDENT(e.evtname) || ' DISABLE;'
+            WHEN 'R' THEN E'\nALTER EVENT TRIGGER ' || QUOTE_IDENT(e.evtname) || ' ENABLE REPLICA;'
+            WHEN 'A' THEN E'\nALTER EVENT TRIGGER ' || QUOTE_IDENT(e.evtname) || ' ENABLE ALWAYS;'
+            ELSE '' END AS Code
+  FROM pg_event_trigger e
+ WHERE " + PostgreSqlNotExtensionMember("pg_event_trigger", "e.oid") + @";
+";
+        PerformPostgreSqlCasting(command, "Event Triggers");
     }
 
     private void CastPostgreSqlRules(IDbCommand command)
@@ -2767,50 +3589,81 @@ SELECT 'Rules' AS Folder,
   WHERE ns.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND ns.nspname NOT LIKE 'pg_temp_%'
     AND ns.nspname NOT LIKE 'pg_toast_temp_%'
-    AND r.rulename != '_RETURN';
+    AND r.rulename != '_RETURN'
+    AND c.reloftype = 0
+    AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = c.oid)
+    AND " + PostgreSqlNotExtensionMember("pg_rewrite", "r.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Rules");
     }
 
     private void CastPostgreSqlTriggers(IDbCommand command)
     {
+        // DROP IF EXISTS then the engine's own CREATE: CREATE OR REPLACE TRIGGER is 14+ and failed on the 12 floor, a
+        // constraint trigger re-run as a plain CREATE failed on the second deploy, and a disabled or replica trigger
+        // came back enabled because tgenabled is not part of the definition.
         command.CommandText = @"
 SELECT 'Triggers' AS Folder,
        ns.nspname || '.' || tbl.relname || '.' || t.tgname AS FullName,
-       REPLACE(PG_GET_TRIGGERDEF(t.oid), 'CREATE TRIGGER', 'CREATE OR REPLACE TRIGGER') AS Code
+       'DROP TRIGGER IF EXISTS ' || QUOTE_IDENT(t.tgname) || ' ON ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname) || E';\n' ||
+       PG_GET_TRIGGERDEF(t.oid) || ';' ||
+       CASE t.tgenabled
+            WHEN 'D' THEN E'\nALTER TABLE ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname) || ' DISABLE TRIGGER ' || QUOTE_IDENT(t.tgname) || ';'
+            WHEN 'R' THEN E'\nALTER TABLE ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname) || ' ENABLE REPLICA TRIGGER ' || QUOTE_IDENT(t.tgname) || ';'
+            WHEN 'A' THEN E'\nALTER TABLE ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname) || ' ENABLE ALWAYS TRIGGER ' || QUOTE_IDENT(t.tgname) || ';'
+            ELSE '' END AS Code
   FROM pg_trigger t
   JOIN pg_class tbl ON t.tgrelid = tbl.oid
   JOIN pg_namespace ns ON tbl.relnamespace = ns.oid
   WHERE NOT t.tgisinternal
     AND ns.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND ns.nspname NOT LIKE 'pg_temp_%'
-    AND ns.nspname NOT LIKE 'pg_toast_temp_%';
+    AND ns.nspname NOT LIKE 'pg_toast_temp_%'
+    -- A partitioned table and its partitions are refused at extraction (partitioning is not modelled), so a trigger
+    -- on either -- including the copies the engine clones onto each partition -- would name a table the package
+    -- does not contain.
+    AND tbl.relkind <> 'p'
+    AND NOT tbl.relispartition
+    AND tbl.reloftype = 0
+    AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = tbl.oid)
+    AND " + PostgreSqlNotExtensionMember("pg_trigger", "t.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Triggers");
     }
 
     private void CastPostgreSqlViews(IDbCommand command)
     {
+        // The view's options (security_barrier, security_invoker, check_option) are stored as reloptions and are
+        // written back in the WITH clause; CREATE OR REPLACE VIEW without them resets them, which is how a
+        // security_invoker view lost its setting on every redeploy.
         command.CommandText = @"
 SELECT 'Views' AS Folder,
-       schemaname || '.' || viewname AS FullName,
-       'CREATE OR REPLACE VIEW ""' || schemaname || '"".""' || viewname || '"" AS' || E'\n' || definition AS Code
-  FROM pg_views
-  WHERE schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
-    AND schemaname NOT LIKE 'pg_temp_%'
-    AND schemaname NOT LIKE 'pg_toast_temp_%';
+       n.nspname || '.' || c.relname AS FullName,
+       'CREATE OR REPLACE VIEW ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.relname) ||
+       COALESCE(' WITH (' || ARRAY_TO_STRING(c.reloptions, ', ') || ')', '') ||
+       E' AS\n' || PG_GET_VIEWDEF(c.oid, true) AS Code
+  FROM pg_class c
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE c.relkind = 'v'
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
+    AND n.nspname NOT LIKE 'pg_temp_%'
+    AND n.nspname NOT LIKE 'pg_toast_temp_%'
+    AND " + PostgreSqlNotExtensionMember("pg_class", "c.oid") + @";
 ";
         PerformPostgreSqlCasting(command, "Views");
     }
 
     private void CastPostgreSqlMaterializedViews(IDbCommand command)
     {
-        command.CommandText = @"
+        command.CommandText = $@"
 SELECT mv.schemaname, mv.matviewname
   FROM pg_matviews mv
+  JOIN pg_class c ON c.relname = mv.matviewname
+                 AND c.relnamespace = (SELECT n.oid FROM pg_namespace n WHERE n.nspname = mv.schemaname)
   WHERE mv.schemaname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND mv.schemaname NOT LIKE 'pg_temp_%'
     AND mv.schemaname NOT LIKE 'pg_toast_temp_%'
+    AND {PostgreSqlNotExtensionMember("pg_class", "c.oid")}
   ORDER BY mv.schemaname, mv.matviewname;
 ";
 
@@ -2867,6 +3720,16 @@ SELECT mv.schemaname, mv.matviewname
         }
     }
 
+    // An overloaded routine is named with its argument types (public.f(integer)), so listing public.f, or f, takes every
+    // overload as it takes a routine that has none; the full signature takes that one alone.
+    private bool IsListedToCast(string fullName)
+    {
+        var open = fullName.IndexOf('(');
+        var baseName = open > 0 ? fullName[..open] : fullName;
+        return new[] { fullName, baseName }.Any(n =>
+            _objectsToCast.Contains(n.ToLower()) || _objectsToCast.Contains(Identifier.SplitQualifiedName(n, _platform).Name.ToLower()));
+    }
+
     private void PerformPostgreSqlCasting(IDbCommand command, string castType)
     {
         _progressLog.Info($"Casting {castType}");
@@ -2879,7 +3742,7 @@ SELECT mv.schemaname, mv.matviewname
                 var castPath = Path.Combine(_templatePath, reader["Folder"].ToString());
                 DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
                 var fullName = reader["FullName"].ToString();
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(fullName.ToLower()) && !_objectsToCast.Contains(Identifier.SplitQualifiedName(fullName, _platform).Name.ToLower())) continue;
+                if (_objectsToCast.Length > 0 && !IsListedToCast(fullName)) continue;
 
                 // Schema-template mode: skip objects outside the source schema; emit unqualified filenames.
                 // Delimiter-aware split so a dotted delimited schema name ([my.schema]) is not mis-split (#272).
@@ -2891,6 +3754,7 @@ SELECT mv.schemaname, mv.matviewname
                     : EncodeFullName(fullName, ".sql");
                 var fileName = ResolveOutputPath(castPath, outputName);
                 var folderName = reader["Folder"].ToString();
+                RetireUnsuffixedRoutineFile(reader, castPath, fullName, fileName);
                 if (ShouldSkipKnownBadScript(fileName)) { IncrementStatForFolder(folderName); continue; }
                 var script = string.Join("\r\n", reader["Code"].ToString());
                 records.Add((castPath, fullName, fileName, script, folderName, false));
@@ -2905,6 +3769,12 @@ SELECT mv.schemaname, mv.matviewname
             var objectType = ScriptFolderTypeInference.InferFromFolderName(folderName);
             ValidateAndHandleScript(command.Connection, fileName, body, objectType);
             IncrementStatForFolder(folderName);
+        }
+
+        foreach (var (castPath, folderName) in records.Select(r => (r.CastPath, r.FolderName)).Distinct())
+        {
+            var objectType = ScriptFolderTypeInference.InferFromFolderName(folderName);
+            if (RepositoryHelper.FoldersWrittenOnUse.Contains(objectType)) DeclareFolderWrittenOnUse(objectType, castPath);
         }
     }
 
@@ -2934,6 +3804,7 @@ SELECT mv.schemaname, mv.matviewname
                 if (_includeTableTriggers) ScriptMySqlTriggers(command, targetSchema);
                 if (_includeEvents) ScriptMySqlEvents(command, targetSchema);
                 if (_includeSequences) ScriptMariaDbSequences(command, targetSchema);
+                if (_includePackages) ScriptMariaDbPackages(command, targetSchema);
             }
             finally
             {
@@ -2950,90 +3821,218 @@ SELECT mv.schemaname, mv.matviewname
     private void ScriptMySqlFunctions(IDbCommand command, string targetSchema)
     {
         _progressLog.Info("Casting Function Scripts");
-        // EXTERNAL_LANGUAGE is NULL on MariaDB for SQL routines (MySQL reports 'SQL'), and one NULL
-        // operand nulls the whole || chain, yielding an empty script file. ORDINAL_POSITION 0 is the
-        // function's return value, excluded explicitly rather than relying on GROUP_CONCAT skipping
-        // its NULL PARAMETER_NAME — which is why the parameter columns must NOT be COALESCEd.
+        _stats.Functions = ScriptMySqlRoutines(command, targetSchema, "FUNCTION", "Functions", ScriptObjectType.Functions);
+    }
+
+    private void ScriptMySqlProcedures(IDbCommand command, string targetSchema)
+    {
+        _progressLog.Info("Casting Stored Procedure Scripts");
+        _stats.Procedures = ScriptMySqlRoutines(command, targetSchema, "PROCEDURE", "Procedures", ScriptObjectType.Procedures);
+    }
+
+    // Views, routines and triggers are written from SHOW CREATE, the engine's own DDL, rather than rebuilt from
+    // INFORMATION_SCHEMA fragments: the fragments lost parameter modes, charsets, quoted names, defaults, aggregates,
+    // multi-event and UPDATE OF triggers, trigger order, COMMENT, SQL_MODE and the view options, and VIEW_DEFINITION
+    // qualified every reference with the source database so a deployed view read the source. SHOW CREATE leaves a
+    // reference to the CURRENT database unqualified and a cross-database one qualified, which is why the extraction
+    // connection is opened on the source database.
+    private int ScriptMySqlRoutines(IDbCommand command, string targetSchema, string kind, string folder, ScriptObjectType objectType)
+    {
         command.CommandText = $@"
-SELECT 'Functions' AS Folder,
-       ROUTINE_NAME AS FullName,
-       'DROP FUNCTION IF EXISTS `' || ROUTINE_NAME || '`;\nDELIMITER //\n' ||
-       'CREATE FUNCTION `' || ROUTINE_NAME || '` (' ||
-       COALESCE((SELECT GROUP_CONCAT(PARAMETER_NAME || ' ' || DTD_IDENTIFIER ORDER BY ORDINAL_POSITION SEPARATOR ',')
-                   FROM INFORMATION_SCHEMA.PARAMETERS p
-                   WHERE p.SPECIFIC_NAME = r.ROUTINE_NAME
-                     AND p.ROUTINE_TYPE = r.ROUTINE_TYPE
-                     AND p.SPECIFIC_SCHEMA = r.ROUTINE_SCHEMA
-                     AND p.ORDINAL_POSITION > 0), '') || ')\n  RETURNS ' || DTD_IDENTIFIER ||
-       '\n' || '  LANGUAGE ' || COALESCE(EXTERNAL_LANGUAGE, 'SQL') ||
-       '\n' || CASE WHEN IS_DETERMINISTIC = 'Yes' THEN '  DETERMINISTIC' ELSE '  NOT DETERMINISTIC' END ||
-       CASE WHEN NULLIF(SQL_DATA_ACCESS, '') IS NOT NULL THEN '\n  ' || SQL_DATA_ACCESS ELSE '' END ||
-       '\n' || '  SQL SECURITY ' || SECURITY_TYPE ||
-       '\n' || ROUTINE_DEFINITION || ' //\nDELIMITER ;' AS Code
-  FROM INFORMATION_SCHEMA.ROUTINES r
+SELECT ROUTINE_NAME, COALESCE(EXTERNAL_LANGUAGE, 'SQL')
+  FROM INFORMATION_SCHEMA.ROUTINES
   WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
-    AND ROUTINE_TYPE = 'FUNCTION'
+    AND ROUTINE_TYPE = '{kind}'
     AND ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
-";
-        _stats.Functions = PerformMySqlCasting(command, "Functions");
+  ORDER BY ROUTINE_NAME";
+        // MY-#24. A JavaScript routine (MySQL Enterprise's MLE component) cannot be created on a server without it, and
+        // its libraries are not modelled, so it is named and skipped rather than written.
+        var names = new List<string>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                var language = reader.GetString(1);
+                if (language is "" or "SQL") { names.Add(reader.GetString(0)); continue; }
+                _progressLog.Warn($"  Skipping {folder}/{reader.GetString(0)}: a {language} routine is not extracted (it needs the server's {language} language component)");
+                _stats.SkippedObjects++;
+            }
+        }
+        var createColumn = kind == "FUNCTION" ? "Create Function" : "Create Procedure";
+        return ScriptMySqlShowCreateObjects(command, names, folder, objectType, name =>
+        {
+            var shown = ShowCreate(command, kind, targetSchema, name, createColumn);
+            return shown == null ? null : WrapMySqlDelimitedScript(kind, name, shown.Value.SqlMode, StripDefiner(shown.Value.Create));
+        });
     }
 
     private void ScriptMySqlViews(IDbCommand command, string targetSchema)
     {
         _progressLog.Info("Casting View Scripts");
         command.CommandText = $@"
-SELECT 'Views' AS Folder,
-       TABLE_NAME AS FullName,
-       'DROP VIEW IF EXISTS `' || TABLE_NAME || '`;\nCREATE VIEW `' || TABLE_NAME || '` AS\n' || VIEW_DEFINITION AS Code
+SELECT TABLE_NAME
   FROM INFORMATION_SCHEMA.VIEWS
   WHERE TABLE_SCHEMA = '{EscapeSql(targetSchema)}'
     AND TABLE_NAME NOT LIKE 'SchemaSmith\_%'
-";
-        _stats.Views = PerformMySqlCasting(command, "Views");
-    }
-
-    private void ScriptMySqlProcedures(IDbCommand command, string targetSchema)
-    {
-        _progressLog.Info("Casting Stored Procedure Scripts");
-        // See ScriptMySqlFunctions: EXTERNAL_LANGUAGE is NULL on MariaDB and would null the whole
-        // || chain, writing a 0-byte script.
-        command.CommandText = $@"
-SELECT 'Procedures' AS Folder,
-       ROUTINE_NAME AS FullName,
-       'DROP PROCEDURE IF EXISTS `' || ROUTINE_NAME || '`;\nDELIMITER //\n' ||
-       'CREATE PROCEDURE `' || ROUTINE_NAME || '` (' ||
-       COALESCE((SELECT GROUP_CONCAT(PARAMETER_MODE || ' ' || PARAMETER_NAME || ' ' || DTD_IDENTIFIER ORDER BY ORDINAL_POSITION SEPARATOR ',')
-                   FROM INFORMATION_SCHEMA.PARAMETERS p
-                   WHERE p.SPECIFIC_NAME = r.ROUTINE_NAME
-                     AND p.ROUTINE_TYPE = r.ROUTINE_TYPE
-                     AND p.SPECIFIC_SCHEMA = r.ROUTINE_SCHEMA
-                     AND p.ORDINAL_POSITION > 0), '') || ')' ||
-       '\n' || '  LANGUAGE ' || COALESCE(EXTERNAL_LANGUAGE, 'SQL') ||
-       '\n' || CASE WHEN IS_DETERMINISTIC = 'Yes' THEN '  DETERMINISTIC' ELSE '  NOT DETERMINISTIC' END ||
-       CASE WHEN NULLIF(SQL_DATA_ACCESS, '') IS NOT NULL THEN '\n  ' || SQL_DATA_ACCESS ELSE '' END ||
-       '\n' || '  SQL SECURITY ' || SECURITY_TYPE ||
-       '\n' || ROUTINE_DEFINITION || ' //\nDELIMITER ;' AS Code
-  FROM INFORMATION_SCHEMA.ROUTINES r
-  WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
-    AND ROUTINE_TYPE = 'PROCEDURE'
-    AND ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
-";
-        _stats.Procedures = PerformMySqlCasting(command, "Procedures");
+  ORDER BY TABLE_NAME";
+        // CREATE OR REPLACE: no window with the view missing, and a failed replace leaves the old view in place.
+        // A view stores no sql_mode, so there is nothing to pin.
+        _stats.Views = ScriptMySqlShowCreateObjects(command, ReadNames(command), "Views", ScriptObjectType.Views, name =>
+        {
+            var shown = ShowCreate(command, "VIEW", targetSchema, name, "Create View");
+            if (shown == null) return null;
+            var create = StripDefiner(shown.Value.Create);
+            return Regex.Replace(create, @"^CREATE\s+(?!OR\s+REPLACE\b)", "CREATE OR REPLACE ", RegexOptions.IgnoreCase) + ";\n";
+        });
     }
 
     private void ScriptMySqlTriggers(IDbCommand command, string targetSchema)
     {
         _progressLog.Info("Casting Trigger Scripts");
         command.CommandText = $@"
-SELECT 'Triggers' AS Folder,
-       TRIGGER_NAME AS FullName,
-       'DROP TRIGGER IF EXISTS `' || TRIGGER_NAME || '`;\nDELIMITER //\nCREATE TRIGGER `' || TRIGGER_NAME || '`\n  ' || ACTION_TIMING || ' ' || EVENT_MANIPULATION || '\n  ON `' || EVENT_OBJECT_TABLE || '` ' ||
-       '\n  FOR EACH ' || ACTION_ORIENTATION || ' \nBEGIN\n' || ACTION_STATEMENT || ';\nEND //\nDELIMITER ;' AS Code
+SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION, ACTION_ORDER
   FROM INFORMATION_SCHEMA.TRIGGERS
   WHERE TRIGGER_SCHEMA = '{EscapeSql(targetSchema)}'
     AND TRIGGER_NAME NOT LIKE 'SchemaSmith\_%'
-";
-        _stats.Triggers = PerformMySqlCasting(command, "Triggers");
+  ORDER BY TRIGGER_NAME";
+        var triggers = new List<(string Name, string Table, string Timing, string[] Events, int Order)>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+                triggers.Add((reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                    reader.GetString(3).Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
+                    Convert.ToInt32(reader.GetValue(4))));
+        }
+
+        // Without the TRIGGER privilege the catalog does not list the triggers at all, so there is nothing to skip and
+        // warn about one by one; an empty list from an account without the privilege is said once.
+        if (triggers.Count == 0 && !HasMySqlPrivilege(command, "TRIGGER", targetSchema))
+            _progressLog.Warn("  No triggers were listed, and the extracting account has no TRIGGER privilege on this database, so any it has are invisible to it.");
+
+        // SHOW CREATE TRIGGER returns the statement as the user wrote it, which never carries FOLLOWS / PRECEDES:
+        // the order lives only in ACTION_ORDER, so the clause is rebuilt from the trigger one position earlier in
+        // the same table, timing and event.
+        string Predecessor((string Name, string Table, string Timing, string[] Events, int Order) t) =>
+            t.Order <= 1 ? null
+                : triggers.Where(o => o.Name != t.Name && o.Table == t.Table && o.Timing == t.Timing && o.Order == t.Order - 1
+                                      && o.Events.Intersect(t.Events, StringComparer.OrdinalIgnoreCase).Any())
+                           .Select(o => o.Name).Distinct().ToList() is { Count: 1 } one ? one[0] : null;
+
+        _stats.Triggers = ScriptMySqlShowCreateObjects(command, triggers.Select(t => t.Name).ToList(), "Triggers", ScriptObjectType.Triggers, name =>
+        {
+            var shown = ShowCreate(command, "TRIGGER", targetSchema, name, "SQL Original Statement");
+            if (shown == null) return null;
+            var create = StripDefiner(shown.Value.Create);
+            var predecessor = Predecessor(triggers.First(t => t.Name == name));
+            if (predecessor != null && !Regex.IsMatch(create, @"\bFOR\s+EACH\s+ROW\s+(FOLLOWS|PRECEDES)\b", RegexOptions.IgnoreCase))
+                create = Regex.Replace(create, @"\bFOR\s+EACH\s+ROW\b", m => $"{m.Value} FOLLOWS `{predecessor.Replace("`", "``")}`", RegexOptions.IgnoreCase, TimeSpan.FromSeconds(5));
+            return WrapMySqlDelimitedScript("TRIGGER", name, shown.Value.SqlMode, create);
+        });
+    }
+
+    // Global, database-level or table-level; a privilege held through a role is not seen, so a false "no" is possible
+    // and the warning that uses this is advisory.
+    private static bool HasMySqlPrivilege(IDbCommand command, string privilege, string database)
+    {
+        command.CommandText = $@"
+SELECT COUNT(*)
+  FROM (SELECT GRANTEE, PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.USER_PRIVILEGES
+        UNION ALL
+        SELECT GRANTEE, PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.SCHEMA_PRIVILEGES WHERE TABLE_SCHEMA = '{EscapeSql(database)}'
+        UNION ALL
+        SELECT GRANTEE, PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.TABLE_PRIVILEGES WHERE TABLE_SCHEMA = '{EscapeSql(database)}') p
+  WHERE p.PRIVILEGE_TYPE = '{privilege}'
+    AND p.GRANTEE = CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''', SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''')";
+        return Convert.ToInt32(command.ExecuteScalar()) > 0;
+    }
+
+    private static List<string> ReadNames(IDbCommand command)
+    {
+        var names = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) names.Add(reader.GetString(0));
+        return names;
+    }
+
+    // Null when the server will not show the definition: SHOW CREATE PROCEDURE / FUNCTION returns a NULL body to an
+    // account that is not the definer and lacks global SELECT (SHOW_ROUTINE on 8.0.20+, SELECT on mysql.proc on
+    // MariaDB); SHOW CREATE VIEW and TRIGGER refuse outright (1142) without SHOW VIEW / TRIGGER. The caller logs it.
+    private (string Create, string SqlMode)? ShowCreate(IDbCommand command, string kind, string database, string name, string createColumn)
+    {
+        command.CommandText = $"SHOW CREATE {kind} `{database.Replace("`", "``")}`.`{name.Replace("`", "``")}`";
+        using var reader = command.ExecuteReader();
+        if (!reader.Read()) return null;
+        var create = reader.GetOrdinal(createColumn) is var c && !reader.IsDBNull(c) ? reader.GetString(c) : null;
+        if (string.IsNullOrWhiteSpace(create)) return null;
+        var modeOrdinal = Enumerable.Range(0, reader.FieldCount).FirstOrDefault(i => reader.GetName(i).Equals("sql_mode", StringComparison.OrdinalIgnoreCase), -1);
+        var mode = modeOrdinal >= 0 && !reader.IsDBNull(modeOrdinal) ? reader.GetString(modeOrdinal) : "";
+        return (create, mode);
+    }
+
+    // The deploying account becomes the definer, as it always has. Under ANSI_QUOTES the engine renders the clause
+    // with double quotes; a bare user@host form is possible too.
+    private static readonly Regex DefinerClause = new(
+        @"\bDEFINER\s*=\s*(`[^`]*`|""[^""]*""|[^\s@`""]+)@(`[^`]*`|""[^""]*""|\S+)\s+",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    internal static string StripDefiner(string create) => DefinerClause.Replace(create, "", 1);
+
+    // SHOW CREATE renders a routine or trigger in the sql_mode it was created under (double-quoted identifiers
+    // under ANSI_QUOTES, Oracle syntax under ORACLE), and the engine runs its body under that mode, so the script
+    // sets it before the CREATE and restores the session's own mode after. Backticks are valid under every mode,
+    // so the DROP needs no pin.
+    internal static string WrapMySqlDelimitedScript(string kind, string name, string sqlMode, string create)
+    {
+        var quoted = $"`{name.Replace("`", "``")}`";
+        return string.Join("\n",
+            $"DROP {kind} IF EXISTS {quoted};",
+            "SET @ss_saved_sql_mode = @@SESSION.sql_mode;",
+            $"SET SESSION sql_mode = '{EscapeSql(sqlMode ?? "")}';",
+            "DELIMITER //",
+            $"{create.TrimEnd()} //",
+            "DELIMITER ;",
+            "SET SESSION sql_mode = @ss_saved_sql_mode;",
+            "");
+    }
+
+    // Validation runs after the object's own SHOW CREATE reader is closed: a second command on the connection while
+    // a reader is open is a protocol error, which is how validation used to end the run.
+    private int ScriptMySqlShowCreateObjects(IDbCommand command, List<string> names, string folder, ScriptObjectType objectType, Func<string, string> buildScript)
+    {
+        if (names.Count == 0) return 0;
+        var castPath = GetCastPath(objectType, folder);
+        DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
+        var count = 0;
+        foreach (var name in names)
+        {
+            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
+            var fileName = ResolveOutputPath(castPath, EncodeFullName(name, ".sql"));
+            if (ShouldSkipKnownBadScript(fileName)) { count++; continue; }
+
+            string script;
+            try
+            {
+                script = buildScript(name);
+            }
+            catch (MySqlException ex) when (ex.Number is 1142 or 1227 or 1305 or 1360)
+            {
+                script = null;
+                _progressLog.Warn($"  Skipping {folder}/{name}: {ex.Message}");
+            }
+            if (script == null)
+            {
+                _progressLog.Warn($"  Skipping {folder}/{name}: the server did not return its definition (the extracting account cannot see it)");
+                _stats.SkippedObjects++;
+                continue;
+            }
+
+            var body = RewriteSqlBodyForSchemaTemplate(script, fileName);
+            _progressLog.Info($"  Casting {name}");
+            FileWrapper.GetFromFactory().WriteAllText(fileName, body);
+            ValidateAndHandleScript(command.Connection, fileName, body, objectType);
+            count++;
+        }
+        return count;
     }
 
     /// <summary>
@@ -3091,6 +4090,25 @@ SELECT EVENT_NAME
         }
     }
 
+    // An overloaded PostgreSQL routine is written as schema.name(argtypes).sql, one file per signature; a single
+    // signature keeps schema.name.sql. When a name becomes overloaded, the file the single signature had is the
+    // same object under its old name, so the refreshed file replaces it rather than sitting beside it as an orphan.
+    private void RetireUnsuffixedRoutineFile(IDataRecord record, string castPath, string fullName, string writtenPath)
+    {
+        var baseIndex = Enumerable.Range(0, record.FieldCount).FirstOrDefault(i => string.Equals(record.GetName(i), "BaseName", StringComparison.OrdinalIgnoreCase), -1);
+        if (baseIndex < 0) return;
+        var baseName = record.GetValue(baseIndex)?.ToString();
+        if (string.IsNullOrEmpty(baseName) || string.Equals(baseName, fullName, StringComparison.Ordinal)) return;
+        var (qualifiedSchema, objectName) = Identifier.SplitQualifiedName(baseName, _platform);
+        var oldName = _isSchemaTemplate && qualifiedSchema != null ? EncodeFileName(objectName, ".sql") : EncodeFullName(baseName, ".sql");
+        var oldPath = Path.Join(castPath, oldName);
+        var file = FileWrapper.GetFromFactory();
+        if (string.Equals(oldPath, writtenPath, StringComparison.OrdinalIgnoreCase) || !file.Exists(oldPath)) return;
+        _folderIndexes.GetValueOrDefault(GetRelativeFolderName(castPath))?.MarkWritten(oldPath);
+        file.Delete(oldPath);
+        _progressLog.Info($"    Renamed {oldName} to {Path.GetFileName(writtenPath)} (the name is now overloaded)");
+    }
+
     // Earlier releases wrote events as ".name.json" (an empty schema segment), which Linux and macOS hide and which
     // --Validate flags as non-canonical. The refreshed file replaces it rather than sitting beside it.
     private void RetireDottedEventFile(string castPath, string fileName, string writtenPath)
@@ -3104,16 +4122,74 @@ SELECT EVENT_NAME
     }
 
     /// <summary>
-    /// MariaDb-only: MySQL has no SEQUENCE object, so this is reached only when the caller's
-    /// _includeSequences flag is true, which LoadShouldCastSettings gates to Platform.MariaDb.
-    /// Two-step like ExtractMySqlTableDefinitions above (list, then per-item) rather than the
-    /// generic PerformMySqlCasting single-query shape — SHOW CREATE SEQUENCE needs a per-sequence
-    /// round trip, and MariaDB's own DDL-generation is the most reliable source for sequence options
-    /// (increment/min/max/cache/cycle) rather than hand-reconstructing them from INFORMATION_SCHEMA.
+    /// MariaDB sequences are written as declared JSON (MariaDbSequence) rather than a scripted CREATE: the deploy
+    /// converges every attribute in place and never moves the current value, which a script could not promise.
+    /// SHOW CREATE SEQUENCE is the source: it is the engine's own rendering of the options, and the current value is
+    /// not in it. A .sql file in Sequences/ still deploys as before.
     /// </summary>
+    // MA-c24. A package and its body are one file: DROP PACKAGE drops both, and each half is created under the sql_mode
+    // it was created in (ORACLE, or from 11.4 any mode). Its members are not routines of their own and are not listed.
+    private void ScriptMariaDbPackages(IDbCommand command, string targetSchema)
+    {
+        _progressLog.Info("Casting Package Scripts");
+        command.CommandText = $@"
+SELECT p.ROUTINE_NAME,
+       EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.ROUTINES b
+                WHERE b.ROUTINE_SCHEMA = p.ROUTINE_SCHEMA AND b.ROUTINE_NAME = p.ROUTINE_NAME AND b.ROUTINE_TYPE = 'PACKAGE BODY') AS HAS_BODY
+  FROM INFORMATION_SCHEMA.ROUTINES p
+  WHERE {MySqlNameMatch.FoldedRoutineSchema("p.ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
+    AND p.ROUTINE_TYPE = 'PACKAGE'
+    AND p.ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
+  ORDER BY p.ROUTINE_NAME";
+        var withBody = new HashSet<string>(StringComparer.Ordinal);
+        var names = new List<string>();
+        using (var reader = command.ExecuteReader())
+        {
+            while (reader.Read())
+            {
+                names.Add(reader.GetString(0));
+                if (Convert.ToInt32(reader.GetValue(1)) == 1) withBody.Add(reader.GetString(0));
+            }
+        }
+        var castPath = GetCastPath(ScriptObjectType.Packages, "Packages");
+        _stats.Packages = ScriptMySqlShowCreateObjects(command, names, "Packages", ScriptObjectType.Packages, name =>
+        {
+            var spec = ShowCreate(command, "PACKAGE", targetSchema, name, "Create Package");
+            if (spec == null) return null;
+            var body = withBody.Contains(name) ? ShowCreate(command, "PACKAGE BODY", targetSchema, name, "Create Package Body") : null;
+            return WrapMariaDbPackageScript(name, spec.Value, body);
+        });
+        if (_stats.Packages > 0) DeclareFolderWrittenOnUse(ScriptObjectType.Packages, castPath);
+    }
+
+    // Before 11.4 PACKAGE is a keyword only under ORACLE mode, so the DROP runs under the package's own mode too.
+    internal static string WrapMariaDbPackageScript(string name, (string Create, string SqlMode) spec, (string Create, string SqlMode)? body)
+    {
+        var lines = new List<string>
+        {
+            "SET @ss_saved_sql_mode = @@SESSION.sql_mode;",
+            $"SET SESSION sql_mode = '{EscapeSql(spec.SqlMode ?? "")}';",
+            $"DROP PACKAGE IF EXISTS `{name.Replace("`", "``")}`;",
+            "DELIMITER //",
+            $"{StripDefiner(spec.Create).TrimEnd()} //",
+            "DELIMITER ;"
+        };
+        if (body != null)
+            lines.AddRange(new[]
+            {
+                $"SET SESSION sql_mode = '{EscapeSql(body.Value.SqlMode ?? "")}';",
+                "DELIMITER //",
+                $"{StripDefiner(body.Value.Create).TrimEnd()} //",
+                "DELIMITER ;"
+            });
+        lines.Add("SET SESSION sql_mode = @ss_saved_sql_mode;");
+        lines.Add("");
+        return string.Join("\n", lines);
+    }
+
     private void ScriptMariaDbSequences(IDbCommand command, string targetSchema)
     {
-        _progressLog.Info("Casting Sequence Scripts");
+        _progressLog.Info("Casting Sequences");
         command.CommandText = $@"
 SELECT TABLE_NAME
   FROM INFORMATION_SCHEMA.TABLES
@@ -3145,16 +4221,78 @@ SELECT TABLE_NAME
                 createStatement = reader.GetString(1); // "Create Table" column carries the CREATE SEQUENCE DDL
             }
 
-            // The script runs on every deploy, so it must leave an existing sequence where it is: CREATE OR REPLACE
-            // reset it to its START value each time, and NEXTVAL handed out numbers it had already given.
-            var script = createStatement.Replace("CREATE SEQUENCE", "CREATE SEQUENCE IF NOT EXISTS");
-
-            var fileName = ResolveOutputPath(castPath, EncodeFullName(name, ".sql"));
-            script = RewriteSqlBodyForSchemaTemplate(script, fileName);
-            _progressLog.Info($"  Casting {fileName}");
-            FileWrapper.GetFromFactory().WriteAllText(fileName, script);
+            var sequence = ParseMariaDbSequence(name, createStatement);
+            var file = ResolveOutputPath(castPath, EncodeFullName(name, ".json"));
+            _progressLog.Info($"  Cast Json for sequence {name}");
+            WritePackageObject(file, sequence, "sequences");
             _stats.Sequences++;
         }
+    }
+
+    // SHOW CREATE SEQUENCE renders, in this order: CREATE SEQUENCE `s` [as <type>] start with N minvalue N maxvalue N
+    // increment by N cache N cycle|nocycle ENGINE=... . MariaDB's own defaults are left out of the file, so it says only
+    // what the author chose: minvalue 1 and maxvalue 9223372036854775806 for an ascending sequence (the mirror for a
+    // descending one), and a start equal to the lower (upper) bound.
+    internal static MariaDbSequence ParseMariaDbSequence(string name, string createStatement)
+    {
+        long Number(string keyword, long fallback)
+        {
+            var m = Regex.Match(createStatement, $@"\b{keyword}\s+(?<n>-?\d+)", RegexOptions.IgnoreCase);
+            return m.Success ? long.Parse(m.Groups["n"].Value, System.Globalization.CultureInfo.InvariantCulture) : fallback;
+        }
+
+        var sequence = new MariaDbSequence { Name = name };
+        var type = Regex.Match(createStatement, @"\bas\s+(?<type>\w+(?:\s+unsigned)?)\s+start\b", RegexOptions.IgnoreCase);
+        if (type.Success) sequence.DataType = type.Groups["type"].Value.ToLowerInvariant();
+        sequence.Increment = Number("increment by", 1);
+        sequence.Cache = Number("cache", 1000);
+        sequence.Cycle = Regex.IsMatch(createStatement, @"\scycle\b", RegexOptions.IgnoreCase);
+        var ascending = sequence.Increment > 0;
+        var min = Number("minvalue", ascending ? 1 : -9223372036854775807);
+        var max = Number("maxvalue", ascending ? 9223372036854775806 : -1);
+        var start = Number("start with", ascending ? min : max);
+        if (min != (ascending ? 1 : -9223372036854775807)) sequence.MinValue = min;
+        if (max != (ascending ? 9223372036854775806 : -1)) sequence.MaxValue = max;
+        if (start != (ascending ? min : max)) sequence.Start = start;
+        return sequence;
+    }
+
+    // The catalog qualifies a sequence default with the database (nextval(`db`.`s`)); the package carries the bare
+    // name so it deploys to any database, and the deploy compares defaults without the qualifier.
+    // Under AUTO the engine adds history partitions as they fill, so the list it reports today is not the declaration.
+    internal static void ApplySystemTimeOptions(MySqlPartitioning partitioning, string createTable)
+    {
+        partitioning.SystemTime = MariaDbSystemTimeOptions.Read(createTable);
+        if (partitioning.SystemTime?.Auto != true) return;
+        partitioning.Partitions.Clear();
+        partitioning.PartitionCount = null;
+    }
+
+    // The engine names a subpartition <partition>sp<n> unless the table names it; a named one is not modelled.
+    private static bool HasExplicitSubpartitionNames(IDbCommand command, string schema, string table, MySqlTable mySqlTable)
+    {
+        if (mySqlTable.Partitioning?.Subpartitioning == null) return false;
+        command.CommandText = @"SELECT COUNT(*) FROM INFORMATION_SCHEMA.PARTITIONS
+WHERE TABLE_SCHEMA = @schema AND TABLE_NAME = @table AND SUBPARTITION_NAME IS NOT NULL
+  AND CAST(SUBPARTITION_NAME AS BINARY) <> CAST(CONCAT(PARTITION_NAME, 'sp', SUBPARTITION_ORDINAL_POSITION - 1) AS BINARY)";
+        command.Parameters.Clear();
+        foreach (var (name, value) in new[] { ("@schema", MySqlReservedWords.Unquote(schema)), ("@table", MySqlReservedWords.Unquote(table)) })
+        {
+            var parameter = command.CreateParameter();
+            parameter.ParameterName = name;
+            parameter.Value = value;
+            command.Parameters.Add(parameter);
+        }
+        var named = Convert.ToInt32(command.ExecuteScalar());
+        command.Parameters.Clear();
+        return named > 0;
+    }
+
+    internal static void StripSequenceDatabase(Table table, string database)
+    {
+        var qualified = new Regex(@"nextval\(`" + Regex.Escape(database) + "`\\.`", RegexOptions.IgnoreCase);
+        foreach (var column in table.Columns)
+            if (column.Default != null) column.Default = qualified.Replace(column.Default, "nextval(`");
     }
 
     private void ExtractMySqlTableDefinitions(IDbCommand command, string targetSchema)
@@ -3207,6 +4345,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
             commandJson.CommandText = $"SET @SchemaSmith_ObjectOrder = '{_objectOrder}'";
             commandJson.ExecuteNonQuery();
 
+            var extracted = new List<Table>();
             foreach (var (schema, table) in tables)
             {
                 if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(table.ToLower()) && !_objectsToCast.Contains($"{schema}.{table}".ToLower())) continue;
@@ -3244,6 +4383,38 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                         continue;
                     }
 
+                    if (tableObj is MySqlTable mySqlTable)
+                    {
+                        if (HasExplicitSubpartitionNames(commandJson, schema, table, mySqlTable))
+                        {
+                            _progressLog.Error($"    ERROR: {table} names its subpartitions; SchemaSmith models subpartitions as a count, which the engine names <partition>sp<n>. Skipped rather than emitted with names a deploy would not create.");
+                            _stats.TableErrors++;
+                            continue;
+                        }
+
+                        // A FULLTEXT parser (MY-A2), KEY partitioning's ALGORITHM, SYSTEM_TIME's options and a VECTOR index's M and
+                        // DISTANCE are reported only by SHOW CREATE TABLE.
+                        var keyPartitioned = mySqlTable.Partitioning?.Method?.Trim().EndsWith("KEY", StringComparison.OrdinalIgnoreCase) == true;
+                        var systemTime = string.Equals(mySqlTable.Partitioning?.Method?.Trim(), "SYSTEM_TIME", StringComparison.OrdinalIgnoreCase);
+                        var vectorIndexed = mySqlTable.Indexes.Exists(i => i is MySqlIndex { IndexType: var type } && string.Equals(type, "VECTOR", StringComparison.OrdinalIgnoreCase));
+                        if (mySqlTable.FullTextIndexes.Count > 0 || keyPartitioned || systemTime || vectorIndexed)
+                        {
+                            commandJson.CommandText = $"SHOW CREATE TABLE `{MySqlReservedWords.Unquote(schema).Replace("`", "``")}`.`{MySqlReservedWords.Unquote(table).Replace("`", "``")}`";
+                            using var createReader = commandJson.ExecuteReader();
+                            if (createReader.Read())
+                            {
+                                var createTable = createReader.GetString(1);
+                                MySqlFullTextParsers.Apply(mySqlTable, createTable);
+                                if (vectorIndexed)
+                                    MariaDbVectorIndexOptions.Apply(mySqlTable.Indexes, createTable);
+                                if (keyPartitioned)
+                                    mySqlTable.Partitioning.KeyAlgorithm = MySqlKeyAlgorithm.Read(createTable);
+                                if (systemTime)
+                                    ApplySystemTimeOptions(mySqlTable.Partitioning, createTable);
+                            }
+                        }
+                    }
+
                     var resolution = resolver.Resolve("", table);
                     var filename = resolution.WritePath;
                     MarkPathWritten(tableDir, filename);
@@ -3262,7 +4433,9 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                             ImportTableHelper.PreserveListOrder(tableObj, original, _objectOrder);
                     }
 
+                    if (_platform == Platform.MariaDb) StripSequenceDatabase(tableObj, targetSchema);
                     WritePackageObject(filename, tableObj, "tables");
+                    extracted.Add(tableObj);
                     _stats.Tables++;
                 }
                 catch (MySqlException ex)
@@ -3285,35 +4458,18 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                     _stats.TableErrors++;
                 }
             }
+
+            static string Bare(string name) => (name ?? "").Trim('`');
+            // MySQL 8.0 deploys a foreign key to a non-unique or partial key; 8.4 refuses it by default.
+            if (_platform == Platform.MySQL)
+                foreach (var (owner, fk) in Schema.Validation.Checks.CoherenceCheck.NonStandardKeyReferences(extracted))
+                    _progressLog.Warn($"    Foreign key {Bare(owner.Name)}.{Bare(fk.Name)} references {Bare(fk.RelatedTable)} ({fk.RelatedColumns.Replace("`", "")}), which is not a whole primary or unique key. " +
+                                      "MySQL 8.4 refuses such a key while restrict_fk_on_non_standard_key is on, its default (SS-FK-008).");
         }
         finally
         {
             connectionJson.Close();
         }
-    }
-
-    private int PerformMySqlCasting(IDbCommand command, string castType)
-    {
-        var count = 0;
-        using var reader = command.ExecuteReader();
-        while (reader.Read())
-        {
-            var castPath = Path.Combine(_templatePath, reader["Folder"].ToString());
-            DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
-            var fullName = reader["FullName"].ToString();
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(fullName.ToLower()) && !_objectsToCast.Contains(Identifier.SplitQualifiedName(fullName, _platform).Name.ToLower())) continue;
-
-            var fileName = ResolveOutputPath(castPath, EncodeFullName(fullName, ".sql"));
-            if (ShouldSkipKnownBadScript(fileName)) { count++; continue; }
-            var script = string.Join("\r\n", reader["Code"].ToString());
-            _progressLog.Info($"  Casting {fullName}");
-            FileWrapper.GetFromFactory().WriteAllText(fileName, script);
-            var folderName = reader["Folder"].ToString();
-            var objectType = ScriptFolderTypeInference.InferFromFolderName(folderName);
-            ValidateAndHandleScript(command.Connection, fileName, script, objectType);
-            count++;
-        }
-        return count;
     }
 
     #endregion
@@ -3361,6 +4517,10 @@ SELECT TABLE_SCHEMA, TABLE_NAME
     -- Both report is_ms_shipped = 0, and the History one has is_dropped_ledger_table = 0, so the
     -- obvious flag misses it -- the engine-reserved name prefix is the reliable discriminator.
     AND TABLE_NAME NOT LIKE 'MSSQL[_]DroppedLedger%'
+    -- A FileTable or external table is named in a warning once the tables are done (WarnSqlServerTablesNotExtracted).
+    AND ISNULL(OBJECTPROPERTY(so.[object_id], 'TableIsFileTable'), 0) = 0" +
+    (_sourceMajor is 0 or >= 13 ? @"
+    AND NOT EXISTS (SELECT 1 FROM sys.tables xt WHERE xt.[object_id] = so.[object_id] AND xt.is_external = 1)" : "") + @"
   ORDER BY 1, 2
 ";
 
@@ -3409,7 +4569,8 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                         commandJson.CommandText = $@"
 SELECT cc.name AS [Name],
        SchemaSmith.fn_StripParenWrapping(cc.definition) AS [Expression],
-       cc.parent_column_id
+       cc.parent_column_id,
+       cc.is_disabled, cc.is_not_trusted, cc.is_not_for_replication
   FROM sys.check_constraints cc
  WHERE cc.parent_object_id = OBJECT_ID('{EscapeSql(tableSchema)}.{EscapeSql(tableName)}')
  ORDER BY cc.name";
@@ -3418,7 +4579,12 @@ SELECT cc.name AS [Name],
                         using (var ccReader = commandJson.ExecuteReader())
                         {
                             while (ccReader.Read())
-                                allConstraints.Add(new CheckConstraint { Name = $"{ccReader["Name"]}", Expression = $"{ccReader["Expression"]}" });
+                                allConstraints.Add(new SqlServerCheckConstraint
+                                {
+                                    Name = $"{ccReader["Name"]}", Expression = $"{ccReader["Expression"]}",
+                                    Enforced = !(bool)ccReader["is_disabled"], Validated = !(bool)ccReader["is_not_trusted"],
+                                    NotForReplication = (bool)ccReader["is_not_for_replication"]
+                                });
                         }
                         PromoteCheckConstraintsToTableLevel(sqlTable, allConstraints);
                     }
@@ -3455,6 +4621,8 @@ SELECT cc.name AS [Name],
                     _stats.TableErrors++;
                 }
             }
+            reader.Close();
+            WarnSqlServerTablesNotExtracted(commandJson);
         }
         finally
         {
@@ -3536,19 +4704,16 @@ SELECT cc.name AS [Name],
 
     internal static string EscapeSql(string value) => value.Replace("'", "''");
 
-    // Index kinds a package cannot declare yet are left out of the table file (ForgeKindler.SqlServerRenderableIndexTypes,
-    // and selective XML indexes): each one is an object the package misses, so it is named and counted as skipped.
+    // Index kinds a package cannot declare yet (vector indexes) are left out of the table file, so each one is named and
+    // counted as skipped. XML indexes (selective ones included), spatial and JSON indexes have lists of their own, and the
+    // renderable types are ordinary indexes.
     private void WarnIndexesNotExtracted(IDbCommand command, string tableSchema, string tableName)
     {
         command.CommandText = $@"
-DECLARE @o INT = OBJECT_ID(QUOTENAME(N'{EscapeSql(tableSchema)}') + N'.' + QUOTENAME(N'{EscapeSql(tableName)}'));
-DECLARE @k TABLE ([name] SYSNAME, kind NVARCHAR(60));
-INSERT @k SELECT [name], type_desc FROM sys.indexes
- WHERE [object_id] = @o AND index_id > 0 AND is_hypothetical = 0 AND [type] NOT IN (3, {ForgeKindler.SqlServerRenderableIndexTypes});
-IF COL_LENGTH('sys.xml_indexes', 'xml_index_type') IS NOT NULL
-  INSERT @k EXEC sp_executesql N'SELECT [name], xml_index_type_description FROM sys.xml_indexes WHERE [object_id] = @o AND xml_index_type NOT IN (0, 1)',
-                               N'@o INT', @o = @o;
-SELECT [name], kind FROM @k ORDER BY [name];";
+SELECT [name], type_desc AS kind FROM sys.indexes
+ WHERE [object_id] = OBJECT_ID(QUOTENAME(N'{EscapeSql(tableSchema)}') + N'.' + QUOTENAME(N'{EscapeSql(tableName)}'))
+   AND index_id > 0 AND is_hypothetical = 0 AND [type] NOT IN (3, 4, 9, {ForgeKindler.SqlServerRenderableIndexTypes})
+ ORDER BY [name];";
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
@@ -3577,6 +4742,9 @@ SELECT [name], kind FROM @k ORDER BY [name];";
             case "datetimeoffset":
             case "time":
                 return scale != 7 ? $"[{Identifier.EscapeDelimited(baseType, Platform.SqlServer)}]({scale})" : $"[{Identifier.EscapeDelimited(baseType, Platform.SqlServer)}]";
+            // VECTOR(n[, float16]) (2025): max_length is 8 + n * 4 (float32) or 8 + n * 2 (float16), scale 1 marks float16.
+            case "vector":
+                return $"[{Identifier.EscapeDelimited(baseType, Platform.SqlServer)}]({(maxLength - 8) / (scale == 1 ? 2 : 4)}{(scale == 1 ? ", float16" : "")})";
             default:
                 return $"[{Identifier.EscapeDelimited(baseType, Platform.SqlServer)}]";
         }
@@ -3602,6 +4770,11 @@ SELECT [name], kind FROM @k ORDER BY [name];";
             case "Materialized Views": _stats.MaterializedViews++; break;
             case "Collations": _stats.Collations++; break;
             case "Publications": _stats.Publications++; break;
+            case "Range Types": _stats.RangeTypes++; break;
+            case "Text Search Configurations": _stats.TextSearchConfigurations++; break;
+            case "Operators": _stats.Operators++; break;
+            case "Casts": _stats.Casts++; break;
+            case "Event Triggers": _stats.EventTriggers++; break;
         }
     }
 
@@ -3651,6 +4824,7 @@ SELECT [name], kind FROM @k ORDER BY [name];";
                 LogIfPositive("  IdxViews:   ", _stats.IndexedViews);
                 LogIfPositive("  Sequences:  ", _stats.Sequences);
                 LogIfPositive("  Synonyms:   ", _stats.Synonyms);
+                LogIfPositive("  Security policies: ", _stats.SecurityPolicies);
                 break;
 
             case Platform.PostgreSQL:
@@ -3668,6 +4842,11 @@ SELECT [name], kind FROM @k ORDER BY [name];";
                 LogIfPositive("  MatViews:   ", _stats.MaterializedViews);
                 LogIfPositive("  Collations: ", _stats.Collations);
                 LogIfPositive("  Publications:", _stats.Publications);
+                LogIfPositive("  Range Types:", _stats.RangeTypes);
+                LogIfPositive("  Text Search Configurations:", _stats.TextSearchConfigurations);
+                LogIfPositive("  Operators:  ", _stats.Operators);
+                LogIfPositive("  Casts:      ", _stats.Casts);
+                LogIfPositive("  Event Triggers:", _stats.EventTriggers);
                 break;
 
             case Platform.MySQL:
@@ -3677,6 +4856,7 @@ SELECT [name], kind FROM @k ORDER BY [name];";
                 LogIfPositive("  Triggers:   ", _stats.Triggers);
                 LogIfPositive("  Events:     ", _stats.Events);
                 LogIfPositive("  Sequences:  ", _stats.Sequences);
+                LogIfPositive("  Packages:   ", _stats.Packages);
                 break;
         }
 
@@ -3721,11 +4901,18 @@ SELECT [name], kind FROM @k ORDER BY [name];";
         public int Sequences { get; set; }
         public int Rules { get; set; }
         public int Events { get; set; }
+        public int Packages { get; set; }
         public int FullTextCatalogs { get; set; }
         public int FullTextStopLists { get; set; }
         public int XmlSchemaCollections { get; set; }
         public int Synonyms { get; set; }
+        public int SecurityPolicies { get; set; }
         public int Collations { get; set; }
         public int Publications { get; set; }
+        public int RangeTypes { get; set; }
+        public int TextSearchConfigurations { get; set; }
+        public int Operators { get; set; }
+        public int Casts { get; set; }
+        public int EventTriggers { get; set; }
     }
 }

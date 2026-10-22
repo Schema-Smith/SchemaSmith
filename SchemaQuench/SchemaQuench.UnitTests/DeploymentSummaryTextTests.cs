@@ -285,7 +285,8 @@ public class DeploymentSummaryTextTests
             {
                 Instrumented = true,
                 Created = new CreatedCounts(Tables: 3, Columns: 0, Indexes: 1, Constraints: 0, ForeignKeys: 0, Procedures: 0, Views: 0, Functions: 0),
-                ScriptsRan = 2
+                ScriptsRan = 2,
+                ScriptsUnchanged = 5
             }
         };
 
@@ -295,6 +296,7 @@ public class DeploymentSummaryTextTests
         // "3000ms" target duration — pins the actual created-tables count being rendered.
         Assert.That(result, Does.Contain("tables=3"));
         Assert.That(result, Does.Contain("Ran (object scripts): 2"));
+        Assert.That(result, Does.Contain("Unchanged (object scripts): 5"));
         Assert.That(result, Does.Not.Contain("(not instrumented)"));
     }
 
@@ -316,5 +318,58 @@ public class DeploymentSummaryTextTests
 
         Assert.That(result, Does.Contain("Jobs/Job 1.sql — primary"));
         Assert.That(result, Does.Not.Contain("Jobs/Job 1.sql — primary / "));
+    }
+
+    [Test]
+    public void Render_AFailedRun_ListsWhatItAppliedBeforeTheFailure_AndASuccessfulOneDoesNot()
+    {
+        var scripts = new List<MigrationScriptRecord>
+        {
+            new(Path: "Before/ran.sql", Slot: "Before", Template: "Main", Schema: null, Server: "primary", Database: "Db", Outcome: "Ran"),
+            new(Path: "Before/skip.sql", Slot: "Before", Template: "Main", Schema: null, Server: "primary", Database: "Db", Outcome: "Skipped")
+        };
+        var details = new List<ObjectChangeDetail>
+        {
+            new("procedure", "dbo.usp_one", "ran"),
+            new("dataDelivery", "dbo.Lookup", "delivered"),
+            new("table", "dbo.T", "created"),
+            new("procedure", "dbo.usp_same", "unchanged"),
+            new("index", "dbo.T.ix", "wouldCreate"),
+            new("check constraint", "dbo.T.ck", "downgraded")
+        };
+        var failed = BuildFullyPopulatedSummary() with { MigrationScripts = scripts };
+        failed = failed with { ObjectChanges = failed.ObjectChanges with { Details = details } };
+
+        var result = DeploymentSummaryText.Render(failed);
+        var section = result[result.IndexOf("## Applied Before The Failure", StringComparison.Ordinal)..];
+        section = section[..section.IndexOf("\n\n", StringComparison.Ordinal)];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(section, Does.StartWith("## Applied Before The Failure (4)"));
+            Assert.That(section, Does.Contain("- migration script Before/ran.sql"));
+            Assert.That(section, Does.Contain("- procedure dbo.usp_one"));
+            Assert.That(section, Does.Contain("- data dbo.Lookup"));
+            Assert.That(section, Does.Contain("- table dbo.T created"), "a schema change the run made is not rolled back either (#545)");
+            Assert.That(section, Does.Not.Contain("skip.sql").And.Not.Contain("usp_same").And.Not.Contain("dbo.T.ix").And.Not.Contain("dbo.T.ck"));
+            Assert.That(DeploymentSummaryText.Render(failed with { Run = failed.Run with { Outcome = RunOutcome.Success } }),
+                Does.Not.Contain("Applied Before The Failure"));
+        });
+    }
+
+    [Test]
+    public void Render_SentinelSkippedScript_SaysSo_AndARanScriptDoesNot()
+    {
+        var scripts = new List<MigrationScriptRecord>
+        {
+            new(Path: "Before/skip.sql", Slot: "Before", Template: "Main", Schema: null, Server: "primary", Database: "Db", Outcome: "Skipped"),
+            new(Path: "Before/ran.sql", Slot: "Before", Template: "Main", Schema: null, Server: "primary", Database: "Db", Outcome: "Ran")
+        };
+        var summary = BuildFullyPopulatedSummary() with { MigrationScripts = scripts };
+
+        var result = DeploymentSummaryText.Render(summary);
+
+        Assert.That(result, Does.Contain("Before/skip.sql — primary / Db — skipped (SHOULD NOT APPLY)"));
+        Assert.That(result, Does.Contain("Before/ran.sql — primary / Db" + Environment.NewLine).Or.Contain("Before/ran.sql — primary / Db\n"));
     }
 }

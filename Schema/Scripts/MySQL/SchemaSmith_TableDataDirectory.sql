@@ -53,7 +53,7 @@ BEGIN
     BEGIN
         DECLARE v_suffix VARCHAR(600) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
         DECLARE CONTINUE HANDLER FOR NOT FOUND SET @ss_tdd_out = NULL;
-        SET @ss_tdd_name = CONCAT(SchemaSmith_InnodbName(p_Schema), '/', SchemaSmith_InnodbName(p_Table));
+        CALL SchemaSmith_InnodbTableName(p_Schema, p_Table, @ss_tdd_name);
         SET @ss_tdd_out = NULL;
         SET @ss_tdd_sql = CONCAT('SELECT df.PATH INTO @ss_tdd_out
 FROM INFORMATION_SCHEMA.', IF(SchemaSmith_ServerVersionNum() < 800, 'INNODB_SYS_DATAFILES', 'INNODB_DATAFILES'), ' df

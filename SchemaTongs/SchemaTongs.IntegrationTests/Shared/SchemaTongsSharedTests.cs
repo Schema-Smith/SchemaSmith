@@ -1,6 +1,8 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using log4net;
 using Microsoft.Extensions.Configuration;
 using NSubstitute;
@@ -62,6 +64,53 @@ public abstract class SchemaTongsSharedTests
             config["ShouldCast:Tables"] = "false";
             FactoryContainer.Clear();
             LogFactory.Clear();
+        }
+    }
+
+    // MY-A2: a FULLTEXT index's WITH PARSER was deployed but never extracted, so a re-extracted package lost ngram. The
+    // engines report it only in SHOW CREATE TABLE; MariaDB ships no full-text parser plugin to declare.
+    [Test]
+    public void ShouldCastAFullTextIndexWithItsParser()
+    {
+        if (Platform != Platform.MySQL) Assert.Ignore("MariaDB has no full-text parser plugin installed.");
+        using (var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};"))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "CREATE TABLE NgramDocs (Id INT NOT NULL PRIMARY KEY, Body TEXT, FULLTEXT KEY ft_ngram (Body) WITH PARSER ngram, FULLTEXT KEY ft_plain (Body))";
+            cmd.ExecuteNonQuery();
+        }
+        try
+        {
+            var file = Substitute.For<IFile>();
+            var written = "";
+            file.WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("NgramDocs.json")), Arg.Do<string>(c => written = c));
+            lock (FactoryContainer.SharedLockObject)
+            {
+                LogFactory.Register("ErrorLog", Substitute.For<ILog>());
+                LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+                FactoryContainer.Register(Substitute.For<IEnvironment>());
+                FactoryContainer.Register(file);
+                FactoryContainer.Register(Substitute.For<IDirectory>());
+                var config = SetupConfig();
+                config["ShouldCast:Tables"] = "true";
+                config["ShouldCast:ObjectList"] = "NgramDocs";
+                new SchemaTongs(Platform).CastTemplate();
+                config["ShouldCast:Tables"] = "false";
+                config["ShouldCast:ObjectList"] = "";
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+            }
+            var table = (Schema.Domain.MySQL.MySqlTable)PlatformDeserializer.DeserializeTable(written, Platform);
+            Assert.That(table.FullTextIndexes.Select(i => $"{i.Name.Trim('`')}:{i.Parser}"), Is.EquivalentTo(new[] { "ft_ngram:ngram", "ft_plain:" }));
+        }
+        finally
+        {
+            using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "DROP TABLE IF EXISTS NgramDocs";
+            cmd.ExecuteNonQuery();
         }
     }
 
@@ -250,6 +299,59 @@ public abstract class SchemaTongsSharedTests
         }
     }
 
+    // Validation used to begin its transaction while the extraction reader was still open, so the first script
+    // killed the run with a protocol error (exit 3) before anything was validated; and the script it would then have
+    // run began with the real object's DROP ... IF EXISTS, which no rollback restores on this family.
+    [Test]
+    public void ShouldValidateScriptsWithoutFailingOrTouchingTheSource()
+    {
+        var file = Substitute.For<IFile>();
+        var written = new List<string>();
+        file.When(f => f.WriteAllText(Arg.Any<string>(), Arg.Any<string>())).Do(ci => written.Add(ci.ArgAt<string>(0)));
+        lock (FactoryContainer.SharedLockObject)
+        {
+            LogFactory.Register("ErrorLog", Substitute.For<ILog>());
+            LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+            FactoryContainer.Register(Substitute.For<IEnvironment>());
+            FactoryContainer.Register(file);
+            FactoryContainer.Register(Substitute.For<IDirectory>());
+            var config = SetupConfig();
+            config["ShouldCast:Views"] = "true";
+            config["ShouldCast:Functions"] = "true";
+            config["ShouldCast:Procedures"] = "true";
+            config["ShouldCast:TableTriggers"] = "true";
+            config["ShouldCast:ValidateScripts"] = "true";
+
+            Assert.DoesNotThrow(() => new SchemaTongs(Platform).CastTemplate(), "validation must not fail the extraction");
+
+            config["ShouldCast:Views"] = "false";
+            config["ShouldCast:Functions"] = "false";
+            config["ShouldCast:Procedures"] = "false";
+            config["ShouldCast:TableTriggers"] = "false";
+            config["ShouldCast:ValidateScripts"] = "false";
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+
+        Assert.That(written.Where(w => w.EndsWith(".sqlerror", StringComparison.OrdinalIgnoreCase)), Is.Empty,
+            "every fixture object is valid, so none may be reported invalid");
+        foreach (var name in new[] { "TestView.sql", "TestFunction.sql", "TestProcedure.sql", "TestTrigger.sql" })
+            Assert.That(written.Any(w => w.EndsWith(name, StringComparison.OrdinalIgnoreCase)), Is.True, $"{name} was not written");
+        file.DidNotReceive().Delete(Arg.Is<string>(s => s.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)));
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};");
+        conn.Open();
+        using var query = conn.CreateCommand();
+        query.CommandText = $"SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '{_integrationDb}' AND ROUTINE_NAME IN ('TestFunction', 'TestProcedure')";
+        Assert.That(Convert.ToInt32(query.ExecuteScalar()), Is.EqualTo(2), "validation must not drop the source's own routines");
+        query.CommandText = $"SELECT COUNT(*) FROM information_schema.VIEWS WHERE TABLE_SCHEMA = '{_integrationDb}' AND TABLE_NAME = 'TestView'";
+        Assert.That(Convert.ToInt32(query.ExecuteScalar()), Is.EqualTo(1), "validation must not drop the source's own view");
+        query.CommandText = $"SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = '{_integrationDb}' AND ROUTINE_NAME LIKE '\\_validate\\_%'";
+        Assert.That(Convert.ToInt32(query.ExecuteScalar()), Is.Zero, "validation must drop the temporary object it created");
+        query.CommandText = $"SELECT COUNT(*) FROM information_schema.VIEWS WHERE TABLE_SCHEMA = '{_integrationDb}' AND TABLE_NAME LIKE '\\_validate\\_%'";
+        Assert.That(Convert.ToInt32(query.ExecuteScalar()), Is.Zero, "validation must drop the temporary view it created");
+    }
+
     [Test]
     public void ShouldCastEvents()
     {
@@ -341,8 +443,11 @@ public abstract class SchemaTongsSharedTests
         cmd.CommandText = "CREATE OR REPLACE SEQUENCE TestSeq START WITH 100 INCREMENT BY 1";
         cmd.ExecuteNonQuery();
 
+        string json = null;
         string script = null;
         var file = Substitute.For<IFile>();
+        file.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("Sequences") && s.EndsWithIgnoringCase("TestSeq.json")), Arg.Any<string>()))
+            .Do(ci => json = ci.ArgAt<string>(1));
         file.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("Sequences") && s.EndsWithIgnoringCase("TestSeq.sql")), Arg.Any<string>()))
             .Do(ci => script = ci.ArgAt<string>(1));
         try
@@ -359,7 +464,13 @@ public abstract class SchemaTongsSharedTests
                 FactoryContainer.Clear();
                 LogFactory.Clear();
             }
-            Assert.That(script, Is.Not.Null, "the sequence must be extracted");
+            Assert.Multiple(() =>
+            {
+                Assert.That(json, Is.Not.Null, "the sequence must be extracted as declared JSON");
+                Assert.That(script, Is.Null, "a sequence is no longer written as a script");
+            });
+            Assert.That(json, Does.Contain("\"Start\": 100").And.Not.Contain("MinValue").And.Not.Contain("next"),
+                "the file carries what the author chose and never the current value: " + json);
 
             cmd.CommandText = "SELECT NEXTVAL(TestSeq)";
             Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(100));
@@ -367,11 +478,11 @@ public abstract class SchemaTongsSharedTests
             cmd.ExecuteScalar();
             for (var deploy = 0; deploy < 2; deploy++)
             {
-                cmd.CommandText = script;
+                cmd.CommandText = $"CALL SchemaSmith_SequenceQuench('{_integrationDb}', '[{json.Replace("'", "''")}]', 0)";
                 cmd.ExecuteNonQuery();
             }
             cmd.CommandText = "SELECT NEXTVAL(TestSeq)";
-            Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(102), "running the extracted script must not reset the sequence: " + script);
+            Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(102), "deploying the extracted sequence must not reset it: " + json);
         }
         finally
         {

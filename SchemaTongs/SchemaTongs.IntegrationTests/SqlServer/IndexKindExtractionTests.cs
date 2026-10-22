@@ -33,6 +33,7 @@ public class IndexKindExtractionTests
     private string _db = "";
     private string _masterConnectionString = "";
     private string _tempProductPath = "";
+    private bool _jsonIndexes;
 
     [OneTimeSetUp]
     public void OneTimeSetUp()
@@ -52,6 +53,12 @@ public class IndexKindExtractionTests
             Run(cmd, "CREATE PRIMARY XML INDEX PX_Kinds ON dbo.Kinds (x)");
             Run(cmd, "CREATE XML INDEX XX_Kinds ON dbo.Kinds (x) USING XML INDEX PX_Kinds FOR PATH");
             Run(cmd, "CREATE SELECTIVE XML INDEX SXI_Kinds ON dbo.Kinds (sx) FOR (p1 = '/a/b')");
+            // JSON indexes and json columns are SQL Server 2025.
+            cmd.CommandText = "SELECT CASE WHEN OBJECT_ID('sys.json_indexes') IS NULL THEN 0 ELSE 1 END";
+            _jsonIndexes = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
+            if (!_jsonIndexes) return;
+            Run(cmd, "EXEC('ALTER TABLE dbo.Kinds ADD j JSON NULL')");
+            Run(cmd, "EXEC('CREATE JSON INDEX JX_Kinds ON dbo.Kinds (j) FOR (''$.a'')')");
         });
     }
 
@@ -79,7 +86,7 @@ public class IndexKindExtractionTests
     // The legacy encoding runs the XML generator, which reaches servers too old for xml_index_type.
     [TestCase(false)]
     [TestCase(true)]
-    public void IndexKindsAPackageCannotDeclare_AreLeftOut_NamedAndCountedAsSkipped(bool legacyEncoding)
+    public void EveryIndexKindAPackageCanDeclare_IsExtractedAsItself(bool legacyEncoding)
     {
         _tempProductPath = Path.Join(Path.GetTempPath(), $"TongsIdxKind_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_tempProductPath);
@@ -111,12 +118,22 @@ public class IndexKindExtractionTests
         {
             Assert.That(json, Does.Contain("IX_Kinds_Code").And.Contain("PX_Kinds").And.Contain("XX_Kinds"),
                 "the kinds a package can declare are still extracted");
-            Assert.That(json, Does.Not.Contain("SX_Kinds"), "a spatial index extracted as a plain index fails the next deploy");
-            Assert.That(json, Does.Not.Contain("SXI_Kinds"), "a selective XML index extracted as a primary one is silently not created");
-            Assert.That(warnings.Count(w => w.Contains("dbo.Kinds.SX_Kinds") && w.Contains("SPATIAL")), Is.EqualTo(1),
-                "each index left out is named, with its kind");
-            Assert.That(warnings.Count(w => w.Contains("dbo.Kinds.SXI_Kinds") && w.Contains("SELECTIVE")), Is.EqualTo(1));
-            Assert.That(tongs.ExitCode, Is.EqualTo(1), "an object the package misses makes the run exit 1");
+            // A spatial index is declarable (#526): it goes to SpatialIndexes, never to Indexes, where it failed the next deploy.
+            var table = Newtonsoft.Json.Linq.JObject.Parse(json);
+            Assert.That(table["Indexes"]?.Select(i => (string)i["Name"]), Has.None.Contains("SX_Kinds"), "a spatial index is not a plain index");
+            Assert.That(table["SpatialIndexes"]?.Select(i => (string)i["Name"]), Is.EquivalentTo(new[] { "[SX_Kinds]" }), "it is extracted as a spatial index");
+            Assert.That(warnings.Where(w => w.Contains("SX_Kinds") && !w.Contains("SXI_Kinds")), Is.Empty, "and no longer reported as left out");
+            // A selective XML index read as a primary one was silently not created (#471); it is declarable now, as itself.
+            var sxi = table["XmlIndexes"]?.FirstOrDefault(i => (string)i["Name"] == "[SXI_Kinds]");
+            Assert.That(sxi?["Selective"]?["Paths"]?.Select(p => (string)p["Path"]), Is.EquivalentTo(new[] { "/a/b" }), "a selective XML index is extracted with its paths");
+            Assert.That(warnings.Where(w => w.Contains("SXI_Kinds")), Is.Empty, "and is not reported as left out");
+            if (_jsonIndexes)
+            {
+                Assert.That(table["JsonIndexes"]?.Select(i => (string)i["Name"] + ":" + string.Join(",", i["Paths"]?.Select(p => (string)p) ?? [])),
+                    Is.EquivalentTo(new[] { "[JX_Kinds]:$.a" }), "a JSON index is extracted as one, with its paths");
+                Assert.That(warnings.Where(w => w.Contains("JX_Kinds")), Is.Empty, "and is not reported as left out");
+            }
+            Assert.That(tongs.ExitCode, Is.EqualTo(0), "with nothing left out, the run succeeds");
         });
     }
 

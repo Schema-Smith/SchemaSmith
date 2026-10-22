@@ -289,6 +289,10 @@ namespace Schema.Domain
         [JsonIgnore]
         public List<PostgreSqlSequence> Sequences { get; } = [];
 
+        // Sequences, MariaDB (10.3+). The same folder, read as MariaDbSequence; MySQL has no sequence at any version.
+        [JsonIgnore]
+        public List<MariaDbSequence> MariaDbSequences { get; } = [];
+
         [JsonIgnore]
         public string SequenceSchema { get; set; } = "[]";
 
@@ -336,7 +340,10 @@ namespace Schema.Domain
             ScriptObjectType.Schemas,
             ScriptObjectType.DDLTriggers,
             ScriptObjectType.FullTextCatalogs,
-            ScriptObjectType.FullTextStopLists
+            ScriptObjectType.FullTextStopLists,
+            ScriptObjectType.Publications,
+            ScriptObjectType.Casts,
+            ScriptObjectType.EventTriggers
         };
 
         /// <summary>
@@ -432,6 +439,7 @@ namespace Schema.Domain
             clone.DomainTypeSchema = DomainTypeSchema;
             clone.EnumTypeSchema = EnumTypeSchema;
             clone.Sequences.AddRange(Sequences);
+            clone.MariaDbSequences.AddRange(MariaDbSequences);
             clone.SequenceSchema = SequenceSchema;
             clone.MaterializedViewSchema = MaterializedViewSchema;
             clone.EventSchema = EventSchema;
@@ -661,31 +669,32 @@ namespace Schema.Domain
                 }
             });
 
+            // The schema tokens are stored RAW, like the template-named {{TableSchema_<Template>}} tokens (#301):
+            // every consumer -- the script folders and the identification scripts -- goes through SqlScript.TokenReplace,
+            // which doubles quotes when the token sits inside a string literal. Pre-escaping here escaped them twice (#507).
             TableSchema = JArray.FromObject(Tables).ToString();
-            tokens.Add(new("TableSchema", TableSchema.Replace("'", "''")));
-            // A2: XML twin, pre-escaped identically to the JSON sibling (added via the same non-escaping
-            // substitution path here, so it must pre-escape single quotes for safe SQL string embedding).
-            tokens.Add(new("TableXml", TableXml.Replace("'", "''")));
+            tokens.Add(new("TableSchema", TableSchema));
+            tokens.Add(new("TableXml", TableXml));
 
             MaterializedViewSchema = JArray.FromObject(MaterializedViews).ToString();
-            tokens.Add(new("MaterializedViewSchema", MaterializedViewSchema.Replace("'", "''")));
-            tokens.Add(new("MaterializedViewXml", MaterializedViewXml.Replace("'", "''")));
+            tokens.Add(new("MaterializedViewSchema", MaterializedViewSchema));
+            tokens.Add(new("MaterializedViewXml", MaterializedViewXml));
 
             EventSchema = JArray.FromObject(Events).ToString();
-            tokens.Add(new("EventSchema", EventSchema.Replace("'", "''")));
+            tokens.Add(new("EventSchema", EventSchema));
 
             DomainTypeSchema = JArray.FromObject(DomainTypes).ToString();
-            tokens.Add(new("DomainTypeSchema", DomainTypeSchema.Replace("'", "''")));
+            tokens.Add(new("DomainTypeSchema", DomainTypeSchema));
 
             EnumTypeSchema = JArray.FromObject(EnumTypes).ToString();
-            tokens.Add(new("EnumTypeSchema", EnumTypeSchema.Replace("'", "''")));
+            tokens.Add(new("EnumTypeSchema", EnumTypeSchema));
 
-            SequenceSchema = JArray.FromObject(Sequences).ToString();
-            tokens.Add(new("SequenceSchema", SequenceSchema.Replace("'", "''")));
+            SequenceSchema = MariaDbSequences.Count > 0 ? JArray.FromObject(MariaDbSequences).ToString() : JArray.FromObject(Sequences).ToString();
+            tokens.Add(new("SequenceSchema", SequenceSchema));
 
             IndexedViewSchema = JArray.FromObject(IndexedViews).ToString();
-            tokens.Add(new("IndexedViewSchema", IndexedViewSchema.Replace("'", "''")));
-            tokens.Add(new("IndexedViewXml", IndexedViewXml.Replace("'", "''")));
+            tokens.Add(new("IndexedViewSchema", IndexedViewSchema));
+            tokens.Add(new("IndexedViewXml", IndexedViewXml));
 
             if (ScriptFolders.Count == 0) ScriptFolders.AddRange(GetDefaultTemplateFolders(platform, IsSchemaTemplate));
 
@@ -711,6 +720,8 @@ namespace Schema.Domain
         /// Single-arg overload preserved for callers (SchemaTongs, FolderMappingConfig, existing tests)
         /// that don't need the schema-template carve-out. Returns the regular-template default set.
         /// </summary>
+        public const string PrerequisitesFolder = "Prerequisites";
+
         public static List<TemplateFolder> GetDefaultTemplateFolders(Platform platform) =>
             GetDefaultTemplateFolders(platform, isSchemaTemplate: false);
 
@@ -728,6 +739,8 @@ namespace Schema.Domain
         /// <item><see cref="ScriptObjectType.Publications"/> — <c>CREATE PUBLICATION</c> has no schema
         /// qualifier on PostgreSQL, so it is database-scoped for the same reason as the SQL Server trio
         /// above.</item>
+        /// <item><see cref="ScriptObjectType.Casts"/>, <see cref="ScriptObjectType.EventTriggers"/> — PostgreSQL
+        /// objects with no schema.</item>
         /// </list>
         /// MySQL has no schema-template path; the parameter is ignored on MySQL.
         /// </summary>
@@ -737,6 +750,10 @@ namespace Schema.Domain
             {
                 Platform.SqlServer =>
                 [
+                    // Written by SchemaTongs in full on every extraction: what the package needs and does not model, such as
+                    // the Always Encrypted keys its columns use. An Objects folder because that pass runs ahead of table
+                    // creation (the Before slot runs after it) and on every deploy; the scripts create only what is missing.
+                    new TemplateFolder { FolderPath = PrerequisitesFolder, QuenchSlot = TemplateQuenchSlot.Objects },
                     new TemplateFolder { FolderPath = "Before Scripts", QuenchSlot = TemplateQuenchSlot.Before },
                     new TemplateFolder { FolderPath = "Schemas", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Schemas },
                     new TemplateFolder { FolderPath = "DataTypes", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.DataTypes },
@@ -759,6 +776,8 @@ namespace Schema.Domain
                     // this pass recreate them -- which only works after the table work has run.
                     new TemplateFolder { FolderPath = "SchemaBound Views", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.SchemaBoundViews },
                     new TemplateFolder { FolderPath = "SchemaBound Functions", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.SchemaBoundFunctions },
+                    // Row-level security (2016): after the tables and the predicate functions a policy names.
+                    new TemplateFolder { FolderPath = "SecurityPolicies", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.SecurityPolicies },
                     new TemplateFolder { FolderPath = "Table Data", QuenchSlot = TemplateQuenchSlot.TableData },
                     new TemplateFolder { FolderPath = "After Scripts", QuenchSlot = TemplateQuenchSlot.After },
                 ],
@@ -769,21 +788,29 @@ namespace Schema.Domain
                     new TemplateFolder { FolderPath = "Domain Types", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.DomainTypes },
                     new TemplateFolder { FolderPath = "Enum Types", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.EnumTypes },
                     new TemplateFolder { FolderPath = "Composite Types", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.CompositeTypes },
+                    new TemplateFolder { FolderPath = "Range Types", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.RangeTypes },
                     // Collations are schema-scoped (like Domain/Enum/Composite Types above), so this folder
                     // fans out per schema in schema-template mode the same as those three — no exclusion needed.
                     new TemplateFolder { FolderPath = "Collations", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Collations },
+                    new TemplateFolder { FolderPath = "Text Search Configurations", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.TextSearchConfigurations },
                     new TemplateFolder { FolderPath = "Functions", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Functions },
                     new TemplateFolder { FolderPath = "Trigger Functions", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.TriggerFunctions },
                     new TemplateFolder { FolderPath = "Window Functions", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.WindowFunctions },
                     new TemplateFolder { FolderPath = "Aggregates", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Aggregates },
                     new TemplateFolder { FolderPath = "Procedures", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Procedures },
                     new TemplateFolder { FolderPath = "Sequences", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Sequences },
+                    // Operators and casts are created over functions and types; the slot re-runs a script whose
+                    // dependency is not there yet, so their place among the other folders does not matter.
+                    new TemplateFolder { FolderPath = "Operators", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Operators },
+                    new TemplateFolder { FolderPath = "Casts", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Casts },
                     // Publications are database-scoped (CREATE PUBLICATION has no schema qualifier), so —
                     // like Schemas above — this folder is excluded from schema-template fan-out below.
                     new TemplateFolder { FolderPath = "Publications", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Publications },
                     new TemplateFolder { FolderPath = "Rules", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.Rules },
                     new TemplateFolder { FolderPath = "Triggers", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.Triggers },
                     new TemplateFolder { FolderPath = "Views", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.Views },
+                    // Last of its slot, so the package's own views are not DDL its event triggers fire on.
+                    new TemplateFolder { FolderPath = "Event Triggers", QuenchSlot = TemplateQuenchSlot.AfterTablesObjects, ObjectType = ScriptObjectType.EventTriggers },
                     new TemplateFolder { FolderPath = "Table Data", QuenchSlot = TemplateQuenchSlot.TableData },
                     new TemplateFolder { FolderPath = "After Scripts", QuenchSlot = TemplateQuenchSlot.After },
                 ],
@@ -809,16 +836,23 @@ namespace Schema.Domain
             if (platform == Platform.MariaDb)
                 folders.Insert(folders.FindIndex(f => f.FolderPath == "Triggers"),
                     new TemplateFolder { FolderPath = "Sequences", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Sequences });
+            // MariaDB packages (10.3+), after the routines a package body may call.
+            if (platform == Platform.MariaDb)
+                folders.Insert(folders.FindIndex(f => f.FolderPath == "Procedures") + 1,
+                    new TemplateFolder { FolderPath = "Packages", QuenchSlot = TemplateQuenchSlot.Objects, ObjectType = ScriptObjectType.Packages });
 
             if (!isSchemaTemplate) return folders;
 
             // Database-scoped objects cannot legitimately fan out per schema (design §3.3).
             return folders.Where(f =>
+                f.FolderPath != PrerequisitesFolder &&
                 f.ObjectType != ScriptObjectType.Schemas &&
                 f.ObjectType != ScriptObjectType.DDLTriggers &&
                 f.ObjectType != ScriptObjectType.FullTextCatalogs &&
                 f.ObjectType != ScriptObjectType.FullTextStopLists &&
-                f.ObjectType != ScriptObjectType.Publications).ToList();
+                f.ObjectType != ScriptObjectType.Publications &&
+                f.ObjectType != ScriptObjectType.Casts &&
+                f.ObjectType != ScriptObjectType.EventTriggers).ToList();
         }
 
         /// <summary>
@@ -850,7 +884,7 @@ namespace Schema.Domain
         /// <summary>Loads DECLARATIVE sequences from the Sequences/ folder; *.sql there still runs scripted.</summary>
         private void LoadSequences(Platform platform, bool tolerateComponentLoadErrors)
         {
-            if (platform != Platform.PostgreSQL) return;
+            if (platform != Platform.PostgreSQL && platform != Platform.MariaDb) return;
             var path = Path.Join(Path.GetDirectoryName(FilePath) ?? "", "Sequences");
             if (!ProductDirectoryWrapper.GetFromFactory().Exists(path)) return;
             var files = ProductDirectoryWrapper.GetFromFactory()
@@ -861,8 +895,12 @@ namespace Schema.Domain
                 try
                 {
                     var json = ProductFileWrapper.GetFromFactory().ReadAllText(f);
-                    Sequences.Add(JsonConvert.DeserializeObject<PostgreSqlSequence>(json, PlatformDeserializer.StrictSettings)
-                                  ?? throw new JsonSerializationException("Failed to deserialize sequence"));
+                    if (platform == Platform.MariaDb)
+                        MariaDbSequences.Add(JsonConvert.DeserializeObject<MariaDbSequence>(json, PlatformDeserializer.StrictSettings)
+                                             ?? throw new JsonSerializationException("Failed to deserialize sequence"));
+                    else
+                        Sequences.Add(JsonConvert.DeserializeObject<PostgreSqlSequence>(json, PlatformDeserializer.StrictSettings)
+                                      ?? throw new JsonSerializationException("Failed to deserialize sequence"));
                 }
                 // prepush-allow: generic-catch -- any load failure must surface wrapped with the file that caused it
                 catch (Exception e) when (!tolerateComponentLoadErrors)
@@ -1128,13 +1166,13 @@ namespace Schema.Domain
             // Ahead of the generic rule: on MySQL and MariaDB the legacy alias has already been migrated away, so that
             // rule would tell a template which plainly carries a SchemaIdentificationScript that it has none.
             if (CreateSchemaIfMissing && Product is { } product && product.Platform.GetBasePlatform() == Platform.MySQL)
-                throw new InvalidOperationException(
+                throw new PackageException(
                     $"Template '{Name}' (file: {FilePath}) sets CreateSchemaIfMissing=true, which does not apply on " +
                     $"{product.Platform}: a schema is a database there, and templates do not fan out per schema. " +
                     $"Remove CreateSchemaIfMissing; use DatabaseIdentificationScript to target tenant databases.");
 
             if (CreateSchemaIfMissing && !IsSchemaTemplate)
-                throw new InvalidOperationException(
+                throw new PackageException(
                     $"Template '{Name}' (file: {FilePath}) sets CreateSchemaIfMissing=true but " +
                     $"has no SchemaIdentificationScript. CreateSchemaIfMissing only applies to " +
                     $"schema templates — add a SchemaIdentificationScript or remove " +
@@ -1146,7 +1184,7 @@ namespace Schema.Domain
             // migration clears the field. If somehow we get here, fail loud with the design's
             // database-per-tenant hint rather than silently producing broken DDL.
             if (Product?.Platform.GetBasePlatform() == Platform.MySQL)
-                throw new InvalidOperationException(
+                throw new PackageException(
                     $"Template '{Name}' (file: {FilePath}) is a schema template on MySQL. " +
                     $"MySQL has no schema-inside-database concept — use database-per-tenant " +
                     $"instead (one DatabaseIdentificationScript-driven template per tenant DB).");
@@ -1154,7 +1192,7 @@ namespace Schema.Domain
             // Rule 2: database-scoped ObjectType rejection.
             var offending = ScriptFolders.FirstOrDefault(f => DisallowedSchemaTemplateObjectTypes.Contains(f.ObjectType));
             if (offending != null)
-                throw new InvalidOperationException(
+                throw new PackageException(
                     $"Template '{Name}' (file: {FilePath}) is a schema template but declares a " +
                     $"ScriptFolder for '{offending.ObjectType}' (path: '{offending.FolderPath}'). " +
                     $"{offending.ObjectType} is database-scoped and cannot fan out per schema. " +
@@ -1189,22 +1227,41 @@ namespace Schema.Domain
                 {
                     var fileName = Path.GetFileName(file);
                     var bareName = Path.GetFileNameWithoutExtension(fileName);
-                    if (!bareName.Contains('.')) continue;
+                    var objectName = bareName.Split(TableFileName.SchemaTemplateVariantSeparator)[0];
+                    if (!objectName.Contains('.')) continue;
 
-                    throw new InvalidOperationException(
+                    throw new PackageException(
                         $"Template '{Name}' (file: {FilePath}) is a schema template; the {ownerKind} " +
                         $"file '{fileName}' has a schema-qualified name. Schema templates require " +
-                        $"unqualified filenames — rename to '{bareName.Substring(bareName.LastIndexOf('.') + 1)}.json' " +
-                        $"(the schema is supplied per iteration via {{{{SchemaName}}}}).");
+                        $"unqualified filenames — rename to '{SuggestedName(file, bareName, objectName)}' " +
+                        $"(the schema is supplied per iteration via {{{{SchemaName}}}}; a variant label follows " +
+                        $"a '{TableFileName.SchemaTemplateVariantSeparator}', as in 'Customers{TableFileName.SchemaTemplateVariantSeparator}v1.json').");
                 }
             }
+        }
+
+        // The name the file's own content gives it; without readable content, the last dotted segment is the best guess.
+        private static string SuggestedName(string file, string bareName, string objectName)
+        {
+            try
+            {
+                var content = JsonText.ParseObject(ProductFileWrapper.GetFromFactory().ReadAllText(file));
+                var name = content.Value<string>("Name");
+                if (!string.IsNullOrWhiteSpace(name))
+                    return TableFileName.Canonical("", name, content.Value<string>("VariantName") ?? "", schemaLess: true, inSchemaTemplate: true);
+            }
+            catch (JsonReaderException)
+            {
+                // Fall through to the guess.
+            }
+            return $"{objectName[(objectName.LastIndexOf('.') + 1)..]}{bareName[objectName.Length..]}.json";
         }
 
         /// <summary>
         /// Per design §3.3, schema-only fields set non-default on a regular template are almost
         /// certainly a configuration mistake. Don't fail the load — surface a clear warning
         /// through the progress log so the user can correct it. <see cref="ContinueOnDatabaseFailure"/>
-        /// is excluded: it applies universally (DB-level failure isolation parity).
+        /// is excluded: it is the regular template's own setting.
         /// </summary>
         private void WarnIfSchemaOnlyFieldsSetOnRegularTemplate()
         {
@@ -1282,7 +1339,7 @@ namespace Schema.Domain
                     var cyclePath = startIndex >= 0
                         ? visitingStack.GetRange(startIndex, visitingStack.Count - startIndex)
                         : visitingStack;
-                    throw new InvalidOperationException(
+                    throw new PackageException(
                         $"Cycle detected in template '{Name}' token graph involving '{name}'. " +
                         $"The token graph contains a cycle: {string.Join(" → ", cyclePath)} → {name}. " +
                         $"Remove the circular reference between these tokens.");

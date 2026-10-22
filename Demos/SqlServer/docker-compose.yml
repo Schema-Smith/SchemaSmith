@@ -89,6 +89,10 @@ services:
         # Overridable via MSSQL_IMAGE in .env (2019 / 2022 / 2025).
         BASE_IMAGE: ${MSSQL_IMAGE:-mcr.microsoft.com/mssql/server:2022-latest}
     restart: always
+    # SQL Server sizes its buffer pool from the memory it can see, so without a limit it grows to most of the Docker
+    # VM and starves everything else. 4 GB is well above its 2 GB minimum and plenty for the demo databases.
+    mem_limit: 4g
+    memswap_limit: 4g
     ports:
       - "${MSSQL_PORT:-1440}:1433"
     environment:

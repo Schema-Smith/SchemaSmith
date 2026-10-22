@@ -33,12 +33,14 @@ public sealed class TableFileNameCheck : ISchemaCheck
         var findings = new List<Finding>();
         var dir = ProductDirectoryWrapper.GetFromFactory();
         if (!dir.Exists(ctx.PackagePath)) return findings;
+        var schemaTemplateByFolder = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var path in dir.GetFiles(ctx.PackagePath, "*.json", SearchOption.AllDirectories))
         {
+            var inSchemaTemplate = IsInSchemaTemplate(path, ctx.PackagePath, schemaTemplateByFolder);
             if (IsUnderModeledFolder(path, ctx.Platform))
             {
-                findings.AddRange(CheckModeledObject(path));
+                findings.AddRange(CheckModeledObject(path, inSchemaTemplate));
                 continue;
             }
             if (!IsUnderFolder(path, "Tables")) continue;
@@ -49,7 +51,7 @@ public sealed class TableFileNameCheck : ISchemaCheck
             if (table == null || string.IsNullOrWhiteSpace(table.Name)) continue;
 
             var schema = (table as IDeliverableTable)?.Schema ?? "";
-            var canonical = TableFileName.Canonical(schema, table.Name, table.VariantName ?? "", isSchemaTemplate: string.IsNullOrEmpty(schema));
+            var canonical = TableFileName.Canonical(schema, table.Name, table.VariantName ?? "", schemaLess: string.IsNullOrEmpty(schema), inSchemaTemplate);
             var actual = Path.GetFileName(path);
             if (!string.Equals(actual, canonical, StringComparison.OrdinalIgnoreCase))
                 findings.Add(new Finding(Severity.Warning, Code, Category, path,
@@ -71,7 +73,30 @@ public sealed class TableFileNameCheck : ISchemaCheck
         ("Events", Platform.MySQL),
     ];
 
-    private static IEnumerable<Finding> CheckModeledObject(string path)
+    // Read from the template's own Template.json rather than the loaded templates: a template that failed to load is
+    // missing from those, and its file names are exactly what the author is about to rename.
+    private static bool IsInSchemaTemplate(string path, string packagePath, Dictionary<string, bool> byFolder)
+    {
+        var segments = Path.GetRelativePath(packagePath, path).Split('\\', '/');
+        if (segments.Length < 3 || !segments[0].Equals("Templates", StringComparison.Ordinal)) return false;
+        if (byFolder.TryGetValue(segments[1], out var known)) return known;
+
+        var templateFile = Path.Join(packagePath, "Templates", segments[1], "Template.json");
+        var file = ProductFileWrapper.GetFromFactory();
+        var isSchemaTemplate = false;
+        try
+        {
+            isSchemaTemplate = file.Exists(templateFile)
+                && !string.IsNullOrWhiteSpace(JsonText.ParseObject(file.ReadAllText(templateFile)).Value<string>("SchemaIdentificationScript"));
+        }
+        catch (JsonReaderException)
+        {
+            // An unreadable Template.json is the load check's finding; name files as a regular template would.
+        }
+        return byFolder[segments[1]] = isSchemaTemplate;
+    }
+
+    private static IEnumerable<Finding> CheckModeledObject(string path, bool inSchemaTemplate)
     {
         JObject content;
         try { content = JsonText.ParseObject(ProductFileWrapper.GetFromFactory().ReadAllText(path)); }
@@ -82,7 +107,7 @@ public sealed class TableFileNameCheck : ISchemaCheck
 
         var schema = content.Value<string>("Schema") ?? "";
         var canonical = TableFileName.Canonical(schema, name, content.Value<string>("VariantName") ?? "",
-            isSchemaTemplate: string.IsNullOrEmpty(TableFileName.NormalizeIdentifier(schema)));
+            schemaLess: string.IsNullOrEmpty(TableFileName.NormalizeIdentifier(schema)), inSchemaTemplate);
         var actual = Path.GetFileName(path);
         if (!string.Equals(actual, canonical, StringComparison.OrdinalIgnoreCase))
             yield return new Finding(Severity.Warning, Code, Category, path,
@@ -90,7 +115,9 @@ public sealed class TableFileNameCheck : ISchemaCheck
     }
 
     private static bool IsUnderModeledFolder(string path, Platform platform) =>
-        ModeledFolders.Any(m => m.Platform == platform.GetBasePlatform() && IsUnderFolder(path, m.Folder));
+        ModeledFolders.Any(m => m.Platform == platform.GetBasePlatform() && IsUnderFolder(path, m.Folder))
+        // MariaDB alone of its family reads Sequences/*.json (Template.LoadSequences), so it is keyed on the exact platform.
+        || (platform == Platform.MariaDb && IsUnderFolder(path, "Sequences"));
 
     private static bool IsUnderFolder(string path, string folder) =>
         path.Split('\\', '/').Any(segment => segment.Equals(folder, StringComparison.Ordinal));

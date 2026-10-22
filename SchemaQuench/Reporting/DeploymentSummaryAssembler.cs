@@ -67,7 +67,7 @@ public static class DeploymentSummaryAssembler
                 Schema: NullIfEmpty(m.Schema),
                 Server: m.Server,
                 Database: NullIfEmpty(m.Database),
-                Outcome: "Ran"))
+                Outcome: m.Outcome))
             .ToList();
 
         var timingSummary = new TimingSummary(
@@ -85,7 +85,7 @@ public static class DeploymentSummaryAssembler
         var unsupportedDowngrade = BuildUnsupportedDowngrade(changeAudit);
 
         return new DeploymentSummary(
-            SchemaVersion: "1.1",
+            SchemaVersion: "1.2",
             Tool: "SchemaQuench",
             ToolVersion: toolVersion,
             Run: run,
@@ -188,16 +188,17 @@ public static class DeploymentSummaryAssembler
             ForeignKeys: Count2("foreignKey", "dropped", "wouldDrop"));
 
         var scriptsRan = rows.Count(r => r.Action == "ran");
+        var scriptsUnchanged = rows.Count(r => r.Action == "unchanged");
         // 'dropSuppressed' rows are protection-suppressed drops, not changes that would occur — they
         // belong to the PreventDropSummary manifest, not the object-change detail. 'downgraded' rows
         // likewise belong to the UnsupportedDowngradeSummary manifest, not the detail. WhatIf 'would*'
         // rows ARE previewed changes and stay in the detail.
         var details = rows
             .Where(r => r.Action != "dropSuppressed" && r.Action != "downgraded")
-            .Select(r => new ObjectChangeDetail(r.ObjectType, r.ObjectName, r.Action))
+            .Select(r => new ObjectChangeDetail(r.ObjectType, r.ObjectName, r.Action, r.Mode))
             .ToArray();
 
-        return new ObjectChangeSummary(true, created, modified, dropped, scriptsRan, details);
+        return new ObjectChangeSummary(true, created, modified, dropped, scriptsRan, details, scriptsUnchanged);
     }
 
     /// <summary>

@@ -16,7 +16,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
         private static string PayloadJson(string table) => @"[{""Schema"":""dbo"",""Name"":""" + table + @""",
             ""Indexes"":[
               {""Name"":""PK_" + table + @""",""PrimaryKey"":true,""Unique"":true,""Clustered"":true,""IndexColumns"":""Id""},
-              {""Name"":""IX_" + table + @"_Label"",""Unique"":false,""Clustered"":false,""IndexColumns"":""Label DESC"",""IncludeColumns"":""Id""}
+              {""Name"":""IX_" + table + @"_Label"",""Unique"":false,""Clustered"":false,""IndexColumns"":""Label DESC"",""IncludeColumns"":""Id"",""Disabled"":true}
             ]}]";
 
         [Test]
@@ -47,6 +47,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                 Assert.Multiple(() =>
                 {
                     Assert.That(jsonIdx, Is.Not.Empty, "JSON IndexOnly converged no indexes");
+                    Assert.That(jsonIdx, Has.Some.EndsWith("|D:1"), "the index declared Disabled is disabled");
                     Assert.That(xmlIdx, Is.EqualTo(jsonIdx), "XML IndexOnly indexes differ from JSON IndexOnly");
                 });
             }
@@ -77,7 +78,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                         ORDER BY ic.key_ordinal FOR XML PATH('')), 1, 1, ''), '') + '|I:' +
                 ISNULL(STUFF((SELECT ',' + col.name FROM sys.index_columns ic JOIN sys.columns col ON col.object_id = ic.object_id AND col.column_id = ic.column_id
                         WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 1
-                        ORDER BY col.name FOR XML PATH('')), 1, 1, ''), '')
+                        ORDER BY col.name FOR XML PATH('')), 1, 1, ''), '') + '|D:' + CONVERT(VARCHAR, i.is_disabled)
                 FROM sys.indexes i WHERE i.object_id = OBJECT_ID('dbo.' + @t) AND i.type_desc <> 'HEAP'
                 ORDER BY i.is_primary_key DESC, i.is_unique DESC, i.type_desc";
             AddParam(cmd, "@t", table);

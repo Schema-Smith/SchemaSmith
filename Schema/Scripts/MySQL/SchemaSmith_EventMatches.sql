@@ -10,7 +10,8 @@ CREATE FUNCTION `SchemaSmith_EventMatches`(
     p_Schema VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Name VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     p_ScheduleType VARCHAR(10) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Interval VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_ExecuteAt VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     p_Starts VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Ends VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Status VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
-    p_Preserve TINYINT, p_Comment TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Definition LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    p_Preserve TINYINT, p_Comment TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_Definition LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+    p_TimeZone VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci, p_SqlMode VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 )
 RETURNS TINYINT
 NOT DETERMINISTIC
@@ -41,6 +42,11 @@ BEGIN
   DECLARE v_preserve TINYINT;
   DECLARE v_comment TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
   DECLARE v_def LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_zone VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_mode VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_flag VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_i INT;
+  DECLARE v_n INT;
 
   SELECT CASE WHEN EVENT_TYPE = 'ONE TIME' THEN 'AT' ELSE 'EVERY' END,
          CASE WHEN INTERVAL_VALUE IS NULL THEN NULL
@@ -58,8 +64,10 @@ BEGIN
                      ELSE STATUS END,
          CASE WHEN ON_COMPLETION = 'PRESERVE' THEN 1 ELSE 0 END,
          EVENT_COMMENT,
-         EVENT_DEFINITION
-    INTO v_type, v_interval, v_at, v_starts, v_ends, v_status, v_preserve, v_comment, v_def
+         EVENT_DEFINITION,
+         TIME_ZONE,
+         SQL_MODE
+    INTO v_type, v_interval, v_at, v_starts, v_ends, v_status, v_preserve, v_comment, v_def, v_zone, v_mode
     FROM INFORMATION_SCHEMA.EVENTS
    WHERE EVENT_SCHEMA = p_Schema
      AND EVENT_NAME = p_Name;
@@ -101,6 +109,22 @@ BEGIN
   -- The comment and body are the user's text, so they compare byte for byte: a change only in case or accent is a
   -- change, whatever the database's collation.
   IF CAST(COALESCE(p_Comment, '') AS BINARY) <> CAST(COALESCE(v_comment, '') AS BINARY) THEN RETURN 0; END IF;
+
+  -- The zone and the mode follow the Starts convention: omitted means not managed. The mode is compared as a
+  -- SET of flags, because the engine canonicalises the order it stores ('ANSI_QUOTES,PIPES_AS_CONCAT' is stored
+  -- as 'PIPES_AS_CONCAT,ANSI_QUOTES'), and an exact compare would rebuild the event on every deploy.
+  IF NULLIF(p_TimeZone, '') IS NOT NULL AND CAST(p_TimeZone AS BINARY) <> CAST(COALESCE(v_zone, '') AS BINARY) THEN RETURN 0; END IF;
+  IF p_SqlMode IS NOT NULL THEN
+    SET v_mode = COALESCE(v_mode, '');
+    SET v_n = CASE WHEN p_SqlMode = '' THEN 0 ELSE LENGTH(p_SqlMode) - LENGTH(REPLACE(p_SqlMode, ',', '')) + 1 END;
+    IF v_n <> CASE WHEN v_mode = '' THEN 0 ELSE LENGTH(v_mode) - LENGTH(REPLACE(v_mode, ',', '')) + 1 END THEN RETURN 0; END IF;
+    SET v_i = 1;
+    WHILE v_i <= v_n DO
+      SET v_flag = TRIM(SUBSTRING_INDEX(SUBSTRING_INDEX(p_SqlMode, ',', v_i), ',', -1));
+      IF FIND_IN_SET(v_flag, v_mode) = 0 THEN RETURN 0; END IF;
+      SET v_i = v_i + 1;
+    END WHILE;
+  END IF;
 
   -- The body is compared with whitespace collapsed at the ends only. The server stores the body
   -- essentially verbatim, so anything more aggressive risks calling two genuinely different bodies equal.

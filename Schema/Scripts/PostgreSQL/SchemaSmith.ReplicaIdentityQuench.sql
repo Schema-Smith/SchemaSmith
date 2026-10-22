@@ -47,6 +47,8 @@ BEGIN
                                 WHERE ic.relname = t."ReplicaIdentityIndex"
                                   AND n.nspname = t."Schema"
                                   AND ic.relkind = 'i')
+               -- OnlineApply: an index built concurrently arrives after this procedure, and the identity with it.
+               AND NOT "SchemaSmith"."OnlineBuildQueued"(t."Schema", t."ReplicaIdentityIndex")
         LOOP
             RAISE EXCEPTION 'Table %.% declares ReplicaIdentityIndex "%" but no such index exists. PostgreSQL requires a unique, non-partial index over NOT NULL columns.',
                 bad_row."Schema", bad_row."Name", bad_row."ReplicaIdentityIndex";
@@ -55,11 +57,13 @@ BEGIN
 
     RAISE NOTICE 'Fixup Replica Identity';
     SELECT STRING_AGG('RAISE NOTICE ''  Setting replica identity for ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
-                      'ALTER TABLE "' || t."Schema" || '"."' || t."Name" || '" REPLICA IDENTITY ' ||
-                      CASE t."ReplicaIdentity"
-                           WHEN 'INDEX' THEN 'USING INDEX "' || t."ReplicaIdentityIndex" || '"'
-                           ELSE t."ReplicaIdentity"
-                           END, ';' || CHR(10)) || ';'
+                      "SchemaSmith"."AfterOnlineBuild"(t."Schema", CASE WHEN t."ReplicaIdentity" = 'INDEX' THEN t."ReplicaIdentityIndex" END,
+                        'Setting replica identity for ' || t."Schema" || '.' || t."Name",
+                        'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' REPLICA IDENTITY ' ||
+                        CASE t."ReplicaIdentity"
+                             WHEN 'INDEX' THEN 'USING INDEX ' || "SchemaSmith"."QuoteName"(t."ReplicaIdentityIndex")
+                             ELSE t."ReplicaIdentity"
+                             END || ';'), CHR(10))
       INTO sql_script
       FROM temp_tables t
       JOIN pg_class c ON c.relname = t."Name"

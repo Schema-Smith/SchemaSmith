@@ -13,7 +13,7 @@ namespace SchemaQuench.UnitTests;
 
 /// <summary>
 /// Covers the end-of-work-unit ChangeAudit drain's best-effort contract at the
-/// <see cref="ChangeAuditReader"/> boundary (Rule 15). The drain runs in the quench's
+/// <see cref="ChangeAuditReader"/> boundary. The drain runs in the quench's
 /// <c>finally</c> on the shared table connection; its documented contract is that an audit-read
 /// failure must NEVER disrupt the run. A broken/closed connection surfaces as
 /// <see cref="InvalidOperationException"/> ("Connection is not open") — not a

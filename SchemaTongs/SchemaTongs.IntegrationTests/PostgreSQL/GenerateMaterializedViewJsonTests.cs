@@ -2,6 +2,8 @@
 
 using System.Data;
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Domain.PostgreSQL;
@@ -166,6 +168,38 @@ CREATE DATABASE ""{_integrationDb}"";
         conn.ChangeDatabase(_integrationDb);
         ForgeKindler.KindleTheForge(cmd, Platform.PostgreSQL);
 
+        conn.Close();
+    }
+
+    [Test]
+    public void ShouldExtractIndexStorageParameters_FillFactorOnlyWhenSet_AndKeyOperatorClass()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE public.test_extras (id INT, name TEXT);
+CREATE MATERIALIZED VIEW public.mv_extras AS SELECT id, name FROM public.test_extras WITH DATA;
+CREATE INDEX ix_mv_extras_brin ON public.mv_extras USING brin (id) WITH (pages_per_range = 16);
+CREATE INDEX ix_mv_extras_name ON public.mv_extras (name COLLATE ""C"" text_pattern_ops) WITH (fillfactor = 70);
+CREATE INDEX ix_mv_extras_plain ON public.mv_extras (id);
+";
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = ResourceLoader.Load("SchemaSmith.GenerateMaterializedViewJson.sql", Platform.PostgreSQL);
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateMaterializedViewJson\"('public', 'mv_extras')";
+        var view = JsonConvert.DeserializeObject<PostgreSqlMaterializedView>(cmd.ExecuteScalar()?.ToString());
+        PostgreSqlIndex Index(string name) => view.Indexes.Single(i => i.Name == name);
+        Assert.Multiple(() =>
+        {
+            Assert.That(Index("ix_mv_extras_brin").StorageParameters, Is.EqualTo(new Dictionary<string, string> { ["pages_per_range"] = "16" }));
+            Assert.That(Index("ix_mv_extras_brin").FillFactor, Is.Zero, "a brin index has no fill factor");
+            Assert.That(Index("ix_mv_extras_name").IndexColumns, Is.EqualTo("name COLLATE \"C\" text_pattern_ops"));
+            Assert.That(Index("ix_mv_extras_name").FillFactor, Is.EqualTo(70));
+            Assert.That(Index("ix_mv_extras_name").StorageParameters, Is.Null, "fillfactor belongs to FillFactor, not the map");
+            Assert.That(Index("ix_mv_extras_plain").FillFactor, Is.Zero, "no option, no declaration");
+            Assert.That(Index("ix_mv_extras_plain").Tablespace, Is.Null);
+        });
         conn.Close();
     }
 

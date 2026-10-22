@@ -1,10 +1,8 @@
 DROP PROCEDURE IF EXISTS `uspLogError`;
+SET @ss_saved_sql_mode = @@SESSION.sql_mode;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION';
 DELIMITER //
-CREATE PROCEDURE `uspLogError` (OUT p_ErrorLogID int)
-  LANGUAGE SQL
-  NOT DETERMINISTIC
-  CONTAINS SQL
-  SQL SECURITY DEFINER
+CREATE PROCEDURE `uspLogError`(OUT p_ErrorLogID int)
 proc_body: BEGIN
     DECLARE v_errno INT;
     DECLARE v_severity INT DEFAULT 0;
@@ -61,3 +59,4 @@ proc_body: BEGIN
     SET p_ErrorLogID = LAST_INSERT_ID();
 END //
 DELIMITER ;
+SET SESSION sql_mode = @ss_saved_sql_mode;

@@ -61,6 +61,46 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         }
     }
 
+    // Below the RENAME COLUMN floor the respell restates the column with CHANGE COLUMN. A non-first TIMESTAMP NOT NULL
+    // restated without its DEFAULT gets an invented zero default where explicit_defaults_for_timestamp is off (MySQL
+    // 5.7, and MariaDB below 10.10, where 10.2-10.3 refuse to let a session turn it on) -- 1067 under a strict mode, or
+    // a silently lost CURRENT_TIMESTAMP.
+    [Test]
+    public void ACaseOnlySpellingOfANonFirstTimestamp_KeepsItsDefault()
+    {
+        const string table = "CaseOnlyTs";
+        const string product = "Case Only Timestamp";
+        var json = $$"""
+            [{
+                "Name": "{{table}}",
+                "Columns": [
+                    { "Name": "id", "DataType": "INT", "Nullable": false },
+                    { "Name": "a", "DataType": "INT", "Nullable": true },
+                    { "Name": "stamp", "DataType": "TIMESTAMP", "Nullable": false, "Default": "CURRENT_TIMESTAMP" }
+                ],
+                "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" } ]
+            }]
+            """;
+
+        using var conn = Open(out var cmd);
+        CleanUp(cmd, product, table);
+        Exec(cmd, $"CREATE TABLE `{table}` (`id` INT NOT NULL PRIMARY KEY, `a` INT NULL, `Stamp` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP)");
+        Exec(cmd, $"INSERT INTO `{table}` (`id`, `a`) VALUES (1, 1)");
+
+        try
+        {
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product));
+            cmd.CommandText = $"SELECT CONCAT(COLUMN_NAME, ' ', UPPER(COALESCE(COLUMN_DEFAULT, 'none'))) FROM INFORMATION_SCHEMA.COLUMNS " +
+                              $"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' AND LOWER(COLUMN_NAME) = 'stamp'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Does.StartWith("stamp CURRENT_TIMESTAMP"),
+                "the column takes the package spelling and keeps its default");
+        }
+        finally
+        {
+            CleanUp(cmd, product, table);
+        }
+    }
+
     // Below the RENAME COLUMN floor (MySQL 8.0 / MariaDB 10.6) the rename restates the column with CHANGE COLUMN,
     // whose generated-column form differs by engine.
     [Test]
@@ -92,6 +132,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         {
             for (var deploy = 1; deploy <= 2; deploy++)
             {
+                Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
                 Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
                     $"deploy {deploy}: re-spelling a generated column must not abort the deploy");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CONCAT(id, ':', plusone, ':', twice, ':', triple) ORDER BY id) FROM `{table}`"),
@@ -104,6 +145,14 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         {
             CleanUp(cmd, product, table);
         }
+    }
+
+    // MariaDB from 10.3 until 10.6.26, 10.11.17 and 11.4.11 cannot respell by case an index a foreign key needs; the deploy
+    // leaves the old spelling there (with a warning) rather than retrying a rebuild every run, so that is the outcome to assert.
+    private static bool KeepsOldSpelling(IDbCommand cmd)
+    {
+        cmd.CommandText = "SELECT SchemaSmith_CaseRespellKeepsOldSpelling()";
+        return Convert.ToInt32(cmd.ExecuteScalar()) == 1;
     }
 
     // The referenced side: a foreign key also depends on the parent's index over the referenced columns.
@@ -145,12 +194,19 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         {
             for (var deploy = 1; deploy <= 2; deploy++)
             {
+                Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
                 Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
                     $"deploy {deploy}: re-spelling the index a foreign key references must not abort the deploy");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
                     Is.EqualTo("fk_fkref_code"), $"deploy {deploy}: the foreign key must survive");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT CAST(INDEX_NAME AS BINARY)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(parent)} AND INDEX_NAME <> 'PRIMARY'"),
-                    Is.EqualTo(IsMariaDb(cmd) ? "UX_FkRef_Code" : "ux_fkref_code"), $"deploy {deploy}: one unique index on the parent");
+                    Is.EqualTo(KeepsOldSpelling(cmd) ? "UX_FkRef_Code" : "ux_fkref_code"), $"deploy {deploy}: one unique index on the parent");
+                if (KeepsOldSpelling(cmd))
+                {
+                    var messages = Scalar(cmd, "SELECT GROUP_CONCAT(Message SEPARATOR ' | ') FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
+                    Assert.That(messages, Does.Contain("keeps its spelling"), $"deploy {deploy}: says so");
+                    Assert.That(messages, Does.Not.Contain("replaced in one statement"), $"deploy {deploy}: and does not retry the swap, which rebuilds the table");
+                }
                 Assert.That(Scalar(cmd, $"SELECT COUNT(*) FROM `{child}`"), Is.EqualTo("1"), $"deploy {deploy}: the rows must survive");
             }
         }
@@ -159,8 +215,6 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             CleanUp(cmd, product, child, parent);
         }
     }
-
-    private static bool IsMariaDb(IDbCommand cmd) => Scalar(cmd, "SELECT VERSION() LIKE '%MariaDB%'") == "1";
 
     private static void ClearStatusMessages(IDbCommand cmd) =>
         Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
@@ -207,6 +261,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             for (var deploy = 1; deploy <= 2; deploy++)
             {
                 ClearStatusMessages(cmd);
+                Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
                 Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
                     $"deploy {deploy}: an index spelled differently only in case is the same index, not a duplicate to create");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT CAST(INDEX_NAME AS BINARY)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(table)} AND INDEX_NAME <> 'PRIMARY'"),
@@ -255,6 +310,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         {
             for (var deploy = 1; deploy <= 2; deploy++)
             {
+                Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
                 Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
                     $"deploy {deploy}: a CHECK spelled differently only in case is the same constraint, not a duplicate to create");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(table)} AND CONSTRAINT_TYPE = 'CHECK'"),
@@ -304,6 +360,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             for (var deploy = 1; deploy <= 2; deploy++)
             {
                 ClearStatusMessages(cmd);
+                Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
                 Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
                     $"deploy {deploy}: a foreign key spelled differently only in case is the same constraint, not a duplicate to create");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
@@ -358,13 +415,20 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         {
             for (var deploy = 1; deploy <= 2; deploy++)
             {
+                Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
                 Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
                     $"deploy {deploy}: re-spelling the index a foreign key depends on must not abort the deploy");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
                     Is.EqualTo("fk_fkback_parent"), $"deploy {deploy}: the foreign key must survive");
-                // MySQL renames in place; MariaDB cannot drop the index the key needs, so it keeps the live spelling.
+                // MySQL renames in place; MariaDB replaces the index in one statement, which the key accepts.
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT CAST(INDEX_NAME AS BINARY)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(child)} AND INDEX_NAME <> 'PRIMARY'"),
-                    Is.EqualTo(IsMariaDb(cmd) ? "IX_FkBack_Parent" : "ix_fkback_parent"), $"deploy {deploy}: exactly one index backs the key");
+                    Is.EqualTo(KeepsOldSpelling(cmd) ? "IX_FkBack_Parent" : "ix_fkback_parent"), $"deploy {deploy}: exactly one index backs the key");
+                if (KeepsOldSpelling(cmd))
+                {
+                    var messages = Scalar(cmd, "SELECT GROUP_CONCAT(Message SEPARATOR ' | ') FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
+                    Assert.That(messages, Does.Contain("keeps its spelling"), $"deploy {deploy}: says so");
+                    Assert.That(messages, Does.Not.Contain("replaced in one statement"), $"deploy {deploy}: and does not retry the swap, which rebuilds the table");
+                }
                 Assert.That(Scalar(cmd, $"SELECT COUNT(*) FROM `{child}`"), Is.EqualTo("1"), $"deploy {deploy}: the rows must survive");
             }
         }
@@ -416,6 +480,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         {
             for (var deploy = 1; deploy <= 2; deploy++)
             {
+                Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
                 Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product), $"deploy {deploy}");
 
                 // Ownership records the package's spelling on every setting, so the expectation is exact.

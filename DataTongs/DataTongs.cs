@@ -306,6 +306,8 @@ public class DataTongs
         // delivery reads the values back in the same zone wherever it runs.
         var extractionTimeZone = _platform.GetBasePlatform() == Platform.MySQL ? "+00:00" : null;
         using var timeZone = extractionTimeZone != null ? MySqlSessionSettings.UseTimeZone(cmd, extractionTimeZone) : null;
+        // The values are read as the default sql_mode reads them: PAD_CHAR_TO_FULL_LENGTH would extract CHAR values padded.
+        using var sqlMode = _platform.GetBasePlatform() == Platform.MySQL ? MySqlSessionSettings.UseParseNeutralSqlMode(cmd) : null;
 
         var tablesProcessed = 0;
         var errors = 0;
@@ -688,7 +690,7 @@ public class DataTongs
         return cmd.ExecuteScalar() as bool? ?? false;
     }
 
-    private static string Literal(string value) => $"'{value.Replace("'", "''")}'";
+    private static string Literal(string value) => MySqlNameMatch.Literal(value);
 
     private static bool TableExistsMySql(IDbCommand cmd, string databaseName, string tableName)
     {
@@ -727,6 +729,9 @@ SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '].STSrid AS [' + c.COLUMN_NAME + '.STSrid]'
                        WHEN c.DATA_TYPE = 'hierarchyid'
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + ']'
+                       -- A vector as its text, which SQL Server writes exactly; FOR JSON would write an array delivery cannot read.
+                       WHEN c.DATA_TYPE = 'vector'
+                       THEN 'CAST([' + c.COLUMN_NAME + '] AS NVARCHAR(MAX)) AS [' + c.COLUMN_NAME + ']'
                        ELSE '[' + c.COLUMN_NAME + ']' END, ',') WITHIN GROUP (ORDER BY c.COLUMN_NAME)
   FROM INFORMATION_SCHEMA.COLUMNS c
   JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
@@ -776,7 +781,7 @@ SELECT STRING_AGG(
         cmd.CommandText = $@"
 SELECT GROUP_CONCAT(
     CASE
-        WHEN c.DATA_TYPE IN ('binary','varbinary','tinyblob','blob','mediumblob','longblob')
+        WHEN c.DATA_TYPE IN ('binary','varbinary','tinyblob','blob','mediumblob','longblob','vector')
             THEN CONCAT('REPLACE(REPLACE(TO_BASE64(`', c.COLUMN_NAME, '`), ''\n'', ''''), ''\r'', '''') AS `', c.COLUMN_NAME, '`')
         WHEN c.DATA_TYPE IN ('geometry','point','linestring','polygon','multipoint','multilinestring','multipolygon','geometrycollection','geomcollection')
             THEN CONCAT('ST_AsText(`', c.COLUMN_NAME, '`) AS `', c.COLUMN_NAME, '`, ST_SRID(`', c.COLUMN_NAME, '`) AS `', c.COLUMN_NAME, '.STSrid`')
@@ -835,7 +840,7 @@ SELECT {selectColumns}
         cmd.CommandText = $@"
 SELECT JSON_AGG(ROW_TO_JSON(tbl))
   FROM(SELECT {selectColumns}
-         FROM ""{Identifier.EscapeDelimited(tableSchema, Platform.PostgreSQL)}"".""{Identifier.EscapeDelimited(tableName, Platform.PostgreSQL)}""
+         FROM ONLY ""{Identifier.EscapeDelimited(tableSchema, Platform.PostgreSQL)}"".""{Identifier.EscapeDelimited(tableName, Platform.PostgreSQL)}""
 {(string.IsNullOrWhiteSpace(filter) ? "" : $"         WHERE {filter}")}
          ORDER BY {orderColumns}) tbl
 ";
@@ -868,59 +873,35 @@ SELECT JSON_AGG(ROW_TO_JSON(tbl))
 
         var qualifiedTable = $"`{Identifier.EscapeDelimited(databaseName, Platform.MySQL)}`.`{Identifier.EscapeDelimited(tableName, Platform.MySQL)}`";
 
-        // MariaDB's JSON_ARRAYAGG is built on GROUP_CONCAT and is cut off at group_concat_max_len (1 MiB by default)
-        // with only a warning, which left a large table's extracted JSON unterminated. So on every MariaDB version,
-        // not just the 10.2-10.4 GROUP_CONCAT fallback, raise it to the max_allowed_packet ceiling first.
-        if (isMariaDb)
-        {
-            cmd.CommandText = "SET SESSION group_concat_max_len = 1073741824";
-            cmd.ExecuteNonQuery();
-        }
-
-        // JSON_ARRAYAGG is MySQL 5.7.22+ / MariaDB 10.5+. On MariaDB 10.2-10.4 it does not exist, so aggregate the
-        // rows with GROUP_CONCAT(JSON_OBJECT(...)) wrapped in brackets instead (empty table -> '[]').
-        if (!SupportsJsonArrayAgg(cmd))
-        {
-            cmd.CommandText = $@"
-SELECT COALESCE(CONCAT('[', GROUP_CONCAT(
-        JSON_OBJECT(
-            {jsonObjectClause}
-        ) ORDER BY {orderColumns} SEPARATOR ','), ']'), '[]') AS json_data
-FROM {qualifiedTable}
-{whereClause};";
-            return cmd.ExecuteScalar()?.ToString() ?? "[]";
-        }
-
+        // One row per read, joined here the way each engine's JSON_ARRAYAGG prints an array. Aggregated on the server, the
+        // rows came back NULL, with only a warning, once they passed max_allowed_packet (4 MiB by default on MySQL 5.7), and
+        // a NULL was written as an empty table.
         cmd.CommandText = $@"
-SELECT JSON_ARRAYAGG(
-        JSON_OBJECT(
+SELECT JSON_OBJECT(
             {jsonObjectClause}
-        )
-    ) AS json_data
+        ) AS row_json
 FROM {qualifiedTable}
 {whereClause}
 ORDER BY {orderColumns};";
-
-        var result = cmd.ExecuteScalar();
-        return result?.ToString() ?? "[]";
+        var separator = isMariaDb ? "," : ", ";
+        var json = new StringBuilder("[");
+        using (var reader = cmd.ExecuteReader())
+        {
+            var first = true;
+            while (reader.Read())
+            {
+                if (!first) json.Append(separator);
+                json.Append(reader.GetValue(0)?.ToString());
+                first = false;
+            }
+        }
+        return json.Append(']').ToString();
     }
 
     private static bool IsMariaDb(IDbCommand cmd)
     {
         cmd.CommandText = "SELECT VERSION()";
         return (cmd.ExecuteScalar()?.ToString() ?? "").Contains("MariaDB", StringComparison.OrdinalIgnoreCase);
-    }
-
-    // JSON_ARRAYAGG is available on MySQL 5.7.22+ (our 5.7 floor is well past that in practice) and MariaDB 10.5+.
-    // MariaDB 10.2-10.4 lack it, so callers fall back to a GROUP_CONCAT-based aggregation there.
-    private static bool SupportsJsonArrayAgg(IDbCommand cmd)
-    {
-        cmd.CommandText = "SELECT VERSION()";
-        var version = cmd.ExecuteScalar()?.ToString() ?? "";
-        if (version.IndexOf("MariaDB", StringComparison.OrdinalIgnoreCase) < 0) return true;
-        var parts = version.Split('.');
-        return parts.Length >= 2 && int.TryParse(parts[0], out var major) && int.TryParse(parts[1], out var minor)
-               && (major > 10 || (major == 10 && minor >= 5));
     }
 
     #region Table Data XML Extraction (SQL Server, B1 slice 3)
@@ -1060,7 +1041,7 @@ ORDER BY c.ORDINAL_POSITION;";
 
     internal static string FormatColumnForJsonObject(ColumnInfo column, bool quoteDecimals = false)
     {
-        var quotedName = $"'{column.Name.Replace("'", "''")}'";
+        var quotedName = MySqlNameMatch.Literal(column.Name);
         var columnRef = $"`{Identifier.EscapeDelimited(column.Name, Platform.MySQL)}`";
         var dataType = column.DataType.ToLowerInvariant();
 
@@ -1074,14 +1055,15 @@ ORDER BY c.ORDINAL_POSITION;";
             "time" when column.DatetimePrecision > 0
                 => $"{quotedName}, CONCAT(TIME_FORMAT({columnRef}, '%H:%i:%s.'), LEFT(TIME_FORMAT({columnRef}, '%f'), {column.DatetimePrecision}))",
             "time" => $"{quotedName}, TIME_FORMAT({columnRef}, '%H:%i:%s')",
-            "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob"
+            // A vector goes as its raw bytes too: the engines' text form keeps six significant digits, which changes a float32.
+            "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob" or "vector"
                 => $"{quotedName}, REPLACE(REPLACE(TO_BASE64({columnRef}), '\n', ''), '\r', '')",
             "geometry" or "point" or "linestring" or "polygon" or "multipoint"
                 or "multilinestring" or "multipolygon" or "geometrycollection" or "geomcollection"
                 // WKT alone drops the reference system. Pair it with a "<col>.STSrid" companion, the
                 // same shape SQL Server extraction has always produced, so the CRS survives delivery
                 // into an untyped destination column.
-                => $"{quotedName}, ST_AsText({columnRef}), '{column.Name.Replace("'", "''")}.STSrid', ST_SRID({columnRef})",
+                => $"{quotedName}, ST_AsText({columnRef}), {MySqlNameMatch.Literal(column.Name + ".STSrid")}, ST_SRID({columnRef})",
             "bit" => $"{quotedName}, CAST({columnRef} AS UNSIGNED)",
             // As a string: MySQL reads a JSON number back as a double, so delivery would round a DECIMAL wider than one.
             "decimal" or "numeric" when quoteDecimals => $"{quotedName}, CAST({columnRef} AS CHAR)",

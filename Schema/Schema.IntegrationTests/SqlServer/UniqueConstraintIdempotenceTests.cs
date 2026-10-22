@@ -24,7 +24,7 @@ namespace Schema.IntegrationTests.SqlServer;
 /// so.</para>
 /// <para>Asserted on <c>object_id</c> rather than on the constraint merely existing, because a
 /// drop-and-recreate leaves a constraint of the same name behind — the exact reason this went unnoticed.
-/// The identity is what proves it was left alone (CLAUDE.md Rule 32: assert the outcome, not the
+/// The identity is what proves it was left alone (assert the outcome, not the
 /// mechanism).</para>
 /// <para>The guid column is declared <c>UNIQUEIDENTIFIER ROWGUIDCOL</c> deliberately, and that is what
 /// makes this test bite. ROWGUIDCOL rides the <c>DataType</c> string, the way IDENTITY does, and

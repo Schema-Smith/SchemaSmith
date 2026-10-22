@@ -27,6 +27,8 @@ BEGIN
     CALL SchemaSmith_ParseTableJson(p_DatabaseName, p_TableDefinitions);
 
     -- Step 2: Create missing tables and add missing columns
+    -- #508: before any table or column is created, so only what already exists is checked on a scratch copy.
+    CALL SchemaSmith_ExpressionMapAdopt(p_DatabaseName, p_WhatIf);
     CALL SchemaSmith_MissingTableAndColumnQuench(p_DatabaseName, p_WhatIf);
 
     -- Step 3: Modify existing tables (column changes, drops if configured)

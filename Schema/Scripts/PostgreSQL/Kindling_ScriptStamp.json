@@ -1,0 +1,50 @@
+{
+  "Schema": "SchemaSmith",
+  "Name": "ScriptStamp",
+  "Columns": [
+    {
+      "Name": "ProductName",
+      "DataType": "VARCHAR(100)",
+      "Nullable": false
+    },
+    {
+      "Name": "TemplateName",
+      "DataType": "VARCHAR(256)",
+      "Nullable": false
+    },
+    {
+      "Name": "PathHash",
+      "DataType": "VARCHAR(64)",
+      "Nullable": false
+    },
+    {
+      "Name": "ScriptPath",
+      "DataType": "VARCHAR(1024)",
+      "Nullable": false
+    },
+    {
+      "Name": "TextHash",
+      "DataType": "VARCHAR(64)",
+      "Nullable": false
+    },
+    {
+      "Name": "DefinitionHash",
+      "DataType": "VARCHAR(64)",
+      "Nullable": false
+    },
+    {
+      "Name": "UpdatedUtc",
+      "DataType": "TIMESTAMP",
+      "Nullable": false,
+      "Default": "CURRENT_TIMESTAMP"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PK_ScriptStamp",
+      "PrimaryKey": false,
+      "Unique": true,
+      "IndexColumns": "\"ProductName\",\"TemplateName\",\"PathHash\""
+    }
+  ]
+}

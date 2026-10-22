@@ -10,13 +10,14 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 [Category("SqlServer")]
 public class TableQuench_UnrenderedIndexKindTests : BaseTableQuenchTests
 {
-    // A deploy that drops unknown indexes read a spatial index as a plain one and a selective XML index as a primary
-    // one, and dropped both -- indexes a package cannot declare, so nothing ever put them back. They are now neither
-    // compared nor dropped. The plain unknown index beside them proves the drop step ran.
+    // A deploy that drops unknown indexes once read a selective XML index as a primary one and dropped it while no package
+    // could declare one (#471). Spatial (#526) and selective XML indexes can be declared now, so an undeclared one is
+    // unknown like any other and is dropped -- the selective one as itself, not as a primary XML index. The plain unknown
+    // index proves the step ran.
     [TestCase("TableQuench")]
     [TestCase("IndexOnlyQuench")]
     [TestCase("IndexOnlyXmlQuench")]
-    public void ADeployThatDropsUnknownIndexes_LeavesTheKindsItCannotDeclare(string path)
+    public void ADeployThatDropsUnknownIndexes_DropsUndeclaredSpatialAndSelectiveXmlIndexes(string path)
     {
         var table = "UnrKind" + path;
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
@@ -41,7 +42,7 @@ public class TableQuench_UnrenderedIndexKindTests : BaseTableQuenchTests
             switch (path)
             {
                 case "TableQuench":
-                    Run(cmd, $"EXEC SchemaSmith.TableQuench @ProductName = '{_productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 1");
+                    Run(cmd, $"EXEC SchemaSmith.TableQuench @ProductName = '{_productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 1");
                     break;
                 case "IndexOnlyQuench":
                     RunTableQuenchProc(cmd, json, indexOnly: true);
@@ -56,8 +57,8 @@ public class TableQuench_UnrenderedIndexKindTests : BaseTableQuenchTests
             Assert.Multiple(() =>
             {
                 Assert.That(IndexExists(cmd, table, $"IX_{table}_Code"), Is.False, "precondition: the deploy dropped an unknown index it can declare");
-                Assert.That(IndexExists(cmd, table, $"SX_{table}"), Is.True, "a spatial index must not be dropped as unknown");
-                Assert.That(IndexExists(cmd, table, $"SXI_{table}"), Is.True, "a selective XML index must not be dropped as unknown");
+                Assert.That(IndexExists(cmd, table, $"SX_{table}"), Is.False, "an undeclared spatial index is unknown, and dropped");
+                Assert.That(IndexExists(cmd, table, $"SXI_{table}"), Is.False, "an undeclared selective XML index is unknown, and dropped");
             });
         }
         finally

@@ -1,10 +1,8 @@
 DROP PROCEDURE IF EXISTS `uspGetWhereUsedProductID`;
+SET @ss_saved_sql_mode = @@SESSION.sql_mode;
+SET SESSION sql_mode = 'ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION';
 DELIMITER //
-CREATE PROCEDURE `uspGetWhereUsedProductID` (IN p_StartProductID int,IN p_CheckDate datetime)
-  LANGUAGE SQL
-  NOT DETERMINISTIC
-  CONTAINS SQL
-  SQL SECURITY DEFINER
+CREATE PROCEDURE `uspGetWhereUsedProductID`(IN p_StartProductID int,IN p_CheckDate datetime)
 BEGIN
     
     WITH RECURSIVE `BOM_cte` (`ProductAssemblyID`, `ComponentID`, `ComponentDesc`, `PerAssemblyQty`, `StandardCost`, `ListPrice`, `BOMLevel`, `RecursionLevel`)
@@ -35,3 +33,4 @@ BEGIN
     ORDER BY b.`BOMLevel`, b.`ProductAssemblyID`, b.`ComponentID`;
 END //
 DELIMITER ;
+SET SESSION sql_mode = @ss_saved_sql_mode;

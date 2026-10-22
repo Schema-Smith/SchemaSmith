@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using NUnit.Framework;
+using Schema.Utility;
 
 namespace SchemaQuench.UnitTests;
 
@@ -60,7 +61,7 @@ public class WorkUnitFilterTests
         };
         var filter = new WorkUnitFilter([], [], ["acme", "tenant_not_in_override"]);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => filter.Apply(overrideUnits, warn: _ => { }));
+        var ex = Assert.Throws<RunFailedException>(() => filter.Apply(overrideUnits, warn: _ => { }));
 
         Assert.That(ex!.Message,
             Does.Contain("tenant_not_in_override")
@@ -193,7 +194,7 @@ public class WorkUnitFilterTests
 
         // tenant_nonexistent isn't a known schema → the unknown-value path fires first with the
         // available-options diagnostic; the zero-result path is exercised separately below.
-        var ex = Assert.Throws<InvalidOperationException>(() => filter.Apply(AllSixUnits(), warn: _ => { }));
+        var ex = Assert.Throws<RunFailedException>(() => filter.Apply(AllSixUnits(), warn: _ => { }));
         Assert.That(ex.Message, Does.Contain("tenant_nonexistent"));
     }
 
@@ -213,7 +214,7 @@ public class WorkUnitFilterTests
     {
         var filter = new WorkUnitFilter(["NoSuchTemplate"], [], []);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => filter.Apply(AllSixUnits(), warn: _ => { }));
+        var ex = Assert.Throws<RunFailedException>(() => filter.Apply(AllSixUnits(), warn: _ => { }));
         Assert.Multiple(() =>
         {
             Assert.That(ex!.Message, Does.Contain("NoSuchTemplate"));
@@ -230,7 +231,7 @@ public class WorkUnitFilterTests
     {
         var filter = new WorkUnitFilter([], ["AppZ"], []);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => filter.Apply(AllSixUnits(), warn: _ => { }));
+        var ex = Assert.Throws<RunFailedException>(() => filter.Apply(AllSixUnits(), warn: _ => { }));
         Assert.Multiple(() =>
         {
             Assert.That(ex!.Message, Does.Contain("AppZ"));
@@ -245,7 +246,7 @@ public class WorkUnitFilterTests
     {
         var filter = new WorkUnitFilter([], [], ["tenant_unknown"]);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => filter.Apply(AllSixUnits(), warn: _ => { }));
+        var ex = Assert.Throws<RunFailedException>(() => filter.Apply(AllSixUnits(), warn: _ => { }));
         Assert.Multiple(() =>
         {
             Assert.That(ex!.Message, Does.Contain("tenant_unknown"));
@@ -262,7 +263,7 @@ public class WorkUnitFilterTests
         // values together, not stop at the first. Saves a round-trip if multiple were typos.
         var filter = new WorkUnitFilter(["NoSuchTemplate"], ["NoSuchDb"], []);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => filter.Apply(AllSixUnits(), warn: _ => { }));
+        var ex = Assert.Throws<RunFailedException>(() => filter.Apply(AllSixUnits(), warn: _ => { }));
         Assert.Multiple(() =>
         {
             Assert.That(ex!.Message, Does.Contain("NoSuchTemplate"));
@@ -278,7 +279,7 @@ public class WorkUnitFilterTests
         // nothing to do.
         var filter = new WorkUnitFilter([], [], []);
 
-        var ex = Assert.Throws<InvalidOperationException>(() => filter.Apply(new List<WorkUnit>(), warn: _ => { }));
+        var ex = Assert.Throws<RunFailedException>(() => filter.Apply(new List<WorkUnit>(), warn: _ => { }));
         Assert.That(ex!.Message, Does.Contain("zero work units"));
     }
 

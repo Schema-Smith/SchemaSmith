@@ -39,6 +39,10 @@ namespace Schema.Capabilities
             // declared columns -- only the node/edge semantics are lost.
             rows.Add(new("graph-table", "Graph tables (NODE/EDGE)", Platform.SqlServer,
                 14, "SQL Server 2017", null, DegradeKind.Reduced, "graph table (SQL Server 2017)"));
+            // An edge table's CONNECTION constraints arrived two years after graph tables; below 2019 the table deploys
+            // without them.
+            rows.Add(new("edge-constraint", "Edge constraints (CONNECTION)", Platform.SqlServer,
+                15, "SQL Server 2019", null, DegradeKind.Skip, "edge constraint (SQL Server 2019)"));
 
             // Reduced for the same reason as graph, and the direction matters more here: a ledger table
             // cannot be converted or dropped afterwards, so NOT creating one is far easier to recover
@@ -52,8 +56,8 @@ namespace Schema.Capabilities
             //
             // WORTH KNOWING for anything driving UI or AI off this row, because the two thresholds are
             // NOT the same one: the version that can DEPLOY this (2022) is not the version that can READ
-            // it back. sys.partitions.xml_compression arrives in 2025, so 2022-2024 honour the setting
-            // and cannot report it -- exactly the asymmetry application-time-period documents for
+            // it back. sys.partitions.xml_compression is missing on 2022 CU25 and present from CU26 and on
+            // 2025, so a 2022 build without it honours the setting and cannot report it -- exactly the asymmetry application-time-period documents for
             // MariaDB. The row encodes the DEPLOY threshold, because that is what the gate compares
             // against; SchemaTongs covers the read gap by preserving the value from the package.
             rows.Add(new("xml-compression", "XML compression", Platform.SqlServer,
@@ -64,6 +68,34 @@ namespace Schema.Capabilities
                 13, "SQL Server 2016", null, DegradeKind.Skip, "Always Encrypted (SQL Server 2016)"));
             // Columnstore splits by index kind: nonclustered arrived in 2012 (major 11), clustered in 2014 (12).
             // Both share the one ChangeAudit ObjectType.
+            // Below 2012 an AUTO_GRID spatial index is created with the GRID scheme of its family, so it still indexes the column.
+            rows.Add(new("spatial-auto-grid", "Spatial index AUTO_GRID tessellation", Platform.SqlServer,
+                11, "SQL Server 2012", null, DegradeKind.Reduced, "spatial AUTO_GRID tessellation (SQL Server 2012)"));
+            // Below 2012 CREATE SPATIAL INDEX has no DATA_COMPRESSION, on any edition: the index is created uncompressed.
+            rows.Add(new("spatial-compression", "Spatial index compression", Platform.SqlServer,
+                11, "SQL Server 2012", null, DegradeKind.Reduced, "spatial index compression (SQL Server 2012)"));
+            // OnlineApply Prefer: below these, or on an edition without online operations (Standard, Web, Express at any
+            // version), the statement runs plain and the audit's Mode says "unavailable"; Require refuses instead. No
+            // manifest row: nothing declared is changed, only how it is built.
+            // SS-125: a memory-optimized table declaring what 2014's In-Memory OLTP lacks is refused by name, because 2014
+            // cannot alter such a table to add it later.
+            rows.Add(new("memory-optimized-constraints", "Foreign keys, CHECK, UNIQUE and (max) columns on a memory-optimized table", Platform.SqlServer,
+                13, "SQL Server 2016", null, DegradeKind.Refused, null));
+            rows.Add(new("memory-optimized-computed", "Computed columns on a memory-optimized table", Platform.SqlServer,
+                14, "SQL Server 2017", null, DegradeKind.Refused, null));
+            rows.Add(new("online-index", "Online index build", Platform.SqlServer,
+                11, "SQL Server 2012", null, DegradeKind.Reduced, null));
+            rows.Add(new("online-alter-column", "Online column change", Platform.SqlServer,
+                13, "SQL Server 2016", null, DegradeKind.Reduced, null));
+            rows.Add(new("resumable-index", "Resumable index build", Platform.SqlServer,
+                15, "SQL Server 2019", null, DegradeKind.Reduced, null));
+            // Below 2012 SP1 a selective XML index and every secondary on one are skipped; the table deploys without them.
+            // The gate is sys.xml_indexes.xml_index_type, which arrived with them: the major version cannot tell SP1 from RTM.
+            rows.Add(new("selective-xml-index", "Selective XML index", Platform.SqlServer,
+                11, "SQL Server 2012 SP1", null, DegradeKind.Skip, "selective XML index (SQL Server 2012 SP1)"));
+            // Below 2025 a JSON index is skipped; the gate is sys.json_indexes, which arrived with them.
+            rows.Add(new("json-index", "JSON index", Platform.SqlServer,
+                17, "SQL Server 2025", null, DegradeKind.Skip, "JSON index (SQL Server 2025)"));
             rows.Add(new("columnstore-nonclustered", "Nonclustered columnstore index", Platform.SqlServer,
                 11, "SQL Server 2012", null, DegradeKind.Skip, "columnstore index (SQL Server 2012/2014)"));
             rows.Add(new("columnstore-clustered", "Clustered columnstore index", Platform.SqlServer,
@@ -75,18 +107,32 @@ namespace Schema.Capabilities
                 13, "SQL Server 2016", null, DegradeKind.Skip, "nonclustered columnstore index (writable from SQL Server 2016)"));
             rows.Add(new("columnstore-clustered-with-rowstore", "Clustered columnstore beside rowstore indexes", Platform.SqlServer,
                 13, "SQL Server 2016", null, DegradeKind.Skip, "clustered columnstore beside rowstore indexes (SQL Server 2016)"));
+            // A clustered columnstore over a (max) or non-persisted computed column: 2017 (35343 and 35307 on 2016).
+            rows.Add(new("columnstore-clustered-max-computed", "Clustered columnstore over a (max) or computed column", Platform.SqlServer,
+                14, "SQL Server 2017", null, DegradeKind.Skip, "columnstore over a (max) or computed column (SQL Server 2017)"));
+            // Ordered columnstore (ORDER): clustered 2022, nonclustered 2025. The index is kept and created unordered.
+            rows.Add(new("columnstore-clustered-ordered", "Ordered clustered columnstore index", Platform.SqlServer,
+                16, "SQL Server 2022", null, DegradeKind.Reduced, "columnstore index without its ORDER"));
+            rows.Add(new("columnstore-nonclustered-ordered", "Ordered nonclustered columnstore index", Platform.SqlServer,
+                17, "SQL Server 2025", null, DegradeKind.Reduced, "columnstore index without its ORDER"));
 
             // ---- PostgreSQL (major gated via ServerVersionNum; all skipped) ---------------------------------
             // Reduced: the column becomes plain as declared, but below 13 it is dropped and re-added, so its values
             // are not kept (13+ converts it in place with DROP EXPRESSION).
             rows.Add(new("drop-expression", "Removing a column's generation, keeping its values", Platform.PostgreSQL,
                 13, "PostgreSQL 13", null, DegradeKind.Reduced, "un-generated column, values not kept (PG13)"));
+            // OnlineApply: below 18 a foreign key on a partitioned table cannot be added NOT VALID, so Prefer adds it plain
+            // and records the change's Mode as unavailable; Require refuses it.
+            rows.Add(new("online-foreign-key-partitioned", "Online foreign key on a partitioned table", Platform.PostgreSQL,
+                18, "PostgreSQL 18", null, DegradeKind.Reduced, null));
             rows.Add(new("nulls-not-distinct", "Unique index NULLS NOT DISTINCT", Platform.PostgreSQL,
                 15, "PostgreSQL 15", null, DegradeKind.Skip, "NULLS NOT DISTINCT (PG15)"));
             rows.Add(new("unlogged-sequence", "Unlogged sequence", Platform.PostgreSQL,
                 15, "PostgreSQL 15", null, DegradeKind.Skip, "UNLOGGED sequence (PG15)"));
             rows.Add(new("expression-statistics", "Extended statistics on expressions", Platform.PostgreSQL,
                 14, "PostgreSQL 14", null, DegradeKind.Skip, "expression statistics (PG14)"));
+            rows.Add(new("statistics-target", "Extended statistics target (ALTER STATISTICS … SET STATISTICS)", Platform.PostgreSQL,
+                13, "PostgreSQL 13", null, DegradeKind.Skip, "statistics target (PG13)"));
             rows.Add(new("column-compression", "Per-column compression method", Platform.PostgreSQL,
                 14, "PostgreSQL 14", null, DegradeKind.Skip, "per-column compression (PG14)"));
             rows.Add(new("table-access-method", "Table access method", Platform.PostgreSQL,
@@ -96,8 +142,24 @@ namespace Schema.Capabilities
             // policy-routed degrade with no row here, invisible to every consumer that drives off this list.
             rows.Add(new("virtual-generated-column", "VIRTUAL generated columns", Platform.PostgreSQL,
                 18, "PostgreSQL 18", null, DegradeKind.Skip, "VIRTUAL generated column (PG18)"));
+            // A CHECK or foreign key declared Enforced: false. Below 18 the constraint deploys enforced -- the object is
+            // created, with the one attribute the server cannot express left off.
+            rows.Add(new("not-enforced-constraint", "NOT ENFORCED constraints", Platform.PostgreSQL,
+                18, "PostgreSQL 18", null, DegradeKind.Reduced, "NOT ENFORCED constraint (PG18)"));
+            // A primary key or unique constraint WITHOUT OVERLAPS (temporal key). Below 18 the clause is skipped: the key
+            // is created over the same columns as a plain one.
+            rows.Add(new("temporal-key", "Temporal key (WITHOUT OVERLAPS)", Platform.PostgreSQL,
+                18, "PostgreSQL 18", null, DegradeKind.Skip, "WITHOUT OVERLAPS (PG18)"));
+            // ON DELETE SET NULL (col, ...) names the subset a delete nulls. Below 15 the key is created with a plain
+            // SET NULL, which nulls every key column: the same action over more columns.
+            rows.Add(new("set-null-columns", "ON DELETE SET NULL over a subset of the key's columns", Platform.PostgreSQL,
+                15, "PostgreSQL 15", null, DegradeKind.Reduced, "ON DELETE SET NULL (columns) (PG15)"));
 
             // ---- MySQL (comparable major*100+minor via SchemaSmith_ServerVersionNum) ------------------------
+            // OnlineApply: an instant add anywhere and an instant drop are 8.0.29 (8.0.12 adds at the end only). Below that
+            // the change runs ALGORITHM=INPLACE, LOCK=NONE, and the change's Mode says online.
+            rows.Add(new("instant-alter", "Instant column add or drop", Platform.MySQL,
+                800, "MySQL 8.0.29", null, DegradeKind.Reduced, null, IntroducedInPatchComparable: 80029));
             rows.Add(new("invisible-index", "Invisible index", Platform.MySQL,
                 800, "MySQL 8.0", null, DegradeKind.Skip, "INDEX (invisible, MySQL 8.0 / MariaDB 10.6)"));
             rows.Add(new("descending-index", "Descending index key part", Platform.MySQL,
@@ -152,8 +214,34 @@ namespace Schema.Capabilities
             // arrives in 11.4, so between those releases a period deploys correctly and cannot be read
             // from the catalog at all. The row encodes the declare threshold, because that is what the
             // gate compares against; the read gap is documented on MariaDbTable.Periods.
+            // OnlineApply: an instant add anywhere and an instant drop are 10.4 (10.3 adds at the end only).
+            rows.Add(new("instant-alter", "Instant column add or drop", Platform.MariaDb,
+                1004, "MariaDB 10.4", null, DegradeKind.Reduced, null));
+            // OnlineApply: a change INPLACE cannot take (a column type change, an add to a table with a full-text index)
+            // copies without blocking writes from 11.2; below it the change runs as written and its Mode is unavailable.
+            rows.Add(new("copy-lock-none", "Online table copy (COPY, LOCK=NONE)", Platform.MariaDb,
+                1102, "MariaDB 11.2", null, DegradeKind.Reduced, null));
             rows.Add(new("application-time-period", "Application-time period", Platform.MariaDb,
                 1004, "MariaDB 10.4.3", null, DegradeKind.Reduced, "table without its PERIOD FOR clause"));
+            // A unique or primary key WITHOUT OVERLAPS over a period (10.5.3). Below it the key is created over the
+            // period's end and start columns -- what the engine itself lists for a temporal key -- without the clause.
+            // Explicit ROW START / ROW END columns added to an existing table that has the implicit pair (11.7). Below it
+            // the table keeps its hidden row_start/row_end; a new table takes declared ones on every supported version.
+            rows.Add(new("explicit-system-time-columns", "Explicit system-time columns on an existing table", Platform.MariaDb,
+                1107, "MariaDB 11.7", null, DegradeKind.Skip, "explicit system-time columns (MariaDB 11.7)"));
+            rows.Add(new("temporal-key", "Temporal key (WITHOUT OVERLAPS)", Platform.MariaDb,
+                1005, "MariaDB 10.5.3", null, DegradeKind.Reduced, "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)"));
+            // A VECTOR index is skipped below 11.7. MySQL Community has none at any version, so it has no row.
+            rows.Add(new("vector-index", "Vector index", Platform.MariaDb,
+                1107, "MariaDB 11.7", null, DegradeKind.Skip, "INDEX (VECTOR, MariaDB 11.7)"));
+
+            // Declared sequences (Sequences/*.json) arrived with CREATE SEQUENCE in MariaDB 10.3; below it a declared
+            // one is skipped. CREATE SEQUENCE ... AS <type> is 11.5+; below it every sequence is a signed bigint.
+            // MySQL has no sequence at any version, so neither row has a MySQL twin.
+            rows.Add(new("sequence", "Declared sequence", Platform.MariaDb,
+                1003, "MariaDB 10.3", null, DegradeKind.Skip, "sequence (MariaDB 10.3)"));
+            rows.Add(new("sequence-type", "Sequence data type", Platform.MariaDb,
+                1105, "MariaDB 11.5", null, DegradeKind.Reduced, "sequence type (MariaDB 11.5)"));
 
             // Per-column history exclusion (MariaDB WITHOUT SYSTEM VERSIONING, #408). Same shape as the
             // period row above: MySQL has no system versioning at any version, so
@@ -191,6 +279,14 @@ namespace Schema.Capabilities
             // that direction is a data-loss guard, not a version degrade.
             rows.Add(new("table-system-versioning", "Table-level system versioning", Platform.MariaDb,
                 1003, "MariaDB 10.3", null, DegradeKind.Skip, "table without its WITH SYSTEM VERSIONING clause"));
+
+            // SYSTEM_TIME partitioning of a versioned table's history. Below 10.5 only a list naming every partition, with no
+            // STARTS, is accepted, so a count or STARTS leaves the clause off; AUTO (10.9.1) is left off on its own and the
+            // table keeps its history partitioning. A table that cannot be versioned at all is the row above.
+            rows.Add(new("system-time-partition-count", "SYSTEM_TIME partitioning by count or with STARTS", Platform.MariaDb,
+                1005, "MariaDB 10.5", null, DegradeKind.Skip, "table without its SYSTEM_TIME partitioning"));
+            rows.Add(new("system-time-auto-partitions", "SYSTEM_TIME partitioning with AUTO", Platform.MariaDb,
+                1009, "MariaDB 10.9.1", null, DegradeKind.Reduced, "SYSTEM_TIME partitioning without AUTO", IntroducedInPatchComparable: 100901));
 
             // Change Data Capture, gated by a DATABASE setting rather than an engine version -- the first
             // row of that kind, which is why Capability gained RequiredDatabaseSetting. IntroducedInComparable

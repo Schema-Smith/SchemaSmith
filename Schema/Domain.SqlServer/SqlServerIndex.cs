@@ -15,8 +15,8 @@ namespace Schema.Domain.SqlServer
         public string CompressionType { get; set; } = "NONE";
 
         // Valid on an index as well as a table (probed on 2022), and alterable via ALTER INDEX ... REBUILD.
-        // Same 2022-deploy / 2025-extract asymmetry as SqlServerTable.XmlCompression -- see the comment there.
-        [SchemaProperty(Description = "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022, but only EXTRACTABLE from 2025** — sys.partitions.xml_compression does not exist before then, so on 2022-2024 SchemaTongs carries the value forward from the package it is refreshing rather than dropping it.")]
+        // Same deploy / extract asymmetry as SqlServerTable.XmlCompression -- see the comment there.
+        [SchemaProperty(Description = "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022; extracted where the server reports sys.partitions.xml_compression** (2025, and 2022 from CU26; 2022 CU25 does not). On a server without it, SchemaTongs carries the value forward from the package it is refreshing rather than dropping it.")]
         [JsonProperty(Order = 110)]
         public bool XmlCompression { get; set; }
 
@@ -96,5 +96,23 @@ namespace Schema.Domain.SqlServer
             Description = "BUCKET_COUNT for a HASH index on a memory-optimized table. Required for a hash index, ignored elsewhere. SQL Server rounds it up to the next power of two.")]
         [JsonProperty(Order = 112, NullValueHandling = NullValueHandling.Ignore)]
         public int? BucketCount { get; set; }
+
+        /// <summary>
+        /// The index is disabled (<c>ALTER INDEX … DISABLE</c>): its definition stays in the catalog but it holds no
+        /// data and enforces nothing. Declared state, converged once the index exists: true disables a live index,
+        /// false (the default) rebuilds a disabled one, which is what enables it. Read from <c>sys.indexes.is_disabled</c>.
+        /// </summary>
+        [SchemaProperty(Description = "The index is disabled (ALTER INDEX … DISABLE): defined but holding no data and enforcing nothing. Declared true, a live index is disabled after it is created; left false, an index someone disabled by hand is rebuilt, which enables it. Disabling a clustered index makes the table unreadable, and disabling a key's index disables the foreign keys that reference it.")]
+        [JsonProperty(Order = 113)]
+        public bool Disabled { get; set; }
+
+        /// <summary>
+        /// An ordered columnstore index's sort columns (<c>ORDER (…)</c>), comma-separated in sort order: a clustered
+        /// columnstore from SQL Server 2022, a nonclustered one from 2025. Below that the index is created unordered and a
+        /// downgrade is recorded. Read from <c>sys.index_columns.column_store_order_ordinal</c>.
+        /// </summary>
+        [SchemaProperty(Description = "ColumnStore only: the ORDER columns, comma-separated in sort order. A clustered columnstore index from SQL Server 2022, a nonclustered one from 2025; below that it is created unordered and a downgrade recorded. A change re-creates the index.")]
+        [JsonProperty(Order = 114, NullValueHandling = NullValueHandling.Ignore)]
+        public string Order { get; set; }
     }
 }

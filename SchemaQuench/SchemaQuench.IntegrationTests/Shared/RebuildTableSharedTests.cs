@@ -600,4 +600,63 @@ INSERT INTO `{table}` (`Id`, `Val`) VALUES (1, 'one'), (2, 'two');");
             conn.Close();
         }
     }
+
+    // ---- grants survive --------------------------------------------------------
+
+    private List<string> GrantsFor(IDbCommand cmd, string table, string user) => Strings(cmd, $@"
+SELECT PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.TABLE_PRIVILEGES
+ WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND GRANTEE = '''{user}''@''%'''
+UNION ALL
+SELECT CONCAT(PRIVILEGE_TYPE, ' (', COLUMN_NAME, ')') FROM INFORMATION_SCHEMA.COLUMN_PRIVILEGES
+ WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND GRANTEE = '''{user}''@''%'''
+ORDER BY 1");
+
+    // MySQL and MariaDB key a table or column grant by name, not by the table object, so the rename swap leaves it
+    // on the replacement with no help. This pins that: a rebuild that dropped and re-created under the same name
+    // would also pass, which is the point -- what the user keeps is the grant.
+    [Test]
+    public void Rebuild_KeepsTableAndColumnGrants()
+    {
+        var table = $"RbGrants_{Uid()}";
+        var user = $"rb_perm_{Uid()}";
+        using var conn = OpenMainDb();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            Exec(cmd, $"CREATE USER '{user}'@'%' IDENTIFIED BY 'Rb-perm-pw1!'");
+            Exec(cmd, $@"
+CREATE TABLE `{table}` (`Id` INT NOT NULL, `Val` VARCHAR(50) NULL, PRIMARY KEY (`Id`));
+INSERT INTO `{table}` (`Id`, `Val`) VALUES (1, 'one');");
+            Exec(cmd, $"GRANT SELECT ON `{_mainDb}`.`{table}` TO '{user}'@'%'");
+            Exec(cmd, $"GRANT UPDATE (`Val`) ON `{_mainDb}`.`{table}` TO '{user}'@'%'");
+            var before = GrantsFor(cmd, table, user);
+            Assert.That(before, Is.EqualTo(new List<string> { "SELECT", "UPDATE (Val)" }),
+                "setup: both grants must be on the table before the rebuild, or the comparison below is vacuous");
+
+            var json = $$"""
+                [{
+                    "Name": "{{table}}",
+                    "Columns": [
+                        {"Name": "Id", "DataType": "INT", "Nullable": false},
+                        {"Name": "Val", "DataType": "VARCHAR(50)", "Nullable": true}
+                    ]
+                }]
+                """;
+            Rebuild(cmd, json, table);
+
+            Assert.That(AuditCount(cmd, table, "rebuilt"), Is.EqualTo(1),
+                "The table must actually have been rebuilt, or the grant assertion below proves nothing.");
+            Assert.That(GrantsFor(cmd, table, user), Is.EqualTo(before),
+                "The table and column grants must still be on the replacement after the swap.");
+        }
+        finally
+        {
+            try
+            {
+                Exec(cmd, $"DROP USER IF EXISTS '{user}'@'%'");
+                Exec(cmd, $"DROP TABLE IF EXISTS `{table}`");
+            }
+            catch (MySqlException) { /* best-effort cleanup must not mask a test result */ }
+        }
+    }
 }

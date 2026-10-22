@@ -399,18 +399,91 @@ namespace Schema.UnitTests.Domain
         public void SqlServer_AddDefaultScriptFolders_MatchesGetDefaultTemplateFolders()
         {
             var template = RepositoryHelper.CreateDefaultTemplate("Test", Platform.SqlServer);
-            var expected = Template.GetDefaultTemplateFolders(Platform.SqlServer);
+            var expected = Template.GetDefaultTemplateFolders(Platform.SqlServer)
+                .Where(f => !RepositoryHelper.FoldersWrittenOnUse.Contains(f.ObjectType)).ToList();
 
             AssertFolderListsMatch(expected, template.ScriptFolders);
+        }
+
+        // 2.7.x refuses a Template.json naming an ObjectType it does not know, so a package with no security policy
+        // must not declare their folder: written, it made every new SQL Server package unloadable there.
+        [Test]
+        public void SqlServer_AWrittenDefaultTemplate_DeclaresNoSecurityPolicyFolder()
+        {
+            var template = RepositoryHelper.CreateDefaultTemplate("Test", Platform.SqlServer);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(template.ScriptFolders.Select(f => f.ObjectType), Has.None.EqualTo(ScriptObjectType.SecurityPolicies));
+                Assert.That(Template.GetDefaultTemplateFolders(Platform.SqlServer).Select(f => f.ObjectType), Has.Some.EqualTo(ScriptObjectType.SecurityPolicies),
+                    "the deploy's own fallback still knows the folder");
+            });
         }
 
         [Test]
         public void PostgreSQL_AddDefaultScriptFolders_MatchesGetDefaultTemplateFolders()
         {
             var template = RepositoryHelper.CreateDefaultTemplate("Test", Platform.PostgreSQL);
-            var expected = Template.GetDefaultTemplateFolders(Platform.PostgreSQL);
+            var expected = Template.GetDefaultTemplateFolders(Platform.PostgreSQL)
+                .Where(f => !RepositoryHelper.FoldersWrittenOnUse.Contains(f.ObjectType)).ToList();
 
             AssertFolderListsMatch(expected, template.ScriptFolders);
+        }
+
+        // The five PostgreSQL kinds added in 2.8 are newer than releases still deploying packages, which refuse a
+        // Template.json naming a type they do not know, so a package that uses none of them declares none of them.
+        [TestCase("Range Types", ScriptObjectType.RangeTypes, TemplateQuenchSlot.Objects)]
+        [TestCase("Text Search Configurations", ScriptObjectType.TextSearchConfigurations, TemplateQuenchSlot.Objects)]
+        [TestCase("Operators", ScriptObjectType.Operators, TemplateQuenchSlot.Objects)]
+        [TestCase("Casts", ScriptObjectType.Casts, TemplateQuenchSlot.Objects)]
+        [TestCase("Event Triggers", ScriptObjectType.EventTriggers, TemplateQuenchSlot.AfterTablesObjects)]
+        public void PostgreSQL_A2Point8Kind_HasItsFolder_ButAWrittenDefaultTemplateDeclaresItOnlyOnUse(string folderPath, ScriptObjectType type, TemplateQuenchSlot slot)
+        {
+            var folder = Template.GetDefaultTemplateFolders(Platform.PostgreSQL).Single(f => f.ObjectType == type);
+            var written = RepositoryHelper.CreateDefaultTemplate("Test", Platform.PostgreSQL);
+            Assert.Multiple(() =>
+            {
+                Assert.That(folder.FolderPath, Is.EqualTo(folderPath));
+                Assert.That(folder.QuenchSlot, Is.EqualTo(slot));
+                Assert.That(written.ScriptFolders.Select(f => f.ObjectType), Has.None.EqualTo(type));
+                Assert.That(RepositoryHelper.FoldersWrittenOnUse, Does.Contain(type));
+            });
+        }
+
+        [Test]
+        public void MariaDb_Packages_FollowProcedures_AreWrittenOnUse_AndMySqlHasNone()
+        {
+            var maria = Template.GetDefaultTemplateFolders(Platform.MariaDb);
+            var paths = maria.Select(f => f.FolderPath).ToList();
+            Assert.Multiple(() =>
+            {
+                Assert.That(paths.IndexOf("Packages"), Is.EqualTo(paths.IndexOf("Procedures") + 1), string.Join(", ", paths));
+                Assert.That(maria.Single(f => f.FolderPath == "Packages").ObjectType, Is.EqualTo(ScriptObjectType.Packages));
+                Assert.That(RepositoryHelper.CreateDefaultTemplate("Test", Platform.MariaDb).ScriptFolders.Select(f => f.ObjectType), Has.None.EqualTo(ScriptObjectType.Packages));
+                Assert.That(Template.GetDefaultTemplateFolders(Platform.MySQL).Select(f => f.ObjectType), Has.None.EqualTo(ScriptObjectType.Packages));
+            });
+        }
+
+        // Event triggers belong to the last folder of their slot, so they do not fire on the package's own views.
+        [Test]
+        public void PostgreSQL_EventTriggers_DeployAfterEveryOtherObjectFolderOfTheirSlot()
+        {
+            var afterTables = Template.GetDefaultTemplateFolders(Platform.PostgreSQL).Where(f => f.QuenchSlot == TemplateQuenchSlot.AfterTablesObjects).ToList();
+            Assert.That(afterTables[^1].ObjectType, Is.EqualTo(ScriptObjectType.EventTriggers), string.Join(", ", afterTables.Select(f => f.FolderPath)));
+        }
+
+        [Test]
+        public void PostgreSQL_SchemaTemplate_ExcludesCastsAndEventTriggers_KeepsTheSchemaScopedKinds()
+        {
+            var types = Template.GetDefaultTemplateFolders(Platform.PostgreSQL, isSchemaTemplate: true).Select(f => f.ObjectType).ToList();
+            Assert.Multiple(() =>
+            {
+                Assert.That(types, Has.None.EqualTo(ScriptObjectType.Casts), "a cast has no schema");
+                Assert.That(types, Has.None.EqualTo(ScriptObjectType.EventTriggers), "an event trigger has no schema");
+                Assert.That(types, Has.Some.EqualTo(ScriptObjectType.RangeTypes));
+                Assert.That(types, Has.Some.EqualTo(ScriptObjectType.TextSearchConfigurations));
+                Assert.That(types, Has.Some.EqualTo(ScriptObjectType.Operators));
+            });
         }
 
         [Test]
@@ -426,7 +499,8 @@ namespace Schema.UnitTests.Domain
         public void MariaDb_AddDefaultScriptFolders_MatchesGetDefaultTemplateFolders()
         {
             var template = RepositoryHelper.CreateDefaultTemplate("Test", Platform.MariaDb);
-            var expected = Template.GetDefaultTemplateFolders(Platform.MariaDb);
+            var expected = Template.GetDefaultTemplateFolders(Platform.MariaDb)
+                .Where(f => !RepositoryHelper.FoldersWrittenOnUse.Contains(f.ObjectType)).ToList();
 
             AssertFolderListsMatch(expected, template.ScriptFolders);
         }

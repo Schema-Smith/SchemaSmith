@@ -18,10 +18,11 @@ BEGIN
     -- Converges declared scheduled events, and RETURNS THE STATEMENTS TO RUN rather than running them.
     --
     -- WHY THIS PROCEDURE IS SHAPED UNLIKE EVERY OTHER QUENCH. The others build DDL as a string and run it
-    -- with PREPARE/EXECUTE. That is impossible for events: MySQL cannot prepare event DDL at all -- both
-    -- CREATE EVENT and DROP EVENT fail with 1295, "This command is not supported in the prepared statement
-    -- protocol yet". MariaDB CAN prepare them, so the limit is MySQL-only, and writing to the lower common
-    -- denominator is what keeps ONE implementation for both engines instead of two.
+    -- with PREPARE/EXECUTE. That is impossible for events below MySQL 9: MySQL 8 cannot prepare event DDL at
+    -- all -- both CREATE EVENT and DROP EVENT fail with 1295, "This command is not supported in the prepared
+    -- statement protocol yet" (probed on 8.4; 9.7 prepares them). MariaDB CAN prepare them, so the limit is
+    -- MySQL 8 and older, and writing to the lower common denominator is what keeps ONE implementation for
+    -- every supported version of both engines instead of two.
     --
     -- The decision-making therefore stays here in SQL and the caller is a dumb executor: this returns an
     -- ORDERED list of statements and SchemaQuench runs them in sequence. The ownership and audit writes
@@ -58,6 +59,9 @@ BEGIN
         Status VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
         Preserve TINYINT,
         Comment TEXT,
+        TimeZone VARCHAR(64),
+        SqlMode VARCHAR(1024),
+        SqlModeCanonical VARCHAR(2048),
         ShouldApply TINYINT DEFAULT 1,
         Changed TINYINT DEFAULT 0,
         DdlScript LONGTEXT
@@ -76,7 +80,7 @@ BEGIN
         -- UPPER runs in utf8mb4_bin so case mapping is the same on every server: MySQL 8.0's default collation
     -- truncates a letter whose upper case is longer to the input's byte length, so 'AT' + U+023F read as 'AT'.
     INSERT INTO _SchemaSmith_Events (Name, Definition, ScheduleType, `Interval`, ExecuteAt, Starts, Ends,
-                                         Status, Preserve, Comment)
+                                         Status, Preserve, Comment, TimeZone, SqlMode)
         SELECT SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Name'))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Definition'))),
                UPPER(COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].ScheduleType')))) COLLATE utf8mb4_bin, ''), 'EVERY')),
@@ -86,7 +90,10 @@ BEGIN
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Ends'))),
                UPPER(COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Status')))) COLLATE utf8mb4_bin, ''), 'ENABLE')),
                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Preserve'))), 0),
-               SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Comment')));
+               COALESCE(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Description'))),
+                        SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Comment')))),
+               SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].TimeZone'))),
+               SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].SqlMode')));
         SET v_idx = v_idx + 1;
     END WHILE;
 
@@ -135,12 +142,34 @@ BEGIN
              THEN CONCAT(' COMMENT ''', REPLACE(Comment, '''', ''''''), '''') ELSE '' END,
         ' DO ', COALESCE(Definition, ''));
 
+    -- A combination mode (TRADITIONAL, ANSI) is stored as the flags it stands for, so the declared mode is compared as
+    -- the server spells it: set on this session, read back, and the session's own put back. Compared as written, an
+    -- event declared TRADITIONAL never matched and was re-created, its schedule reset, on every deploy. A mode the
+    -- server refuses fails here, before any event is touched.
+    SET @ss_ev_saved_mode = @@SESSION.sql_mode;
+    BEGIN
+        DECLARE v_ModeId INT DEFAULT 0;
+        DECLARE v_ModeNext INT;
+        DECLARE v_ModeText VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+        mode_loop: LOOP
+            SET v_ModeNext = NULL;
+            SELECT MIN(Id) INTO v_ModeNext FROM _SchemaSmith_Events WHERE SqlMode IS NOT NULL AND Id > v_ModeId;
+            IF v_ModeNext IS NULL THEN LEAVE mode_loop; END IF;
+            SELECT SqlMode INTO v_ModeText FROM _SchemaSmith_Events WHERE Id = v_ModeNext;
+            SET SESSION sql_mode = v_ModeText;
+            SET @ss_ev_mode = @@SESSION.sql_mode;
+            SET SESSION sql_mode = @ss_ev_saved_mode;
+            UPDATE _SchemaSmith_Events SET SqlModeCanonical = @ss_ev_mode WHERE Id = v_ModeNext;
+            SET v_ModeId = v_ModeNext;
+        END LOOP;
+    END;
+
     -- Decide "changed" ONCE and store it. Calling the comparison inline in four places would re-evaluate
     -- it against a catalog that the earlier statements have already altered.
     UPDATE _SchemaSmith_Events
     SET Changed = CASE WHEN SchemaSmith_EventMatches(p_DatabaseName, Name, ScheduleType, `Interval`,
                                                      ExecuteAt, Starts, Ends, Status, Preserve,
-                                                     Comment, Definition) = 1 THEN 0 ELSE 1 END;
+                                                     Comment, Definition, TimeZone, SqlModeCanonical) = 1 THEN 0 ELSE 1 END;
 
     -- ---- create or replace ------------------------------------------------------------------------
     -- Converging means DROP then CREATE: ALTER EVENT cannot change every attribute and CREATE OR REPLACE
@@ -156,16 +185,40 @@ BEGIN
         -- twice in a single statement -- error 1137, "Can't reopen table" -- so the obvious single
         -- query is not available here.
         --
-        -- Seq is Id*10 + phase, which keeps each event's DROP, CREATE, ownership and audit ADJACENT.
+        -- Seq is Id*100 + phase, which keeps each event's pins, DROP, CREATE, restores, ownership and audit ADJACENT.
         -- Ordering by phase across all events instead would be wrong in a specific and nasty way: if a
         -- CREATE failed partway, every later event would already have been DROPPED and never recreated.
+        --
+        -- The schedule is read in the event's zone and the body is parsed and run under its mode, so both are
+        -- pinned on the session around the CREATE and restored after it (the session is the deploy's own). The pins
+        -- come before the DROP: a zone or mode the server refuses fails the deploy with the event still in place.
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
-            SELECT Id * 10 + 1, CONCAT('DROP EVENT IF EXISTS `', p_DatabaseName, '`.`', Name, '`')
+            SELECT Id * 100 + 20, 'SET @ss_saved_time_zone = @@SESSION.time_zone'
+              FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND NULLIF(TimeZone, '') IS NOT NULL;
+        INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
+            SELECT Id * 100 + 21, CONCAT('SET SESSION time_zone = ''', REPLACE(TimeZone, '''', ''''''), '''')
+              FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND NULLIF(TimeZone, '') IS NOT NULL;
+        INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
+            SELECT Id * 100 + 22, 'SET @ss_saved_sql_mode = @@SESSION.sql_mode'
+              FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND SqlMode IS NOT NULL;
+        INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
+            SELECT Id * 100 + 23, CONCAT('SET SESSION sql_mode = ''', REPLACE(SqlMode, '''', ''''''), '''')
+              FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND SqlMode IS NOT NULL;
+
+        INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
+            SELECT Id * 100 + 25, CONCAT('DROP EVENT IF EXISTS `', p_DatabaseName, '`.`', Name, '`')
               FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1;
 
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
-            SELECT Id * 10 + 2, DdlScript
+            SELECT Id * 100 + 30, DdlScript
               FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1;
+
+        INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
+            SELECT Id * 100 + 40, 'SET SESSION time_zone = @ss_saved_time_zone'
+              FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND NULLIF(TimeZone, '') IS NOT NULL;
+        INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
+            SELECT Id * 100 + 41, 'SET SESSION sql_mode = @ss_saved_sql_mode'
+              FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND SqlMode IS NOT NULL;
 
         -- Ownership AFTER the create, so a failed create never leaves a claim on an event that does not
         -- exist. Recorded for every declared event, not only changed ones, so adopting one that already
@@ -174,7 +227,7 @@ BEGIN
             -- Every interpolated value is quote-escaped (doubled '') the same way the Comment field is
             -- above: a database, event, product or template name containing a single quote would
             -- otherwise break -- or inject into -- this generated INSERT.
-            SELECT Id * 10 + 3,
+            SELECT Id * 100 + 50,
                    CONCAT('INSERT INTO SchemaSmith_ProductOwnership (ObjectType, ObjectSchema, ObjectName, ProductName, TemplateName) ',
                           'SELECT ''EVENT'', ''', REPLACE(p_DatabaseName, '''', ''''''), ''', ''', REPLACE(Name, '''', ''''''), ''', ''', REPLACE(p_ProductName, '''', ''''''), ''', ''', REPLACE(COALESCE(p_TemplateName, ''), '''', ''''''), ''' ',
                           'FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM SchemaSmith_ProductOwnership po WHERE po.ObjectType = ''EVENT'' ',
@@ -183,7 +236,7 @@ BEGIN
               FROM _SchemaSmith_Events WHERE ShouldApply = 1;
 
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
-            SELECT Id * 10 + 4,
+            SELECT Id * 100 + 60,
                    CONCAT('INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) ',
                           'VALUES (CONNECTION_ID(), ''event'', ''', p_DatabaseName, '.', Name, ''', ''created'')')
               FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1;
@@ -224,7 +277,7 @@ BEGIN
         ELSE
             -- Same 1137 constraint as above: one reference per statement, explicit Seq. Offset well
             -- past the create range so drops always follow creates.
-            SET @ss_ev_base = 1000000;
+            SET @ss_ev_base = 100000000;
             INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
                 SELECT @ss_ev_base + Id * 10 + 1, CONCAT('DROP EVENT IF EXISTS `', p_DatabaseName, '`.`', Name, '`')
                   FROM _SchemaSmith_EventsToDrop;

@@ -25,7 +25,7 @@ namespace Schema.UnitTests.Domain.PostgreSQL
             Assert.That(fk.RelatedTableSchema, Is.Null);
             Assert.That(fk.Deferrable, Is.False);
             Assert.That(fk.InitiallyDeferred, Is.False);
-            Assert.That(fk.MatchType, Is.EqualTo("FULL"));
+            Assert.That(fk.MatchType, Is.EqualTo("SIMPLE"), "the engine's own default, so an omitted MatchType deploys what CREATE TABLE gives");
         }
 
         [Test]

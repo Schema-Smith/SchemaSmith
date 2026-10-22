@@ -35,7 +35,7 @@ AS $$
                      ELSE REGEXP_REPLACE(p_UdtName, '^_', '') END
                 || COALESCE(SUBSTRING(format_type(p_TypeId, p_TypeMod) FROM '\(.*\)'), '') || '[]'
            WHEN p_DomainName IS NOT NULL
-           THEN CASE WHEN p_DomainSchema != 'pg_catalog' THEN '"' || p_DomainSchema || '".' ELSE '' END || '"' || p_DomainName || '"'
+           THEN CASE WHEN p_DomainSchema != 'pg_catalog' THEN "SchemaSmith"."QuoteName"(p_DomainSchema) || '.' ELSE '' END || "SchemaSmith"."QuoteName"(p_DomainName)
            WHEN p_UdtSchema != 'pg_catalog'
            THEN QUOTE_IDENT(p_UdtSchema) || '.' || QUOTE_IDENT(p_UdtName)
                 || COALESCE(SUBSTRING(format_type(p_TypeId, p_TypeMod) FROM '\(.*\)'), '')

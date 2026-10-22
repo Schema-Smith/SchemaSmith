@@ -22,6 +22,7 @@ public static class ScriptFolderTypeInference
         ["XMLSchemaCollections"] = ScriptObjectType.XMLSchemaCollections,
         ["DDLTriggers"] = ScriptObjectType.DDLTriggers,
         ["Synonyms"] = ScriptObjectType.Synonyms,
+        ["SecurityPolicies"] = ScriptObjectType.SecurityPolicies,
         ["Domain Types"] = ScriptObjectType.DomainTypes,
         ["Enum Types"] = ScriptObjectType.EnumTypes,
         ["Composite Types"] = ScriptObjectType.CompositeTypes,
@@ -32,6 +33,12 @@ public static class ScriptFolderTypeInference
         ["Rules"] = ScriptObjectType.Rules,
         ["Collations"] = ScriptObjectType.Collations,
         ["Publications"] = ScriptObjectType.Publications,
+        ["Range Types"] = ScriptObjectType.RangeTypes,
+        ["Text Search Configurations"] = ScriptObjectType.TextSearchConfigurations,
+        ["Operators"] = ScriptObjectType.Operators,
+        ["Casts"] = ScriptObjectType.Casts,
+        ["Event Triggers"] = ScriptObjectType.EventTriggers,
+        ["Packages"] = ScriptObjectType.Packages,
         ["Events"] = ScriptObjectType.Events,
     };
 

@@ -38,6 +38,8 @@
            -- SECOND deploy, in packages that never mentioned placement.
            COALESCE(elem ->> 'Tablespace', '') AS "Tablespace",
            COALESCE(elem ->> 'PersistenceType', '') AS "PersistenceType",
+           -- NULL when omitted (leave the database's comment alone), '' when the package asks for it removed.
+           elem ->> 'Description' AS "Description",
            -- Empty string means "not declared, leave the server alone", the AccessMethod convention. #407
            COALESCE(UPPER(elem ->> 'ReplicaIdentity'), '') AS "ReplicaIdentity",
            COALESCE(elem ->> 'ReplicaIdentityIndex', '') AS "ReplicaIdentityIndex",
@@ -60,7 +62,9 @@
            elem #>> '{RebuildPolicy,Mode}' AS "RebuildPolicyMode",
            (elem #>> '{RebuildPolicy,Threshold}')::INT AS "RebuildPolicyThreshold",
            (elem #>> '{RebuildPolicy,OnOrderMismatch}')::BOOLEAN AS "RebuildPolicyOnOrderMismatch",
-           COALESCE(JSON_TYPEOF(elem -> 'RebuildPolicy') = 'object', FALSE) AS "RebuildPolicySpecified"
+           COALESCE(JSON_TYPEOF(elem -> 'RebuildPolicy') = 'object', FALSE) AS "RebuildPolicySpecified",
+           -- The table's OnlineApply (OFF, PREFER, REQUIRE) over the deploy's; NULL inherits (OnlineApplyMode).
+           UPPER(NULLIF(TRIM(elem ->> 'OnlineApply'), '')) AS "OnlineApply"
     FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem;
 
     -- ShouldApply scoped by "_RowId" so each generated DELETE targets exactly the source row.
@@ -82,6 +86,7 @@
            (celem ->> 'Nullable') IS NOT NULL AS "NullableDeclared",
            COALESCE(celem ->> 'Default', '') AS "Default",
            COALESCE(celem ->> 'Collation', '') AS "Collation",
+           celem ->> 'Description' AS "Description",
            -- An expression is only ever a generated column on PostgreSQL, so an omitted Generated beside one means
            -- ALWAYS. Reading it as NEVER built a plain column that every later comparison then read as generated.
            CASE WHEN NULLIF(celem ->> 'Generated', '') IS NOT NULL THEN celem ->> 'Generated'
@@ -119,7 +124,7 @@
     UPDATE temp_columns tc
        SET "Nullable" = COALESCE((SELECT NOT a.attnotnull
                                     FROM pg_attribute a
-                                   WHERE a.attrelid = to_regclass('"' || tc."TableSchema" || '"."' || tc."TableName" || '"')
+                                   WHERE a.attrelid = to_regclass("SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName"))
                                      AND a.attname = tc."Name" AND a.attnum > 0 AND NOT a.attisdropped), TRUE)
      WHERE NOT tc."NullableDeclared"
        AND tc."Generated" = 'ALWAYS' AND COALESCE(tc."GenerationExpression", '') <> '';
@@ -139,7 +144,7 @@
     UPDATE temp_columns tc
        SET "DataType" = r."Rendered"
       FROM (SELECT c."_RowId",
-                   (SELECT CASE WHEN ty.typtype = 'd' THEN '"' || ns.nspname || '"."' || ty.typname || '"'
+                   (SELECT CASE WHEN ty.typtype = 'd' THEN "SchemaSmith"."QuoteName"(ns.nspname) || '.' || "SchemaSmith"."QuoteName"(ty.typname)
                                 ELSE QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(ty.typname) END
                       FROM pg_type ty
                       JOIN pg_namespace ns ON ns.oid = ty.typnamespace
@@ -232,6 +237,28 @@
                                        || CASE WHEN "DataType" LIKE '%[]%' THEN '[]' ELSE '' END
                              ELSE "DataType" END;
 
+    -- A serial column is the engine's own declaration of an integer with an owned sequence. For comparison and ALTER
+    -- it is that integer, NOT NULL, with the sequence's nextval as its default; for CREATE TABLE, ADD COLUMN and the
+    -- rebuild's shadow table the keyword is kept, so the engine creates and owns the sequence. SERIAL4 is not a type
+    -- name the engine accepts in DDL at all, which is why a declared serial failed outright before this fold.
+    -- The default names the sequence the column already owns when it has one (rendered as the catalog renders it,
+    -- search_path-aware), else the one the ALTER pass creates by the engine's own naming convention.
+    ALTER TABLE temp_columns ADD COLUMN "IsSerial" BOOLEAN NOT NULL DEFAULT FALSE, ADD COLUMN "SerialKeyword" TEXT;
+    UPDATE temp_columns c
+       SET "IsSerial" = TRUE,
+           "SerialKeyword" = CASE TRIM(UPPER(c."DataType")) WHEN 'SERIAL2' THEN 'SMALLSERIAL' WHEN 'SERIAL8' THEN 'BIGSERIAL' ELSE 'SERIAL' END,
+           "DataType" = CASE TRIM(UPPER(c."DataType")) WHEN 'SERIAL2' THEN 'INT2' WHEN 'SERIAL8' THEN 'INT8' ELSE 'INT4' END,
+           "Nullable" = FALSE,
+           "Default" = 'nextval(''' ||
+                       CASE WHEN TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName")) IS NOT NULL
+                             AND EXISTS (SELECT 1 FROM pg_attribute a
+                                          WHERE a.attrelid = TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"))
+                                            AND a.attname = c."Name" AND NOT a.attisdropped)
+                             AND pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name") IS NOT NULL
+                            THEN pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass::text
+                            ELSE QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName" || '_' || c."Name" || '_seq') END ||
+                       '''::regclass)'
+     WHERE TRIM(UPPER(c."DataType")) IN ('SERIAL2', 'SERIAL4', 'SERIAL8');
     -- Family defaults, applied AFTER the synonym fold so both spellings of a type reach one rule.
     -- ColumnTypeArguments renders the catalog side bare when the value equals the family default, so an
     -- explicitly-declared default has to be dropped here or it compares unequal to its own deployment --
@@ -266,20 +293,34 @@
            COALESCE((celem ->> 'Clustered')::BOOLEAN, false) AS "Clustered",
            REGEXP_REPLACE(COALESCE(celem ->> 'IndexColumns', ''), '\s*,\s*', ',', 'g') AS "IndexColumns",
            COALESCE(celem ->> 'IncludeColumns', '') AS "IncludeColumns",
-           COALESCE(celem ->> 'AccessMethod', 'btree') AS "AccessMethod",
+           -- A temporal key's backing index is GiST, implied by the flag rather than declared.
+           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 18 AND COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) THEN 'gist'
+                ELSE COALESCE(celem ->> 'AccessMethod', 'btree') END AS "AccessMethod",
            COALESCE(celem ->> 'Tablespace', '') AS "Tablespace",
            COALESCE(celem ->> 'FilterExpression', '') AS "FilterExpression",
+           celem ->> 'Description' AS "Description",
            COALESCE((celem ->> 'Deferrable')::BOOLEAN, false) AS "Deferrable",
            COALESCE((celem ->> 'InitiallyDeferred')::BOOLEAN, false) AS "InitiallyDeferred",
            -- Below PG15 NULLS NOT DISTINCT does not exist: the effective column drives compare + emit
            -- (coerced false so an old target neither churns nor emits an unsupported clause); the raw
            -- declared value drives the unsupported-feature policy (fail | warn-with-downgrade).
-           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 15 THEN COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) ELSE false END AS "NullsNotDistinct",
-           COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) AS "NullsNotDistinctDeclared",
+           -- On a primary key the clause decides nothing (the columns cannot be NULL) and the engine never records it,
+           -- so it is neither emitted nor compared there; --Validate reports it (SS-IDX-004).
+           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 15 AND NOT COALESCE((celem ->> 'PrimaryKey')::BOOLEAN, false) THEN COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) ELSE false END AS "NullsNotDistinct",
+           CASE WHEN NOT COALESCE((celem ->> 'PrimaryKey')::BOOLEAN, false) THEN COALESCE((celem ->> 'NullsNotDistinct')::BOOLEAN, false) ELSE false END AS "NullsNotDistinctDeclared",
+           -- WITHOUT OVERLAPS is PostgreSQL 18: the effective value drives compare + emit (false below 18, so an old
+           -- target neither churns nor emits the clause), the declared value drives the unsupported-feature policy.
+           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 18 THEN COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) ELSE false END AS "WithoutOverlaps",
+           COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) AS "WithoutOverlapsDeclared",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName",
            CASE WHEN p_UpdateFillFactor THEN true ELSE COALESCE((celem ->> 'UpdateFillFactor')::BOOLEAN, false) END AS "UpdateFillFactor",
-           COALESCE(NULLIF((celem ->> 'FillFactor')::INT2, 0), 90) AS "FillFactor",
+           -- Undeclared (absent or 0) is the engine's default for the access method, which is what the live index has
+           -- when nobody set one; only a declared value is written into the CREATE (IndexWithClause).
+           COALESCE(NULLIF((celem ->> 'FillFactor')::INT2, 0),
+                    "SchemaSmith"."IndexFillFactorDefault"(CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 18 AND COALESCE((celem ->> 'WithoutOverlaps')::BOOLEAN, false) THEN 'gist'
+                                                                ELSE COALESCE(celem ->> 'AccessMethod', 'btree') END)) AS "FillFactor",
+           NULLIF((celem ->> 'FillFactor')::INT2, 0) IS NOT NULL AS "FillFactorDeclared",
            -- Index storage parameters (the WITH clause), canonicalised as key=value pairs sorted by key so
            -- reloptions' own ordering does not matter, with fillfactor excluded (FillFactor owns it). This is
            -- what carries a vector index's m / ef_construction / lists. Same shape as IndexOnlyQuench's own
@@ -315,6 +356,12 @@
            COALESCE(celem ->> 'Expression', '') AS "Expression",
            COALESCE((celem ->> 'Deferrable')::BOOLEAN, false) AS "Deferrable",
            COALESCE((celem ->> 'InitiallyDeferred')::BOOLEAN, false) AS "InitiallyDeferred",
+           COALESCE((celem ->> 'Enforced')::BOOLEAN, true) AS "Enforced",
+           COALESCE((celem ->> 'Validated')::BOOLEAN, true) AS "Validated",
+           -- NULL when omitted: an existing constraint's state is converged only when the package declares it.
+           (celem ->> 'Enforced')::BOOLEAN AS "EnforcedDeclared",
+           (celem ->> 'Validated')::BOOLEAN AS "ValidatedDeclared",
+           COALESCE((celem ->> 'NoInherit')::BOOLEAN, false) AS "NoInherit",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName"
       FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
@@ -347,7 +394,17 @@
            COALESCE(NULLIF(celem ->> 'UpdateAction', 'NO ACTION'), '') AS "UpdateAction",
            COALESCE((celem ->> 'Deferrable')::BOOLEAN, false) AS "Deferrable",
            COALESCE((celem ->> 'InitiallyDeferred')::BOOLEAN, false) AS "InitiallyDeferred",
-           celem ->> 'MatchType' AS "MatchType"
+           celem ->> 'MatchType' AS "MatchType",
+           COALESCE((celem ->> 'Enforced')::BOOLEAN, true) AS "Enforced",
+           COALESCE((celem ->> 'Validated')::BOOLEAN, true) AS "Validated",
+           -- NULL when omitted: an existing constraint's state is converged only when the package declares it.
+           (celem ->> 'Enforced')::BOOLEAN AS "EnforcedDeclared",
+           (celem ->> 'Validated')::BOOLEAN AS "ValidatedDeclared",
+           -- ON DELETE SET NULL (columns) is PostgreSQL 15: the effective list drives compare + emit (empty below 15,
+           -- where a plain SET NULL sets every column, so an old target neither churns nor emits the clause); the
+           -- declared one drives the unsupported-feature policy. Written as the catalog reads it back: no spaces.
+           CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 15 THEN REGEXP_REPLACE(COALESCE(celem ->> 'SetNullColumns', ''), '\s*,\s*', ',', 'g') ELSE '' END AS "SetNullColumns",
+           REGEXP_REPLACE(COALESCE(celem ->> 'SetNullColumns', ''), '\s*,\s*', ',', 'g') AS "SetNullColumnsDeclared"
     FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
       CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'ForeignKeys')::JSON) AS celem(value);
 
@@ -365,6 +422,8 @@
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
            NULLIF(celem ->> 'Schema', '') AS "StatisticsSchema",
+           -- NULL when the package says nothing: the target is then unmanaged (13+; policy-gated below).
+           (celem ->> 'StatisticsTarget')::INT AS "StatisticsTarget",
            COALESCE(celem ->> 'Kind', '') AS "Kind",
            COALESCE(celem ->> 'StatisticsColumns', '') AS "StatisticsColumns",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
@@ -391,7 +450,13 @@
            COALESCE((celem ->> 'Deferrable')::BOOLEAN, false) AS "Deferrable",
            COALESCE((celem ->> 'InitiallyDeferred')::BOOLEAN, false) AS "InitiallyDeferred",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
-           COALESCE(celem ->> 'VariantName', '') AS "VariantName"
+           COALESCE(celem ->> 'VariantName', '') AS "VariantName",
+           -- The backing index's extras, as an index declares them; every storage parameter counts here, fillfactor
+           -- included, there being no FillFactor property on an exclusion constraint.
+           COALESCE(celem ->> 'IncludeColumns', '') AS "IncludeColumns",
+           COALESCE((SELECT STRING_AGG(sp.k || '=' || sp.v, ',' ORDER BY sp.k)
+                       FROM JSON_EACH_TEXT(COALESCE(celem -> 'StorageParameters', '{}'::JSON)) AS sp(k, v)), '') AS "StorageParameters",
+           COALESCE(celem ->> 'Tablespace', '') AS "Tablespace"
       FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
       CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'ExcludeConstraints')::JSON) AS celem(value);
 

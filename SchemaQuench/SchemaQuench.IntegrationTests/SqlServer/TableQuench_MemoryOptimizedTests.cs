@@ -531,6 +531,92 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
 ]
 """;
 
+    // SS-125. 2014's In-Memory OLTP takes no foreign key, CHECK, UNIQUE or (max) column on a memory-optimized table (2016)
+    // and no computed column (2017), and cannot alter one afterwards. Only an Enterprise 2014 can host the table at all
+    // (Express refuses it with 534, probed), so the gate runs here under the version override, before any DDL, and the
+    // server never sees the statement.
+    [TestCase(12, new[] { "foreign keys", "CHECK constraints", "UNIQUE indexes or constraints", "max-length columns", "computed columns" })]
+    [TestCase(13, new[] { "computed columns" })]
+    public void AMemoryOptimizedTableDeclaringWhatTheVersionLacks_IsRefusedByName(int major, string[] named)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"MOGateProduct_{uid}";
+        var table = $"MOGate_{uid}";
+        var json = $$"""
+[
+  { "Schema": "[dbo]", "Name": "[{{table}}_P]", "MemoryOptimized": true, "Durability": "SCHEMA_AND_DATA",
+    "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false } ],
+    "Indexes": [ { "Name": "[PK_{{table}}_P]", "PrimaryKey": true, "IndexColumns": "[Id]" } ] },
+  { "Schema": "[dbo]", "Name": "[{{table}}]", "MemoryOptimized": true, "Durability": "SCHEMA_AND_DATA",
+    "Columns": [
+      { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+      { "Name": "[ParentId]", "DataType": "INT", "Nullable": false },
+      { "Name": "[Code]", "DataType": "INT", "Nullable": false, "CheckExpression": "[Code] > 0" },
+      { "Name": "[Notes]", "DataType": "NVARCHAR(MAX)", "Nullable": true },
+      { "Name": "[Twice]", "DataType": "INT", "ComputedExpression": "[Code] * 2" }
+    ],
+    "Indexes": [
+      { "Name": "[PK_{{table}}]", "PrimaryKey": true, "IndexColumns": "[Id]" },
+      { "Name": "[UX_{{table}}_Code]", "Unique": true, "IndexColumns": "[Code]" }
+    ],
+    "ForeignKeys": [ { "Name": "[FK_{{table}}_P]", "Columns": "[ParentId]", "RelatedTableSchema": "[dbo]", "RelatedTable": "[{{table}}_P]", "RelatedColumns": "[Id]" } ] }
+]
+""";
+
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            cmd.CommandText = $"SET CONTEXT_INFO 0x53534F56{major:X8}";
+            cmd.ExecuteNonQuery();
+            var ex = Assert.Throws<SqlException>(() => RunTableQuenchProc(cmd, json, productName: product));
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.tables WHERE [name] LIKE 'MOGate[_]{uid}%'";
+            var created = Convert.ToInt32(cmd.ExecuteScalar());
+            // The table's own list, "[dbo].[t] (a, b)": the message's closing advice names computed columns too.
+            var marker = $"dbo].[{table}] (";
+            var at = ex!.Message.IndexOf(marker, StringComparison.Ordinal);
+            var listed = at < 0 ? "" : ex.Message[(at + marker.Length)..ex.Message.IndexOf(')', at + marker.Length)];
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex.Message, Does.Contain($"SQL Server {major}"));
+                Assert.That(listed.Split(", "), Is.EquivalentTo(named),
+                    $"the table's list was '{listed}' in: {ex.Message}");
+                Assert.That(ex.Message, Does.Not.Contain($"dbo].[{table}_P]"), "the parent declares none of them");
+                Assert.That(created, Is.Zero, "refused before any DDL");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $"SET CONTEXT_INFO 0x0; DROP TABLE IF EXISTS [dbo].[{table}]; DROP TABLE IF EXISTS [dbo].[{table}_P];";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    [Test]
+    public void AMemoryOptimizedTableDeclaringNoneOfThem_StillDeploysUnderThe2014Gate()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"MOGateOkProduct_{uid}";
+        var table = $"MOGateOk_{uid}";
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            cmd.CommandText = "SET CONTEXT_INFO 0x53534F560000000C";
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, WithMemoryOptimizedTable(table, "SCHEMA_AND_DATA", bucketCount: 1024), productName: product);
+            cmd.CommandText = $"SELECT is_memory_optimized FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.{table}')";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1));
+        }
+        finally
+        {
+            cmd.CommandText = $"SET CONTEXT_INFO 0x0; DROP TABLE IF EXISTS [dbo].[{table}];";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     private static string WithMemoryOptimizedTable(string table, string durability, int bucketCount) => $$"""
 [
   {

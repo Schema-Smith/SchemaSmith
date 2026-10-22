@@ -18,7 +18,7 @@ namespace Schema.IntegrationTests.MariaDb;
 /// <c>/ddspace</c> directory owned by <c>mysql</c>, so these tests need the purpose-built image
 /// <c>scripts/test-infra/datadir/mariadb</c>, run via <c>scripts/run-datadir-sweep.sh</c> -- the same
 /// reason the Encryption category is a separate sweep rather than part of the normal gate.</para>
-/// <para>Outcome, not mechanism (Rule 32): the assertions read
+/// <para>Outcome, not mechanism: the assertions read
 /// <c>INFORMATION_SCHEMA.TABLES.CREATE_OPTIONS</c> directly -- the exact catalog source
 /// <c>SchemaSmith_TableDataDirectory</c>'s MariaDb body itself parses -- rather than trusting the emitted
 /// CREATE TABLE SQL, so a placement bug that still produces a plausible-looking statement cannot pass

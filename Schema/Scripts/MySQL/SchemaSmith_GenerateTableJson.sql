@@ -51,7 +51,7 @@ BEGIN
         'RowFormat', t.ROW_FORMAT,
         'CharacterSet', SUBSTRING_INDEX(t.TABLE_COLLATION, '_', 1),
         'Collation', t.TABLE_COLLATION,
-        'Comment', CASE WHEN t.TABLE_COMMENT = '' THEN NULL ELSE t.TABLE_COMMENT END,
+        'Description', CASE WHEN t.TABLE_COMMENT = '' THEN NULL ELSE t.TABLE_COMMENT END,
         'AutoIncrementValue', t.AUTO_INCREMENT,
         -- These four live ONLY in CREATE_OPTIONS, a single free-text blob, which is why they share one
         -- parser and are read together. NULL (stripped by the JSON_REMOVE pass) when absent, so a table
@@ -102,14 +102,14 @@ BEGIN
         -- JSON_REMOVE pass below, so only protected tables carry "PreventDrop": true. Read from ProductOwnership. #270
         'PreventDrop', CASE WHEN EXISTS (SELECT 1 FROM SchemaSmith_ProductOwnership po
                                           WHERE po.ObjectType = 'TABLE'
-                                            AND CONVERT(po.ObjectSchema USING utf8mb4) = CONVERT(p_Schema USING utf8mb4)
-                                            AND CONVERT(po.ObjectName USING utf8mb4) = CONVERT(p_Table USING utf8mb4)
+                                            AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_Schema)
+                                            AND SchemaSmith_IdentifierKey(po.ObjectName) = SchemaSmith_IdentifierKey(p_Table)
                                             AND COALESCE(po.PreventDrop, 0) = 1)
                             THEN TRUE ELSE NULL END
     ) INTO v_json
     FROM INFORMATION_SCHEMA.TABLES t
     WHERE t.TABLE_SCHEMA = p_Schema
-      AND t.TABLE_NAME = p_Table
+      AND t.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(t.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
       -- MariaDB reports a system-versioned table as 'SYSTEM VERSIONED', not 'BASE TABLE'. Filtering on
       -- BASE TABLE alone silently omitted such a table from the extracted package -- no error, no warning,
       -- and the deploy-side twin of this filter was fixed separately. MySQL never reports this type.
@@ -126,8 +126,12 @@ BEGIN
         -- every MySQL package, whose schema does not declare it and would reject it. #408
         JSON_REMOVE(JSON_OBJECT(
             'Name', SchemaSmith_QuoteIdentifier(c.COLUMN_NAME),
-            -- Without MariaDB's /* mariadb-5.3 */ storage-format note, which is not part of the type.
-            'DataType', TRIM(REPLACE(c.COLUMN_TYPE, ' /* mariadb-5.3 */', '')),
+            -- Without MariaDB's /* mariadb-5.3 */ storage-format note, which is not part of the type. MariaDB renders a
+            -- JSON column as longtext utf8mb4_bin with a json_valid check named after the column; that shape is the
+            -- package's JSON, with no check, character set or collation of its own (never on MySQL, whose JSON column
+            -- reports json, and never below MariaDB 10.4.3, where there is no check to recognise it by).
+            'DataType', CASE WHEN SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 1 THEN 'JSON'
+                             ELSE TRIM(REPLACE(c.COLUMN_TYPE, ' /* mariadb-5.3 */', '')) END,
             'Nullable', CASE WHEN c.IS_NULLABLE = 'YES' THEN TRUE ELSE FALSE END,
             -- SchemaSmith_NormalizeColumnDefault folds MariaDB's divergent COLUMN_DEFAULT reporting
             -- (literal 'NULL' marker, quoted string values, current_timestamp() with parens) to the
@@ -140,6 +144,14 @@ BEGIN
             -- MariaDB refuses to aggregate the mix without an explicit coercion.
             'Default', CASE
                 WHEN SchemaSmith_NormalizeColumnDefault(c.COLUMN_DEFAULT) IS NULL THEN NULL
+                -- An expression default, by the catalog's own flag (#520): written wrapped, as the engine reports it
+                -- with MySQL's client-charset introducers removed and its escapes undone. The engine already wraps an
+                -- operator expression once, so that pair is kept rather than doubled. A temporal keyword is not an
+                -- expression here (SchemaSmith_IsExpressionDefault says no) and stays bare, below.
+                WHEN SchemaSmith_IsExpressionDefault(c.COLUMN_DEFAULT, c.EXTRA) = 1
+                     THEN CONVERT(CASE WHEN CONVERT(TRIM(SchemaSmith_ExpressionDefaultText(c.COLUMN_DEFAULT)) USING utf8mb4) LIKE CONVERT('(%)' USING utf8mb4)
+                                       THEN TRIM(SchemaSmith_ExpressionDefaultText(c.COLUMN_DEFAULT))
+                                       ELSE CONCAT('(', TRIM(SchemaSmith_ExpressionDefaultText(c.COLUMN_DEFAULT)), ')') END USING utf8mb4)
                 -- Numeric types: value is always a valid literal
                 WHEN c.DATA_TYPE IN ('tinyint', 'smallint', 'mediumint', 'int', 'integer', 'bigint',
                                      'float', 'double', 'decimal', 'numeric', 'bit', 'year') THEN CONVERT(c.COLUMN_DEFAULT USING utf8mb4)
@@ -184,22 +196,34 @@ BEGIN
             -- (Scripts/MariaDb/SchemaSmith_ColumnSrid.sql) always returns NULL. See
             -- SchemaSmith_SupportsColumnSrid for the full per-engine rationale.
             'Srid', SchemaSmith_ColumnSrid(p_Schema, p_Table, c.COLUMN_NAME),
+            -- MariaDB only (NULL on MySQL, and stripped below so a MySQL package never carries a key its model rejects).
+            'CheckExpression', CASE WHEN SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 1 THEN NULL
+                                    ELSE SchemaSmith_ColumnLevelCheck(p_Schema, p_Table, c.COLUMN_NAME) END,
+            'GeneratedAlways', CASE SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, c.COLUMN_NAME) WHEN 1 THEN 'RowStart' WHEN 2 THEN 'RowEnd' END,
             'Generated', CASE
+                WHEN SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, c.COLUMN_NAME) > 0 THEN NULL
                 WHEN c.EXTRA LIKE '%VIRTUAL GENERATED%' THEN 'VIRTUAL'
                 WHEN c.EXTRA LIKE '%STORED GENERATED%' THEN 'STORED'
                 ELSE NULL
             END,
-            'GenerationExpression', CASE WHEN c.GENERATION_EXPRESSION = '' THEN NULL ELSE c.GENERATION_EXPRESSION END,
-            'CharacterSet', c.CHARACTER_SET_NAME,
+            'GenerationExpression', CASE WHEN c.GENERATION_EXPRESSION = '' OR c.GENERATION_EXPRESSION IN ('ROW START', 'ROW END') THEN NULL ELSE c.GENERATION_EXPRESSION END,
+            'CharacterSet', CASE WHEN SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 1 THEN NULL
+                                 ELSE c.CHARACTER_SET_NAME END,
             'Collation', CASE
+                WHEN SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 1 THEN NULL
                 WHEN c.COLLATION_NAME = (SELECT TABLE_COLLATION FROM INFORMATION_SCHEMA.TABLES
-                                         WHERE TABLE_SCHEMA = p_Schema AND TABLE_NAME = p_Table)
+                                         WHERE TABLE_SCHEMA = p_Schema AND TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table))
                 THEN NULL  -- Don't include if same as table default
                 ELSE c.COLLATION_NAME
             END,
-            'Comment', CASE WHEN c.COLUMN_COMMENT = '' THEN NULL ELSE c.COLUMN_COMMENT END
+            'Description', CASE WHEN c.COLUMN_COMMENT = '' THEN NULL ELSE c.COLUMN_COMMENT END
         ), CASE WHEN c.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%'
-                THEN '$.___dummy___' ELSE '$.WithoutSystemVersioning' END)
+                THEN '$.___dummy___' ELSE '$.WithoutSystemVersioning' END,
+           CASE WHEN SchemaSmith_ColumnLevelCheck(p_Schema, p_Table, c.COLUMN_NAME) IS NOT NULL
+                 AND SchemaSmith_IsJsonAliasColumn(p_Schema, p_Table, c.COLUMN_NAME) = 0
+                THEN '$.___dummy2___' ELSE '$.CheckExpression' END,
+           CASE WHEN SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, c.COLUMN_NAME) > 0
+                THEN '$.___dummy3___' ELSE '$.GeneratedAlways' END)
         -- Alphabetical, matching SQL Server and PostgreSQL. Ordinal order made the same table extract
         -- differently depending on which engine it came from, so a package re-extracted elsewhere showed
         -- a whole-file diff that was pure noise. Name order is also stable against a source table whose
@@ -220,12 +244,11 @@ BEGIN
     ), ']') INTO v_columns
     FROM INFORMATION_SCHEMA.COLUMNS c
     WHERE c.TABLE_SCHEMA = p_Schema
-      AND c.TABLE_NAME = p_Table
-      -- A system-versioned table's row-start/row-end columns are generated and maintained by the engine.
-      -- Extracting them as ordinary columns would have the apply path try to manage them on re-deploy.
-      -- Only the explicit authoring form exposes them at all; the implicit form hides them. Isolated in a
-      -- function because the catalog columns behind it do not exist on MySQL -- see that function.
-      AND SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, c.COLUMN_NAME) = 0;
+      AND c.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
+      -- The key the server generated for a table created without one is the server's, not the package's.
+      AND SchemaSmith_IsGeneratedInvisiblePrimaryKey(p_Schema, p_Table, c.COLUMN_NAME) = 0;
+      -- A system-versioned table's explicit ROW START / ROW END columns are written with their role (GeneratedAlways);
+      -- the implicit pair is not in INFORMATION_SCHEMA.COLUMNS at all, so a table that has it extracts without them.
 
     -- Get indexes (excluding FULLTEXT which are handled separately). A functional/expression key part
     -- (MySQL 8.0.13+) has NULL COLUMN_NAME and reports its text via EXPRESSION instead; that column does
@@ -267,7 +290,7 @@ BEGIN
     -- that order and it is not name order and not even stable. MEASURED: MariaDB 11.4 emitted a table's
     -- check constraints in creation order (zzz, mmm, aaa), and MySQL 8.0 emitted the SAME table's two
     -- different ways across two runs. SQL Server and PostgreSQL have always sorted these by name in their
-    -- own generators; this is the Rule 20 parity gap (#10).
+    -- own generators; this is the cross-engine parity gap (#10).
     --
     -- Name order is NOT what Product:ObjectOrder selects here. These are sets, not sequences -- there is
     -- no physical order to preserve -- so they sort by name unconditionally, exactly as the other two
@@ -275,14 +298,18 @@ BEGIN
     IF SchemaSmith_SupportsFunctionalIndex() = 1 THEN
         SELECT CONCAT('[', IFNULL(GROUP_CONCAT(idx_json ORDER BY idx_name SEPARATOR ','), ''), ']') INTO v_indexes
         FROM (
-            SELECT JSON_OBJECT(
+            SELECT JSON_REMOVE(JSON_OBJECT(
                 'Name', s.INDEX_NAME,
+                -- MariaDB only (NULL elsewhere and stripped below, so a MySQL package never carries a key its schema does
+                -- not declare): the key is declared WITHOUT OVERLAPS over the period pj names.
+                'WithoutOverlaps', CASE WHEN pj.PeriodJson IS NOT NULL THEN TRUE ELSE NULL END,
                 'PrimaryKey', CASE WHEN s.INDEX_NAME = 'PRIMARY' THEN TRUE ELSE FALSE END,
                 'Unique', CASE WHEN s.NON_UNIQUE = 0 THEN TRUE ELSE FALSE END,
                 'UniqueConstraint', CASE WHEN s.INDEX_NAME = 'PRIMARY' OR s.NON_UNIQUE = 0 THEN TRUE ELSE FALSE END,
                 'IndexType', s.INDEX_TYPE,
-                'IndexColumns', GROUP_CONCAT(
-                    CASE WHEN s.COLUMN_NAME IS NOT NULL THEN
+                'IndexColumns', CONCAT(GROUP_CONCAT(
+                    CASE WHEN s.COLUMN_NAME IS NOT NULL AND pj.PeriodJson IS NOT NULL AND s.COLUMN_NAME IN (JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.StartColumn')), JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.EndColumn'))) THEN NULL
+                         WHEN s.COLUMN_NAME IS NOT NULL THEN
                         CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME),
                             CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')) THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
                             CASE WHEN s.COLLATION = 'D' THEN ' DESC' ELSE '' END
@@ -296,49 +323,67 @@ BEGIN
                     END
                     ORDER BY s.SEQ_IN_INDEX
                     SEPARATOR ','
-                ),
+                ), CASE WHEN pj.PeriodJson IS NOT NULL THEN CONCAT(',', SchemaSmith_QuoteIdentifier(JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.Name')))) ELSE '' END),
                 'Visible', CASE WHEN SchemaSmith_IndexIsVisible(p_Schema, p_Table, s.INDEX_NAME) = 1 THEN TRUE ELSE FALSE END,
-                'Comment', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
-            ) AS idx_json,
+                'Description', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
+            ), CASE WHEN pj.PeriodJson IS NOT NULL THEN '$.___dummy___' ELSE '$.WithoutOverlaps' END) AS idx_json,
                    s.INDEX_NAME AS idx_name
             FROM INFORMATION_SCHEMA.STATISTICS s
+            -- The period a temporal key is declared over (MariaDB 11.4+, where the catalog can say; NULL elsewhere and
+            -- below, where the key reads back as a plain unique key over the period's columns).
+            LEFT JOIN (SELECT DISTINCT s2.INDEX_NAME, SchemaSmith_IndexPeriodJson(p_Schema, p_Table, s2.INDEX_NAME) AS PeriodJson
+                         FROM INFORMATION_SCHEMA.STATISTICS s2
+                        WHERE s2.TABLE_SCHEMA = p_Schema AND s2.TABLE_NAME = p_Table AND s2.NON_UNIQUE = 0) pj
+                   ON pj.INDEX_NAME = s.INDEX_NAME
             WHERE s.TABLE_SCHEMA = p_Schema
-              AND s.TABLE_NAME = p_Table
+              AND s.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
               AND s.INDEX_TYPE != 'FULLTEXT'
-              -- A period column is left out of Columns, so an index must not name it either: the package would not
-              -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
-              AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
-            GROUP BY s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
+              -- MariaDB adds a versioned table's ROW END column to its unique keys itself, so a unique key is written
+              -- without it; the deploy compares the two as one. Any other index naming a period column keeps it.
+              AND (s.COLUMN_NAME IS NULL OR s.NON_UNIQUE = 1 OR SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, s.COLUMN_NAME) <> 2)
+              AND NOT (s.INDEX_NAME = 'PRIMARY' AND SchemaSmith_IsGeneratedInvisiblePrimaryKey(p_Schema, p_Table, s.COLUMN_NAME) = 1)
+            GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT, pj.PeriodJson
         ) idx_subquery;
     ELSE
         SELECT CONCAT('[', IFNULL(GROUP_CONCAT(idx_json ORDER BY idx_name SEPARATOR ','), ''), ']') INTO v_indexes
         FROM (
-            SELECT JSON_OBJECT(
+            SELECT JSON_REMOVE(JSON_OBJECT(
                 'Name', s.INDEX_NAME,
+                -- MariaDB only (NULL elsewhere and stripped below, so a MySQL package never carries a key its schema does
+                -- not declare): the key is declared WITHOUT OVERLAPS over the period pj names.
+                'WithoutOverlaps', CASE WHEN pj.PeriodJson IS NOT NULL THEN TRUE ELSE NULL END,
                 'PrimaryKey', CASE WHEN s.INDEX_NAME = 'PRIMARY' THEN TRUE ELSE FALSE END,
                 'Unique', CASE WHEN s.NON_UNIQUE = 0 THEN TRUE ELSE FALSE END,
                 'UniqueConstraint', CASE WHEN s.INDEX_NAME = 'PRIMARY' OR s.NON_UNIQUE = 0 THEN TRUE ELSE FALSE END,
                 'IndexType', s.INDEX_TYPE,
-                'IndexColumns', GROUP_CONCAT(
+                'IndexColumns', CONCAT(GROUP_CONCAT(
+                    CASE WHEN pj.PeriodJson IS NOT NULL AND s.COLUMN_NAME IN (JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.StartColumn')), JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.EndColumn'))) THEN NULL ELSE
                     CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME),
                         CASE WHEN s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')) THEN CONCAT('(', s.SUB_PART, ')') ELSE '' END,
                         CASE WHEN s.COLLATION = 'D' THEN ' DESC' ELSE '' END
-                    )
+                    ) END
                     ORDER BY s.SEQ_IN_INDEX
                     SEPARATOR ','
-                ),
+                ), CASE WHEN pj.PeriodJson IS NOT NULL THEN CONCAT(',', SchemaSmith_QuoteIdentifier(JSON_UNQUOTE(JSON_EXTRACT(pj.PeriodJson, '$.Name')))) ELSE '' END),
                 'Visible', CASE WHEN SchemaSmith_IndexIsVisible(p_Schema, p_Table, s.INDEX_NAME) = 1 THEN TRUE ELSE FALSE END,
-                'Comment', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
-            ) AS idx_json,
+                'Description', CASE WHEN s.INDEX_COMMENT = '' THEN NULL ELSE s.INDEX_COMMENT END
+            ), CASE WHEN pj.PeriodJson IS NOT NULL THEN '$.___dummy___' ELSE '$.WithoutOverlaps' END) AS idx_json,
                    s.INDEX_NAME AS idx_name
             FROM INFORMATION_SCHEMA.STATISTICS s
+            -- The period a temporal key is declared over (MariaDB 11.4+, where the catalog can say; NULL elsewhere and
+            -- below, where the key reads back as a plain unique key over the period's columns).
+            LEFT JOIN (SELECT DISTINCT s2.INDEX_NAME, SchemaSmith_IndexPeriodJson(p_Schema, p_Table, s2.INDEX_NAME) AS PeriodJson
+                         FROM INFORMATION_SCHEMA.STATISTICS s2
+                        WHERE s2.TABLE_SCHEMA = p_Schema AND s2.TABLE_NAME = p_Table AND s2.NON_UNIQUE = 0) pj
+                   ON pj.INDEX_NAME = s.INDEX_NAME
             WHERE s.TABLE_SCHEMA = p_Schema
-              AND s.TABLE_NAME = p_Table
+              AND s.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
               AND s.INDEX_TYPE != 'FULLTEXT'
-              -- A period column is left out of Columns, so an index must not name it either: the package would not
-              -- deploy. MariaDB adds the row-end column to a versioned table's unique keys itself.
-              AND (s.COLUMN_NAME IS NULL OR SchemaSmith_IsSystemTimePeriodColumn(p_Schema, p_Table, s.COLUMN_NAME) = 0)
-            GROUP BY s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT
+              -- MariaDB adds a versioned table's ROW END column to its unique keys itself, so a unique key is written
+              -- without it; the deploy compares the two as one. Any other index naming a period column keeps it.
+              AND (s.COLUMN_NAME IS NULL OR s.NON_UNIQUE = 1 OR SchemaSmith_SystemTimePeriodRole(p_Schema, p_Table, s.COLUMN_NAME) <> 2)
+              AND NOT (s.INDEX_NAME = 'PRIMARY' AND SchemaSmith_IsGeneratedInvisiblePrimaryKey(p_Schema, p_Table, s.COLUMN_NAME) = 1)
+            GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME, s.NON_UNIQUE, s.INDEX_TYPE, s.INDEX_COMMENT, pj.PeriodJson
         ) idx_subquery;
     END IF;
 
@@ -352,7 +397,7 @@ BEGIN
                 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu2
                 WHERE kcu2.CONSTRAINT_SCHEMA = p_Schema
                   AND kcu2.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
-                  AND kcu2.TABLE_NAME = p_Table
+                  AND kcu2.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(kcu2.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
             ),
             'RelatedTableSchema', CASE
                 WHEN rc.UNIQUE_CONSTRAINT_SCHEMA = p_Schema THEN ''
@@ -364,7 +409,7 @@ BEGIN
                 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu3
                 WHERE kcu3.CONSTRAINT_SCHEMA = p_Schema
                   AND kcu3.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
-                  AND kcu3.TABLE_NAME = p_Table
+                  AND kcu3.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(kcu3.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
             ),
             'DeleteAction', rc.DELETE_RULE,
             'UpdateAction', rc.UPDATE_RULE
@@ -377,7 +422,7 @@ BEGIN
           -- Foreign-key names are unique per table from MariaDB 12.1, so the name alone matches other tables' keys.
           AND tc.TABLE_NAME = rc.TABLE_NAME
         WHERE tc.TABLE_SCHEMA = p_Schema
-          AND tc.TABLE_NAME = p_Table
+          AND tc.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
           AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
     ) fk_subquery;
 
@@ -390,7 +435,7 @@ BEGIN
         SET @v_ccSql = CONCAT('SELECT CONCAT(''['', IFNULL(GROUP_CONCAT(
     JSON_OBJECT(
         ''Name'', cc.CONSTRAINT_NAME,
-        ''Expression'', REPLACE(REGEXP_REPLACE(cc.CHECK_CLAUSE, ''_utf8mb4|_utf8mb3|_utf8|_latin1|_binary'', ''''), ''\\\\'''''', '''''''')
+        ''Expression'', SchemaSmith_CleanCheckClause(cc.CHECK_CLAUSE)', IF(VERSION() LIKE '%MariaDB%', '', ', ''Enforced'', CASE WHEN tc.ENFORCED = ''YES'' THEN TRUE ELSE FALSE END'), '
     )
     ORDER BY cc.CONSTRAINT_NAME SEPARATOR '',''
 ), ''''), '']'') INTO @v_ccResult
@@ -399,8 +444,13 @@ JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
   ON cc.CONSTRAINT_SCHEMA = tc.CONSTRAINT_SCHEMA
   AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME', SchemaSmith_CheckTableJoin(), '
 WHERE tc.TABLE_SCHEMA = @v_ccSchema
-  AND tc.TABLE_NAME = @v_ccTable
-  AND tc.CONSTRAINT_TYPE = ''CHECK''');
+  AND tc.TABLE_NAME = @v_ccTable AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(@v_ccTable)
+  AND tc.CONSTRAINT_TYPE = ''CHECK''',
+  -- A MariaDB check named after a column of the table is that column's own (column-level) check, written on the column above.
+  IF(VERSION() LIKE '%MariaDB%', '
+  AND NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS col
+                   WHERE col.TABLE_SCHEMA = tc.TABLE_SCHEMA AND col.TABLE_NAME = tc.TABLE_NAME
+                     AND SchemaSmith_NameKeyCI(col.COLUMN_NAME) = SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME))', ''));
         PREPARE stmt FROM @v_ccSql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
@@ -415,14 +465,14 @@ WHERE tc.TABLE_SCHEMA = @v_ccSchema
         SELECT JSON_OBJECT(
             'Name', s.INDEX_NAME,
             'Columns', GROUP_CONCAT(SchemaSmith_QuoteIdentifier(s.COLUMN_NAME) ORDER BY s.SEQ_IN_INDEX SEPARATOR ','),
-            'Comment', CASE WHEN MAX(s.INDEX_COMMENT) = '' THEN NULL ELSE MAX(s.INDEX_COMMENT) END
+            'Description', CASE WHEN MAX(s.INDEX_COMMENT) = '' THEN NULL ELSE MAX(s.INDEX_COMMENT) END
         ) AS ft_json,
                s.INDEX_NAME AS ft_name
         FROM INFORMATION_SCHEMA.STATISTICS s
         WHERE s.TABLE_SCHEMA = p_Schema
-          AND s.TABLE_NAME = p_Table
+          AND s.TABLE_NAME = p_Table AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
           AND s.INDEX_TYPE = 'FULLTEXT'
-        GROUP BY s.INDEX_NAME
+        GROUP BY CAST(s.INDEX_NAME AS BINARY), s.INDEX_NAME
     ) ft_subquery;
 
     -- Combine all into final JSON. Nest the JSON-text vars as JSON values via JSON_EXTRACT(x,'$')
@@ -445,7 +495,7 @@ WHERE tc.TABLE_SCHEMA = @v_ccSchema
 
     -- Remove null values for cleaner output
     SET v_json = JSON_REMOVE(v_json,
-        CASE WHEN JSON_EXTRACT(v_json, '$.Comment') IS NULL THEN '$.Comment' ELSE '$.___dummy___' END,
+        CASE WHEN JSON_EXTRACT(v_json, '$.Description') IS NULL THEN '$.Description' ELSE '$.___dummy___' END,
         CASE WHEN JSON_EXTRACT(v_json, '$.AutoIncrementValue') IS NULL THEN '$.AutoIncrementValue' ELSE '$.___dummy___' END,
         CASE WHEN JSON_EXTRACT(v_json, '$.RowFormat') IS NULL THEN '$.RowFormat' ELSE '$.___dummy___' END,
         CASE WHEN COALESCE(JSON_TYPE(JSON_EXTRACT(v_json, '$.PreventDrop')), 'NULL') = 'NULL' THEN '$.PreventDrop' ELSE '$.___dummy___' END,

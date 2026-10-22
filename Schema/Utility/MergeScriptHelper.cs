@@ -396,9 +396,9 @@ public static class MergeScriptHelper
     };
 
     /// <summary>
-    /// Returns structured column metadata for Pro's deferred merge assembly.
+    /// Returns structured column metadata for a caller that assembles the merge itself.
     /// Excludes computed columns and unsupported types. Includes JSON parse type
-    /// information so Pro can build type-safe NULL casts.
+    /// information so the caller can build type-safe NULL casts.
     /// </summary>
     public static List<MergeColumnInfo> GetColumnMetadata(Platform platform, IDbCommand cmd, string schemaOrDb, string tableName, HashSet<string> jsonKeys = null)
     {
@@ -464,7 +464,9 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE,
             // `(dtPrecision * 0)` and rerunning the full suite left every test green, including the
             // delivery round-trip tests below — proof, not just the documented-defaults argument, that
             // nothing downstream depends on this value being correct. Do not "fix" the missing TIME case.
+            // A vector is read as its text, which the INSERT converts back; VECTOR is no shred target without its dimension.
             var parseType = userType
+                .Replace("VECTOR", "NVARCHAR(MAX)")
                 .Replace("HIERARCHYID", "NVARCHAR(4000)")
                 .Replace("GEOGRAPHY", "NVARCHAR(4000)")
                 .Replace("GEOMETRY", "NVARCHAR(4000)")
@@ -594,7 +596,7 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE,
                 IsJson = dataType == "json"
             });
             var isGeometry = IsGeometryTypeMySql(dataType);
-            var isBinary = dataType is "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob";
+            var isBinary = IsBinaryTypeMySql(dataType);
 
             results.Add(new MergeColumnInfo
             {
@@ -1006,7 +1008,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         return string.Join(" OR ",
             updateColumns!.Split(',').Select(c => c.StartsWith("G[")
                 ? NullSafeNotEqual($"Target.{c.Substring(1)}.ToString()", $"Source.{c.Substring(1)}.ToString()")
-                : c.StartsWith("X[") || c.StartsWith("N[")
+                : c.StartsWith("X[") || c.StartsWith("N[") || c.StartsWith("V[")
                     ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS NVARCHAR(MAX))", $"CAST(Source.{c.Substring(1)} AS NVARCHAR(MAX))")
                     : c.StartsWith("T[")
                         ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS VARCHAR(MAX))", $"CAST(Source.{c.Substring(1)} AS VARCHAR(MAX))")
@@ -1019,7 +1021,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
 
     private static string BuildUpdateAssignmentsSqlServer(string updateColumns)
     {
-        static string Plain(string c) => c.Replace("G[", "[").Replace("X[", "[").Replace("N[", "[").Replace("T[", "[").Replace("I[", "[").Replace("D[", "[");
+        static string Plain(string c) => c.Replace("G[", "[").Replace("X[", "[").Replace("N[", "[").Replace("T[", "[").Replace("I[", "[").Replace("D[", "[").Replace("V[", "[");
         return string.Join(",\r\n", updateColumns.Split(',').Select(c => $"        {Plain(c)} = Source.{Plain(c)}"));
     }
 
@@ -1032,6 +1034,9 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         HashSet<string> jsonKeys, bool identityInsert, bool disableTriggers, bool memoryOptimized, bool appendOnlyLedger)
     {
         var target = $"[{destSchema}].[{tableName}]";
+        // #v_ss_Source's column names follow the server's collation, not the database's, so a key named in another case
+        // than the table's must be respelled before it is matched against the copy.
+        keyColumns = KeyColumnsInTableCaseSqlServer(cmd, tableSchema, tableName, keyColumns);
         var matchColumns = BuildSqlServerMatchColumns(keyColumns);
         var hint = memoryOptimized ? " WITH (SNAPSHOT)" : "";
         var filter = string.IsNullOrWhiteSpace(mergeFilter) ? "" : $" AND ({mergeFilter})";
@@ -1069,6 +1074,25 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         if (identityInsert) sb.Append($"SET IDENTITY_INSERT {target} OFF;\r\n");
         if (disableTriggers) sb.Append($"ALTER TABLE {target} ENABLE TRIGGER ALL;\r\n");
         return sb.ToString();
+    }
+
+    // An exact match wins, so a case-sensitive table with both Id and ID keeps the one named.
+    private static string KeyColumnsInTableCaseSqlServer(IDbCommand cmd, string tableSchema, string tableName, string keyColumns)
+    {
+        BindIdentifierParameters(cmd, ("@objname", $"[{tableSchema.Replace("]", "]]")}].[{tableName.Replace("]", "]]")}]"));
+        cmd.CommandText = "SELECT [name] FROM sys.columns WHERE [object_id] = OBJECT_ID(@objname)";
+        var columns = ReadStringColumn(cmd);
+        cmd.Parameters.Clear();
+        return string.Join(",", keyColumns.Split(',').Select(key =>
+        {
+            var trimmed = key.Trim();
+            var nullable = trimmed.StartsWith('*') ? "*" : "";
+            var name = trimmed.TrimStart('*').Trim().Trim('[', ']');
+            var inTableCase = columns.Contains(name, StringComparer.Ordinal)
+                ? name
+                : columns.Where(c => string.Equals(c, name, StringComparison.OrdinalIgnoreCase)).ToList() is [var only] ? only : name;
+            return $"{nullable}[{inTableCase}]";
+        }));
     }
 
     private static string BuildSqlServerMatchColumns(string keyColumns)
@@ -1195,6 +1219,7 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
                   CASE UPPER(USER_TYPE) WHEN 'HIERARCHYID' THEN 'NVARCHAR(4000)' WHEN 'GEOGRAPHY' THEN 'NVARCHAR(4000)'
                                         WHEN 'GEOMETRY' THEN 'NVARCHAR(4000)' WHEN 'DATETIMEOFFSET' THEN 'NVARCHAR(50)'
                                         WHEN 'NTEXT' THEN 'NVARCHAR(MAX)' WHEN 'TEXT' THEN 'VARCHAR(MAX)' WHEN 'IMAGE' THEN 'VARBINARY(MAX)'
+                                        WHEN 'VECTOR' THEN 'NVARCHAR(MAX)'
                                         ELSE USER_TYPE END +
                       CASE WHEN UPPER(USER_TYPE) IN ('CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR', 'BINARY', 'VARBINARY')
                            THEN '(' + CASE WHEN CHARACTER_MAXIMUM_LENGTH = -1 THEN 'MAX' ELSE CONVERT(NVARCHAR(20), CHARACTER_MAXIMUM_LENGTH) END + ')'
@@ -1267,6 +1292,7 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
                        WHEN c.DATA_TYPE = 'ntext' THEN 'N'
                        WHEN c.DATA_TYPE = 'text' THEN 'T'
                        WHEN c.DATA_TYPE = 'image' THEN 'I'
+                       WHEN c.DATA_TYPE = 'vector' THEN 'V'
                        ELSE '' END +
                   '[' + c.COLUMN_NAME + ']'";
         var filters = $@"
@@ -1340,6 +1366,7 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
         var jsonValue = tokenizeScripts
             ? $"{{{{{contentToken}}}}}"
             : tableData?.Replace("'", "''");
+        var tag = PostgreSqlDataBlockTag(jsonValue);
 
         var modernDelete = pgServerVersionNum == 0 || pgServerVersionNum >= 17;
         // PostgreSQL MERGE is a v15 feature; below 15 the upsert is emitted as INSERT ... ON CONFLICT
@@ -1366,7 +1393,7 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
 
         mergeSQL = (string.IsNullOrEmpty(unsupportedComments) ? "" : unsupportedComments + "\n")
             + (string.IsNullOrEmpty(disableRuleStatements) ? "" : disableRuleStatements + "\n") + $@"
-DO $$
+DO {tag}
 DECLARE
 {jsonDeclareLine}  nextval BIGINT;
 BEGIN
@@ -1431,7 +1458,7 @@ WHEN MATCHED AND ({updateCompare}) THEN
 {(disableTriggers ? $"ALTER TABLE {(updateDescendents ? "" : "ONLY ")}\"{destSchema}\".\"{tableName}\" ENABLE TRIGGER ALL;" : "")}
 {(!string.IsNullOrEmpty(identAndSeq) ? $"SELECT SETVAL('{identAndSeq.Split("=")[1]}', (SELECT MAX(\"{identAndSeq.Split("=")[0]}\") FROM \"{destSchema}\".\"{tableName}\")) INTO nextval;" : "")}
 
-END $$ LANGUAGE plpgsql;
+END {tag} LANGUAGE plpgsql;
 " + (string.IsNullOrEmpty(enableRuleStatements) ? "" : "\n" + enableRuleStatements);
         }
 
@@ -1489,6 +1516,17 @@ DELETE FROM {(updateDescendents ? "" : "ONLY ")}""{destSchema}"".""{tableName}""
     /// re-seed, changed-only compare (IS DISTINCT FROM, with xml/json text/jsonb casts), and rule
     /// disable/enable wrapping.
     /// </summary>
+    // The data sits inside a dollar-quoted block, so a row value carrying the block's tag ($$ in a text column) would
+    // end the block mid-literal. The tag is one no PostgreSQL value is likely to hold, and one the inlined data does not.
+    internal static string PostgreSqlDataBlockTag(string content)
+    {
+        var tag = "$SchemaSmithData$";
+        var n = 0;
+        while (content != null && content.Contains(tag, StringComparison.Ordinal))
+            tag = $"$SchemaSmithData{++n}$";
+        return tag;
+    }
+
     private static string BuildPostgreSqlLegacyUpsert(IDbCommand cmd, string tableSchema, string tableName,
         string destSchema, bool updateDescendents, bool mergeUpdate, bool disableTriggers, string jsonValue,
         string jsonColumns, string keyColumns, string identAndSeq,
@@ -1543,9 +1581,10 @@ UPDATE {only}""{destSchema}"".""{tableName}"" AS ""Target""
             : $"OVERRIDING {identAndSeq.Split("=")[2]} VALUE\n  ";
 
         var jsonDeclareLine = isXml ? "" : $"  v_json JSON = '{jsonValue}';\n";
+        var tag = PostgreSqlDataBlockTag(jsonValue);
         return (string.IsNullOrEmpty(unsupportedComments) ? "" : unsupportedComments + "\n")
             + (string.IsNullOrEmpty(disableRuleStatements) ? "" : disableRuleStatements + "\n") + $@"
-DO $$
+DO {tag}
 DECLARE
 {jsonDeclareLine}  nextval BIGINT;
 BEGIN
@@ -1558,7 +1597,7 @@ INSERT INTO ""{destSchema}"".""{tableName}"" (
    WHERE NOT EXISTS (SELECT 1 FROM {only}""{destSchema}"".""{tableName}"" AS ""Target"" WHERE {matchColumns});
 {(disableTriggers ? $"ALTER TABLE {only}\"{destSchema}\".\"{tableName}\" ENABLE TRIGGER ALL;" : "")}
 {(!string.IsNullOrEmpty(identAndSeq) ? $"SELECT SETVAL('{identAndSeq.Split("=")[1]}', (SELECT MAX(\"{identAndSeq.Split("=")[0]}\") FROM \"{destSchema}\".\"{tableName}\")) INTO nextval;" : "")}
-END $$ LANGUAGE plpgsql;
+END {tag} LANGUAGE plpgsql;
 " + (string.IsNullOrEmpty(enableRuleStatements) ? "" : "\n" + enableRuleStatements);
     }
 
@@ -1636,8 +1675,9 @@ SELECT c.column_name || '=' || COALESCE(PG_GET_SERIAL_SEQUENCE(c.table_schema ||
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         cmd.CommandText = $@"
 SELECT STRING_AGG(
+    -- PostGIS's function by the schema its type lives in: a delivery script can run under a search_path without it.
     CASE WHEN c.udt_name IN ('geometry','geography')
-         THEN 'ST_GeomFromText(elem ->> ''' || c.column_name || ''', COALESCE(NULLIF(elem ->> ''' || c.column_name || '.STSrid'', '''')::int, 0))'
+         THEN quote_ident(tn.nspname) || '.ST_GeomFromText(elem ->> ''' || c.column_name || ''', COALESCE(NULLIF(elem ->> ''' || c.column_name || '.STSrid'', '''')::int, 0))'
          WHEN c.udt_name = 'bytea'
          THEN 'decode(elem ->> ''' || c.column_name || ''', ''base64'')'
          WHEN LEFT(c.udt_name, 1) = '_'
@@ -1693,6 +1733,16 @@ SELECT STRING_AGG(
     // which are themselves already the JSON path's C#-side mirrors (IsGeometryTypePostgreSql/
     // IsByteaTypePostgreSql). internal: shared with DeferredMergeBuilder so the 2-pass path classifies
     // columns identically rather than drifting.
+    // The "schema." a type's rendering starts with: PostgreSqlQualifiedColumnType qualifies every type outside pg_catalog, so
+    // PostGIS's function is found where its type is, whatever the search_path.
+    internal static string TypeSchemaPrefix(string typeRendering)
+    {
+        var paren = typeRendering.IndexOf('(');
+        var name = paren < 0 ? typeRendering : typeRendering[..paren];
+        var dot = name.LastIndexOf('.');
+        return dot < 0 ? "" : name[..(dot + 1)];
+    }
+
     internal static bool RequiresXmlColumnTransformPostgreSql(MergeColumnInfo c) =>
         c.IsGeometry || c.IsBinary || c.DataType.StartsWith("_", StringComparison.Ordinal) || c.DataType == "char";
 
@@ -1705,7 +1755,7 @@ SELECT STRING_AGG(
     {
         var raw = $"\"{sourceAlias}\".\"{c.Name}\"";
         if (c.IsGeometry)
-            return $"ST_GeomFromText({raw}, COALESCE(NULLIF(\"{sourceAlias}\".\"{c.Name}.STSrid\", '')::int, 0))";
+            return $"{TypeSchemaPrefix(c.JsonParseType)}ST_GeomFromText({raw}, COALESCE(NULLIF(\"{sourceAlias}\".\"{c.Name}.STSrid\", '')::int, 0))";
         if (c.IsBinary) return $"decode({raw}, 'base64')";
         if (c.DataType.StartsWith("_", StringComparison.Ordinal))
             return $"CASE WHEN LEFT({raw}, 1) IN ('{{', '[') THEN {raw}::{c.JsonParseType} " +
@@ -1786,7 +1836,9 @@ SELECT STRING_AGG('""' || c.column_name || '""', ',' ORDER BY c.column_name)
              ELSE quote_ident(tn.nspname) || '.' || format_type(a.atttypid, a.atttypmod) END
         """;
 
-    // Columns compared as text: xml, point and polygon have no equality operator, so the upsert failed to compile.
+    // Columns compared as text: xml, point and polygon have no equality operator, so the upsert failed to compile. Nor
+    // does a type outside pg_catalog (pgvector, PostGIS, citext) once the script runs under a search_path without its
+    // schema, which is where its = operator lives; its text form is always found, and a missed change is worse than churn.
     private static HashSet<string> GetTextCompareColumnsPostgreSql(IDbCommand cmd, string tableSchema, string tableName)
     {
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
@@ -1795,7 +1847,7 @@ SELECT STRING_AGG(c.column_name, ',')
   FROM information_schema.columns c
   WHERE c.table_schema = @schema
     AND c.table_name = @table
-    AND c.udt_name IN ('xml','point','polygon');
+    AND (c.udt_name IN ('xml','point','polygon') OR c.udt_schema NOT IN ('pg_catalog', 'information_schema'));
 ";
         var result = cmd.ExecuteScalar()?.ToString();
         if (string.IsNullOrEmpty(result)) return new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
@@ -2593,7 +2645,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
                 ? $"VARCHAR({col.CharMaxLength})"
                 : "VARCHAR(65535)",
             // LONGTEXT, not TEXT: TEXT holds 64 KB, and a longer value (base64 for a blob) arrived NULL or truncated.
-            "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob"
+            "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob" or "vector"
                 => "LONGTEXT",
             "tinytext" or "text" or "mediumtext" or "longtext" => "LONGTEXT",
             // Read ENUM/SET as text in JSON_TABLE: MySQL accepts the raw `enum(...)`/`set(...)`
@@ -2619,9 +2671,10 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         _ => false
     };
 
+    // A vector (MySQL 9, MariaDB 11.7) is delivered as its base64 bytes: the engines' text form keeps six significant digits.
     private static bool IsBinaryTypeMySql(string dataType) => dataType.ToLowerInvariant() switch
     {
-        "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob" => true,
+        "binary" or "varbinary" or "tinyblob" or "blob" or "mediumblob" or "longblob" or "vector" => true,
         _ => false
     };
 
@@ -2671,6 +2724,8 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
             if (c.IsJson) return $"JSON_EXTRACT({live}, '$') <=> JSON_EXTRACT({delivered}, '$')";
             if (MySqlTextTypes.Contains(c.DataType))
                 return $"CAST(CONVERT({live} USING utf8mb4) AS BINARY) <=> CAST(CONVERT({delivered} USING utf8mb4) AS BINARY)";
+            // MySQL refuses to compare a VECTOR at all (1210), so its bytes are compared.
+            if (c.DataType.Equals("vector", StringComparison.OrdinalIgnoreCase)) return $"HEX({live}) <=> HEX({delivered})";
             return $"{live} <=> {delivered}";
         });
         return $"WHERE NOT EXISTS (SELECT 1 FROM `{databaseName}`.`{tableName}` _ss_live\n" +

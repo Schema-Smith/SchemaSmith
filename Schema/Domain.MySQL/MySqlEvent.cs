@@ -85,9 +85,32 @@ namespace Schema.Domain.MySQL
         [JsonProperty(Order = 9)]
         public bool Preserve { get; set; }
 
-        [SchemaProperty(MaxLength = 2048)]
+        [SchemaProperty(MaxLength = 2048, Description = "Optional. The event's COMMENT. An omitted value clears a comment the server has, as the engine's own DDL does.")]
+        [JsonProperty(Order = 10, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
+        // TRANSITIONAL (Comment is the pre-2.8 spelling of Description on MySQL and MariaDB; roadmap WS-13 tracks its removal)
+        [SchemaProperty(MaxLength = 2048, Deprecated = true, Description = "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002).")]
         [JsonProperty(Order = 10, NullValueHandling = NullValueHandling.Ignore)]
         public string Comment { get; set; }
+
+        /// <summary>
+        /// The time zone STARTS, ENDS and ExecuteAt are read in, as the engine stores it (an offset such as
+        /// <c>+05:00</c>, or a named zone where the server has time-zone tables). Omitted means the server's
+        /// own zone is not managed, as with Starts.
+        /// </summary>
+        [SchemaProperty(MaxLength = 64, Description = "Optional. The time zone the schedule is read in, e.g. \"+05:00\". Omitted: the event takes the deploying session's zone and the server's value is not compared.")]
+        [JsonProperty(Order = 13, NullValueHandling = NullValueHandling.Ignore)]
+        public string TimeZone { get; set; }
+
+        /// <summary>
+        /// The sql_mode the body runs under, as the engine reports it (<c>SELECT @@sql_mode</c> after SET: the
+        /// engine canonicalises the list). Omitted means the event takes the deploying session's mode and the
+        /// server's value is not compared.
+        /// </summary>
+        [SchemaProperty(MaxLength = 1024, Description = "Optional. The sql_mode the event body runs under, written as the engine reports it. Omitted: the event takes the deploying session's mode and the server's value is not compared.")]
+        [JsonProperty(Order = 14, NullValueHandling = NullValueHandling.Ignore)]
+        public string SqlMode { get; set; }
 
         [SchemaProperty(MaxLength = 128, Description = "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied.")]
         [JsonProperty(Order = 11, NullValueHandling = NullValueHandling.Ignore)]

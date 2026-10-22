@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Data;
 using System.IO;
 using NSubstitute;
@@ -202,6 +203,8 @@ public class DataDeliveryProcessorTests
             Assert.That(built, Is.EqualTo(new[] { (expectedData, expectedEncoding) }), "the merge is built from the delivered content and encoding");
             Assert.That(_executedScripts, Has.Count.EqualTo(1));
             Assert.That(downgrades, Is.Empty, "nothing is left undelivered, so nothing is downgraded");
+            Assert.That(_logs.Any(l => l.Contains("Delivering dbo.Config") && l.Contains($"(converted to Xml for compatibility level {compatLevel})")), Is.EqualTo(expectedEncoding == "Xml"),
+                "the delivery line says when the payload was converted; log: " + string.Join(" | ", _logs));
         });
     }
 
@@ -650,6 +653,71 @@ public class DataDeliveryProcessorTests
         Assert.That(_executedScripts[2], Does.Contain("Tasks"));
     }
 
+    // A two-pass delivery is delivered only when its second pass lands: pass 1 inserts the rows with the deferred
+    // foreign-key columns NULL, so a failed pass 2 leaves the table without them, and the summary must not say otherwise.
+    [Test]
+    public void DeliverTables_DeferredMergeWhosePass2Fails_IsNotRecordedAsDelivered()
+    {
+        var processor = new DataDeliveryProcessor();
+        var parent = new TestTable
+        {
+            Name = "Employees", Schema = "dbo",
+            DataDeliveries = new List<DataDelivery> { new DataDelivery { MergeType = "Insert", ContentFile = "employees.json" } }
+        };
+        var child = new TestTable
+        {
+            Name = "Tasks", Schema = "dbo",
+            DataDeliveries = new List<DataDelivery> { new DataDelivery { MergeType = "Insert", ContentFile = "tasks.json" } },
+            DeliverableColumns = new List<IDeliverableColumn> { new TestColumn { Name = "AssigneeId", Nullable = true } },
+            DeliverableForeignKeys = new List<IDeliverableForeignKey>
+            {
+                new TestFK { Columns = "AssigneeId", RelatedTable = "Employees", RelatedTableSchema = "dbo" }
+            }
+        };
+        var recorded = new List<string>();
+        var context = MakeContext(new List<IDeliverableTable> { child, parent });
+        context.RecordDelivery = recorded.Add;
+        var tasksRuns = 0;
+        context.ExecuteScript = (name, script) =>
+        {
+            if (name == "Tasks" && ++tasksRuns == 2) throw new InvalidOperationException("pass 2 failed");
+            _executedScripts.Add(script);
+        };
+
+        Assert.Throws<InvalidOperationException>(() => processor.DeliverTables(context));
+
+        Assert.That(tasksRuns, Is.EqualTo(2), "pass 1 and pass 2 both ran");
+        Assert.That(recorded, Is.EqualTo(new[] { "dbo.Employees" }));
+    }
+
+    [Test]
+    public void DeliverTables_DeferredMerge_IsRecordedOnceWhenBothPassesLand()
+    {
+        var processor = new DataDeliveryProcessor();
+        var parent = new TestTable
+        {
+            Name = "Employees", Schema = "dbo",
+            DataDeliveries = new List<DataDelivery> { new DataDelivery { MergeType = "Insert", ContentFile = "employees.json" } }
+        };
+        var child = new TestTable
+        {
+            Name = "Tasks", Schema = "dbo",
+            DataDeliveries = new List<DataDelivery> { new DataDelivery { MergeType = "Insert", ContentFile = "tasks.json" } },
+            DeliverableColumns = new List<IDeliverableColumn> { new TestColumn { Name = "AssigneeId", Nullable = true } },
+            DeliverableForeignKeys = new List<IDeliverableForeignKey>
+            {
+                new TestFK { Columns = "AssigneeId", RelatedTable = "Employees", RelatedTableSchema = "dbo" }
+            }
+        };
+        var recorded = new List<string>();
+        var context = MakeContext(new List<IDeliverableTable> { child, parent });
+        context.RecordDelivery = recorded.Add;
+
+        processor.DeliverTables(context);
+
+        Assert.That(recorded, Is.EquivalentTo(new[] { "dbo.Employees", "dbo.Tasks" }));
+    }
+
     [Test]
     public void DeliverTables_WhatIf_DoesNotExecute()
     {
@@ -767,12 +835,12 @@ public class DataDeliveryProcessorTests
         DataDeliveryProcessor.ValidateDeleteCascade(_mockCommand, "MySQL", "`mydb`",
             new List<(string, string)> { ("`mydb`", "Users") });
 
-        Assert.That(_mockCommand.CommandText, Does.Contain("'mydb'"));
+        Assert.That(_mockCommand.CommandText, Does.Contain(Schema.Utility.MySqlNameMatch.Literal("mydb")));
         Assert.That(_mockCommand.CommandText, Does.Not.Contain("`mydb`"));
     }
 
     [Test]
-    public void ValidateDeleteCascade_MySql_TableNameWithQuote_IsEscaped()
+    public void ValidateDeleteCascade_MySql_TableNameWithQuote_PassesUnaltered()
     {
         var mockReader = Substitute.For<IDataReader>();
         mockReader.Read().Returns(false);
@@ -781,7 +849,7 @@ public class DataDeliveryProcessorTests
         DataDeliveryProcessor.ValidateDeleteCascade(_mockCommand, "MySQL", "testdb",
             new List<(string, string)> { ("testdb", "O'Brien") });
 
-        Assert.That(_mockCommand.CommandText, Does.Contain("O''Brien"));
+        Assert.That(_mockCommand.CommandText, Does.Contain(Schema.Utility.MySqlNameMatch.Literal("O'Brien")));
     }
 
     [Test]

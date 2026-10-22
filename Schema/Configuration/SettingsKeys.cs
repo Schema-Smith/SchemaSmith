@@ -117,6 +117,8 @@ public static class SettingsKeys
         [ReadBy(SettingsTool.DataTongs)]
         public const string MergeUpdate = "ShouldCast:MergeUpdate";
         [ReadBy(SettingsTool.SchemaTongs)]
+        public const string ModuleSyntax = "ShouldCast:ModuleSyntax";
+        [ReadBy(SettingsTool.SchemaTongs)]
         public const string ObjectList = "ShouldCast:ObjectList";
         [ReadBy(SettingsTool.DataTongs)]
         public const string OutputContentFiles = "ShouldCast:OutputContentFiles";
@@ -127,11 +129,24 @@ public static class SettingsKeys
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string Publications = "ShouldCast:Publications";
         [ReadBy(SettingsTool.SchemaTongs)]
+        public const string RangeTypes = "ShouldCast:RangeTypes";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string TextSearchConfigurations = "ShouldCast:TextSearchConfigurations";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string Operators = "ShouldCast:Operators";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string Casts = "ShouldCast:Casts";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string EventTriggers = "ShouldCast:EventTriggers";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string Packages = "ShouldCast:Packages";
+        [ReadBy(SettingsTool.SchemaTongs)]
         public const string Rules = "ShouldCast:Rules";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string SaveInvalidScripts = "ShouldCast:SaveInvalidScripts";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string Schemas = "ShouldCast:Schemas";
+        // TRANSITIONAL (deprecated in 2.8, read only to warn; delete two releases past 2.8 GA with the SchemaTongs field).
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string ScriptDynamicDependencyRemovalForFunctions = "ShouldCast:ScriptDynamicDependencyRemovalForFunctions";
         [ReadBy(SettingsTool.SchemaTongs)]
@@ -140,6 +155,8 @@ public static class SettingsKeys
         public const string StopLists = "ShouldCast:StopLists";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string Synonyms = "ShouldCast:Synonyms";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string SecurityPolicies = "ShouldCast:SecurityPolicies";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string TableTriggers = "ShouldCast:TableTriggers";
         [ReadBy(SettingsTool.SchemaTongs)]
@@ -202,6 +219,15 @@ public static class SettingsKeys
     /// history to the new shape. Anything else leaves the engine default, which refuses the change.
     /// </summary>
     public const string SystemVersioningAlterHistory = "SystemVersioningAlterHistory";
+
+    /// <summary>
+    /// Off (default), Prefer or Require: whether a deploy uses the engine's lower-lock form of a statement on an
+    /// existing table. A table's own <c>OnlineApply</c> overrides it.
+    /// </summary>
+    public const string OnlineApply = "OnlineApply";
+
+    /// <summary>SQL Server: minutes a resumable online index build may run before it pauses. Unset: not resumable.</summary>
+    public const string OnlineApplyMaxDuration = "OnlineApplyMaxDuration";
     public const string PreventDrop = "PreventDrop";
     public const string UpdateTables = "UpdateTables";
     public const string KindleTheForge = "KindleTheForge";
@@ -214,6 +240,8 @@ public static class SettingsKeys
     public const string TrackRunOnceMigrations = "TrackRunOnceMigrations";
     public const string PruneObsoleteMigrationTracking = "PruneObsoleteMigrationTracking";
     public const string UnsupportedFeaturePolicy = "Target:UnsupportedFeaturePolicy";
+    /// <summary>When true (default), an object script whose text and whose module the server still renders as last applied is not re-run.</summary>
+    public const string SkipUnchangedObjects = "Target:SkipUnchangedObjects";
     public const string CompatEncoding = "Target:CompatEncoding";
     public const string SourceCompatEncoding = "Source:CompatEncoding";
     public const string ArtifactPath = "ArtifactPath";

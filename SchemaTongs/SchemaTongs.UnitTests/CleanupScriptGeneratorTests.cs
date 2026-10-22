@@ -169,6 +169,28 @@ public class CleanupScriptGeneratorTests
         Assert.That(result, Is.EqualTo("DROP COLLATION IF EXISTS \"public\".\"my_collation\";"));
     }
 
+    [TestCase("app.floatrange.sql", ScriptObjectType.RangeTypes, "DROP TYPE IF EXISTS \"app\".\"floatrange\";")]
+    [TestCase("app.docs.sql", ScriptObjectType.TextSearchConfigurations, "DROP TEXT SEARCH CONFIGURATION IF EXISTS \"app\".\"docs\";")]
+    [TestCase("audit_ddl.sql", ScriptObjectType.EventTriggers, "DROP EVENT TRIGGER IF EXISTS \"audit_ddl\";")]
+    public void GenerateDropStatement_PostgreSQL_2Point8Kinds_ReturnCorrectDrop(string file, ScriptObjectType type, string expected)
+    {
+        Assert.That(CleanupScriptGenerator.GenerateDropStatement(file, type, Platform.PostgreSQL), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void GenerateDropStatement_MariaDb_Packages_ReturnsCorrectDrop()
+    {
+        Assert.That(CleanupScriptGenerator.GenerateDropStatement("pkg_ora.sql", ScriptObjectType.Packages, Platform.MariaDb), Is.EqualTo("SET @ss_saved_sql_mode = @@SESSION.sql_mode; SET SESSION sql_mode = 'ORACLE'; DROP PACKAGE IF EXISTS `pkg_ora`; SET SESSION sql_mode = @ss_saved_sql_mode;"));
+    }
+
+    // An operator's or a cast's file name cannot be turned back into the signature its DROP needs.
+    [TestCase("app.===(app.cents, app.cents).sql", ScriptObjectType.Operators)]
+    [TestCase("app.cents AS integer.sql", ScriptObjectType.Casts)]
+    public void GenerateDropStatement_PostgreSQL_OperatorsAndCasts_WriteNoDrop(string file, ScriptObjectType type)
+    {
+        Assert.That(CleanupScriptGenerator.GenerateDropStatement(file, type, Platform.PostgreSQL), Is.Null);
+    }
+
     [Test]
     public void GenerateDropStatement_PostgreSQL_Publications_ReturnsCorrectDrop()
     {

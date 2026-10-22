@@ -19,6 +19,8 @@ DECLARE
   -- NullsNotDistinct is neutralised to false below 15 (override-aware) in the emit procs; the emitted
   -- index therefore physically lacks the clause, so FALSE-vs-FALSE produces no phantom churn.
   v_nnd_expr TEXT := CASE WHEN (current_setting('server_version_num')::int / 10000) >= 15 THEN 'idx.indnullsnotdistinct' ELSE 'FALSE' END;
+  -- pg_constraint.conperiod (WITHOUT OVERLAPS) is 18+, read the same way for the same reason.
+  v_wo_expr TEXT := CASE WHEN (current_setting('server_version_num')::int / 10000) >= 18 THEN 'COALESCE(con.conperiod, FALSE)' ELSE 'FALSE' END;
 BEGIN
   -- Session-scoped snapshot of existing indexes, consumed by ModifiedTableQuench,
   -- IndexOnlyQuench, and MissingIndexesAndConstraintsQuench. Extracted to one proc so the
@@ -50,12 +52,9 @@ BEGIN
            -- snapshot omitted the modifier while extraction emitted it, so a DESC key with non-default
            -- null ordering was a second way to churn. TRIM(BOTH '"') because PG_GET_INDEXDEF quotes
            -- identifiers it considers to need it and the authored side does not.
-           (SELECT STRING_AGG(TRIM(BOTH '"' FROM PG_GET_INDEXDEF(idx.indexrelid, idx::int4, true)) ||
-                              CASE WHEN (idx.indoption[idx-1] & 1) = 1 THEN ' DESC' || CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN '' ELSE ' NULLS LAST' END
-                                   ELSE CASE WHEN (idx.indoption[idx-1] & 2) = 2 THEN ' NULLS FIRST' ELSE '' END
-                                  END, ',' ORDER BY idx)
-              FROM UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
-             WHERE idx <= idx.indnkeyatts) AS "IndexColumns",
+           -- Now one rendering (IndexKeyForms) carrying each key's operator class, COLLATE and parameters as the
+           -- engine writes them, which the declared side is normalised to; the shape described above is preserved.
+           "SchemaSmith"."IndexKeyList"(idx.indexrelid) AS "IndexColumns",
            (SELECT STRING_AGG(a.attname, ',' ORDER BY idx)
               FROM pg_attribute a
               CROSS JOIN LATERAL UNNEST(idx.indkey) WITH ORDINALITY AS u(element, idx)
@@ -68,11 +67,14 @@ BEGIN
            idx.indisclustered AS "Clustered",
            COALESCE(PG_GET_EXPR(idx.indpred, idx.indrelid), '') AS "FilterExpression",
            (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') AS "AccessMethod",
-           CASE WHEN 'fillfactor=100' = ANY(i.reloptions) THEN 100
-                WHEN i.reloptions IS NULL THEN 90 -- Default for B-tree indexes
-                ELSE (regexp_match(array_to_string(i.reloptions, ','), 'fillfactor=(\d+)') ) [1] ::int
-                END AS "FillFactor",
+           -- The option when set, else the engine's default for the access method (NULL where it has none), which
+           -- is what the declared side resolves an undeclared FillFactor to.
+           COALESCE((regexp_match(array_to_string(i.reloptions, ','), 'fillfactor=(\d+)'))[1]::int2,
+                    "SchemaSmith"."IndexFillFactorDefault"((SELECT am.amname FROM pg_am am WHERE i.relam = am.oid))) AS "FillFactor",
+           -- A failed CREATE INDEX CONCURRENTLY leaves the index behind marked invalid: present by name, used by nothing.
+           idx.indisvalid AS "Valid",
            %s AS "NullsNotDistinct",
+           %s AS "WithoutOverlaps",
            -- Storage parameters (the WITH clause), canonicalised to match the declared side: reloptions is
            -- already key=value strings, sorted so order does not matter, with fillfactor removed because
            -- FillFactor above owns it. An index with only fillfactor yields '' here and compares equal to a
@@ -83,8 +85,8 @@ BEGIN
            COALESCE(con.condeferrable, FALSE) AS "Deferrable",
            COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred"
       FROM temp_tables t
-      JOIN pg_index idx ON idx.indrelid = to_regclass('"' || t."Schema" || '"' ||  '.' || '"' ||  t."Name" || '"')
+      JOIN pg_index idx ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(t."Schema") ||  '.' || "SchemaSmith"."QuoteName"(t."Name"))
       JOIN pg_class i ON i.oid = idx.indexrelid
       LEFT JOIN pg_catalog.pg_constraint con ON con.contype IN ('p','u') AND con.conrelid = idx.indrelid AND con.conname = i.relname
-  $snapshot$, v_nnd_expr);
+  $snapshot$, v_nnd_expr, v_wo_expr);
 END $$;

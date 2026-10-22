@@ -33,7 +33,8 @@ namespace Schema.Domain.MySQL
         [DefaultValue("InnoDB")]
         public string Engine { get; set; } = "InnoDB";
 
-        [SchemaProperty(Pattern = "Dynamic|Compact|Compressed|Redundant|Fixed")]
+        // The deploy compares UPPER() to UPPER(), so any casing deploys. Page is MariaDB's Aria format, which extraction writes.
+        [SchemaProperty(Pattern = "Dynamic|Compact|Compressed|Redundant|Fixed|Page", PatternIgnoreCase = true)]
         [JsonProperty(Order = 101)]
         public string RowFormat { get; set; }
 
@@ -43,6 +44,8 @@ namespace Schema.Domain.MySQL
         [JsonProperty(Order = 103)]
         public string Collation { get; set; }
 
+        // TRANSITIONAL (Comment is the pre-2.8 spelling of Description on MySQL and MariaDB; roadmap WS-13 tracks its removal)
+        [SchemaProperty(Deprecated = true, Description = "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002).")]
         [JsonProperty(Order = 104)]
         public string Comment { get; set; }
 

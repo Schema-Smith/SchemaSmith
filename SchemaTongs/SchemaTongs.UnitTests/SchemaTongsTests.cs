@@ -377,6 +377,81 @@ public class SchemaTongsTests
         }
     }
 
+    private string CastOneProcedure(string moduleSyntax)
+    {
+        SetUpMocks();
+        var overrides = new Dictionary<string, string>
+        {
+            ["ShouldCast:Tables"] = "false",
+            ["ShouldCast:Schemas"] = "false",
+            ["ShouldCast:UserDefinedTypes"] = "false",
+            ["ShouldCast:Functions"] = "false",
+            ["ShouldCast:Views"] = "false",
+            ["ShouldCast:Procedures"] = "true",
+            ["ShouldCast:TableTriggers"] = "false",
+            ["ShouldCast:Catalogs"] = "false",
+            ["ShouldCast:StopLists"] = "false",
+            ["ShouldCast:DDLTriggers"] = "false",
+            ["ShouldCast:XMLSchemaCollections"] = "false"
+        };
+        if (moduleSyntax != null) overrides["ShouldCast:ModuleSyntax"] = moduleSyntax;
+        RegisterConfig(Platform.SqlServer, overrides);
+        RegisterConnectionFactory(Platform.SqlServer);
+
+        var listReader = Substitute.For<IDataReader>();
+        var listCount = 0;
+        listReader.Read().Returns(_ => listCount++ < 1, _ => false);
+        listReader.GetString(0).Returns("dbo");
+        listReader.GetString(1).Returns("MyProc");
+        var defReader = Substitute.For<IDataReader>();
+        defReader.Read().Returns(true, false);
+        defReader.IsDBNull(0).Returns(false);
+        defReader.GetString(0).Returns("CREATE PROCEDURE dbo.MyProc AS BEGIN SELECT 1 END");
+        defReader.GetBoolean(1).Returns(true);
+        defReader.GetBoolean(2).Returns(true);
+        var extReader = Substitute.For<IDataReader>();
+        extReader.Read().Returns(false);
+        _command.StubReaders(listReader, defReader, extReader);
+
+        string written = null;
+        _fileWrapper.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("dbo.MyProc.sql")), Arg.Any<string>())).Do(ci => written = ci.ArgAt<string>(1));
+        new SchemaTongs(Platform.SqlServer).CastTemplate();
+        return written;
+    }
+
+    [Test]
+    public void CastTemplate_SqlServer_LegacyModuleSyntax_WritesAGuardedStubAndAlter()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var written = CastOneProcedure("legacy");
+
+            Assert.That(written, Is.Not.Null, "the procedure script was not written");
+            Assert.That(written, Does.Contain("IF OBJECT_ID(N'[dbo].[MyProc]') IS NULL EXEC('CREATE PROCEDURE [dbo].[MyProc] AS RETURN')\r\nGO\r\n\r\nALTER PROCEDURE [dbo].[MyProc] AS BEGIN SELECT 1 END"));
+            Assert.That(written, Does.Not.Contain("CREATE OR ALTER"));
+            _progressLog.DidNotReceive().Warn(Arg.Is<string>(s => s.Contains("ModuleSyntax")));
+
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
+    [Test]
+    public void CastTemplate_SqlServer_MistypedModuleSyntax_WarnsAndWritesCreateOrAlter()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var written = CastOneProcedure("Legcay");
+
+            Assert.That(written, Is.Not.Null, "the procedure script was not written");
+            Assert.That(written, Does.Contain("CREATE OR ALTER PROCEDURE [dbo].[MyProc]"));
+            _progressLog.Received().Warn(Arg.Is<string>(s => s.Contains("ShouldCast:ModuleSyntax 'Legcay'") && s.Contains("CreateOrAlter or Legacy")));
+
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
     [Test]
     public void CastTemplate_SqlServer_ProceduresOnly_CastsProcedures()
     {
@@ -1125,6 +1200,53 @@ public class SchemaTongsTests
         }
     }
 
+    // An overload is named with its argument types, so ObjectsToCast listing the routine's name matched none of them.
+    [TestCase("public.my_func")]
+    [TestCase("my_func")]
+    public void CastTemplate_PostgreSQL_ObjectListNamingARoutine_CastsEveryOverload(string listed)
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetUpMocks();
+            RegisterConfig(Platform.PostgreSQL, new Dictionary<string, string>
+            {
+                ["ShouldCast:Tables"] = "false",
+                ["ShouldCast:Schemas"] = "false",
+                ["ShouldCast:DomainTypes"] = "false",
+                ["ShouldCast:EnumTypes"] = "false",
+                ["ShouldCast:CompositeTypes"] = "false",
+                ["ShouldCast:Functions"] = "true",
+                ["ShouldCast:Aggregates"] = "false",
+                ["ShouldCast:Procedures"] = "false",
+                ["ShouldCast:Sequences"] = "false",
+                ["ShouldCast:Rules"] = "false",
+                ["ShouldCast:TableTriggers"] = "false",
+                ["ShouldCast:Views"] = "false",
+                ["ShouldCast:MaterializedViews"] = "false",
+                ["ShouldCast:ObjectList"] = listed
+            });
+            RegisterConnectionFactory(Platform.PostgreSQL);
+
+            var rows = new[] { "public.my_func(integer)", "public.my_func(text)", "public.other(integer)" };
+            var row = -1;
+            var reader = Substitute.For<IDataReader>();
+            reader.Read().Returns(_ => ++row < rows.Length);
+            reader["Folder"].Returns("Functions");
+            reader["FullName"].Returns(_ => rows[row]);
+            reader["BaseName"].Returns(_ => rows[row][..rows[row].IndexOf('(')]);
+            reader["Code"].Returns(_ => $"CREATE OR REPLACE FUNCTION {rows[row]} RETURNS INT AS $$ SELECT 1 $$ LANGUAGE sql;");
+            _command.StubReaders(reader);
+
+            new SchemaTongs(Platform.PostgreSQL).CastTemplate();
+
+            _fileWrapper.Received(2).WriteAllText(Arg.Is<string>(s => s.Contains("my_func") && s.EndsWith(".sql")), Arg.Any<string>());
+            _fileWrapper.DidNotReceive().WriteAllText(Arg.Is<string>(s => s.Contains("other") && s.EndsWith(".sql")), Arg.Any<string>());
+
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
     [Test]
     public void CastTemplate_PostgreSQL_AggregatesOnly_CastsAggregates()
     {
@@ -1645,19 +1767,58 @@ public class SchemaTongsTests
             });
             RegisterConnectionFactory(Platform.MySQL);
 
-            var reader = Substitute.For<IDataReader>();
-            var callCount = 0;
-            reader.Read().Returns(_ => callCount++ < 1, _ => false);
-            reader["Folder"].Returns("Functions");
-            reader["FullName"].Returns("my_func");
-            reader["Code"].Returns("CREATE FUNCTION my_func() RETURNS INT RETURN 1;");
-            _command.StubReaders(reader);
+            var names = Substitute.For<IDataReader>();
+            var nameCalls = 0;
+            names.Read().Returns(_ => nameCalls++ < 1, _ => false);
+            names.GetString(0).Returns("my_func");
+            var shown = ShowCreateRow("Create Function", "CREATE DEFINER=`root`@`localhost` FUNCTION `my_func`() RETURNS int RETURN 1");
+            _command.StubReaders(names, shown);
 
             var tongs = new SchemaTongs(Platform.MySQL);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
             _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Function Scripts")));
-            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_func.sql")), Arg.Any<string>());
+            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_func.sql")),
+                Arg.Is<string>(c => c.StartsWith("DROP FUNCTION IF EXISTS `my_func`;") && c.Contains("SET SESSION sql_mode = 'STRICT_TRANS_TABLES';")
+                                    && c.Contains("DELIMITER //") && c.Contains("CREATE FUNCTION `my_func`()") && !c.Contains("DEFINER=")));
+
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
+    // MY-#24. A JavaScript routine (MySQL Enterprise's MLE) has a body SHOW CREATE renders but a server without the
+    // component cannot create, so it is named in a warning and skipped rather than written.
+    [Test]
+    public void CastTemplate_MySQL_AJavaScriptRoutine_IsSkippedWithAWarning()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetUpMocks();
+            StubMySqlKindleGate();
+            RegisterConfig(Platform.MySQL, new Dictionary<string, string>
+            {
+                ["ShouldCast:Tables"] = "false",
+                ["ShouldCast:Functions"] = "true",
+                ["ShouldCast:Views"] = "false",
+                ["ShouldCast:Procedures"] = "false",
+                ["ShouldCast:TableTriggers"] = "false",
+                ["ShouldCast:Events"] = "false"
+            });
+            RegisterConnectionFactory(Platform.MySQL);
+
+            var names = Substitute.For<IDataReader>();
+            var nameCalls = 0;
+            names.Read().Returns(_ => nameCalls++ < 1, _ => false);
+            names.GetString(0).Returns("js_func");
+            names.GetString(1).Returns("JAVASCRIPT");
+            _command.StubReaders(names);
+
+            var tongs = new SchemaTongs(Platform.MySQL);
+            Assert.DoesNotThrow(() => tongs.CastTemplate());
+
+            _progressLog.Received().Warn(Arg.Is<string>(s => s.Contains("js_func") && s.Contains("JAVASCRIPT")));
+            _fileWrapper.DidNotReceive().WriteAllText(Arg.Is<string>(s => s.Contains("js_func")), Arg.Any<string>());
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -1682,19 +1843,19 @@ public class SchemaTongsTests
             });
             RegisterConnectionFactory(Platform.MySQL);
 
-            var reader = Substitute.For<IDataReader>();
-            var callCount = 0;
-            reader.Read().Returns(_ => callCount++ < 1, _ => false);
-            reader["Folder"].Returns("Views");
-            reader["FullName"].Returns("my_view");
-            reader["Code"].Returns("CREATE VIEW my_view AS SELECT 1;");
-            _command.StubReaders(reader);
+            var names = Substitute.For<IDataReader>();
+            var nameCalls = 0;
+            names.Read().Returns(_ => nameCalls++ < 1, _ => false);
+            names.GetString(0).Returns("my_view");
+            var shown = ShowCreateRow("Create View", "CREATE ALGORITHM=UNDEFINED DEFINER=`root`@`localhost` SQL SECURITY DEFINER VIEW `my_view` AS select 1 AS `1`");
+            _command.StubReaders(names, shown);
 
             var tongs = new SchemaTongs(Platform.MySQL);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
             _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting View Scripts")));
-            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_view.sql")), Arg.Any<string>());
+            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_view.sql")),
+                Arg.Is<string>(c => c.StartsWith("CREATE OR REPLACE ALGORITHM=UNDEFINED SQL SECURITY DEFINER VIEW `my_view` AS") && !c.Contains("DEFINER=") && !c.Contains("DROP VIEW")));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -1719,19 +1880,19 @@ public class SchemaTongsTests
             });
             RegisterConnectionFactory(Platform.MySQL);
 
-            var reader = Substitute.For<IDataReader>();
-            var callCount = 0;
-            reader.Read().Returns(_ => callCount++ < 1, _ => false);
-            reader["Folder"].Returns("Procedures");
-            reader["FullName"].Returns("my_proc");
-            reader["Code"].Returns("CREATE PROCEDURE my_proc() BEGIN END;");
-            _command.StubReaders(reader);
+            var names = Substitute.For<IDataReader>();
+            var nameCalls = 0;
+            names.Read().Returns(_ => nameCalls++ < 1, _ => false);
+            names.GetString(0).Returns("my_proc");
+            var shown = ShowCreateRow("Create Procedure", "CREATE DEFINER=`root`@`localhost` PROCEDURE `my_proc`() BEGIN END");
+            _command.StubReaders(names, shown);
 
             var tongs = new SchemaTongs(Platform.MySQL);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
             _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Stored Procedure Scripts")));
-            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_proc.sql")), Arg.Any<string>());
+            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_proc.sql")),
+                Arg.Is<string>(c => c.StartsWith("DROP PROCEDURE IF EXISTS `my_proc`;") && c.Contains("CREATE PROCEDURE `my_proc`()") && !c.Contains("DEFINER=")));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -1756,23 +1917,44 @@ public class SchemaTongsTests
             });
             RegisterConnectionFactory(Platform.MySQL);
 
-            var reader = Substitute.For<IDataReader>();
-            var callCount = 0;
-            reader.Read().Returns(_ => callCount++ < 1, _ => false);
-            reader["Folder"].Returns("Triggers");
-            reader["FullName"].Returns("my_trigger");
-            reader["Code"].Returns("CREATE TRIGGER my_trigger BEFORE INSERT ON t FOR EACH ROW BEGIN END;");
-            _command.StubReaders(reader);
+            var names = Substitute.For<IDataReader>();
+            var nameCalls = 0;
+            names.Read().Returns(_ => nameCalls++ < 1, _ => false);
+            names.GetString(0).Returns("my_trigger");
+            names.GetString(1).Returns("t");
+            names.GetString(2).Returns("BEFORE");
+            names.GetString(3).Returns("INSERT");
+            names.GetValue(4).Returns(1);
+            var shown = ShowCreateRow("SQL Original Statement", "CREATE DEFINER=`root`@`localhost` TRIGGER my_trigger BEFORE INSERT ON t FOR EACH ROW BEGIN END");
+            _command.StubReaders(names, shown);
 
             var tongs = new SchemaTongs(Platform.MySQL);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
             _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Trigger Scripts")));
-            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_trigger.sql")), Arg.Any<string>());
+            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_trigger.sql")),
+                Arg.Is<string>(c => c.StartsWith("DROP TRIGGER IF EXISTS `my_trigger`;") && c.Contains("CREATE TRIGGER my_trigger BEFORE INSERT ON t FOR EACH ROW BEGIN END //") && !c.Contains("DEFINER=")));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
         }
+    }
+
+    // The second reader of each SHOW CREATE extraction: one row with the DDL column and the object's sql_mode.
+    private static IDataReader ShowCreateRow(string createColumn, string create)
+    {
+        var row = Substitute.For<IDataReader>();
+        var calls = 0;
+        row.Read().Returns(_ => calls++ < 1, _ => false);
+        row.FieldCount.Returns(3);
+        row.GetName(0).Returns("Name");
+        row.GetName(1).Returns("sql_mode");
+        row.GetName(2).Returns(createColumn);
+        row.GetOrdinal(createColumn).Returns(2);
+        row.IsDBNull(Arg.Any<int>()).Returns(false);
+        row.GetString(1).Returns("STRICT_TRANS_TABLES");
+        row.GetString(2).Returns(create);
+        return row;
     }
 
     [Test]
@@ -2024,8 +2206,10 @@ public class SchemaTongsTests
             var tongs = new SchemaTongs(Platform.MariaDb);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
-            _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Sequence Scripts")));
-            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_seq.sql")), Arg.Any<string>());
+            _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Sequences")));
+            // Declared JSON, not a script: the deploy converges it and never resets it.
+            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("my_seq.json")), Arg.Is<string>(j => j.Contains("\"Name\": \"my_seq\"")));
+            _fileWrapper.DidNotReceive().WriteAllText(Arg.Is<string>(s => s.Contains("my_seq.sql")), Arg.Any<string>());
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -2698,6 +2882,84 @@ public class SchemaTongsTests
 
             Assert.DoesNotThrow(() => tongs.PreFlightSourceVersion());
 
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
+    private string CastOneFunction(Dictionary<string, string> extraOverrides)
+    {
+        SetUpMocks();
+        var overrides = new Dictionary<string, string>
+        {
+            ["ShouldCast:Tables"] = "false",
+            ["ShouldCast:Schemas"] = "false",
+            ["ShouldCast:UserDefinedTypes"] = "false",
+            ["ShouldCast:Functions"] = "true",
+            ["ShouldCast:Views"] = "false",
+            ["ShouldCast:Procedures"] = "false",
+            ["ShouldCast:TableTriggers"] = "false",
+            ["ShouldCast:Catalogs"] = "false",
+            ["ShouldCast:StopLists"] = "false",
+            ["ShouldCast:DDLTriggers"] = "false",
+            ["ShouldCast:XMLSchemaCollections"] = "false"
+        };
+        foreach (var kv in extraOverrides) overrides[kv.Key] = kv.Value;
+        RegisterConfig(Platform.SqlServer, overrides);
+        RegisterConnectionFactory(Platform.SqlServer);
+
+        var listReader = Substitute.For<IDataReader>();
+        var listCount = 0;
+        listReader.Read().Returns(_ => listCount++ < 1, _ => false);
+        listReader.GetString(0).Returns("dbo");
+        listReader.GetString(1).Returns("MyFunction");
+        listReader.GetBoolean(2).Returns(false);
+        var defReader = Substitute.For<IDataReader>();
+        defReader.Read().Returns(true, false);
+        defReader.IsDBNull(0).Returns(false);
+        defReader.GetString(0).Returns("CREATE FUNCTION dbo.MyFunction() RETURNS INT AS BEGIN RETURN 1 END");
+        defReader.GetBoolean(1).Returns(true);
+        defReader.GetBoolean(2).Returns(true);
+        var extReader = Substitute.For<IDataReader>();
+        extReader.Read().Returns(false);
+        _command.StubReaders(listReader, defReader, extReader);
+
+        string written = null;
+        _fileWrapper.When(f => f.WriteAllText(Arg.Is<string>(s => s.Contains("dbo.MyFunction.sql")), Arg.Any<string>())).Do(ci => written = ci.ArgAt<string>(1));
+        new SchemaTongs(Platform.SqlServer).CastTemplate();
+        return written;
+    }
+
+    // The preamble dropped every object whose definition mentioned the function's name, on every deploy, and could not
+    // run on a database with a CHECK that referenced the function. SchemaQuench now drops the schema-bound dependents a
+    // changed module actually blocks on and later steps put them back, so the setting does nothing but say so.
+    [Test]
+    public void CastTemplate_SqlServer_ScriptDynamicDependencyRemovalForFunctions_IsADeprecatedNoOp()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var written = CastOneFunction(new Dictionary<string, string> { ["ShouldCast:ScriptDynamicDependencyRemovalForFunctions"] = "true" });
+
+            Assert.That(written, Is.Not.Null, "the function script was not written");
+            Assert.Multiple(() =>
+            {
+                Assert.That(written, Does.Not.Contain("@v_SearchTerm"), "no dependency-removal preamble may be written");
+                Assert.That(written, Does.Contain("FUNCTION").And.Contain("MyFunction"), "the function script itself is still written");
+            });
+            _progressLog.Received(1).Warn(Arg.Is<string>(s => s.Contains("ScriptDynamicDependencyRemovalForFunctions") && s.Contains("deprecated")));
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+        }
+    }
+
+    [Test]
+    public void CastTemplate_SqlServer_WithoutTheDeprecatedSetting_DoesNotWarn()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var written = CastOneFunction(new Dictionary<string, string>());
+            Assert.That(written, Does.Not.Contain("@v_SearchTerm"));
+            _progressLog.DidNotReceive().Warn(Arg.Is<string>(s => s.Contains("ScriptDynamicDependencyRemovalForFunctions")));
             FactoryContainer.Clear();
             LogFactory.Clear();
         }

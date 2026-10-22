@@ -6,7 +6,7 @@ using Schema.Domain;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
-// Rule 20 parity for #375 (a MySQL-family bug): prove SQL Server stays idempotent when two tables declare an
+// Cross-engine parity for #375 (a MySQL-family bug): prove SQL Server stays idempotent when two tables declare an
 // empty OldName. SQL Server manufactures a [] bracket pair for a blank OldName too, but keys its rename/new-
 // table logic on OBJECT_ID(schema.OldName) existence (OBJECT_ID('dbo.[]') is NULL) and has no
 // _SchemaSmith_TableRenames PK to collide on — so it is clean by construction. This locks that in.

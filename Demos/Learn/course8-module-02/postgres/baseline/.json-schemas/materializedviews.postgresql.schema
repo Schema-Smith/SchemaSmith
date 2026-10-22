@@ -31,6 +31,10 @@
       "maxLength": 128,
       "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
     },
+    "Description": {
+      "type": "string",
+      "description": "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it."
+    },
     "Indexes": {
       "type": "array",
       "items": {
@@ -50,6 +54,10 @@
           },
           "IndexColumns": {
             "type": "string"
+          },
+          "Description": {
+            "type": "string",
+            "description": "Optional. A description stored on the object: an MS_Description extended property on SQL Server, COMMENT ON on PostgreSQL, the COMMENT clause on MySQL and MariaDB. On SQL Server and PostgreSQL an omitted value leaves an existing description alone and \"\" removes it; on MySQL and MariaDB an omitted value clears the comment, as the engine's own DDL does."
           },
           "ShouldApplyExpression": {
             "type": "string"
@@ -95,6 +103,10 @@
           },
           "StorageParameters": {
             "type": "object"
+          },
+          "WithoutOverlaps": {
+            "type": "boolean",
+            "description": "PostgreSQL 18+. On a primary key or unique constraint whose last column is a range or multirange: rows with the same other key values may not have overlapping ranges (WITHOUT OVERLAPS). The backing index is GiST (a scalar key column needs the btree_gist extension). Below 18 the key is created without the clause and a downgrade is recorded."
           },
           "Extensions": {}
         },

@@ -113,7 +113,10 @@ public class FixtureSetup
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 120;
 
-            cmd.CommandText = "SELECT [name] FROM sys.databases WHERE [name] LIKE 'SchemaIntTest[_]%'";
+            // Plus every per-class database the tool suites create, <prefix>_Test_<yyyyMMdd>_<HHmmss>_<8>: matched by shape, so a
+            // new test class's prefix is swept without being listed here.
+            cmd.CommandText = "SELECT [name] FROM sys.databases WHERE [name] LIKE 'SchemaIntTest[_]%' " +
+                              "OR [name] LIKE '%[_]Test[_][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][_][0-9][0-9][0-9][0-9][0-9][0-9][_]________'";
             var stale = new List<string>();
             using (var reader = cmd.ExecuteReader())
                 while (reader.Read())

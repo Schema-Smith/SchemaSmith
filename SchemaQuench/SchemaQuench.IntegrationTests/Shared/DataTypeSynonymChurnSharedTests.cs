@@ -8,7 +8,7 @@ using Schema.DataAccess;
 namespace SchemaQuench.IntegrationTests.Shared;
 
 /// <summary>
-/// Data-type synonyms must not churn (Rule 20 parity with PostgreSQL, which has had this since its
+/// Data-type synonyms must not churn (parity with PostgreSQL, which has had this since its
 /// parse step).
 ///
 /// <para>Every engine accepts synonyms and the catalog reports the BASE name whatever the package
@@ -16,7 +16,7 @@ namespace SchemaQuench.IntegrationTests.Shared;
 /// comparison saw a difference that was not one and drop/recreated the column on EVERY quench: not a
 /// cosmetic diff, an unnecessary table rewrite on every deploy, forever.</para>
 ///
-/// <para><b>Asserted at the outcome, per Rule 32.</b> Not "the helper returns X for Y" — declare the
+/// <para><b>Asserted at the outcome.</b> Not "the helper returns X for Y" — declare the
 /// column with the synonym, deploy twice, and require the column to be untouched. The mapping table
 /// itself was measured against both engines rather than assumed, so a test that re-asserted the table
 /// would only be checking my arithmetic against itself.</para>
@@ -57,6 +57,18 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
     [TestCase("LONG VARBINARY", TestName = "Synonym_LONG_VARBINARY_DoesNotChurn")] // -> mediumblob
     [TestCase("DECIMAL", TestName = "Synonym_DECIMAL_DoesNotChurn")]           // -> decimal(10,0)
     [TestCase("NUMERIC", TestName = "Synonym_NUMERIC_DoesNotChurn")]           // -> decimal(10,0)
+    [TestCase("DEC", TestName = "Synonym_bare_DEC_DoesNotChurn")]              // -> decimal(10,0)
+    [TestCase("FIXED", TestName = "Synonym_bare_FIXED_DoesNotChurn")]          // -> decimal(10,0)
+    // A length after a space is not a bare type: it was given the default length too, a syntax error on deploy.
+    [TestCase("DECIMAL (10,2)", TestName = "Spaced_DECIMAL_DoesNotChurn")]    // -> decimal(10,2)
+    [TestCase("DEC (10,2)", TestName = "Spaced_DEC_DoesNotChurn")]            // -> decimal(10,2)
+    [TestCase("CHAR (10)", TestName = "Spaced_CHAR_DoesNotChurn")]            // -> char(10)
+    [TestCase("BINARY (4)", TestName = "Spaced_BINARY_DoesNotChurn")]         // -> binary(4)
+    [TestCase("BIT (3)", TestName = "Spaced_BIT_DoesNotChurn")]               // -> bit(3)
+    [TestCase("DECIMAL UNSIGNED", TestName = "Synonym_DECIMAL_UNSIGNED_DoesNotChurn")] // -> decimal(10,0) unsigned
+    [TestCase("DEC UNSIGNED", TestName = "Synonym_DEC_UNSIGNED_DoesNotChurn")] // -> decimal(10,0) unsigned
+    [TestCase("FIXED UNSIGNED", TestName = "Synonym_FIXED_UNSIGNED_DoesNotChurn")] // -> decimal(10,0) unsigned
+    [TestCase("NUMERIC UNSIGNED", TestName = "Synonym_NUMERIC_UNSIGNED_DoesNotChurn")] // -> decimal(10,0) unsigned
     [TestCase("CHAR", TestName = "Synonym_CHAR_DoesNotChurn")]                 // -> char(1)
     [TestCase("BIT", TestName = "Synonym_BIT_DoesNotChurn")]                   // -> bit(1)
     [TestCase("BINARY", TestName = "Synonym_BINARY_DoesNotChurn")]             // -> binary(1)
@@ -100,6 +112,30 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
             DropTable(cmd, table);
         }
         conn.Close();
+    }
+
+    // MY-V3: MySQL stores a bare VECTOR as vector(2048), so it was altered on every deploy. MariaDB refuses a VECTOR
+    // without its dimension, so there only the dimensioned form exists.
+    [TestCase("VECTOR(3)")]
+    [TestCase("VECTOR")]
+    public void AVectorColumn_IsNotRewrittenOnRedeploy(string declared)
+    {
+        using (var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString))
+        {
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT VERSION()";
+            var version = cmd.ExecuteScalar()?.ToString() ?? "";
+            var isMariaDb = version.Contains("MariaDB", StringComparison.OrdinalIgnoreCase);
+            var numbers = version.Split('-')[0].Split('.');
+            var major = int.Parse(numbers[0]);
+            var minor = int.Parse(numbers[1]);
+            if (isMariaDb ? major < 11 || (major == 11 && minor < 7) : major < 9)
+                Assert.Ignore("VECTOR is MySQL 9.0 / MariaDB 11.7.");
+            if (isMariaDb && declared == "VECTOR")
+                Assert.Ignore("MariaDB refuses a VECTOR without its dimension.");
+        }
+        ColumnDeclaredWithASynonym_IsNotRewrittenOnRedeploy(declared);
     }
 
     // Members are trimmed with their quoting intact. A backslash-escaped quote is part of the member: reading it as the
@@ -191,6 +227,9 @@ public abstract class DataTypeSynonymChurnSharedTests : BaseTableQuenchTests
     // Index spellings the engine stores in another form must not be rebuilt on every deploy.
     [TestCase("varchar(10)", "`Val`", "HASH", false, null, TestName = "Index_HashOnInnoDB_DoesNotChurn")]
     [TestCase("varchar(10)", "`Val`(10)", "BTREE", false, null, TestName = "Index_FullLengthPrefix_DoesNotChurn")]
+    // Column names match without regard to case on every server, so the key part may name the column in another case.
+    [TestCase("varchar(10)", "`val`(10)", "BTREE", false, null, TestName = "Index_FullLengthPrefix_ColumnInAnotherCase_DoesNotChurn")]
+    [TestCase("varchar(10)", "`val`", "BTREE", false, null, TestName = "Index_ColumnInAnotherCase_DoesNotChurn")]
     [TestCase("point", "`Val`", "BTREE", false, "MySQL", TestName = "Index_BtreeOnGeometry_DoesNotChurn")]
     // MySQL 5.7 stores a BTREE key on a POINT as prefix 25, the whole value, so a package extracted there may say so.
     [TestCase("point", "`Val`(25)", "BTREE", false, "MySQL", TestName = "Index_BtreeOnGeometry_WithItsImplicitPrefix_DoesNotChurn")]

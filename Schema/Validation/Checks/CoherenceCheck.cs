@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.RegularExpressions;
 using Schema.Delivery;
 using Schema.Domain;
 using Schema.Utility;
@@ -29,15 +30,45 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string RelatedColumnCode = "SS-FK-004";
     private const string CardinalityCode = "SS-FK-005";
     private const string ForeignKeyNameReusedCode = "SS-FK-006";
+    private const string SetNullColumnsCode = "SS-FK-007";
+    private const string NonStandardKeyReferenceCode = "SS-FK-008";
+    private const string SetDefaultActionCode = "SS-FK-009";
+    private const string RelatedTableInOtherTemplateCode = "SS-FK-010";
     private const string IndexColumnCode = "SS-IDX-001";
+    private const string TemporalKeyShapeCode = "SS-IDX-002";
+    private const string TemporalKeyPeriodCode = "SS-IDX-003";
+    private const string NullsNotDistinctOnKeyCode = "SS-IDX-004";
+    private const string VectorIndexColumnCode = "SS-IDX-005";
+    private const string VectorIndexCountCode = "SS-IDX-006";
+    private const string PeriodPairIncompleteCode = "SS-TMP-001";
+    private const string PeriodRoleRepeatedCode = "SS-TMP-002";
+    private const string PeriodWithoutTemporalCode = "SS-TMP-003";
+    private const string PeriodTypeCode = "SS-TMP-004";
+    private const string LedgerColumnWithoutLedgerCode = "SS-LDG-001";
+    private const string LedgerEndOnAppendOnlyCode = "SS-LDG-002";
+    private const string LedgerRoleRepeatedCode = "SS-LDG-003";
+    private const string LedgerViewWithoutLedgerCode = "SS-LDG-004";
+    private const string LedgerColumnTypeCode = "SS-LDG-005";
+    private const string SpatialColumnCode = "SS-SPX-001";
+    private const string SpatialFamilyCode = "SS-SPX-002";
+    private const string SpatialBoundingBoxCode = "SS-SPX-003";
+    private const string SpatialGridsCode = "SS-SPX-004";
+    private const string JsonIndexColumnCode = "SS-JSX-001";
+    private const string JsonIndexSameColumnCode = "SS-JSX-002";
+    private const string JsonIndexPathCode = "SS-JSX-003";
+    private const string JsonIndexKeyCode = "SS-JSX-004";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string CharsetWithoutCollationCode = "SS-COL-002";
+    private const string RemovedFunctionCode = "SS-COL-004";
+    private const string NationalCharacterTypeCode = "SS-COL-005";
+    private const string DeprecatedNumericFormCode = "SS-COL-006";
     private const string RebuildThresholdCode = "SS-TBL-001";
     private const string IgnoredThresholdCode = "SS-TBL-002";
+    private const string EdgeConstraintTableKindCode = "SS-TBL-003";
+    private const string EdgeConstraintNodeCode = "SS-TBL-004";
     private const string RlsWithoutPoliciesCode = "SS-RLS-001";
     private const string PoliciesWithoutRlsCode = "SS-RLS-002";
     private const string ReplicaIdentityIndexMissingCode = "SS-RI-001";
-    private const string QuotedIdentifierCode = "SS-IDENT-001";
     private const string IdentifierTooLongCode = "SS-IDENT-002";
     private const int PostgreSqlMaxIdentifierBytes = 63;
     private const string ReplicaIdentityIndexUnknownCode = "SS-RI-002";
@@ -47,6 +78,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string MinimumVersionUnresolvableCode = "SS-VER-001";
     private const string CdcFilegroupInertCode = "SS-CDC-001";
     private const string CdcIndexNameInvalidCode = "SS-CDC-002";
+    private const string FullTextKeyIndexInvalidCode = "SS-FT-001";
     private const string CompressionConflictCode = "SS-CO-001";
     private const string CompressionLevelInertCode = "SS-CO-002";
     private const string DuplicateEventCode = "SS-EVT-001";
@@ -57,8 +89,97 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string PartitionAndFileGroupCode = "SS-PART-002";
     private const string MyPartitionRangeListNoPartitionsCode = "SS-PART-003";
     private const string MyPartitionHashBoundaryCode = "SS-PART-004";
+    private const string MyPartitionKeyMissesColumnCode = "SS-PART-005";
+    private const string SystemTimePartitioningCode = "SS-PART-006";
+    private const string PartitionExpressionMissingCode = "SS-PART-007";
+    private const string PartitionedForeignKeyCode = "SS-PART-008";
+    private const string PartitionColumnRenamedCode = "SS-PART-009";
+    private const string PartitionCountMismatchCode = "SS-PART-010";
     private const string MemoryOptimizedPlacementCode = "SS-XTP-001";
     private const string Category = "Coherence";
+
+    private static readonly IReadOnlyList<Severity> ErrorLevel = [Severity.Error];
+    private static readonly IReadOnlyList<Severity> WarningLevel = [Severity.Warning];
+    private static readonly IReadOnlyList<Severity> ErrorOrWarningLevel = [Severity.Error, Severity.Warning];
+
+    /// <summary>
+    /// Every code this check reports, with the levels it can carry. A code with two levels picks one from the product
+    /// (<c>SS-FK-006</c> is a warning on MariaDB below 12.1). A caller that refuses an Error and warns on a Warning reads
+    /// the levels from here rather than keeping its own copy.
+    /// </summary>
+    public static IReadOnlyDictionary<string, IReadOnlyList<Severity>> Codes { get; } = new Dictionary<string, IReadOnlyList<Severity>>
+    {
+        [LocalColumnCode] = ErrorLevel,
+        [RelatedTableCode] = WarningLevel,
+        [RelatedColumnCode] = ErrorLevel,
+        [CardinalityCode] = ErrorLevel,
+        [ForeignKeyNameReusedCode] = ErrorOrWarningLevel,
+        [SetNullColumnsCode] = ErrorLevel,
+        [NonStandardKeyReferenceCode] = WarningLevel,
+        [SetDefaultActionCode] = WarningLevel,
+        [RelatedTableInOtherTemplateCode] = WarningLevel,
+        [IndexColumnCode] = ErrorLevel,
+        [TemporalKeyShapeCode] = ErrorLevel,
+        [TemporalKeyPeriodCode] = ErrorLevel,
+        [NullsNotDistinctOnKeyCode] = WarningLevel,
+        [VectorIndexColumnCode] = ErrorLevel,
+        [VectorIndexCountCode] = ErrorLevel,
+        [PeriodPairIncompleteCode] = ErrorLevel,
+        [PeriodRoleRepeatedCode] = ErrorLevel,
+        [PeriodWithoutTemporalCode] = ErrorLevel,
+        [PeriodTypeCode] = ErrorLevel,
+        [LedgerColumnWithoutLedgerCode] = ErrorLevel,
+        [LedgerEndOnAppendOnlyCode] = ErrorLevel,
+        [LedgerRoleRepeatedCode] = ErrorLevel,
+        [LedgerViewWithoutLedgerCode] = ErrorLevel,
+        [LedgerColumnTypeCode] = ErrorLevel,
+        [SpatialColumnCode] = ErrorLevel,
+        [SpatialFamilyCode] = ErrorLevel,
+        [SpatialBoundingBoxCode] = ErrorLevel,
+        [SpatialGridsCode] = ErrorLevel,
+        [JsonIndexColumnCode] = ErrorLevel,
+        [JsonIndexSameColumnCode] = ErrorLevel,
+        [JsonIndexPathCode] = ErrorLevel,
+        [JsonIndexKeyCode] = ErrorLevel,
+        [BackfillWithoutDefaultCode] = WarningLevel,
+        [CharsetWithoutCollationCode] = WarningLevel,
+        [RemovedFunctionCode] = WarningLevel,
+        [NationalCharacterTypeCode] = WarningLevel,
+        [DeprecatedNumericFormCode] = WarningLevel,
+        [RebuildThresholdCode] = ErrorLevel,
+        [IgnoredThresholdCode] = WarningLevel,
+        [EdgeConstraintTableKindCode] = ErrorLevel,
+        [EdgeConstraintNodeCode] = WarningLevel,
+        [RlsWithoutPoliciesCode] = WarningLevel,
+        [PoliciesWithoutRlsCode] = WarningLevel,
+        [ReplicaIdentityIndexMissingCode] = ErrorLevel,
+        [IdentifierTooLongCode] = ErrorLevel,
+        [ReplicaIdentityIndexUnknownCode] = ErrorLevel,
+        [ReplicaIdentityIndexNotUniqueCode] = ErrorLevel,
+        [ReplicaIdentityIndexIgnoredCode] = WarningLevel,
+        [VersioningExclusionInertCode] = WarningLevel,
+        [MinimumVersionUnresolvableCode] = ErrorLevel,
+        [CdcFilegroupInertCode] = WarningLevel,
+        [CdcIndexNameInvalidCode] = ErrorLevel,
+        [FullTextKeyIndexInvalidCode] = ErrorLevel,
+        [CompressionConflictCode] = ErrorLevel,
+        [CompressionLevelInertCode] = WarningLevel,
+        [DuplicateEventCode] = ErrorLevel,
+        [DuplicateEnumTypeCode] = ErrorLevel,
+        [DuplicateSequenceCode] = ErrorLevel,
+        [DuplicateDomainTypeCode] = ErrorLevel,
+        [PartitionHalfDeclaredCode] = ErrorLevel,
+        [PartitionAndFileGroupCode] = ErrorLevel,
+        [MyPartitionRangeListNoPartitionsCode] = ErrorLevel,
+        [MyPartitionHashBoundaryCode] = ErrorLevel,
+        [MyPartitionKeyMissesColumnCode] = ErrorLevel,
+        [SystemTimePartitioningCode] = ErrorLevel,
+        [PartitionExpressionMissingCode] = ErrorLevel,
+        [PartitionedForeignKeyCode] = ErrorLevel,
+        [PartitionColumnRenamedCode] = ErrorOrWarningLevel,
+        [PartitionCountMismatchCode] = ErrorLevel,
+        [MemoryOptimizedPlacementCode] = ErrorLevel,
+    };
 
     public IEnumerable<Finding> Run(ValidationContext ctx)
     {
@@ -69,6 +190,12 @@ public sealed class CoherenceCheck : ISchemaCheck
         var tablesByKey = ctx.AllTables
             .GroupBy(t => TableKey(t))
             .ToDictionary(g => g.Key, g => g.ToList());
+
+        // A foreign key resolves within its own template: each template deploys to the databases its
+        // DatabaseIdentificationScript names, so a table in another template is on this one's target only when
+        // both identify the same databases.
+        var tablesByTemplate = ctx.Templates.ToDictionary(t => t,
+            t => t.Tables.GroupBy(TableKey).ToDictionary(g => g.Key, g => g.ToList()));
 
         var findings = new List<Finding>();
         findings.AddRange(CheckMinimumVersion(ctx.Product));
@@ -89,9 +216,6 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckModeledFolderObjectCoexistence(template));
 
         foreach (var template in ctx.Templates)
-            findings.AddRange(CheckPostgreSqlQuotedIdentifierOnModeledObjects(template));
-
-        foreach (var template in ctx.Templates)
             findings.AddRange(IdentifierLengthFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'"));
 
         foreach (var template in ctx.Templates)
@@ -109,24 +233,34 @@ public sealed class CoherenceCheck : ISchemaCheck
             var columnsAreOwnedElsewhere = template.IndexOnlyTableQuenches;
 
             foreach (var fk in table.ForeignKeys)
-                findings.AddRange(CheckForeignKey(table, fk, location, tablesByKey, columnsAreOwnedElsewhere));
+                findings.AddRange(CheckForeignKey(table, fk, location, template, tablesByTemplate, columnsAreOwnedElsewhere));
+            findings.AddRange(CheckMySqlFamilyForeignKeys(table, location, tablesByKey, ctx.Product.Platform));
+            findings.AddRange(CheckMySqlFamilyColumnTypes(table, location, ctx.Product.Platform));
 
             foreach (var index in table.Indexes)
                 findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
 
             findings.AddRange(CheckBackfill(table, location));
+            findings.AddRange(CheckPeriodColumns(table, location));
+            findings.AddRange(CheckLedgerColumns(table, location));
+            findings.AddRange(CheckMariaDbPeriodColumns(table, location));
+            findings.AddRange(CheckSpatialIndexes(table, location, columnsAreOwnedElsewhere));
+            findings.AddRange(CheckJsonIndexes(table, location, columnsAreOwnedElsewhere));
+            findings.AddRange(CheckEdgeConstraints(table, location, tablesByKey));
             findings.AddRange(CheckCharsetWithoutCollation(table, location));
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
             findings.AddRange(CheckRowLevelSecurity(table, location));
             findings.AddRange(CheckReplicaIdentity(table, location));
-            findings.AddRange(CheckPostgreSqlQuotedIdentifier(table, location));
+            findings.AddRange(CheckPostgreSqlIdentifierLength(table, location));
             findings.AddRange(CheckSystemVersioningExclusions(table, location));
             findings.AddRange(CheckCdcFilegroup(table, location));
             findings.AddRange(CheckCdcSupportsNetChanges(table, location));
             findings.AddRange(CheckCdcIndexName(table, location));
+            findings.AddRange(CheckFullTextKeyIndex(table, location));
             findings.AddRange(CheckCompressionOptions(table, location));
             findings.AddRange(CheckPartitionPlacement(table, location));
-            findings.AddRange(CheckMyPartitioning(table, location));
+            findings.AddRange(CheckMyPartitioning(table, location, ctx.Product));
+            findings.AddRange(CheckPartitionedForeignKeys(table, location, tablesByKey));
             findings.AddRange(CheckMemoryOptimizedPlacement(table, location));
         }
 
@@ -178,7 +312,8 @@ public sealed class CoherenceCheck : ISchemaCheck
         Table table,
         ForeignKey fk,
         string tableLocation,
-        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey,
+        Template owningTemplate,
+        IReadOnlyDictionary<Template, Dictionary<(string Schema, string Name), List<Table>>> tablesByTemplate,
         bool columnsAreOwnedElsewhere)
     {
         var location = $"{tableLocation} / FK '{fk.Name}'";
@@ -201,10 +336,37 @@ public sealed class CoherenceCheck : ISchemaCheck
             yield return new Finding(Severity.Error, CardinalityCode, Category, location,
                 $"Columns has {fkColumns.Count} entries but RelatedColumns has {fkRelatedColumns.Count} — FK column lists must be the same length.");
 
-        var (schema, name) = ResolveRelatedTarget(table, fk);
-
-        if (!tablesByKey.TryGetValue((schema, name), out var relatedTables))
+        // SetNullColumns is the subset ON DELETE SET NULL or SET DEFAULT applies to: it needs one of those actions, and
+        // names only key columns.
+        if (fk is PostgreSqlForeignKey { SetNullColumns: not null } pgFk && !string.IsNullOrWhiteSpace(pgFk.SetNullColumns))
         {
+            if (NormalizeAction(fk.DeleteAction)?.ToUpperInvariant() is not ("SET NULL" or "SET DEFAULT"))
+                yield return new Finding(Severity.Error, SetNullColumnsCode, Category, location,
+                    $"SetNullColumns is set but DeleteAction is '{fk.DeleteAction ?? "NO ACTION"}': the subset applies to ON DELETE SET NULL or SET DEFAULT alone, so set one of those or remove SetNullColumns.");
+            var keyColumns = fkColumns.Select(NormalizeIdentifier).ToHashSet(StringComparer.Ordinal);
+            foreach (var column in SplitNames(pgFk.SetNullColumns).Where(column => !keyColumns.Contains(NormalizeIdentifier(column))))
+                yield return new Finding(Severity.Error, SetNullColumnsCode, Category, location,
+                    $"SetNullColumns names '{column}', which is not one of the key's Columns: only a key column can be set on delete.");
+        }
+
+        var (schema, name) = ResolveRelatedTarget(table, fk);
+        var relatedTables = tablesByTemplate
+            .Where(x => x.Key == owningTemplate || SameDatabases(x.Key, owningTemplate))
+            .SelectMany(x => x.Value.TryGetValue((schema, name), out var found) ? found : [])
+            .ToList();
+
+        if (relatedTables.Count == 0)
+        {
+            var elsewhere = tablesByTemplate.Where(x => x.Value.ContainsKey((schema, name))).Select(x => $"'{x.Key.Name}'").ToList();
+            if (elsewhere.Count > 0)
+            {
+                yield return new Finding(Severity.Warning, RelatedTableInOtherTemplateCode, Category, location,
+                    $"RelatedTable '{fk.RelatedTable}' is declared in template {string.Join(", ", elsewhere)}, not in " +
+                    $"'{owningTemplate.Name}', and the two identify their databases differently. The deploy succeeds only " +
+                    $"if that table already exists on the database '{owningTemplate.Name}' deploys to.");
+                yield break;
+            }
+
             // A warning, not an error: the deploy creates a foreign key to any table that exists on the target,
             // declared or not, so an unresolved reference is only a likely mistake. Never silenced -- not even for
             // a partial deployment such as a SchemaShears patch, where it is expected: DropTablesRemovedFromProduct
@@ -216,11 +378,109 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         var relatedColumnNames = new HashSet<string>(
             relatedTables.SelectMany(ColumnNames),
-            StringComparer.OrdinalIgnoreCase);
+            NameComparer(table));
 
         foreach (var column in fkRelatedColumns.Where(column => !relatedColumnNames.Contains(NormalizeIdentifier(column))))
             yield return new Finding(Severity.Error, RelatedColumnCode, Category, location,
                 $"Related column '{column}' referenced in RelatedColumns does not exist on related table '{fk.RelatedTable}'.");
+    }
+
+    /// <summary>
+    /// The foreign keys among <paramref name="tables"/> whose related columns are not a whole primary or unique key of a
+    /// related table in the same set (MySQL 8.4 refuses them by default). Shared with SchemaTongs, which warns on extraction.
+    /// </summary>
+    public static IEnumerable<(Table Table, ForeignKey ForeignKey)> NonStandardKeyReferences(IReadOnlyCollection<Table> tables)
+    {
+        var tablesByKey = tables.GroupBy(TableKey).ToDictionary(g => g.Key, g => g.ToList());
+        return tables.SelectMany(t => t.ForeignKeys.Select(fk => (Table: t, ForeignKey: fk)))
+            .Where(x => tablesByKey.TryGetValue(ResolveRelatedTarget(x.Table, x.ForeignKey), out var related) && !ReferencesWholeKey(x.ForeignKey, related));
+    }
+
+    private static bool SameDatabases(Template a, Template b) =>
+        string.Equals((a.DatabaseIdentificationScript ?? "").Trim(), (b.DatabaseIdentificationScript ?? "").Trim(), StringComparison.Ordinal);
+
+    private static bool ReferencesWholeKey(ForeignKey fk, List<Table> relatedTables)
+    {
+        var comparer = relatedTables.Count > 0 ? NameComparer(relatedTables[0]) : StringComparer.OrdinalIgnoreCase;
+        var related = SplitNames(fk.RelatedColumns).Select(NormalizeIdentifier).ToHashSet(comparer);
+        if (related.Count == 0) return true;
+        return relatedTables.SelectMany(t => t.Indexes)
+            .Where(i => i.PrimaryKey || i.Unique || i.UniqueConstraint)
+            // A prefix or expression key part (Code(10)) never equals a column name, so a partial key does not match.
+            .Select(i => SplitNames(i.IndexColumns).Select(part => StripOrderingSuffix(part).Trim()).ToList())
+            .Any(parts => parts.Select(NormalizeIdentifier).ToHashSet(comparer).SetEquals(related));
+    }
+
+    /// <summary>
+    /// Two foreign-key shapes the MySQL family accepts at create time but does not honour as written:
+    /// <list type="bullet">
+    /// <item><c>SET DEFAULT</c> is stored and then acts as <c>RESTRICT</c> (probed on MySQL 8.0 and MariaDB 11.4:
+    /// the parent delete fails with 1451), so the declared action never happens;</item>
+    /// <item>MySQL 8.4 refuses a key to columns that are not a whole primary or unique key of the related table
+    /// (6125, while <c>restrict_fk_on_non_standard_key</c> is on, its default). A package extracted from 8.0 can
+    /// carry one. MariaDB has no such restriction.</item>
+    /// </list>
+    /// Both are warnings: the first deploys, and the second deploys where the server variable is off.
+    /// </summary>
+    private static IEnumerable<Finding> CheckMySqlFamilyForeignKeys(Table table, string tableLocation,
+        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey, Platform platform)
+    {
+        if (platform.GetBasePlatform() != Platform.MySQL) yield break;
+        foreach (var fk in table.ForeignKeys)
+        {
+            var location = $"{tableLocation} / FK '{fk.Name}'";
+            foreach (var (clause, action) in new[] { ("ON DELETE", fk.DeleteAction), ("ON UPDATE", fk.UpdateAction) })
+                if (NormalizeAction(action) == "SET DEFAULT")
+                    yield return new Finding(Severity.Warning, SetDefaultActionCode, Category, location,
+                        $"{clause} SET DEFAULT is accepted by {platform} but acts as RESTRICT: the change to the parent row is refused instead. Declare the action the server will carry out.");
+
+            if (platform != Platform.MySQL) continue;
+            if (tablesByKey.TryGetValue(ResolveRelatedTarget(table, fk), out var relatedTables) && !ReferencesWholeKey(fk, relatedTables))
+                yield return new Finding(Severity.Warning, NonStandardKeyReferenceCode, Category, location,
+                    $"RelatedColumns ({fk.RelatedColumns}) are not the whole primary key or a whole unique key of '{fk.RelatedTable}'. MySQL 8.4 refuses such a foreign key while restrict_fk_on_non_standard_key is on, its default. Reference a whole unique key, or declare one on those columns.");
+        }
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex RemovedHashFunction =
+        new(@"\b(MD5|SHA1|SHA)\s*\(", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex NationalCharacterType =
+        new(@"^\s*(NVARCHAR|NCHAR|NATIONAL\s+(VARCHAR|CHAR|CHARACTER))\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+    private static readonly System.Text.RegularExpressions.Regex DeprecatedNumericForm =
+        new(@"^\s*(FLOAT|DOUBLE|REAL)\s*\(\s*\d+\s*,\s*\d+\s*\)|^\s*(FLOAT|DOUBLE|REAL|DECIMAL|NUMERIC)\b.*\bUNSIGNED\b|\bZEROFILL\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    /// <summary>
+    /// Column declarations the MySQL family accepts today but that will stop deploying, or that do something other than
+    /// the name suggests. All warnings, since each still deploys on the servers that accept it:
+    /// <list type="bullet">
+    /// <item>MySQL 9.6 removed <c>MD5()</c>, <c>SHA1()</c> and <c>SHA()</c>, so an expression that calls one fails there;</item>
+    /// <item><c>NVARCHAR</c> / <c>NCHAR</c> create a <c>utf8mb3</c> column, a character set MySQL has deprecated;</item>
+    /// <item>MySQL 8.0.17 deprecated <c>FLOAT(M,D)</c>, <c>UNSIGNED</c> on approximate and decimal types, and <c>ZEROFILL</c>.</item>
+    /// </list>
+    /// </summary>
+    private static IEnumerable<Finding> CheckMySqlFamilyColumnTypes(Table table, string tableLocation, Platform platform)
+    {
+        if (platform.GetBasePlatform() != Platform.MySQL) yield break;
+        var expressions = table.Columns.OfType<MySqlColumn>()
+            .SelectMany(c => new[] { ($"Column '{c.Name}'", c.GenerationExpression), ($"Column '{c.Name}'", c.Default) })
+            .Concat(table.CheckConstraints.Select(cc => ($"Check constraint '{cc.Name}'", cc.Expression)))
+            .Concat(table.Indexes.Select(i => ($"Index '{i.Name}'", i.IndexColumns)))
+            .Append(("Partitioning", (table as MySqlTable)?.Partitioning?.Expression));
+        if (platform == Platform.MySQL)
+            foreach (var (where, expression) in expressions.Where(e => !string.IsNullOrWhiteSpace(e.Item2) && RemovedHashFunction.IsMatch(e.Item2)))
+                yield return new Finding(Severity.Warning, RemovedFunctionCode, Category, $"{tableLocation} / {where}",
+                    $"The expression calls {RemovedHashFunction.Match(expression).Groups[1].Value.ToUpperInvariant()}(), which MySQL 9.6 removed, so it fails to deploy there. SHA2() is the supported replacement.");
+
+        foreach (var column in table.Columns)
+        {
+            var location = $"{tableLocation} / Column '{column.Name}'";
+            if (NationalCharacterType.IsMatch(column.DataType ?? ""))
+                yield return new Finding(Severity.Warning, NationalCharacterTypeCode, Category, location,
+                    $"'{column.DataType}' creates a utf8mb3 column, a character set {platform} has deprecated. Declare VARCHAR or CHAR with CharacterSet utf8mb4 instead.");
+            if (platform == Platform.MySQL && DeprecatedNumericForm.IsMatch(column.DataType ?? ""))
+                yield return new Finding(Severity.Warning, DeprecatedNumericFormCode, Category, location,
+                    $"'{column.DataType}' uses a form MySQL 8.0.17 deprecated (FLOAT(M,D), UNSIGNED on FLOAT, DOUBLE or DECIMAL, or ZEROFILL), which a later release will remove.");
+        }
     }
 
     /// <summary>
@@ -259,12 +519,224 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
+    /// An edge constraint lives on an edge table and connects node tables. The table kind is an error (SQL Server
+    /// refuses the constraint by name); a clause naming a table the package does not declare as a node is a warning,
+    /// since the deploy succeeds when the node table already exists on the target.
+    /// </summary>
+    private static IEnumerable<Finding> CheckEdgeConstraints(Table table, string tableLocation,
+        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey)
+    {
+        if (table is not SqlServerTable { EdgeConstraints.Count: > 0 } sqlTable) yield break;
+        var schema = NormalizedSchema(table);
+        foreach (var constraint in sqlTable.EdgeConstraints)
+        {
+            var location = $"{tableLocation} / EdgeConstraint '{constraint.Name}'";
+            if (!string.Equals(sqlTable.GraphType, "Edge", StringComparison.OrdinalIgnoreCase))
+            {
+                yield return new Finding(Severity.Error, EdgeConstraintTableKindCode, Category, location,
+                    $"Table '{table.Name}' declares an edge constraint but its GraphType is '{sqlTable.GraphType ?? "None"}': only an edge table (GraphType \"Edge\") can carry one.");
+                continue;
+            }
+            foreach (var clause in constraint.Clauses ?? [])
+                foreach (var name in new[] { clause.FromTable, clause.ToTable }.Where(n => !string.IsNullOrWhiteSpace(n)))
+                {
+                    var parts = SplitNames(name.Replace(".", ","));
+                    var key = (parts.Count > 1 ? IdentityKey(parts[0]) : schema, IdentityKey(parts[^1]));
+                    if (tablesByKey.TryGetValue(key, out var targets) && targets.OfType<SqlServerTable>().Any(x => string.Equals(x.GraphType, "Node", StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    var resolvedSchema = parts.Count > 1 ? NormalizeIdentifier(parts[0]) : NormalizeIdentifier((table as IDeliverableTable)?.Schema ?? "");
+                    yield return new Finding(Severity.Warning, EdgeConstraintNodeCode, Category, location,
+                        $"Clause table '{name}' is not a node table in the package (resolved '{resolvedSchema}.{NormalizeIdentifier(parts[^1])}'). The deploy succeeds only if a node table of that name already exists on the target.");
+                }
+        }
+    }
+
+    /// <summary>
+    /// A SQL Server JSON index covers one json column, which takes no second one, on a table with a clustered primary key; its
+    /// paths start at <c>$</c>, have no wildcard, and none contains another. The engine refuses each other shape at create
+    /// time, so it is reported here. An index-only template owns no columns, so the column and key checks are skipped there.
+    /// </summary>
+    private static IEnumerable<Finding> CheckJsonIndexes(Table table, string tableLocation, bool columnsAreOwnedElsewhere)
+    {
+        if (table is not SqlServerTable sqlTable || sqlTable.JsonIndexes.Count == 0) yield break;
+        if (!columnsAreOwnedElsewhere && !sqlTable.Indexes.OfType<SqlServerIndex>().Any(i => i.PrimaryKey && i.Clustered))
+            yield return new Finding(Severity.Error, JsonIndexKeyCode, Category, tableLocation,
+                $"Table '{table.Name}' declares a JSON index but no clustered primary key, which a JSON index requires.");
+        foreach (var group in sqlTable.JsonIndexes.Where(j => j.Column != null)
+                     .GroupBy(j => NormalizeIdentifier(j.Column), StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+            yield return new Finding(Severity.Error, JsonIndexSameColumnCode, Category, tableLocation,
+                $"JSON indexes {string.Join(", ", group.Select(j => $"'{j.Name}'"))} are all on column '{group.First().Column}', which takes one JSON index: declare its paths on one index.");
+        foreach (var index in sqlTable.JsonIndexes)
+        {
+            var location = $"{tableLocation} / JSON index '{index.Name}'";
+            if (!columnsAreOwnedElsewhere)
+            {
+                var column = sqlTable.Columns.FirstOrDefault(c => string.Equals(NormalizeIdentifier(c.Name), NormalizeIdentifier(index.Column), StringComparison.OrdinalIgnoreCase));
+                if (column?.DataType?.Trim().Trim('[', ']').ToUpperInvariant() != "JSON")
+                    yield return new Finding(Severity.Error, JsonIndexColumnCode, Category, location,
+                        column == null
+                            ? $"JSON index '{index.Name}' names column '{index.Column}', which the table does not declare."
+                            : $"JSON index '{index.Name}' is on column '{index.Column}', which is {column.DataType}: a JSON index needs a json column.");
+            }
+            var paths = index.Paths ?? [];
+            foreach (var path in paths.Where(p => p == null || !p.StartsWith('$') || p.Contains('*')))
+                yield return new Finding(Severity.Error, JsonIndexPathCode, Category, location,
+                    $"JSON index '{index.Name}' has path '{path}': a path starts at $ and has no wildcard.");
+            var valid = paths.Where(p => p != null && p.StartsWith('$') && !p.Contains('*')).ToList();
+            foreach (var (outer, inner) in valid.SelectMany((p, i) => valid.Skip(i + 1).Select(q => (p, q)))
+                         .Where(x => Contains(x.p, x.q) || Contains(x.q, x.p)))
+                yield return new Finding(Severity.Error, JsonIndexPathCode, Category, location,
+                    $"JSON index '{index.Name}' has paths '{outer}' and '{inner}', and one contains the other: keep the outer one.");
+        }
+
+        static bool Contains(string outer, string inner) =>
+            outer == inner || outer == "$" || inner.StartsWith(outer + ".", StringComparison.Ordinal) || inner.StartsWith(outer + "[", StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A SQL Server spatial index covers one geometry or geography column with a tessellation of the same family; a
+    /// geometry index needs a bounding box with an area and a geography index cannot have one; GRIDS belong to the GRID
+    /// schemes. The engine refuses each other shape at create time, so it is reported here. An index-only template owns
+    /// no columns, so the column checks are skipped there, as for ordinary indexes.
+    /// </summary>
+    private static IEnumerable<Finding> CheckSpatialIndexes(Table table, string tableLocation, bool columnsAreOwnedElsewhere)
+    {
+        if (table is not SqlServerTable sqlTable) yield break;
+        foreach (var index in sqlTable.SpatialIndexes)
+        {
+            var location = $"{tableLocation} / Spatial index '{index.Name}'";
+            var tessellation = index.Tessellation?.Trim().ToUpperInvariant();
+            string family = null;
+            if (!columnsAreOwnedElsewhere)
+            {
+                var column = sqlTable.Columns.FirstOrDefault(c => string.Equals(NormalizeIdentifier(c.Name), NormalizeIdentifier(index.Column), StringComparison.OrdinalIgnoreCase));
+                var type = column?.DataType?.Trim().Trim('[', ']').ToUpperInvariant();
+                if (type is not ("GEOMETRY" or "GEOGRAPHY"))
+                {
+                    yield return new Finding(Severity.Error, SpatialColumnCode, Category, location,
+                        column == null
+                            ? $"Spatial index '{index.Name}' names column '{index.Column}', which the table does not declare."
+                            : $"Spatial index '{index.Name}' is on column '{index.Column}', which is {column.DataType}: a spatial index needs a geometry or geography column.");
+                    continue;
+                }
+                family = type;
+            }
+            family ??= tessellation?.StartsWith("GEOGRAPHY") == true ? "GEOGRAPHY" : tessellation?.StartsWith("GEOMETRY") == true ? "GEOMETRY" : null;
+            if (tessellation != null && family != null && !tessellation.StartsWith(family))
+            {
+                yield return new Finding(Severity.Error, SpatialFamilyCode, Category, location,
+                    $"Spatial index '{index.Name}' uses {index.Tessellation} on a {family.ToLowerInvariant()} column: use {family}_GRID or {family}_AUTO_GRID.");
+                continue;
+            }
+            if (family == "GEOMETRY" && index.BoundingBox == null)
+                yield return new Finding(Severity.Error, SpatialBoundingBoxCode, Category, location,
+                    $"Spatial index '{index.Name}' is on a geometry column and declares no BoundingBox, which a geometry spatial index requires.");
+            else if (family == "GEOGRAPHY" && index.BoundingBox != null)
+                yield return new Finding(Severity.Error, SpatialBoundingBoxCode, Category, location,
+                    $"Spatial index '{index.Name}' is on a geography column, which takes no BoundingBox.");
+            else if (index.BoundingBox is { } box && (box.XMax <= box.XMin || box.YMax <= box.YMin))
+                yield return new Finding(Severity.Error, SpatialBoundingBoxCode, Category, location,
+                    $"Spatial index '{index.Name}' has a BoundingBox with no area: XMax must exceed XMin and YMax must exceed YMin.");
+            if (index.Grids != null && tessellation?.EndsWith("_AUTO_GRID") == true)
+                yield return new Finding(Severity.Error, SpatialGridsCode, Category, location,
+                    $"Spatial index '{index.Name}' declares Grids on {index.Tessellation}, which chooses its own: Grids apply to GEOMETRY_GRID and GEOGRAPHY_GRID.");
+        }
+    }
+
+    /// <summary>
+    /// MariaDB's explicit system-time columns follow the same pair rule as SQL Server's period columns (one RowStart, one
+    /// RowEnd, on a table with IsSystemVersioned), with MariaDB's types: TIMESTAMP(6), or BIGINT UNSIGNED for
+    /// transaction-precise history. MariaDB refuses anything else at CREATE TABLE.
+    /// </summary>
+    private static IEnumerable<Finding> CheckMariaDbPeriodColumns(Table table, string tableLocation)
+    {
+        if (table is not Schema.Domain.MariaDb.MariaDbTable mariaTable) yield break;
+        var periods = mariaTable.Columns.OfType<Schema.Domain.MariaDb.MariaDbColumn>().Where(c => PeriodRoles.Contains(c.GeneratedAlways?.Trim() ?? "")).ToList();
+        if (periods.Count == 0) yield break;
+        var byRole = periods.GroupBy(c => c.GeneratedAlways.Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+        foreach (var (role, columns) in byRole.Where(r => r.Value.Count > 1))
+            yield return new Finding(Severity.Error, PeriodRoleRepeatedCode, Category, tableLocation,
+                $"Columns {string.Join(", ", columns.Select(c => $"'{c.Name}'"))} all declare GeneratedAlways {role}: a table has one RowStart and one RowEnd.");
+        foreach (var (have, missing) in new[] { ("RowStart", "RowEnd"), ("RowEnd", "RowStart") })
+            if (byRole.TryGetValue(have, out var present) && !byRole.ContainsKey(missing))
+                yield return new Finding(Severity.Error, PeriodPairIncompleteCode, Category, tableLocation,
+                    $"Column '{present[0].Name}' declares GeneratedAlways {have} but no column declares {missing}: PERIOD FOR SYSTEM_TIME needs both.");
+        if (!mariaTable.IsSystemVersioned)
+            yield return new Finding(Severity.Error, PeriodWithoutTemporalCode, Category, tableLocation,
+                $"Table '{table.Name}' declares ROW START / ROW END columns but not IsSystemVersioned: they exist only on a system-versioned table, so set IsSystemVersioned or remove GeneratedAlways.");
+        foreach (var column in periods.Where(c => !Regex.IsMatch(c.DataType ?? "", @"^\s*(TIMESTAMP\s*\(\s*6\s*\)|BIGINT(\s*\(\s*\d+\s*\))?\s+UNSIGNED)\s*$", RegexOptions.IgnoreCase)))
+            yield return new Finding(Severity.Error, PeriodTypeCode, Category, tableLocation,
+                $"System-time column '{column.Name}' is {column.DataType}: MariaDB takes TIMESTAMP(6), or BIGINT UNSIGNED for transaction-precise history.");
+    }
+
+    private static readonly HashSet<string> PeriodRoles = new(StringComparer.OrdinalIgnoreCase) { "RowStart", "RowEnd" };
+    private static readonly HashSet<string> LedgerRoles = new(StringComparer.OrdinalIgnoreCase)
+        { "TransactionIdStart", "TransactionIdEnd", "SequenceNumberStart", "SequenceNumberEnd" };
+
+    /// <summary>
+    /// A ledger table's generated columns and view exist only on a ledger table: an append-only one has the two Start
+    /// columns and no End ones, each role is one column, and SQL Server makes them BIGINT. Every other shape fails the
+    /// CREATE TABLE, so it is stopped here.
+    /// </summary>
+    private static IEnumerable<Finding> CheckLedgerColumns(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable sqlTable) yield break;
+        var ledger = sqlTable.Ledger?.Trim();
+        var isLedger = !string.IsNullOrEmpty(ledger) && !string.Equals(ledger, "Off", StringComparison.OrdinalIgnoreCase);
+        var columns = sqlTable.Columns.OfType<SqlServerColumn>().Where(c => LedgerRoles.Contains(c.GeneratedAlways?.Trim() ?? "")).ToList();
+        if (sqlTable.LedgerView != null && !isLedger)
+            yield return new Finding(Severity.Error, LedgerViewWithoutLedgerCode, Category, tableLocation,
+                $"Table '{table.Name}' declares a LedgerView but no Ledger: a ledger view exists only beside a ledger table.");
+        if (columns.Count == 0) yield break;
+        if (!isLedger)
+        {
+            yield return new Finding(Severity.Error, LedgerColumnWithoutLedgerCode, Category, tableLocation,
+                $"Column '{columns[0].Name}' declares GeneratedAlways {columns[0].GeneratedAlways}, a ledger column, but table '{table.Name}' declares no Ledger.");
+            yield break;
+        }
+        foreach (var column in columns.Where(c => string.Equals(ledger, "AppendOnly", StringComparison.OrdinalIgnoreCase) && c.GeneratedAlways.Trim().EndsWith("End", StringComparison.OrdinalIgnoreCase)))
+            yield return new Finding(Severity.Error, LedgerEndOnAppendOnlyCode, Category, tableLocation,
+                $"Column '{column.Name}' declares GeneratedAlways {column.GeneratedAlways} on an append-only ledger table, which has no End columns: rows are never updated or deleted.");
+        foreach (var group in columns.GroupBy(c => c.GeneratedAlways.Trim(), StringComparer.OrdinalIgnoreCase).Where(g => g.Count() > 1))
+            yield return new Finding(Severity.Error, LedgerRoleRepeatedCode, Category, tableLocation,
+                $"Columns {string.Join(", ", group.Select(c => $"'{c.Name}'"))} all declare GeneratedAlways {group.Key}: a ledger table has one column of each role.");
+        foreach (var column in columns.Where(c => !Regex.IsMatch(c.DataType ?? "", @"^\s*\[?BIGINT\]?\s*$", RegexOptions.IgnoreCase)))
+            yield return new Finding(Severity.Error, LedgerColumnTypeCode, Category, tableLocation,
+                $"Ledger column '{column.Name}' is {column.DataType}: SQL Server makes a ledger table's generated columns BIGINT.");
+    }
+
+    /// <summary>
+    /// A SQL Server temporal table's period columns are a pair -- one RowStart, one RowEnd, both DATETIME2 -- on a
+    /// table with IsTemporal. The engine refuses every other shape, so the package is stopped here instead.
+    /// </summary>
+    private static IEnumerable<Finding> CheckPeriodColumns(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable sqlTable) yield break;
+        var periods = sqlTable.Columns.OfType<SqlServerColumn>().Where(c => PeriodRoles.Contains(c.GeneratedAlways?.Trim() ?? "")).ToList();
+        if (periods.Count == 0) yield break;
+
+        var byRole = periods.GroupBy(c => c.GeneratedAlways.Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.ToList(), StringComparer.OrdinalIgnoreCase);
+        foreach (var (role, columns) in byRole.Where(r => r.Value.Count > 1))
+            yield return new Finding(Severity.Error, PeriodRoleRepeatedCode, Category, tableLocation,
+                $"Columns {string.Join(", ", columns.Select(c => $"'{c.Name}'"))} all declare GeneratedAlways {role}: a table has one RowStart and one RowEnd.");
+        foreach (var (have, missing) in new[] { ("RowStart", "RowEnd"), ("RowEnd", "RowStart") })
+            if (byRole.TryGetValue(have, out var present) && !byRole.ContainsKey(missing))
+                yield return new Finding(Severity.Error, PeriodPairIncompleteCode, Category, tableLocation,
+                    $"Column '{present[0].Name}' declares GeneratedAlways {have} but no column declares {missing}: PERIOD FOR SYSTEM_TIME needs both.");
+        if (!sqlTable.IsTemporal)
+            yield return new Finding(Severity.Error, PeriodWithoutTemporalCode, Category, tableLocation,
+                $"Table '{table.Name}' declares period columns but not IsTemporal: they are created only with system versioning, so set IsTemporal or remove GeneratedAlways.");
+        foreach (var column in periods.Where(c => !Regex.IsMatch(c.DataType ?? "", @"^\s*\[?DATETIME2\]?\s*(\(\s*\d\s*\))?\s*$", RegexOptions.IgnoreCase)))
+            yield return new Finding(Severity.Error, PeriodTypeCode, Category, tableLocation,
+                $"Period column '{column.Name}' is {column.DataType}: a period column must be DATETIME2 or DATETIME2(n).");
+    }
+
+    /// <summary>
     /// BackfillExistingRows renders as ALTER TABLE ... WITH VALUES, which SQL Server rejects as a SYNTAX
     /// error when the column has no DEFAULT — so the deploy path only emits it alongside one. That guard
     /// keeps the batch runnable but makes the setting a silent no-op, which is the shape worth catching
     /// here: the author asked for existing rows to be populated and nothing would populate them.
     /// </summary>
-
     private static IEnumerable<Finding> CheckBackfill(Table table, string tableLocation)
     {
         foreach (var column in table.Columns.OfType<SqlServerColumn>()
@@ -283,18 +755,34 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// </summary>
     private static IEnumerable<Finding> CheckCharsetWithoutCollation(Table table, string tableLocation)
     {
-        if (table is not MySqlTable { Collation: { } tableCollation } || string.IsNullOrWhiteSpace(tableCollation))
+        if (table is not MySqlTable { Collation: { } tableCollation } mySqlTable || string.IsNullOrWhiteSpace(tableCollation))
             yield break;
+        var tableCharset = CharsetOfCollation(tableCollation.Trim(), mySqlTable.CharacterSet);
+        if (tableCharset == null) yield break;
 
         foreach (var column in table.Columns.OfType<MySqlColumn>()
                      .Where(c => !string.IsNullOrWhiteSpace(c.CharacterSet) && string.IsNullOrWhiteSpace(c.Collation)
-                                 && !tableCollation.Trim().StartsWith(c.CharacterSet.Trim() + "_",
-                                     StringComparison.OrdinalIgnoreCase)))
+                                 && !string.Equals(CanonicalCharset(c.CharacterSet), tableCharset, StringComparison.OrdinalIgnoreCase)))
             yield return new Finding(Severity.Warning, CharsetWithoutCollationCode, Category, tableLocation,
                 $"Column '{column.Name}' declares CharacterSet '{column.CharacterSet.Trim()}' but no Collation, so it " +
                 $"gets that character set's default collation, which depends on the engine version. Add a Collation " +
                 $"to choose one; the table's own '{tableCollation.Trim()}' belongs to a different character set.");
     }
+
+    // A collation name starts with its character set's (charset names hold no underscore), except MariaDB 11.4's short
+    // uca1400_* names, which take the table's character set -- or, where it declares none, the database default, which
+    // validation cannot see (null). The deploy resolves both forms the same way before it compares.
+    private static string CharsetOfCollation(string collation, string tableCharset)
+    {
+        if (collation.StartsWith("uca1400_", StringComparison.OrdinalIgnoreCase))
+            return string.IsNullOrWhiteSpace(tableCharset) ? null : CanonicalCharset(tableCharset);
+        var underscore = collation.IndexOf('_');
+        return CanonicalCharset(underscore > 0 ? collation[..underscore] : collation);
+    }
+
+    // utf8 is utf8mb3 under its older name.
+    private static string CanonicalCharset(string charset) =>
+        string.Equals(charset.Trim(), "utf8", StringComparison.OrdinalIgnoreCase) ? "utf8mb3" : charset.Trim();
 
     /// <summary>
     /// Error, not Warning — the distinction from SS-COL-001 is the point. A BackfillExistingRows with no
@@ -372,11 +860,71 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         var location = $"{tableLocation} / Index '{index.Name}'";
         var localColumnNames = ColumnNames(table);
+        var keyParts = SplitNames(index.IndexColumns);
+
+        // A primary key's columns cannot be NULL, so NULLS NOT DISTINCT decides nothing there and the engine never
+        // records it on one. The deploy leaves it off the key rather than re-creating the key on every run.
+        if (index is PostgreSqlIndex { NullsNotDistinct: true } && index.PrimaryKey)
+            yield return new Finding(Severity.Warning, NullsNotDistinctOnKeyCode, Category, location,
+                $"Index '{index.Name}' sets NullsNotDistinct on a primary key, whose columns cannot be NULL: the clause has no effect and is not applied.");
+
+        // A MariaDB VECTOR index covers one NOT NULL vector column (1252 otherwise), and a table takes one (1235).
+        if (table is MariaDbTable && index is MySqlIndex { IndexType: var indexType } && string.Equals(indexType?.Trim(), "VECTOR", StringComparison.OrdinalIgnoreCase))
+        {
+            var vectorColumn = keyParts.Count == 1
+                ? table.Columns.Find(c => string.Equals(NormalizeIdentifier(c.Name), NormalizeIdentifier(StripOrderingSuffix(keyParts[0])), StringComparison.OrdinalIgnoreCase))
+                : null;
+            if (vectorColumn == null || vectorColumn.Nullable
+                || !(vectorColumn.DataType ?? "").TrimStart().StartsWith("VECTOR", StringComparison.OrdinalIgnoreCase))
+                yield return new Finding(Severity.Error, VectorIndexColumnCode, Category, location,
+                    $"Index '{index.Name}' is a VECTOR index, which MariaDB builds over exactly one NOT NULL VECTOR column; IndexColumns names " +
+                    (keyParts.Count == 1 ? $"'{keyParts[0]}', which is not one." : $"{keyParts.Count} parts."));
+            var vectorIndexes = table.Indexes.Where(i => i is MySqlIndex { IndexType: var t } && string.Equals(t?.Trim(), "VECTOR", StringComparison.OrdinalIgnoreCase)).ToList();
+            if (vectorIndexes.Count > 1 && !ReferenceEquals(vectorIndexes[0], index))
+                yield return new Finding(Severity.Error, VectorIndexCountCode, Category, location,
+                    $"Index '{index.Name}' is the table's second VECTOR index, after '{vectorIndexes[0].Name}': MariaDB allows one per table.");
+        }
+
+        // A temporal key (WITHOUT OVERLAPS) is a primary key or unique key; on MariaDB its last part names one of the
+        // table's periods rather than a column, so that part is not a missing column.
+        var withoutOverlaps = index switch
+        {
+            PostgreSqlIndex p => p.WithoutOverlaps,
+            MariaDbIndex m => m.WithoutOverlaps,
+            _ => false
+        };
+        var periodNames = table is MariaDbTable mariaDb
+            ? mariaDb.Periods.Select(p => NormalizeIdentifier(p.Name)).ToHashSet(StringComparer.OrdinalIgnoreCase)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var lastPartIsPeriod = withoutOverlaps && table is MariaDbTable && keyParts.Count > 0
+                               && periodNames.Contains(NormalizeIdentifier(StripOrderingSuffix(keyParts[^1])));
+        if (withoutOverlaps)
+        {
+            var isKey = index.PrimaryKey || (table is MariaDbTable ? index.Unique || index.UniqueConstraint : index.UniqueConstraint);
+            if (!isKey)
+                yield return new Finding(Severity.Error, TemporalKeyShapeCode, Category, location,
+                    $"Index '{index.Name}' sets WithoutOverlaps but is not a primary key or unique " +
+                    (table is MariaDbTable ? "key" : "constraint") + ": WITHOUT OVERLAPS is a clause of those alone, so the key would be created without it.");
+            if (table is MariaDbTable && !lastPartIsPeriod)
+                yield return new Finding(Severity.Error, TemporalKeyPeriodCode, Category, location,
+                    $"Index '{index.Name}' sets WithoutOverlaps but its last IndexColumns part is not one of the table's Periods" +
+                    (periodNames.Count == 0 ? " (the table declares none)" : "") + ": MariaDB declares a temporal key over a period, named last.");
+        }
+
+        // A SQL Server graph table's pseudo-columns are key parts a package can name without declaring them:
+        // $node_id on a node table; $edge_id, $from_id and $to_id on an edge table.
+        var graphPseudoColumns = (table as SqlServerTable)?.GraphType switch
+        {
+            "Node" => new[] { "$node_id" },
+            "Edge" => new[] { "$edge_id", "$from_id", "$to_id" },
+            _ => Array.Empty<string>()
+        };
 
         var hasPrefixKeyParts = table is MySqlTable;
-        foreach (var column in SplitNames(index.IndexColumns).Select(StripOrderingSuffix)
+        foreach (var column in keyParts.Take(lastPartIsPeriod ? keyParts.Count - 1 : keyParts.Count).Select(StripOrderingSuffix)
                      .Select(column => hasPrefixKeyParts ? StripPrefixLength(column) : column)
                      .Where(column => !IsExpressionKeyPart(column))
+                     .Where(column => !graphPseudoColumns.Contains(NormalizeIdentifier(column), StringComparer.OrdinalIgnoreCase))
                      .Where(column => !localColumnNames.Contains(NormalizeIdentifier(column))))
             yield return new Finding(Severity.Error, IndexColumnCode, Category, location,
                 $"Index column '{column}' referenced in IndexColumns does not exist on table '{table.Name}'.");
@@ -405,12 +953,13 @@ public sealed class CoherenceCheck : ISchemaCheck
             _ => Platform.SqlServer
         };
         var (prefixSchema, unqualified) = Identifier.SplitQualifiedName(fk.RelatedTable ?? "", platform);
-        var name = IdentityKey(unqualified);
+        var exact = ComparesExactly(owningTable);
+        var name = IdentityKey(unqualified, exact);
 
         var schema = hasExplicitSchemaProperty ? relatedTableSchema
             : prefixSchema ?? NormalizedSchema(owningTable);
 
-        return (IdentityKey(schema), name);
+        return (IdentityKey(schema, exact), name);
     }
 
     // IDeliverableTable.Schema is resolved uniformly across platforms (SchemaDefaultResolver
@@ -422,17 +971,24 @@ public sealed class CoherenceCheck : ISchemaCheck
     // strings therefore made every such FK unresolvable, which is the ordinary hand-authored shape: two
     // shipped demos reported SS-FK-002 against a table sitting in the same template. Packages that spell
     // RelatedTableSchema out explicitly matched by luck, because then both sides carry the brackets.
-    private static string IdentityKey(string identifier) =>
-        NormalizeIdentifier(identifier).ToLowerInvariant();
+    // PostgreSQL compares exactly: SchemaSmith deploys every PostgreSQL name quoted, so `Customer` and `customer` are
+    // two tables there, and a key to the wrong spelling fails the deploy with 42P01.
+    private static string IdentityKey(string identifier, bool exact = false) =>
+        exact ? NormalizeIdentifier(identifier) : NormalizeIdentifier(identifier).ToLowerInvariant();
+
+    private static bool ComparesExactly(Table table) => table is PostgreSqlTable;
+
+    private static StringComparer NameComparer(Table table) =>
+        ComparesExactly(table) ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
 
     private static (string Schema, string Name) TableKey(Table table) =>
-        (NormalizedSchema(table), IdentityKey(table.Name));
+        (NormalizedSchema(table), IdentityKey(table.Name, ComparesExactly(table)));
 
     private static string NormalizedSchema(Table table) =>
-        IdentityKey((table as IDeliverableTable)?.Schema ?? "");
+        IdentityKey((table as IDeliverableTable)?.Schema ?? "", ComparesExactly(table));
 
     private static HashSet<string> ColumnNames(Table table) =>
-        new(table.Columns.Select(c => NormalizeIdentifier(c.Name ?? "")), StringComparer.OrdinalIgnoreCase);
+        new(table.Columns.Select(c => NormalizeIdentifier(c.Name ?? "")), NameComparer(table));
 
     // Mirrors SchemaSmith_StripBacktickWrapping.sql (source of truth for the backtick case — keep in
     // sync), generalized to the other two engines' wrapping so a hand-authored/hand-edited package
@@ -440,10 +996,10 @@ public sealed class CoherenceCheck : ISchemaCheck
     // [bracket] (SQL Server), "double-quote" (PostgreSQL). Strips only a matched pair around the
     // WHOLE identifier — a lone/unbalanced quote character is left untouched, and interior content is
     // never touched (in particular, no expression key part reaches here — those are filtered out
-    // before comparison). Comparison is OrdinalIgnoreCase everywhere in this class, so an unwrapped
-    // PostgreSQL identifier (folds to lower case) and a "quoted" one (case-sensitive) are compared
-    // case-insensitively too — a deliberate slight loosening: the failure mode this check should have
-    // is a missed nit, never a false error on a valid package.
+    // before comparison). Names compare case-insensitively except on PostgreSQL (see IdentityKey).
+    private static string NormalizeAction(string action) =>
+        System.Text.RegularExpressions.Regex.Replace((action ?? "").Trim(), @"\s+", " ").ToUpperInvariant();
+
     private static string NormalizeIdentifier(string identifier)
     {
         var trimmed = (identifier ?? "").Trim();
@@ -455,7 +1011,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         if (trimmed[0] == '[' && trimmed[^1] == ']')
             return trimmed[1..^1];
         if (trimmed[0] == '"' && trimmed[^1] == '"')
-            return trimmed[1..^1];
+            return trimmed[1..^1].Replace("\"\"", "\"");
 
         return trimmed;
     }
@@ -506,28 +1062,8 @@ public sealed class CoherenceCheck : ISchemaCheck
         return result;
     }
 
-    /// <summary>
-    /// A <c>"</c> in a PostgreSQL object name is refused, because no stored form of such a name deploys.
-    /// <para>
-    /// The quench re-wraps a stored name as <c>'"' || Name || '"'</c> without escaping, so a bare
-    /// <c>a"b</c> emits <c>"a"b"</c> — invalid DDL — while the escaped form <c>a""b</c> would emit
-    /// correctly but is never what extraction writes, since extraction writes the RAW catalog name. The
-    /// two directions disagree, so no consumer can be correct by construction, and the failure lands at
-    /// deploy time as a syntax error that names nothing useful.
-    /// </para>
-    /// <para>
-    /// Refusing here is deliberately the 2.7.0 answer rather than escaping the ~101 emission sites: it
-    /// states the limit, fails at lint time with something actionable, and cannot break a working package
-    /// because such a package has never deployed. Supporting the name properly is 2.8.0 work — see the
-    /// roadmap entry — and when it lands this check is what gets deleted.
-    /// </para>
-    /// </summary>
-    private static IEnumerable<Finding> CheckPostgreSqlQuotedIdentifier(Table table, string tableLocation)
-    {
-        if (table is not PostgreSqlTable pgTable) return [];
-        return QuotedIdentifierFindings(NamedParts(pgTable), tableLocation)
-            .Concat(IdentifierLengthFindings(NamedParts(pgTable), tableLocation));
-    }
+    private static IEnumerable<Finding> CheckPostgreSqlIdentifierLength(Table table, string tableLocation) =>
+        table is PostgreSqlTable pgTable ? IdentifierLengthFindings(NamedParts(pgTable), tableLocation) : [];
 
     /// <summary>
     /// PostgreSQL truncates an identifier longer than 63 bytes, with only a NOTICE. The object is created under the
@@ -550,40 +1086,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
-    /// The modeled-object populations — materialized views, enum types, sequences, domain types — which
-    /// reach the identical unescaped re-wrap as a table's own names and were outside the check's original
-    /// table-only population.
-    /// <para>Not platform-gated, because these four collections are typed to PostgreSQL-only classes: a
-    /// non-PostgreSQL package cannot populate them at all, so there is no cross-engine false error to
-    /// guard against the way there is for a table.</para>
-    /// </summary>
-    private static IEnumerable<Finding> CheckPostgreSqlQuotedIdentifierOnModeledObjects(Template template) =>
-        QuotedIdentifierFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'");
-
-    private static IEnumerable<Finding> QuotedIdentifierFindings(
-        IEnumerable<(string Kind, string Name)> parts,
-        string location)
-    {
-        foreach (var (kind, name) in parts)
-        {
-            if (string.IsNullOrEmpty(name) || !name.Contains('"')) continue;
-            // "{kind} '{name}'" rather than "{kind} name '{name}'": several kinds already end in the noun
-            // (Table OldName, ReplicaIdentityIndex), and appending "name" to those read as "Table OldName
-            // name 'old'".
-            yield return new Finding(Severity.Error, QuotedIdentifierCode, Category, location,
-                $"{kind} '{name}' contains a double-quote character, which PostgreSQL allows but " +
-                "SchemaSmith cannot deploy: the name is re-wrapped in double quotes without escaping, so " +
-                "every stored form of it produces invalid DDL. Rename the object to remove the quote.");
-        }
-    }
-
-    /// <summary>
-    /// Every name on a table that reaches PostgreSQL DDL as a wrapped identifier.
-    /// <para>Each kind here was read at its emission site in the shipped quench scripts and carries the
-    /// stored value between bare double quotes with no doubling. A name wrapped by <c>QUOTE_IDENT</c>
-    /// escapes correctly and so is deliberately ABSENT — a policy name is the case that looks like an
-    /// omission and is not one. Column <em>lists</em> are also out: they route through
-    /// <c>QuoteColumnList</c>/<c>QuoteIndexColumnList</c>, and <c>SchemaRef</c> is read by no script.</para>
+    /// Every name on a table that reaches PostgreSQL DDL as an identifier, for the 63-byte limit (SS-IDENT-002). Column
+    /// <em>lists</em> are out (their items are checked as the columns they name), and <c>SchemaRef</c> is read by no script.
     /// </summary>
     private static IEnumerable<(string Kind, string Name)> NamedParts(PostgreSqlTable table)
     {
@@ -643,6 +1147,9 @@ public sealed class CoherenceCheck : ISchemaCheck
             if (!string.IsNullOrEmpty(sequence.Schema)) yield return ("Sequence schema", sequence.Schema);
         }
 
+        foreach (var sequence in template.MariaDbSequences)
+            yield return ("Sequence", sequence.Name);
+
         foreach (var domain in template.DomainTypes)
         {
             yield return ("Domain type", domain.Name);
@@ -686,7 +1193,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         }
 
         var named = table.Indexes.FirstOrDefault(i =>
-            string.Equals(i.Name, indexName, StringComparison.OrdinalIgnoreCase));
+            string.Equals(NormalizeIdentifier(i.Name), NormalizeIdentifier(indexName), StringComparison.Ordinal));
 
         if (named == null)
         {
@@ -755,6 +1262,41 @@ public sealed class CoherenceCheck : ISchemaCheck
                 $"Table '{table.Name}' names CdcIndexName '{ssTable.CdcIndexName}', {problem}. CDC identifies rows by a " +
                 "unique index over NOT NULL columns, and the deploy refuses anything else — name one of the table's " +
                 "declared unique indexes, or drop CdcIndexName to use the primary key.");
+    }
+
+    /// <summary>
+    /// SQL Server builds a full-text index only over its KEY INDEX: an unfiltered unique index on a single NOT NULL column. Anything
+    /// else fails the deploy when it creates the full-text index; checked against the declared indexes, as CdcIndexName is.
+    /// </summary>
+    private static IEnumerable<Finding> CheckFullTextKeyIndex(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable ssTable) yield break;
+
+        foreach (var fullText in ssTable.FullTextIndex.Where(f => !string.IsNullOrWhiteSpace(f.KeyIndex)))
+        {
+            var keyIndex = NormalizeIdentifier(fullText.KeyIndex);
+            var problem = FullTextKeyIndexProblem(table, keyIndex);
+            if (problem != null)
+                yield return new Finding(Severity.Error, FullTextKeyIndexInvalidCode, Category, tableLocation,
+                    $"Table '{table.Name}' names full-text KeyIndex '{fullText.KeyIndex}', {problem}. SQL Server builds a " +
+                    "full-text index only over an unfiltered unique index on a single NOT NULL column (error 7653), so the deploy fails creating it " +
+                    "— name one of the table's declared indexes that is.");
+        }
+    }
+
+    private static string FullTextKeyIndexProblem(Table table, string indexName)
+    {
+        var index = table.Indexes.FirstOrDefault(i =>
+            string.Equals(NormalizeIdentifier(i.Name), indexName, StringComparison.OrdinalIgnoreCase));
+        if (index == null) return "which is not one of its declared indexes";
+        if (!index.Unique && !index.PrimaryKey && !index.UniqueConstraint) return "which is not unique";
+
+        var keyColumns = SplitNames(index.IndexColumns).Select(c => NormalizeIdentifier(StripOrderingSuffix(c))).ToList();
+        if (keyColumns.Count > 1) return "which has more than one key column";
+        if (index is SqlServerIndex { FilterExpression: { } filter } && !string.IsNullOrWhiteSpace(filter)) return "which has a filter";
+        return table.Columns.Any(c => c.Nullable && keyColumns.Contains(NormalizeIdentifier(c.Name), StringComparer.OrdinalIgnoreCase))
+            ? "which has a nullable key column"
+            : null;
     }
 
     private static string CdcIndexProblem(Table table, string indexName)
@@ -904,7 +1446,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// SS-PART-003 RANGE/LIST with no named Partitions (they need per-partition boundaries), and SS-PART-004
     /// a HASH/KEY partition carrying a VALUES boundary (HASH/KEY assign by hashing and have none).
     /// </summary>
-    private static IEnumerable<Finding> CheckMyPartitioning(Table table, string tableLocation)
+    private static IEnumerable<Finding> CheckMyPartitioning(Table table, string tableLocation, Product product)
     {
         if (table is not MySqlTable mySqlTable) yield break;
         var p = mySqlTable.Partitioning;
@@ -928,6 +1470,99 @@ public sealed class CoherenceCheck : ISchemaCheck
                     $"Table '{table.Name}' partitions by {method} but partition '{part.Name}' declares a " +
                     "Values boundary. HASH/KEY assign rows by hashing and have no boundary — drop the Values, " +
                     "or use RANGE/LIST if you meant to define boundaries.");
+
+        foreach (var finding in CheckMyPartitionKeys(mySqlTable, method, p.Expression, tableLocation))
+            yield return finding;
+
+        if (method == "SYSTEM_TIME")
+        {
+            // The engine refuses it on a table that is not system-versioned (4124), and MySQL has no system versioning.
+            if (mySqlTable is not Schema.Domain.MariaDb.MariaDbTable { IsSystemVersioned: true })
+                yield return new Finding(Severity.Error, SystemTimePartitioningCode, Category, tableLocation,
+                    $"Table '{table.Name}' partitions by SYSTEM_TIME, which partitions a system-versioned table's history: " +
+                    "it needs a MariaDB table with IsSystemVersioned true.");
+        }
+        else if (string.IsNullOrWhiteSpace(p.Expression))
+            yield return new Finding(Severity.Error, PartitionExpressionMissingCode, Category, tableLocation,
+                $"Table '{table.Name}' partitions by {method} but declares no Expression: every method but SYSTEM_TIME " +
+                "partitions on an expression or a column list.");
+
+        // Both engines refuse PARTITIONS n beside a list of a different length (1064).
+        if (p.PartitionCount is { } count && hasNamedPartitions && count != p.Partitions.Count)
+            yield return new Finding(Severity.Error, PartitionCountMismatchCode, Category, tableLocation,
+                $"Table '{table.Name}' declares PartitionCount {count} and names {p.Partitions.Count} partition(s): " +
+                "the engine refuses the table. Drop PartitionCount, or name that many partitions.");
+
+        // MySQL refuses to rename a column a partitioning expression uses (3855, from 8.0.17); MariaDB renames it.
+        if (product.Platform == Platform.MySQL)
+        {
+            var severity = VersionHelper.ParseDeclaredVersion(product.MinimumVersion, product.Platform) is < 800
+                ? Severity.Warning : Severity.Error;
+            var expressions = $"{p.Expression} {p.Subpartitioning?.Expression}";
+            foreach (var column in table.Columns.Where(c => !string.IsNullOrWhiteSpace(c.OldName)))
+            {
+                var oldName = NormalizeIdentifier(column.OldName);
+                if (!System.Text.RegularExpressions.Regex.IsMatch(expressions,
+                        $@"(?<![\w$])`?{System.Text.RegularExpressions.Regex.Escape(oldName)}`?(?![\w$])",
+                        System.Text.RegularExpressions.RegexOptions.IgnoreCase, TimeSpan.FromSeconds(1))) continue;
+                yield return new Finding(severity, PartitionColumnRenamedCode, Category, tableLocation,
+                    $"Column '{column.Name}' of table '{table.Name}' is renamed from '{oldName}', which the table's partitioning " +
+                    "uses: MySQL refuses to rename a partitioning column from 8.0.17 (3855). Rename it by hand after " +
+                    "removing the partitioning, or keep the name.");
+            }
+        }
+    }
+
+    // InnoDB has no foreign keys on a partitioned table, on either side: MySQL refuses both with 1506, MariaDB the child
+    // with 1506 and the parent with errno 150.
+    private static IEnumerable<Finding> CheckPartitionedForeignKeys(Table table, string tableLocation,
+        IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey)
+    {
+        if (table is not MySqlTable mySqlTable) yield break;
+        if (!string.IsNullOrWhiteSpace(mySqlTable.Partitioning?.Method))
+            foreach (var fk in table.ForeignKeys)
+                yield return new Finding(Severity.Error, PartitionedForeignKeyCode, Category, $"{tableLocation} / FK '{fk.Name}'",
+                    $"Table '{table.Name}' is partitioned and declares foreign key '{fk.Name}': InnoDB has no foreign keys on " +
+                    "a partitioned table, so the engine refuses it.");
+        foreach (var fk in table.ForeignKeys)
+        {
+            if (!tablesByKey.TryGetValue(ResolveRelatedTarget(table, fk), out var related)) continue;
+            if (related.OfType<MySqlTable>().Any(r => !ReferenceEquals(r, table) && !string.IsNullOrWhiteSpace(r.Partitioning?.Method)))
+                yield return new Finding(Severity.Error, PartitionedForeignKeyCode, Category, $"{tableLocation} / FK '{fk.Name}'",
+                    $"Foreign key '{fk.Name}' references '{fk.RelatedTable}', which is partitioned: InnoDB has no foreign keys " +
+                    "to a partitioned table, so the engine refuses it.");
+        }
+    }
+
+    // Every primary and unique key must hold each partitioning column whole (1503 on every MySQL and MariaDB version);
+    // a prefix key part does not count. Checked where the method names columns: KEY (an empty list means the primary
+    // key's) and the COLUMNS forms. An expression method's columns are not parsed.
+    private static IEnumerable<Finding> CheckMyPartitionKeys(MySqlTable table, string method, string expression, string tableLocation)
+    {
+        var keys = table.Indexes.Where(i => i.PrimaryKey || i.Unique || i.UniqueConstraint).ToList();
+        List<string> columns;
+        if (method is "KEY" or "LINEAR KEY")
+        {
+            columns = SplitNames(expression).Select(NormalizeIdentifier).ToList();
+            if (columns.Count == 0)
+                columns = keys.Where(i => i.PrimaryKey).SelectMany(i => SplitNames(i.IndexColumns))
+                    .Select(part => NormalizeIdentifier(StripOrderingSuffix(part).Trim().Split('(')[0])).ToList();
+        }
+        else if (method is "RANGE COLUMNS" or "LIST COLUMNS")
+            columns = SplitNames(expression).Select(NormalizeIdentifier).ToList();
+        else
+            yield break;
+
+        foreach (var key in keys)
+        {
+            var whole = SplitNames(key.IndexColumns).Select(part => NormalizeIdentifier(StripOrderingSuffix(part).Trim()))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            foreach (var column in columns.Where(c => c.Length > 0 && !whole.Contains(c)))
+                yield return new Finding(Severity.Error, MyPartitionKeyMissesColumnCode, Category, tableLocation,
+                    $"Table '{table.Name}' partitions by {method} on '{column}', which key '{key.Name}' does not hold whole " +
+                    "(a prefix part does not count). Every primary and unique key must include every partitioning column, " +
+                    "or the engine refuses the table — add the column to the key, or partition on columns the keys hold.");
+        }
     }
 
     /// <summary>
@@ -997,7 +1632,7 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         foreach (var finding in CoexistenceFindings(
                      template, "Sequences", DuplicateSequenceCode, "Sequence",
-                     template.Sequences.Select(s => (s.Schema, s.Name)),
+                     template.Sequences.Select(s => (s.Schema, s.Name)).Concat(template.MariaDbSequences.Select(s => ((string)null, s.Name))),
                      "Two authoring paths for one object leave it ambiguous which one is in charge"))
             yield return finding;
     }

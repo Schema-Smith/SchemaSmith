@@ -44,6 +44,11 @@ BEGIN
               THEN  '(' + CONVERT(NVARCHAR(20), @p_DateTimePrecision) + ')'
               WHEN @type = 'XML' AND @p_XmlSchemaCollection IS NOT NULL
               THEN  '(' + @p_XmlSchemaCollection + ')'
+              -- VECTOR(n[, float16]) (2025): the catalog stores the byte length, 8 + n * 4 for float32 and 8 + n * 2
+              -- for float16, and marks float16 with scale 1. INFORMATION_SCHEMA reports no scale for the type, so the
+              -- callers pass sys.columns.scale in its place.
+              WHEN @type = 'VECTOR'
+              THEN  '(' + CONVERT(NVARCHAR(20), (@p_CharacterMaxLength - 8) / CASE WHEN @p_NumericScale = 1 THEN 2 ELSE 4 END) + CASE WHEN @p_NumericScale = 1 THEN ', float16' ELSE '' END + ')'
               WHEN @type = 'UNIQUEIDENTIFIER' AND @p_IsRowGuidCol = 1
               THEN  ' ROWGUIDCOL'
               ELSE '' END

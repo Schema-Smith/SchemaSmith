@@ -288,4 +288,38 @@ public abstract class BootstrapOldNameRenameSharedTests
         var ex = Assert.Catch<Exception>(() => CallBootstrap(TableRenameJson(TableName, oldTableName: OldTableName)));
         Assert.That(ex!.Message + ex.InnerException?.Message, Does.Contain("already exist"));
     }
+
+    // Column names are case-insensitive on every setting, so an OldName that differs from Name only in case names
+    // the same column. Read as two names, both "existed" and the rename was refused as a clash.
+    [Test]
+    public void ColumnRename_CaseOnlyOldName_RespellsTheColumnAndDataSurvives()
+    {
+        Exec($"CREATE TABLE `{TableName}` (`Id` INT AUTO_INCREMENT PRIMARY KEY, `value` VARCHAR(50) NOT NULL DEFAULT '0') ENGINE=InnoDB");
+        Exec($"INSERT INTO `{TableName}` (`value`) VALUES ('distinguishing-value')");
+
+        CallBootstrap(ColumnRenameJson(TableName, newColOldName: "value"));
+        Assert.DoesNotThrow(() => CallBootstrap(ColumnRenameJson(TableName, newColOldName: "value")),
+            "the second run finds the column already spelled as declared");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ScalarStr($@"SELECT column_name FROM information_schema.columns
+                   WHERE table_schema = '{MainDb}' AND table_name = '{TableName}' AND column_name <> 'Id'"), Is.EqualTo("Value"),
+                "the column must carry the declared spelling");
+            Assert.That(ScalarStr($"SELECT `Value` FROM `{TableName}` WHERE `Id` = 1"), Is.EqualTo("distinguishing-value"));
+        });
+    }
+
+    // With lower_case_table_names 1 or 2 a case-only table OldName names the table itself. On 0 it names a table that
+    // does not exist, so this guards the folding settings; CI runs 0.
+    [Test]
+    public void TableRename_CaseOnlyOldName_IsNotAClash()
+    {
+        Exec($"CREATE TABLE `{TableName}` (`Id` INT AUTO_INCREMENT PRIMARY KEY, `Value` VARCHAR(50) NOT NULL DEFAULT '0') ENGINE=InnoDB");
+        Exec($"INSERT INTO `{TableName}` (`Value`) VALUES ('distinguishing-value')");
+
+        Assert.DoesNotThrow(() => CallBootstrap(TableRenameJson(TableName, oldTableName: TableName.ToUpperInvariant())));
+
+        Assert.That(ScalarStr($"SELECT `Value` FROM `{TableName}` WHERE `Id` = 1"), Is.EqualTo("distinguishing-value"));
+    }
 }

@@ -17,6 +17,12 @@ namespace Schema.Domain.MySQL
         [JsonProperty(Order = 3)]
         public string Parser { get; set; }
 
+        [SchemaProperty(Description = "Optional. The index's COMMENT. An omitted value clears a comment the server has, as the engine's own DDL does.")]
+        [JsonProperty(Order = 4, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
+        // TRANSITIONAL (Comment is the pre-2.8 spelling of Description on MySQL and MariaDB; roadmap WS-13 tracks its removal)
+        [SchemaProperty(Deprecated = true, Description = "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002).")]
         [JsonProperty(Order = 4)]
         public string Comment { get; set; }
 

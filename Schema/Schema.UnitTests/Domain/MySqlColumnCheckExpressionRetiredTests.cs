@@ -77,14 +77,22 @@ public class MySqlColumnCheckExpressionRetiredTests
         ]
     }";
 
-    [TestCase(Platform.MySQL)]
-    [TestCase(Platform.MariaDb)]
-    public void AColumnStillDeclaringCheckExpression_FailsTheLoad_NamingThePropertyAndTheFile(Platform platform)
+    [Test]
+    public void AColumnStillDeclaringCheckExpression_FailsTheLoad_NamingThePropertyAndTheFile()
     {
-        var ex = Assert.Catch<Exception>(() => LoadWith(platform, ColumnLevelCheck));
+        var ex = Assert.Catch<Exception>(() => LoadWith(Platform.MySQL, ColumnLevelCheck));
 
         Assert.That(ex!.Message, Does.Contain("CheckExpression"), "the message must name the retired property: " + ex.Message);
         Assert.That(ex.Message, Does.Contain("Orders.json"), "and the file that carries it: " + ex.Message);
+    }
+
+    // MariaDB has a column-level check of its own (named after the column, level Column), so the key is back there in
+    // 2.8 and loads; MySQL, whose catalog cannot tie a check to a column, keeps the retirement.
+    [Test]
+    public void OnMariaDb_TheColumnLevelCheck_Loads()
+    {
+        var table = LoadWith(Platform.MariaDb, ColumnLevelCheck);
+        Assert.That(((Schema.Domain.MariaDb.MariaDbColumn)table.Tables.Single().Columns.Single()).CheckExpression, Is.EqualTo("`Status` >= 0"));
     }
 
     [TestCase(Platform.MySQL)]

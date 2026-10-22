@@ -44,6 +44,7 @@ DECLARE
   v_TableRaw TEXT;
   v_Qualified TEXT;
   v_ObjectName TEXT;
+  v_PreserveSql TEXT;
   v_Oid OID;
   v_BlockedReason TEXT;
   v_ShadowRaw TEXT;
@@ -217,7 +218,7 @@ BEGIN
   -- The insert list and the select list are ONE string by construction: same columns, same order, so they
   -- cannot drift apart into a positional mismatch that would write data into the wrong column.
   ----------------------------------------------------------------------------------------------------
-  SELECT STRING_AGG(quote_ident(c."Name") || ' ' || c."DataType" ||
+  SELECT STRING_AGG(quote_ident(c."Name") || ' ' || CASE WHEN c."IsSerial" THEN c."SerialKeyword" ELSE c."DataType" END ||
            "SchemaSmith"."CollateClause"(c."Collation") ||
            CASE WHEN UPPER(COALESCE(c."Generated", 'NEVER')) LIKE 'GENERATED%IDENTITY%' THEN ' ' || c."Generated" ELSE '' END ||
            CASE WHEN COALESCE(c."Generated", 'NEVER') = 'ALWAYS' AND COALESCE(c."GenerationExpression", '') <> ''
@@ -226,6 +227,7 @@ BEGIN
            CASE WHEN c."Nullable" THEN '' ELSE ' NOT NULL' END ||
            CASE WHEN UPPER(COALESCE(c."Generated", 'NEVER')) NOT LIKE 'GENERATED%IDENTITY%'
                  AND NOT (COALESCE(c."Generated", 'NEVER') = 'ALWAYS' AND COALESCE(c."GenerationExpression", '') <> '')
+                 AND NOT c."IsSerial"
                  AND COALESCE(c."Default", '') <> ''
                 THEN ' DEFAULT ' || c."Default" ELSE '' END,
          ', ' ORDER BY c."_RowId")
@@ -322,8 +324,7 @@ BEGIN
         -- sequence whose column the package no longer declares as identity/serial simply dies with the old
         -- table, and there is nothing on the new one to restore it to.
         AND (UPPER(COALESCE(c."Generated", 'NEVER')) LIKE 'GENERATED%IDENTITY%'
-             OR UPPER(TRIM(COALESCE(c."DataType", ''))) LIKE 'SERIAL%'
-             OR UPPER(TRIM(COALESCE(c."DataType", ''))) IN ('BIGSERIAL', 'SMALLSERIAL'))
+             OR c."IsSerial")
       ORDER BY c."_RowId"
   LOOP
     v_SeqText := pg_get_serial_sequence(v_Qualified, v_Col."ColumnName");
@@ -424,6 +425,10 @@ BEGIN
   -- name with its rows and its inbound keys.
   v_DropOldSql := 'DROP TABLE ' || v_OldQualified || ';' || COALESCE(CHR(10) || v_SeqRenameSql, '');
 
+  -- What the swap strips: the ACL, owner and comments sit on the relation, and the one renamed out is the one that
+  -- has them. Captured now, put back on the replacement after the swap.
+  v_PreserveSql := "SchemaSmith"."CapturePermissions"(v_SchemaRaw, v_TableRaw, 'TABLE');
+
   ----------------------------------------------------------------------------------------------------
   -- 7. WHATIF -- print, execute nothing.
   ----------------------------------------------------------------------------------------------------
@@ -436,6 +441,7 @@ BEGIN
     CALL "SchemaSmith"."ExecuteOrDebug"(v_SeqRestoreSql, TRUE);
     CALL "SchemaSmith"."ExecuteOrDebug"(v_SwapSql, TRUE);
     CALL "SchemaSmith"."ExecuteOrDebug"(v_DropOldSql, TRUE);
+    CALL "SchemaSmith"."ReapplyPermissions"(v_PreserveSql, 'table', v_ObjectName, TRUE);
 
     INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
       VALUES (pg_backend_pid(), 'table', v_ObjectName, 'wouldRebuild');
@@ -483,6 +489,7 @@ BEGIN
   CALL "SchemaSmith"."ExecuteOrDebug"(v_SeqRestoreSql, FALSE);
   CALL "SchemaSmith"."ExecuteOrDebug"(v_SwapSql, FALSE);
   CALL "SchemaSmith"."ExecuteOrDebug"(v_DropOldSql, FALSE);
+  CALL "SchemaSmith"."ReapplyPermissions"(v_PreserveSql, 'table', v_ObjectName, FALSE);
 
   INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
     VALUES (pg_backend_pid(), 'table', v_ObjectName, 'rebuilt');

@@ -197,14 +197,16 @@ BEGIN
         SELECT CONNECTION_ID(), CONCAT(
                       'CREATE ',
                       CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL '
+                           WHEN UPPER(i.IndexType) = 'VECTOR' THEN 'VECTOR '
                            WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE '
                            ELSE '' END,
                       'INDEX ', i.IndexName,
                       ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
-                      ' (', i.IndexColumns, ')',
+                      ' (', i.EmitColumns, ')',
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
+                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
                       CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
                            THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
                            ELSE '' END)
@@ -245,11 +247,15 @@ BEGIN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing indexes');
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateIdxStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_CreateIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT, IsSwap TINYINT)
+        -- Versioned: 1 for a system-versioned table created in this run (its index work runs under KEEP, which has no
+        -- history to protect there), 2 for an existing one (KEEP only if the environment asks; a refusal names it).
+        CREATE TEMPORARY TABLE _SchemaSmith_CreateIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT, IsSwap TINYINT,
+                                                            TableKey VARCHAR(260) COLLATE utf8mb4_bin, Versioned TINYINT NOT NULL DEFAULT 0,
+                                                            OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF')
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         -- Detection reads the post-drop snapshot _SchemaSmith_IdxExistPostDrop (taken after ModifiedTableQuench's
         -- modified-index drops) so a just-dropped modified index is correctly seen as missing here and recreated.
-        INSERT INTO _SchemaSmith_CreateIdxStmts (LogMsg, Stmt, AuditName, IsSwap)
+        INSERT INTO _SchemaSmith_CreateIdxStmts (LogMsg, Stmt, AuditName, IsSwap, TableKey)
         SELECT
             CONCAT('  Create index: ', SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName),
                 CASE WHEN COALESCE(i.VariantName, '') <> '' THEN CONCAT(' (variant: ', i.VariantName, ')') ELSE '' END),
@@ -259,22 +265,25 @@ BEGIN
                                  ' DROP INDEX ', i.IndexName, ', ADD ')
                      ELSE 'CREATE ' END,
                 CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL '
+                     WHEN UPPER(i.IndexType) = 'VECTOR' THEN 'VECTOR '
                      WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE '
                      ELSE '' END,
                 'INDEX ', i.IndexName,
                 CASE WHEN d.IndexName IS NOT NULL THEN ''
                      ELSE CONCAT(' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName) END,
-                ' (', i.IndexColumns, ')',
+                ' (', i.EmitColumns, ')',
                 CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                      WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                      ELSE '' END,
+                CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
                 CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
                      THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
                      ELSE '' END,
                 CASE WHEN i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1 THEN SchemaSmith_IndexInvisibleClause() ELSE '' END
             ),
             CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)),
-            d.IndexName IS NOT NULL
+            d.IndexName IS NOT NULL,
+            i.TableKey
         FROM _SchemaSmith_Indexes i
         LEFT JOIN _SchemaSmith_DeferredIndexSwaps d
                ON d.TableName = CONVERT(SchemaSmith_StripBacktickWrapping(i.TableName) USING utf8mb4) COLLATE utf8mb4_bin
@@ -292,18 +301,52 @@ BEGIN
           )
           AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
 
+        -- A statement of its own: MySQL cannot open a temporary table twice in one statement, and the insert above
+        -- already reads _SchemaSmith_Tables for the engine.
+        -- OnlineApply: each table's mode, so a new index is built ALGORITHM=INPLACE, LOCK=NONE where the engine can.
+        CALL SchemaSmith_StageOnlineApply();
+        UPDATE _SchemaSmith_CreateIdxStmts s
+          JOIN _SchemaSmith_Tables t ON t.TableKey = s.TableKey
+           SET s.Versioned = CASE WHEN t.IsSystemVersioned = 1 AND t.NewTable = 1 THEN 1
+                                  WHEN t.IsSystemVersioned = 1 THEN 2 ELSE 0 END,
+               s.OnlineMode = t.OnlineMode;
+
         SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts);
         WHILE @ss_id IS NOT NULL DO
-            SELECT LogMsg, Stmt, AuditName, IsSwap INTO @ss_log, @exec_sql, @ss_auditname, @ss_swap FROM _SchemaSmith_CreateIdxStmts WHERE RowId = @ss_id;
+            SELECT LogMsg, Stmt, AuditName, IsSwap, Versioned, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_swap, @ss_versioned, @ss_online_mode
+              FROM _SchemaSmith_CreateIdxStmts WHERE RowId = @ss_id;
+            SET @ss_online_form = NULL;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
             PREPARE stmt FROM @exec_sql;
             SET @ss_fk_needs_index := 0;
+            IF @ss_versioned = 1 THEN CALL SchemaSmith_KeepHistoryForNewVersionedTable(1); END IF;
             BEGIN
                 -- Only a swap can raise this: its new definition no longer serves the key. The index is kept as it is,
                 -- and a later deploy changes it once the key no longer needs it.
                 DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
-                EXECUTE stmt;
+                -- MariaDB's 4119 on an existing versioned table names the engine variable; the deploy's own setting is
+                -- what the operator changes, so the refusal says that instead. Everything else is passed on unchanged.
+                DECLARE EXIT HANDLER FOR SQLEXCEPTION
+                BEGIN
+                    GET DIAGNOSTICS CONDITION 1 @ss_errno = MYSQL_ERRNO;
+                    IF @ss_versioned = 1 THEN CALL SchemaSmith_KeepHistoryForNewVersionedTable(0); END IF;
+                    IF @ss_errno = 4119 THEN
+                        SET @ss_errmsg = LEFT(CONCAT('Versioned table ', SUBSTRING_INDEX(@ss_auditname, '.', 1),
+                                                     ': set SystemVersioningAlterHistory=KEEP to add this key'), 128);
+                        SIGNAL SQLSTATE 'HY000' SET MESSAGE_TEXT = @ss_errmsg;
+                    ELSE
+                        RESIGNAL;
+                    END IF;
+                END;
+                -- A swap (DROP INDEX, ADD in one ALTER) stays as written: its drop is the change, and the index is gone
+                -- in between either way.
+                IF @ss_swap = 1 THEN
+                    EXECUTE stmt;
+                ELSE
+                    CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 0, 1, p_DatabaseName, SUBSTRING_INDEX(@ss_auditname, '.', 1), @ss_online_form);
+                END IF;
             END;
+            IF @ss_versioned = 1 THEN CALL SchemaSmith_KeepHistoryForNewVersionedTable(0); END IF;
             IF @ss_fk_needs_index = 1 THEN
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
                 VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_auditname, ' unchanged: a foreign key needs its current columns'));
@@ -312,7 +355,7 @@ BEGIN
                 IF @ss_swap = 1 THEN
                     INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped');
                 END IF;
-                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created');
+                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created', @ss_online_form);
             END IF;
             DEALLOCATE PREPARE stmt;
             SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts WHERE RowId > @ss_id);
@@ -320,6 +363,8 @@ BEGIN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateIdxStmts;
     END IF;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DeferredIndexSwaps;
+    -- An existing table's declared primary key, added or replaced now that the secondary indexes exist.
+    CALL SchemaSmith_ConvergePrimaryKeys(p_DatabaseName, p_WhatIf);
 
     -- =========================================================================
     -- STEP 3.5: Drop modified check constraints (table-level AND column-level)
@@ -346,6 +391,8 @@ BEGIN
     -- strings, gated by SchemaSmith_SupportsCheckConstraints() (see GenerateTableJson for the full rationale).
     -- Below the floor there are no check constraints to detect as modified, so _SchemaSmith_ModifiedChecks
     -- simply stays unpopulated by this step.
+    -- Names match through their case-insensitive key, so a spelling that differs only in case is the same check under
+    -- the wrong name, and re-creating it is the only way either engine renames one.
     SET @v_mcDbName = p_DatabaseName;
     SET @v_mcDbCi = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci;
     SET @v_mcDbKey = SchemaSmith_IdentifierKey(p_DatabaseName);
@@ -363,11 +410,16 @@ JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc
     ON cc.CONSTRAINT_SCHEMA = @v_mcDbCi AND SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = @v_mcDbKey
     AND SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) = c.ConstraintKey', SchemaSmith_CheckTableJoin(), '
-WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4)) AS BINARY)
+WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4)) AS BINARY)
     != CAST(SchemaSmith_NormalizeCheckExpression(c.Expression) AS BINARY)
   AND SchemaSmith_ExpressionMapUnchanged(@v_mcDbName, SchemaSmith_StripBacktickWrapping(c.TableName),
         ''CHECK'', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ''expression'',
-        c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0');
+        c.Expression, SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING utf8mb4))) = 0)
+   OR CAST(tc.CONSTRAINT_NAME AS BINARY) != CAST(SchemaSmith_StripBacktickWrapping(c.ConstraintName) AS BINARY)',
+        -- NOT ENFORCED is part of the definition, so a changed Enforced is a modified check (MySQL only: MariaDB
+        -- has no ENFORCED column, and the mention would be fatal there).
+        IF(VERSION() LIKE '%MariaDB%', '', '
+   OR ((tc.ENFORCED = ''NO'') <> (c.Enforced = 0))'));
         PREPARE stmt FROM @v_mcSql1;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
@@ -379,25 +431,31 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`')
         FROM _SchemaSmith_ModifiedChecks;
+        -- WhatIf twin of the 'constraint'/'dropped' audit in the ELSE branch; same source.
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'constraint', CONCAT(TableName, '.', ConstraintName), 'wouldDrop'
+        FROM _SchemaSmith_ModifiedChecks;
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop modified check constraints');
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropModChkStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_DropModChkStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_DropModChkStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_DropModChkStmts (LogMsg, Stmt)
+        INSERT INTO _SchemaSmith_DropModChkStmts (LogMsg, Stmt, AuditName)
         SELECT
             CONCAT('  Drop modified check constraint: ', TableName, '.', ConstraintName),
-            CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`')
+            CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`'),
+            CONCAT(TableName, '.', ConstraintName)
         FROM _SchemaSmith_ModifiedChecks;
 
         SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts);
         WHILE @ss_id IS NOT NULL DO
-            SELECT LogMsg, Stmt INTO @ss_log, @exec_sql FROM _SchemaSmith_DropModChkStmts WHERE RowId = @ss_id;
+            SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_DropModChkStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
+            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'constraint', @ss_auditname, 'dropped');
             SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts WHERE RowId > @ss_id);
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropModChkStmts;
@@ -450,6 +508,18 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
               SELECT 1 FROM _SchemaSmith_CheckConstraints c
               WHERE c.TableKey = tc.TableKey
                 AND c.ConstraintKey = tc.ConstraintKey)
+          -- A MariaDB check named after a column of the table is that column's own (column-level) check: the column
+          -- carries it, MODIFY COLUMN converges it, and a drop by name fails outright for the JSON auto-check (1091).
+          AND NOT (VERSION() LIKE '%MariaDB%'
+                   AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns col
+                                WHERE col.TableKey = tc.TableKey AND col.ColumnKey = tc.ConstraintKey))
+          -- A check named after one of the table's DECLARED periods is that period's backing constraint (MariaDB
+          -- names it after the period), on every version: the package itself says so, so the catalog's blind spot
+          -- below 11.4 (next clause) does not apply to a period the package manages.
+          AND NOT (VERSION() LIKE '%MariaDB%'
+                   AND EXISTS (SELECT 1 FROM _SchemaSmith_Periods pd
+                                WHERE SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(pd.TableName)) = tc.TableKey
+                                  AND SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(pd.PeriodName)) = tc.ConstraintKey))
 ;
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -502,6 +572,18 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
               SELECT 1 FROM _SchemaSmith_CheckConstraints c
               WHERE c.TableKey = tc.TableKey
                 AND c.ConstraintKey = tc.ConstraintKey)
+          -- A MariaDB check named after a column of the table is that column's own (column-level) check: the column
+          -- carries it, MODIFY COLUMN converges it, and a drop by name fails outright for the JSON auto-check (1091).
+          AND NOT (VERSION() LIKE '%MariaDB%'
+                   AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns col
+                                WHERE col.TableKey = tc.TableKey AND col.ColumnKey = tc.ConstraintKey))
+          -- A check named after one of the table's DECLARED periods is that period's backing constraint (MariaDB
+          -- names it after the period), on every version: the package itself says so, so the catalog's blind spot
+          -- below 11.4 (next clause) does not apply to a period the package manages.
+          AND NOT (VERSION() LIKE '%MariaDB%'
+                   AND EXISTS (SELECT 1 FROM _SchemaSmith_Periods pd
+                                WHERE SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(pd.TableName)) = tc.TableKey
+                                  AND SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(pd.PeriodName)) = tc.ConstraintKey))
 
           -- MariaDB backs an application-time period with a CHECK constraint named after the period
           -- (`start < end`), indistinguishable from a user check constraint in the catalog -- same
@@ -512,9 +594,11 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
           -- by any MariaDB user with one, whether or not SchemaSmith manages the period.
           --
           -- Identified by name against the period reader, which is truthful only from 11.4. Below that
-          -- it returns '[]' and the exclusion cannot fire, so the defect remains on 10.4.3-11.3: nothing
-          -- in that catalog distinguishes the two, and guessing from the check clause would risk
-          -- silently preserving a genuine user constraint that happens to compare two columns.
+          -- it returns '[]' and this exclusion cannot fire; a period the package declares is covered by
+          -- the clause above on every version, so what remains on 10.4.3-11.3 is a period the package
+          -- does not manage: nothing in that catalog distinguishes its check from a user's, and guessing
+          -- from the check clause would risk silently preserving a genuine user constraint that happens
+          -- to compare two columns.
           AND JSON_SEARCH(SchemaSmith_TablePeriodsJson(p_DatabaseName, tc.TableName),
                           'one', tc.ConstraintName, NULL, '$[*].Name') IS NULL;
 
@@ -621,7 +705,7 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' ADD CONSTRAINT ', c.ConstraintName,
-                      ' CHECK (', c.Expression, ')')
+                      ' CHECK (', c.Expression, ')', IF(c.Enforced = 0 AND VERSION() NOT LIKE '%MariaDB%', ' NOT ENFORCED', ''))
         FROM _SchemaSmith_CheckConstraints c
         WHERE NOT EXISTS (
             SELECT 1 FROM _SchemaSmith_ChkExist tc
@@ -653,7 +737,9 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
             CONCAT(
                 'ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                 ' ADD CONSTRAINT ', c.ConstraintName,
-                ' CHECK (', c.Expression, ')'
+                ' CHECK (', c.Expression, ')',
+                -- NOT ENFORCED is part of the definition (MySQL 8.0.16+, the CHECK gate itself); a change re-creates.
+                IF(c.Enforced = 0 AND VERSION() NOT LIKE '%MariaDB%', ' NOT ENFORCED', '')
             ),
             CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName))
         FROM _SchemaSmith_CheckConstraints c
@@ -744,6 +830,9 @@ WHERE CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING ut
         );
 
     END IF;
+
+    -- A table's FullTextIndexes (#530): this pass created every other index but never these.
+    CALL SchemaSmith_CreateMissingFullTextIndexes(p_ProductName, p_DatabaseName, p_WhatIf);
 
     -- Cleanup temporary tables
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexRenames;

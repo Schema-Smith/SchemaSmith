@@ -45,6 +45,7 @@ BEGIN
             [SchemaSmith].[fn_SafeBracketWrap](v.name) AS [Name],
             @definition AS [Definition],
             '' AS [ShouldApplyExpression],
+            (SELECT CONVERT(NVARCHAR(MAX), ep.[value]) FROM sys.extended_properties ep WHERE ep.class = 1 AND ep.major_id = v.object_id AND ep.minor_id = 0 AND ep.[name] = 'MS_Description') AS [Description],
             (
                 SELECT
                     [SchemaSmith].[fn_SafeBracketWrap](i.name) AS [Name],

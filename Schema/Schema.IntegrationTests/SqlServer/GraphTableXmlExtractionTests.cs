@@ -51,6 +51,10 @@ public class GraphTableXmlExtractionTests
 
         Exec("CREATE TABLE dbo.XmlGraphPerson (Id INT NOT NULL PRIMARY KEY, Name NVARCHAR(50) NULL) AS NODE");
         Exec("CREATE TABLE dbo.XmlGraphKnows (Since DATE NULL) AS EDGE");
+        Exec("CREATE TABLE dbo.XmlGraphRoad (Km INT NULL) AS EDGE");
+        Exec("CREATE INDEX IX_XmlGraphRoad_From ON dbo.XmlGraphRoad ($from_id, $to_id)");
+        if (serverMajor >= 15)
+            Exec("ALTER TABLE dbo.XmlGraphRoad ADD CONSTRAINT EC_XmlGraphRoad CONNECTION (XmlGraphPerson TO XmlGraphPerson) ON DELETE CASCADE");
         Exec("CREATE TABLE dbo.XmlPlain (Id INT NOT NULL PRIMARY KEY, node_id_like NVARCHAR(10) NULL)");
     }
 
@@ -90,6 +94,44 @@ public class GraphTableXmlExtractionTests
         while (reader.Read())
             if (!reader.IsDBNull(0)) sb.Append(reader.GetValue(0));
         return sb.ToString();
+    }
+
+    [Test]
+    public void TheXmlTier_WritesAnEdgeConstraint_AndDeploysOneFromTheXmlForm()
+    {
+        using var cmd = _connection.CreateCommand();
+        if (TargetVersionDetector.Detect(cmd, Platform.SqlServer).ServerComparable < 15) Assert.Ignore("edge constraints are SQL Server 2019+");
+
+        var xml = Extract("XmlGraphRoad");
+        Assert.Multiple(() =>
+        {
+            Assert.That(xml, Does.Contain("<EdgeConstraints xmlns:json=\"http://james.newtonking.com/projects/json\" json:Array=\"true\"><Name>[EC_XmlGraphRoad]</Name>"), "the constraint is extracted on the XML tier:\n" + xml);
+            Assert.That(xml, Does.Contain("<FromTable>[dbo].[XmlGraphPerson]</FromTable><ToTable>[dbo].[XmlGraphPerson]</ToTable>"));
+            Assert.That(xml, Does.Contain("<DeleteAction>CASCADE</DeleteAction>"));
+        });
+
+        // The XML ingest form of a package declaring one, deployed through the XML-kindled TableQuench.
+        const string package = "[{ \"Schema\": \"[dbo]\", \"Name\": \"[XmlGraphTown]\", \"GraphType\": \"Node\", \"Columns\": [ { \"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false } ], \"Indexes\": [ { \"Name\": \"[PK_XmlGraphTown]\", \"IndexColumns\": \"[Id]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true } ] },"
+                               + " { \"Schema\": \"[dbo]\", \"Name\": \"[XmlGraphVisits]\", \"GraphType\": \"Edge\", \"Columns\": [ { \"Name\": \"[Day]\", \"DataType\": \"DATE\", \"Nullable\": true } ],"
+                               + " \"EdgeConstraints\": [ { \"Name\": \"[EC_XmlGraphVisits]\", \"Clauses\": [ { \"FromTable\": \"XmlGraphTown\", \"ToTable\": \"[dbo].[XmlGraphTown]\" } ], \"DeleteAction\": \"CASCADE\" } ] }]";
+        var ingest = ModelXmlSerializer.ToIngestXml(package, "Tables", "Table");
+        cmd.CommandText = "EXEC SchemaSmith.TableQuench @ProductName = 'XmlGraphTest', @TableDefinitions = N'" + ingest.Replace("'", "''") + "'";
+        cmd.CommandTimeout = 300;
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = "SELECT delete_referential_action_desc FROM sys.edge_constraints WHERE parent_object_id = OBJECT_ID('dbo.XmlGraphVisits') AND [name] = 'EC_XmlGraphVisits'";
+        Assert.That(cmd.ExecuteScalar(), Is.EqualTo("CASCADE"), "the XML parse carries the constraint into the deploy");
+    }
+
+    [Test]
+    public void TheXmlTier_WritesAnIndexOverTheFromAndToIds_UnderThoseNames()
+    {
+        var xml = Extract("XmlGraphRoad");
+        Assert.Multiple(() =>
+        {
+            Assert.That(xml, Does.Contain("<Name>[IX_XmlGraphRoad_From]</Name>"), "the user's index is extracted on the XML tier too");
+            Assert.That(xml, Does.Contain("<IndexColumns>$from_id,$to_id</IndexColumns>"), "under the two names a package can carry:\n" + xml);
+            Assert.That(xml, Does.Not.Contain("GRAPH_UNIQUE_INDEX"), "and the engine's own index is not");
+        });
     }
 
     [Test]

@@ -20,6 +20,10 @@ namespace Schema.Checkpointing;
 public class FileCheckpointManager : ICheckpointing
 {
     private readonly string _checkpointDirectory;
+    // Whether this run takes up progress files already on disk. Only --ResumeQuench should: the folder is shared by
+    // every run for the same user, and the file names do not identify the run, so a run that is not resuming would
+    // otherwise read a concurrent run's progress as its own and skip steps it never ran.
+    private readonly bool _adoptExisting;
     private readonly ConcurrentDictionary<string, DatabaseCheckpoint> _dbCheckpoints = new();
     private readonly ConcurrentDictionary<string, ProductCheckpoint> _productCheckpoints = new();
     private static readonly ConcurrentDictionary<string, object> FileLocks = new();
@@ -27,7 +31,11 @@ public class FileCheckpointManager : ICheckpointing
     public FileCheckpointManager() : this(GetDefaultCheckpointDirectory()) { }
 
     public FileCheckpointManager(string checkpointDirectory)
+        : this(checkpointDirectory, CommandLineParser.ContainsSwitch("ResumeQuench")) { }
+
+    public FileCheckpointManager(string checkpointDirectory, bool adoptExisting)
     {
+        _adoptExisting = adoptExisting;
         _checkpointDirectory = checkpointDirectory ?? throw new ArgumentNullException(nameof(checkpointDirectory));
         if (!DirectoryWrapper.GetFromFactory().Exists(_checkpointDirectory))
             DirectoryWrapper.GetFromFactory().CreateDirectory(_checkpointDirectory);
@@ -102,6 +110,25 @@ public class FileCheckpointManager : ICheckpointing
 
             SaveProductCheckpoint(checkpoint);
         }
+    }
+
+    public bool ResumedAny { get; private set; }
+
+    // A plain run discards only its own targets' checkpoints, as it reaches each one; a failed deploy of the same
+    // product to another database keeps its resume point.
+    public void DeleteCheckpointsOfThisRun(string productName)
+    {
+        foreach (var checkpoint in _dbCheckpoints.Where(kv => kv.Key.StartsWith(productName + "|", StringComparison.OrdinalIgnoreCase)).Select(kv => kv.Value).ToList())
+        {
+            var filePath = GetDatabaseCheckpointPath(checkpoint.ProductName, checkpoint.TemplateName, checkpoint.Server, checkpoint.DatabaseName, checkpoint.SchemaName);
+            try { FileWrapper.GetFromFactory().Delete(filePath); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        foreach (var key in _dbCheckpoints.Keys.Where(k => k.StartsWith(productName + "|", StringComparison.OrdinalIgnoreCase)).ToList())
+            _dbCheckpoints.TryRemove(key, out _);
+        DeleteProductCheckpoint(productName);
+        _productCheckpoints.TryRemove(productName, out _);
     }
 
     /// <summary>Clean up checkpoint files after a successful deployment.</summary>
@@ -219,7 +246,16 @@ public class FileCheckpointManager : ICheckpointing
     private DatabaseCheckpoint LoadDatabaseCheckpoint(TrackingScope scope)
     {
         var filePath = GetDatabaseCheckpointPath(scope.ProductName, scope.TemplateName, scope.Server, scope.DatabaseName, scope.SchemaName);
-        if (!FileWrapper.GetFromFactory().Exists(filePath))
+        var exists = FileWrapper.GetFromFactory().Exists(filePath);
+        // A run that is not resuming starts this target fresh, so a resume after it fails cannot take up an older run's steps.
+        if (exists && !_adoptExisting)
+        {
+            try { FileWrapper.GetFromFactory().Delete(filePath); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
+        }
+        if (exists && _adoptExisting) ResumedAny = true;
+        if (!_adoptExisting || !exists)
             return new DatabaseCheckpoint
             {
                 ProductName = scope.ProductName,
@@ -385,7 +421,7 @@ public class FileCheckpointManager : ICheckpointing
     private ProductCheckpoint LoadProductCheckpoint(string productName)
     {
         var filePath = GetProductCheckpointPath(productName);
-        if (!FileWrapper.GetFromFactory().Exists(filePath))
+        if (!_adoptExisting || !FileWrapper.GetFromFactory().Exists(filePath))
             return new ProductCheckpoint { ProductName = productName };
 
         try

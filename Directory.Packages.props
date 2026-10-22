@@ -22,7 +22,7 @@
          SchemaSmith.Schema (Schema.csproj). Validates a JSON string against a JsonSchema instance
          via the Newtonsoft-based API on net8.0+ (its net8.0 dependency group has no
          System.Text.Json dependency). Referenced from Schema.csproj, so it is an accepted
-         transitive dependency of every SchemaSmith.Schema consumer (Community CLIs + add-ons):
+         transitive dependency of every SchemaSmith.Schema consumer:
          small + MIT, cheaper than conditional compilation or duplicating the checks. -->
     <PackageVersion Include="NJsonSchema" Version="11.6.1" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
@@ -46,7 +46,6 @@
     <PackageVersion Include="Avalonia.Fonts.Inter" Version="11.3.12" />
     <PackageVersion Include="Avalonia.Headless.NUnit" Version="11.3.12" />
     <PackageVersion Include="Avalonia.Themes.Fluent" Version="11.3.12" />
-    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.1" />
     <PackageVersion Include="MessageBox.Avalonia" Version="3.3.1.1" />
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.5" />
 

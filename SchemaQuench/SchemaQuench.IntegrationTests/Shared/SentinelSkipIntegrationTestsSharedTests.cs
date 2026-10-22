@@ -10,6 +10,9 @@ using Schema.Isolators;
 using Schema.Utility;
 using System;
 using System.Data;
+using System.IO;
+using System.Linq;
+using Newtonsoft.Json.Linq;
 
 namespace SchemaQuench.IntegrationTests.Shared;
 
@@ -75,6 +78,11 @@ public abstract class SentinelSkipIntegrationTestsSharedTests
                 // Tracking row must exist — sentinel skip is a success, so it's recorded.
                 Assert.That(CountCompletedMigrationRows("MigrationScripts/Before/SentinelMigration.sql"), Is.EqualTo(1L),
                     "SentinelMigration.sql must be recorded in SchemaSmith_CompletedMigrationScripts after sentinel skip.");
+
+                // The deployment summary reports what happened to it: skipped, not "Ran".
+                var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+                var sentinel = ((JArray)summary["migrationScripts"]!).FirstOrDefault(m => (m["path"]?.Value<string>() ?? "").EndsWith("SentinelMigration.sql"));
+                Assert.That(sentinel?["outcome"]?.Value<string>() ?? "not listed", Is.EqualTo("Skipped"), summary["migrationScripts"]!.ToString());
 
                 // Pre-sentinel INSERT committed before the sentinel was raised.
                 Assert.That(CountMarkerRows(), Is.EqualTo(1L),

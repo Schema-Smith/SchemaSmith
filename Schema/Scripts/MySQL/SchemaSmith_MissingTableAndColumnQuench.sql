@@ -47,7 +47,7 @@ BEGIN
                 GROUP_CONCAT(c.ColumnScript ORDER BY c.OrdinalPosition SEPARATOR ', '),
                 COALESCE(t.AutoIncrementKeyClause, ''),
                 COALESCE(
-                    (SELECT CONCAT(', PRIMARY KEY (', i.IndexColumns, ')')
+                    (SELECT CONCAT(', PRIMARY KEY (', i.EmitColumns, ')')
                      FROM _SchemaSmith_Indexes i
                      WHERE i.TableName = t.TableName AND i.IsPrimaryKey = 1),
                     ''
@@ -63,6 +63,13 @@ BEGIN
                      FROM _SchemaSmith_Periods pd
                      WHERE pd.TableName = t.TableName
                        AND SchemaSmith_SupportsApplicationTimePeriods() = 1),
+                    ''
+                ),
+                -- Declared system-time period columns (MariaDB): their period, in the CREATE with the columns.
+                COALESCE(
+                    (SELECT CONCAT(', PERIOD FOR SYSTEM_TIME(', sp.StartColumn, ', ', sp.EndColumn, ')')
+                     FROM _SchemaSmith_SystemPeriods sp
+                     WHERE sp.TableName = t.TableName AND t.IsSystemVersioned = 1),
                     ''
                 ),
                 ') ENGINE=', COALESCE(t.Engine, 'InnoDB'),
@@ -140,6 +147,12 @@ BEGIN
                 CASE WHEN t.DataDirectory IS NOT NULL AND t.DataDirectory != ''
                      THEN CONCAT(' DATA DIRECTORY=''', REPLACE(t.DataDirectory, '''', ''''''), '''')
                      ELSE '' END,
+                -- System versioning (MariaDB WITH SYSTEM VERSIONING, F1S1). A table option, so it comes before
+                -- PARTITION BY: MariaDB refuses it after (1064), so a versioned partitioned table could not be created.
+                -- Gated on SchemaSmith_SupportsSystemVersioning() (MariaDB 10.3+; MySQL never): below the floor the
+                -- clause is suppressed so the table deploys as an ordinary one, and the degrade guard below reports it.
+                CASE WHEN t.IsSystemVersioned = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
+                     THEN ' WITH SYSTEM VERSIONING' ELSE '' END,
                 -- Partitioning (#partitioning, K3). LAST in the statement, which is where MySQL's own
                 -- CREATE TABLE grammar puts it -- after every table option.
                 --
@@ -151,26 +164,44 @@ BEGIN
                 -- boundaries must ascend, and the engine rejects a definition where they do not), so the
                 -- list is aggregated by Ordinal. HASH and KEY carry a count instead and no list at all.
                 CASE WHEN t.PartitionMethod IS NULL THEN ''
-                     WHEN t.PartitionMethod IN ('HASH', 'KEY')
-                     THEN CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ')',
-                                 CASE WHEN t.PartitionCount IS NOT NULL THEN CONCAT(' PARTITIONS ', t.PartitionCount) ELSE '' END)
-                     ELSE CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ') (',
-                                 COALESCE((SELECT GROUP_CONCAT(CONCAT('PARTITION ', pt.PartitionName,
-                                                                      CASE WHEN t.PartitionMethod LIKE 'LIST%'
-                                                                           THEN CONCAT(' VALUES IN (', pt.PartitionValues, ')')
-                                                                           ELSE CONCAT(' VALUES LESS THAN (', pt.PartitionValues, ')') END)
-                                                               ORDER BY pt.Ordinal SEPARATOR ', ')
+                     -- SYSTEM_TIME (MariaDB) the server cannot create is left out; the degrade guard below reports it.
+                     WHEN t.PartitionMethod = 'SYSTEM_TIME'
+                          AND SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0 THEN ''
+                     ELSE CONCAT(' PARTITION BY ', t.PartitionMethod,
+                                 -- SYSTEM_TIME has no expression: it partitions the history by INTERVAL or LIMIT, AUTO from 10.9.1.
+                                 IF(t.PartitionMethod = 'SYSTEM_TIME',
+                                    CONCAT(COALESCE(CONCAT(' INTERVAL ', t.SystemTimeInterval,
+                                                           COALESCE(CONCAT(' STARTS ', QUOTE(t.SystemTimeStarts)), '')), ''),
+                                           COALESCE(CONCAT(' LIMIT ', t.SystemTimeLimit), ''),
+                                           IF(t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 1, ' AUTO', '')),
+                                    CONCAT(CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
+                                                THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
+                                           ' (', t.PartitionExpression, ')',
+                                           -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
+                                           CASE WHEN t.SubpartitionMethod IS NOT NULL
+                                                THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
+                                                            CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
+                                                ELSE '' END)),
+                                 -- The named list, in declared order: RANGE and LIST with their boundaries, SYSTEM_TIME as HISTORY or
+                                 -- CURRENT, HASH and KEY by name alone. ONE read of _SchemaSmith_Partitions in this statement: MySQL
+                                 -- cannot reopen a temporary table (1137). A table that names none takes a count instead.
+                                 COALESCE((SELECT CONCAT(' (', GROUP_CONCAT(CONCAT('PARTITION ', pt.PartitionName,
+                                                                  CASE WHEN t.PartitionMethod LIKE 'LIST%'
+                                                                       THEN CONCAT(' VALUES IN (', pt.PartitionValues, ')')
+                                                                       WHEN t.PartitionMethod LIKE 'RANGE%'
+                                                                       THEN CONCAT(' VALUES LESS THAN (', pt.PartitionValues, ')')
+                                                                       WHEN t.PartitionMethod = 'SYSTEM_TIME'
+                                                                       THEN IF(UPPER(TRIM(COALESCE(pt.PartitionValues, ''))) = 'CURRENT', ' CURRENT', ' HISTORY')
+                                                                       ELSE '' END,
+                                                                  CASE WHEN pt.PartitionComment IS NOT NULL
+                                                                       THEN CONCAT(' COMMENT = ', QUOTE(pt.PartitionComment)) ELSE '' END)
+                                                           ORDER BY pt.Ordinal SEPARATOR ', '), ')')
                                              FROM _SchemaSmith_Partitions pt
-                                            WHERE pt.TableName = t.TableName), ''),
-                                 ')')
-                     END,
-                -- System versioning (MariaDB WITH SYSTEM VERSIONING, F1S1). A trailing table SUFFIX
-                -- keyword, not a KEY=VALUE option, so it goes last -- after PARTITION BY, which is where
-                -- MariaDB's own grammar places it. Gated on the EXISTING SchemaSmith_SupportsSystemVersioning()
-                -- (MariaDB 10.3+; MySQL never): below the floor the clause is suppressed here so the table
-                -- still deploys as an ordinary table -- see the degrade guard below, which reports the loss.
-                CASE WHEN t.IsSystemVersioned = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
-                     THEN ' WITH SYSTEM VERSIONING' ELSE '' END
+                                            WHERE pt.TableName = t.TableName),
+                                          CASE WHEN t.PartitionMethod LIKE 'RANGE%' OR t.PartitionMethod LIKE 'LIST%' THEN ' ()'
+                                               WHEN t.PartitionCount IS NOT NULL THEN CONCAT(' PARTITIONS ', t.PartitionCount)
+                                               ELSE '' END))
+                END
             ) AS CreateTableStatement,
             CASE WHEN t.Compression IS NOT NULL AND t.Compression != '' AND VERSION() NOT LIKE '%MariaDB%'
                  THEN CONCAT(' COMPRESSION=''', t.Compression, '''')
@@ -183,7 +214,9 @@ BEGIN
         GROUP BY t.TableName, t.VariantName, t.Engine, t.RowFormat, t.Compression, t.KeyBlockSize,
                  t.PageCompressed, t.PageCompressionLevel, t.Encryption, t.Encrypted, t.EncryptionKeyId,
                  t.AutoIncrementValue, t.Comment, t.Tablespace, t.DataDirectory,
-                 t.PartitionMethod, t.PartitionExpression, t.PartitionCount;
+                 t.PartitionMethod, t.PartitionExpression, t.PartitionCount,
+                 t.PartitionKeyAlgorithm, t.SubpartitionMethod, t.SubpartitionExpression, t.SubpartitionCount,
+                 t.SystemTimeInterval, t.SystemTimeStarts, t.SystemTimeLimit, t.SystemTimeAuto, t.HasPartitionList;
 
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_Done = TRUE;
 
@@ -193,6 +226,7 @@ BEGIN
 
     -- Declarations no degrade can rescue are refused before anything is created.
     CALL SchemaSmith_RefuseUnsupportedIndexes();
+    CALL SchemaSmith_DegradeVectorIndexes();
 
     -- IDEMPOTENCY REFRESH -- this proc is re-CALLed on retryable contention, and it must survive that.
     --
@@ -417,6 +451,24 @@ BEGIN
         END IF;
     END IF;
 
+    -- A key declared WITHOUT OVERLAPS where the engine has no such clause (MariaDB below 10.5.3; MySQL, which has no
+    -- periods) is created over the period's end and start columns instead -- the same columns the engine would list
+    -- for it -- and the downgrade is recorded. Under the fail policy SchemaSmith_RefuseUnsupportedIndexes stopped
+    -- the run before this.
+    IF SchemaSmith_SupportsWithoutOverlaps() = 0
+       AND EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i WHERE i.WithoutOverlaps = 1) THEN
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  Key created over the period''s columns, without WITHOUT OVERLAPS (requires MariaDB 10.5.3, MySQL unsupported - downgraded): ',
+               SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName))
+        FROM _SchemaSmith_Indexes i
+        WHERE i.WithoutOverlaps = 1;
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)',
+               CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)), 'downgraded'
+        FROM _SchemaSmith_Indexes i
+        WHERE i.WithoutOverlaps = 1;
+    END IF;
+
     -- =========================================================================
     -- Degrade per-column history exclusion below MariaDB 10.3.4 / on MySQL at any version (#408).
     -- Mirrors the application-time-period guard directly above, and for the same reason: ParseTableJson
@@ -504,6 +556,46 @@ BEGIN
     END IF;
 
 
+    -- SYSTEM_TIME partitioning a server cannot create (no system versioning, or a count or STARTS below MariaDB 10.5)
+    -- is left off the CREATE above, and AUTO below 10.9.1. A versioned table without its history partitioning is still a
+    -- correct table, so each is a downgrade rather than a failure, unless the policy says fail.
+    IF EXISTS (SELECT 1 FROM _SchemaSmith_Tables t
+               WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+                 AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
+                      OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0))) THEN
+        IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail' THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), CONCAT('  SYSTEM_TIME partitioning this server cannot create (UnsupportedFeaturePolicy=fail): ',
+                   SchemaSmith_StripBacktickWrapping(t.TableName))
+            FROM _SchemaSmith_Tables t
+            WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+              AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
+                   OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0));
+            SET @ss_msg = 'SYSTEM_TIME partitioning needs a newer MariaDB (UnsupportedFeaturePolicy=fail). See the run log.';
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+        ELSE
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(),
+                   CONCAT(IF(SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0,
+                             '  Table deployed without its SYSTEM_TIME partitioning (needs system versioning, and MariaDB 10.5 for a count or STARTS - downgraded): ',
+                             '  SYSTEM_TIME partitioning deployed without AUTO (requires MariaDB 10.9.1 - downgraded): '),
+                          SchemaSmith_StripBacktickWrapping(t.TableName))
+            FROM _SchemaSmith_Tables t
+            WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+              AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
+                   OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0));
+            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+            SELECT CONNECTION_ID(),
+                   IF(SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0,
+                      'table without its SYSTEM_TIME partitioning', 'SYSTEM_TIME partitioning without AUTO'),
+                   SchemaSmith_StripBacktickWrapping(t.TableName), 'downgraded'
+            FROM _SchemaSmith_Tables t
+            WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+              AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
+                   OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0));
+        END IF;
+    END IF;
+
     IF p_WhatIf = 1 THEN
         -- WhatIf mode: output the actual SQL that would be executed
         CALL SchemaSmith_MarkTableRenames(p_DatabaseName);
@@ -541,7 +633,7 @@ BEGIN
                       GROUP_CONCAT(c.ColumnScript ORDER BY c.OrdinalPosition SEPARATOR ', '),
                       COALESCE(t.AutoIncrementKeyClause, ''),
                       COALESCE(
-                          (SELECT CONCAT(', PRIMARY KEY (', i.IndexColumns, ')')
+                          (SELECT CONCAT(', PRIMARY KEY (', i.EmitColumns, ')')
                            FROM _SchemaSmith_Indexes i
                            WHERE i.TableName = t.TableName AND i.IsPrimaryKey = 1),
                           ''
@@ -605,26 +697,53 @@ BEGIN
                       CASE WHEN t.DataDirectory IS NOT NULL AND t.DataDirectory != ''
                            THEN CONCAT(' DATA DIRECTORY=''', REPLACE(t.DataDirectory, '''', ''''''), '''')
                            ELSE '' END,
+                      -- System versioning (MariaDB WITH SYSTEM VERSIONING, F1S1). A table option, so it comes before
+                      -- PARTITION BY: MariaDB refuses it after (1064), so a versioned partitioned table could not be created.
+                      -- Gated on SchemaSmith_SupportsSystemVersioning() (MariaDB 10.3+; MySQL never): below the floor the
+                      -- clause is suppressed so the table deploys as an ordinary one, and the degrade guard below reports it.
+                      CASE WHEN t.IsSystemVersioned = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
+                           THEN ' WITH SYSTEM VERSIONING' ELSE '' END,
                       -- Partitioning (#partitioning, K3) -- must match the real-path emit above exactly,
                       -- or the WhatIf preview shows a statement the live run would not issue.
                       CASE WHEN t.PartitionMethod IS NULL THEN ''
-                           WHEN t.PartitionMethod IN ('HASH', 'KEY')
-                           THEN CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ')',
-                                       CASE WHEN t.PartitionCount IS NOT NULL THEN CONCAT(' PARTITIONS ', t.PartitionCount) ELSE '' END)
-                           ELSE CONCAT(' PARTITION BY ', t.PartitionMethod, ' (', t.PartitionExpression, ') (',
-                                       COALESCE((SELECT GROUP_CONCAT(CONCAT('PARTITION ', pt.PartitionName,
-                                                                            CASE WHEN t.PartitionMethod LIKE 'LIST%'
-                                                                                 THEN CONCAT(' VALUES IN (', pt.PartitionValues, ')')
-                                                                                 ELSE CONCAT(' VALUES LESS THAN (', pt.PartitionValues, ')') END)
-                                                                     ORDER BY pt.Ordinal SEPARATOR ', ')
+                           -- SYSTEM_TIME (MariaDB) the server cannot create is left out; the degrade guard below reports it.
+                           WHEN t.PartitionMethod = 'SYSTEM_TIME'
+                                AND SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0 THEN ''
+                           ELSE CONCAT(' PARTITION BY ', t.PartitionMethod,
+                                       -- SYSTEM_TIME has no expression: it partitions the history by INTERVAL or LIMIT, AUTO from 10.9.1.
+                                       IF(t.PartitionMethod = 'SYSTEM_TIME',
+                                          CONCAT(COALESCE(CONCAT(' INTERVAL ', t.SystemTimeInterval,
+                                                                 COALESCE(CONCAT(' STARTS ', QUOTE(t.SystemTimeStarts)), '')), ''),
+                                                 COALESCE(CONCAT(' LIMIT ', t.SystemTimeLimit), ''),
+                                                 IF(t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 1, ' AUTO', '')),
+                                          CONCAT(CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
+                                                      THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
+                                                 ' (', t.PartitionExpression, ')',
+                                                 -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
+                                                 CASE WHEN t.SubpartitionMethod IS NOT NULL
+                                                      THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
+                                                                  CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
+                                                      ELSE '' END)),
+                                       -- The named list, in declared order: RANGE and LIST with their boundaries, SYSTEM_TIME as HISTORY or
+                                       -- CURRENT, HASH and KEY by name alone. ONE read of _SchemaSmith_Partitions in this statement: MySQL
+                                       -- cannot reopen a temporary table (1137). A table that names none takes a count instead.
+                                       COALESCE((SELECT CONCAT(' (', GROUP_CONCAT(CONCAT('PARTITION ', pt.PartitionName,
+                                                                        CASE WHEN t.PartitionMethod LIKE 'LIST%'
+                                                                             THEN CONCAT(' VALUES IN (', pt.PartitionValues, ')')
+                                                                             WHEN t.PartitionMethod LIKE 'RANGE%'
+                                                                             THEN CONCAT(' VALUES LESS THAN (', pt.PartitionValues, ')')
+                                                                             WHEN t.PartitionMethod = 'SYSTEM_TIME'
+                                                                             THEN IF(UPPER(TRIM(COALESCE(pt.PartitionValues, ''))) = 'CURRENT', ' CURRENT', ' HISTORY')
+                                                                             ELSE '' END,
+                                                                        CASE WHEN pt.PartitionComment IS NOT NULL
+                                                                             THEN CONCAT(' COMMENT = ', QUOTE(pt.PartitionComment)) ELSE '' END)
+                                                                 ORDER BY pt.Ordinal SEPARATOR ', '), ')')
                                                    FROM _SchemaSmith_Partitions pt
-                                                  WHERE pt.TableName = t.TableName), ''),
-                                       ')')
-                           END,
-                      -- Must match the real-path emit above exactly, or the WhatIf preview shows a
-                      -- statement the live run would not issue.
-                      CASE WHEN t.IsSystemVersioned = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
-                           THEN ' WITH SYSTEM VERSIONING' ELSE '' END)
+                                                  WHERE pt.TableName = t.TableName),
+                                                CASE WHEN t.PartitionMethod LIKE 'RANGE%' OR t.PartitionMethod LIKE 'LIST%' THEN ' ()'
+                                                     WHEN t.PartitionCount IS NOT NULL THEN CONCAT(' PARTITIONS ', t.PartitionCount)
+                                                     ELSE '' END))
+                      END)
         FROM _SchemaSmith_Tables t
         INNER JOIN _SchemaSmith_Columns c ON c.TableName = t.TableName
         WHERE t.NewTable = 1
@@ -633,12 +752,15 @@ BEGIN
         GROUP BY t.TableName, t.VariantName, t.Engine, t.RowFormat, t.Compression, t.KeyBlockSize,
                  t.PageCompressed, t.PageCompressionLevel, t.Encryption, t.Encrypted, t.EncryptionKeyId,
                  t.AutoIncrementValue, t.Comment, t.Tablespace, t.DataDirectory,
-                 t.PartitionMethod, t.PartitionExpression, t.PartitionCount;
+                 t.PartitionMethod, t.PartitionExpression, t.PartitionCount,
+                 t.PartitionKeyAlgorithm, t.SubpartitionMethod, t.SubpartitionExpression, t.SubpartitionCount,
+                 t.SystemTimeInterval, t.SystemTimeStarts, t.SystemTimeLimit, t.SystemTimeAuto, t.HasPartitionList;
 
         -- Step 2: Show ALTER TABLE ADD COLUMN for new columns on existing tables (set-based;
         -- one row per column, matching the per-column statement the ELSE branch would issue
         -- one-at-a-time before it folds them into a single ALTER per table).
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add missing columns to existing tables');
+        CALL SchemaSmith_StageOnlineApply();
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
@@ -646,9 +768,12 @@ BEGIN
                       -- WhatIf preview must match the real run: strip WITHOUT SYSTEM VERSIONING on a
                       -- not-yet-versioned table exactly as the ELSE branch's exec does (MariaDB 4124).
                       CASE WHEN ist.TABLE_TYPE = 'SYSTEM VERSIONED' THEN c.ColumnScript
-                           ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END)
+                           ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END,
+                      COALESCE(op.Clause, ''),
+                      CASE WHEN t.OnlineMode <> 'OFF' THEN ' (online: ALGORITHM=INSTANT, else INPLACE, LOCK=NONE)' ELSE '' END)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        LEFT JOIN _SchemaSmith_OnlineColumnPositions op ON op.TableName = c.TableName AND op.ColumnName = c.ColumnName
         LEFT JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = c.TableKey
         WHERE t.NewTable = 0
@@ -719,7 +844,8 @@ BEGIN
         -- rides a table rename also fires — its parse-time NewColumn flag is unreliable because the
         -- new table name did not exist when the flag was computed.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColRenameStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_ColRenameStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_ColRenameStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT,
+                                                            TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         -- `ALTER TABLE ... RENAME COLUMN old TO new` needs MySQL 8.0 / MariaDB 10.5.2+. Below that
         -- (MySQL 5.7 / MariaDB 10.2-10.5) reproduce the rename with `CHANGE COLUMN old new <def>`,
@@ -734,7 +860,75 @@ BEGIN
         -- omitted here too, for the same reason: it is unconditionally dropped by this CHANGE COLUMN and
         -- restored by ModifiedTableQuench's ON UPDATE compare against the new column name in the same deploy.
         CALL SchemaSmith_MarkColumnRenames(p_DatabaseName);
+
+        -- MySQL refuses to rename a column that a functional key part (3837) or a generated column (3108) reads;
+        -- MariaDB rewrites both itself. A declared functional index is dropped ahead of the rename and rebuilt by the
+        -- index pass; a declared generated column is re-stated over the new name in the rename's own ALTER. One the
+        -- package does not declare could not be put back, so the deploy stops by name before anything is renamed.
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RenameDependents;
+        CREATE TEMPORARY TABLE _SchemaSmith_RenameDependents (
+            Kind VARCHAR(16) COLLATE utf8mb4_bin NOT NULL,
+            TableName VARCHAR(130) COLLATE utf8mb4_bin NOT NULL,
+            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+            DependentName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            Declared TINYINT NOT NULL DEFAULT 0,
+            PRIMARY KEY (Kind, TableKey, DependentName)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+        IF VERSION() NOT LIKE '%MariaDB%' THEN
+            INSERT IGNORE INTO _SchemaSmith_RenameDependents (Kind, TableName, TableKey, DependentName)
+            SELECT 'column', c.TableName, c.TableKey, g.COLUMN_NAME
+              FROM _SchemaSmith_Columns c
+              JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId
+              JOIN _SchemaSmith_CatColumns g ON g.TableKey = c.TableKey
+             WHERE CONVERT(g.EXTRA USING utf8mb4) LIKE '%GENERATED%'
+               AND LOCATE(CAST(CONCAT('`', r.LiveName, '`') AS BINARY), CAST(g.GENERATION_EXPRESSION AS BINARY)) > 0;
+            -- STATISTICS.EXPRESSION is 8.0.13, and a catalog column is resolved when the procedure is created, so it is
+            -- only ever named in a prepared statement.
+            IF SchemaSmith_ServerVersionPatchNum() >= 80013 THEN
+                SET @ss_rename_db = p_DatabaseName;
+                SET @ss_rename_sql = CONCAT(
+                    'INSERT IGNORE INTO _SchemaSmith_RenameDependents (Kind, TableName, TableKey, DependentName) ',
+                    'SELECT ''index'', c.TableName, c.TableKey, s.INDEX_NAME FROM _SchemaSmith_Columns c ',
+                    'JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId ',
+                    'JOIN INFORMATION_SCHEMA.STATISTICS s ON s.TABLE_SCHEMA = ? AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = c.TableKey ',
+                    'WHERE s.EXPRESSION IS NOT NULL ',
+                    'AND LOCATE(CAST(CONCAT(''`'', r.LiveName, ''`'') AS BINARY), CAST(s.EXPRESSION AS BINARY)) > 0');
+                PREPARE stmt FROM @ss_rename_sql;
+                EXECUTE stmt USING @ss_rename_db;
+                DEALLOCATE PREPARE stmt;
+            END IF;
+        END IF;
+        UPDATE _SchemaSmith_RenameDependents d SET d.Declared = 1
+         WHERE d.Kind = 'index'
+           AND EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
+                        WHERE i.TableKey = d.TableKey AND i.IndexKey = SchemaSmith_NameKeyCI(d.DependentName));
+        UPDATE _SchemaSmith_RenameDependents d SET d.Declared = 1
+         WHERE d.Kind = 'column'
+           AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
+                        WHERE c.TableKey = d.TableKey AND c.ColumnKey = SchemaSmith_NameKeyCI(d.DependentName)
+                          AND c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) <> '');
+        IF EXISTS (SELECT 1 FROM _SchemaSmith_RenameDependents WHERE Declared = 0) THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), CONCAT('  A column rename would break ', Kind, ' ', SchemaSmith_StripBacktickWrapping(TableName), '.', DependentName,
+                                           ', which the package does not declare. Declare it in the table''s JSON, or drop it in a Before script.')
+              FROM _SchemaSmith_RenameDependents WHERE Declared = 0;
+            SET @ss_msg = (SELECT LEFT(CONCAT('A column rename would break undeclared ', Kind, ' ', DependentName, ' on ',
+                                              SchemaSmith_StripBacktickWrapping(TableName), '; see the deploy log.'), 128)
+                             FROM _SchemaSmith_RenameDependents WHERE Declared = 0 ORDER BY TableName, DependentName LIMIT 1);
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+        END IF;
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  Drop functional index `', DependentName, '` on ', TableName, ' ahead of a column rename')
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'index';
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'index', CONCAT(SchemaSmith_StripBacktickWrapping(TableName), '.', DependentName), 'dropped'
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'index';
         INSERT INTO _SchemaSmith_ColRenameStmts (Stmt)
+        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', TableName,
+                      ' DROP INDEX `', REPLACE(DependentName, '`', '``'), '`')
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'index';
+
+        INSERT INTO _SchemaSmith_ColRenameStmts (Stmt, TableKey)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
                       GROUP_CONCAT(
                           IF(SchemaSmith_SupportsRenameColumn() = 1,
@@ -755,13 +949,23 @@ BEGIN
                                     IF(CONVERT(isc.EXTRA USING utf8mb4) LIKE '%auto_increment%', ' AUTO_INCREMENT', ''),
                                     IF(COALESCE(CONVERT(isc.COLUMN_COMMENT USING utf8mb4), '') <> '',
                                        CONCAT(' COMMENT ', QUOTE(CONVERT(isc.COLUMN_COMMENT USING utf8mb4) COLLATE utf8mb4_unicode_ci)), '')))
-                          ORDER BY c.ColumnName SEPARATOR ', '))
+                          ORDER BY c.ColumnName SEPARATOR ', ')),
+               MIN(c.TableKey)
         FROM _SchemaSmith_Columns c
         JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId
         JOIN _SchemaSmith_CatColumns isc
             ON isc.TableKey = c.TableKey
            AND CAST(isc.COLUMN_NAME AS BINARY) = CAST(r.LiveName AS BINARY)
         GROUP BY c.TableName;
+
+        UPDATE _SchemaSmith_ColRenameStmts s
+          JOIN (SELECT d.TableKey, GROUP_CONCAT(CONCAT('MODIFY COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', ') AS Clauses
+                  FROM _SchemaSmith_RenameDependents d
+                  JOIN _SchemaSmith_Columns c ON c.TableKey = d.TableKey AND c.ColumnKey = SchemaSmith_NameKeyCI(d.DependentName)
+                 WHERE d.Kind = 'column'
+                 GROUP BY d.TableKey) m ON m.TableKey = s.TableKey
+           SET s.Stmt = CONCAT(s.Stmt, ', ', m.Clauses);
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RenameDependents;
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Rename column `', r.LiveName,
@@ -902,6 +1106,7 @@ BEGIN
 
         -- Step 2: Add non-generated columns to existing tables
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add missing columns to existing tables');
+        CALL SchemaSmith_StageOnlineApply();
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Add column: ',
@@ -909,10 +1114,12 @@ BEGIN
                              ' ADD COLUMN ',
                              -- Match the exec below: strip WITHOUT SYSTEM VERSIONING on a not-yet-versioned table.
                              CASE WHEN ist.TABLE_TYPE = 'SYSTEM VERSIONED' THEN c.ColumnScript
-                                  ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END),
+                                  ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END,
+                             COALESCE(op.Clause, '')),
                       CASE WHEN COALESCE(c.VariantName, '') <> '' THEN CONCAT(' (variant: ', c.VariantName, ')') ELSE '' END)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        LEFT JOIN _SchemaSmith_OnlineColumnPositions op ON op.TableName = c.TableName AND op.ColumnName = c.ColumnName
         LEFT JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = c.TableKey
         WHERE t.NewTable = 0
@@ -923,9 +1130,10 @@ BEGIN
 
         -- Fold each table's missing-column adds into one multi-clause ALTER, materialize, execute.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_AddColumnStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_AddColumnStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_AddColumnStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT,
+                                                            TableName VARCHAR(128) COLLATE utf8mb4_bin, Mode VARCHAR(8), Form VARCHAR(16))
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_AddColumnStmts (Stmt)
+        INSERT INTO _SchemaSmith_AddColumnStmts (Stmt, TableName, Mode)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
                       -- Strip WITHOUT SYSTEM VERSIONING from the ADD COLUMN clause when the target table is
                       -- not (yet) system-versioned: MariaDB refuses that clause on an ALTER ADD COLUMN
@@ -934,40 +1142,47 @@ BEGIN
                       -- adds the versioning AFTER this pass). The clause is valid inline on CREATE (unchanged)
                       -- and on ADD COLUMN against an already-versioned table (kept). The column's exclusion is
                       -- (re)applied post-versioning by ModifiedTableQuench's exclusion pass.
+                      -- In declared order, each AFTER the one before it, so a column added ahead of another is there
+                      -- when the later one names it (OnlineApply; no position under OFF, which appends as always).
                       GROUP_CONCAT(CONCAT('ADD COLUMN ',
                           CASE WHEN ist.TABLE_TYPE = 'SYSTEM VERSIONED' THEN c.ColumnScript
-                               ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END)
-                          ORDER BY c.OrdinalPosition SEPARATOR ', '))
+                               ELSE REPLACE(c.ColumnScript, ' WITHOUT SYSTEM VERSIONING', '') END,
+                          COALESCE(op.Clause, ''))
+                          ORDER BY c.OrdinalPosition, c.RowId SEPARATOR ', ')),
+               c.TableName, t.OnlineMode
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        LEFT JOIN _SchemaSmith_OnlineColumnPositions op ON op.TableName = c.TableName AND op.ColumnName = c.ColumnName
         LEFT JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = c.TableKey
         WHERE t.NewTable = 0
           AND c.NewColumn = 1
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)
-        GROUP BY c.TableName, ist.TABLE_TYPE;
+        GROUP BY c.TableName, ist.TABLE_TYPE, t.OnlineMode;
 
         SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts);
         WHILE @v_addcol_id IS NOT NULL DO
-            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_AddColumnStmts WHERE RowId = @v_addcol_id;
-            PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            DEALLOCATE PREPARE stmt;
+            SELECT Stmt, Mode, SchemaSmith_StripBacktickWrapping(TableName) INTO @exec_sql, @ss_online_mode, @ss_online_table
+              FROM _SchemaSmith_AddColumnStmts WHERE RowId = @v_addcol_id;
+            CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
+            UPDATE _SchemaSmith_AddColumnStmts SET Form = @ss_online_form WHERE RowId = @v_addcol_id;
             SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts WHERE RowId > @v_addcol_id);
         END WHILE;
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_AddColumnStmts;
 
         -- Object-change audit (#243 E5): one row per physical column added to an existing table.
         -- Set-based over temp tables only (no INFORMATION_SCHEMA — not the #337 segfault shape).
-        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT CONNECTION_ID(), 'column', CONCAT(c.TableName, '.', c.ColumnName), 'created'
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
+        SELECT CONNECTION_ID(), 'column', CONCAT(c.TableName, '.', c.ColumnName), 'created', s.Form
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+        LEFT JOIN _SchemaSmith_AddColumnStmts s ON s.TableName = c.TableName
         WHERE t.NewTable = 0
           AND c.NewColumn = 1
           AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = '')
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0);
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_AddColumnStmts;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_OnlineColumnPositions;
 
     END IF;
 

@@ -36,6 +36,8 @@ public class DeployPathTableFeatureTests
     private readonly IEnvironment _environment = Substitute.For<IEnvironment>();
     private string _betweenScript;
     private string _beforeScript;
+    private string _prerequisiteScript;
+    private string _securityPolicyScript;
     private bool _nextDeployFails;
 
     // A new database costs CREATE DATABASE, sp_cdc_enable_db, a full kindle and a cold plan compile on the first
@@ -173,6 +175,186 @@ public class DeployPathTableFeatureTests
             cmd.CommandText = "SELECT OBJECT_SCHEMA_NAME(referenced_object_id) + '.' + OBJECT_NAME(referenced_object_id) FROM sys.foreign_keys WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("sales.Customer"));
         }, freshDatabase: true);
+    }
+
+    // The shape SchemaTongs writes to Prerequisites/, an Objects folder: that pass runs ahead of table creation, and the
+    // script is create-only, so the second deploy finds the keys and changes nothing.
+    [Test]
+    public void AnAlwaysEncryptedTable_DeploysToAnEmptyDatabase_WithItsKeysFromAPrerequisiteScript()
+    {
+        RunScenario("DeployAeKeys", null, (deploy, db, cmd) =>
+        {
+            _prerequisiteScript = """
+                IF NOT EXISTS (SELECT 1 FROM sys.column_master_keys WHERE [name] = N'CMK_Deploy')
+                  EXEC(N'CREATE COLUMN MASTER KEY [CMK_Deploy] WITH (KEY_STORE_PROVIDER_NAME = N''MSSQL_CERTIFICATE_STORE'', KEY_PATH = N''CurrentUser/My/0123456789ABCDEF'')')
+                IF NOT EXISTS (SELECT 1 FROM sys.column_encryption_keys WHERE [name] = N'CEK_Deploy')
+                  EXEC(N'CREATE COLUMN ENCRYPTION KEY [CEK_Deploy] WITH VALUES (COLUMN_MASTER_KEY = [CMK_Deploy], ALGORITHM = ''RSA_OAEP'', ENCRYPTED_VALUE = 0x016E0000016300)')
+                """;
+            const string table = """
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                               { "Name": "[Ssn]", "DataType": "CHAR(11)", "Nullable": true, "Collation": "Latin1_General_BIN2",
+                                 "EncryptionType": "DETERMINISTIC", "EncryptionKey": "CEK_Deploy", "EncryptionAlgorithm": "AEAD_AES_256_CBC_HMAC_SHA_256" } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }
+                """;
+            deploy(table);
+            deploy(table);
+            cmd.CommandText = "SELECT k.[name] COLLATE DATABASE_DEFAULT + ':' + c.encryption_type_desc COLLATE DATABASE_DEFAULT FROM sys.columns c " +
+                              "JOIN sys.column_encryption_keys k ON k.column_encryption_key_id = c.column_encryption_key_id WHERE c.[object_id] = OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("CEK_Deploy:DETERMINISTIC"));
+        }, freshDatabase: true);
+    }
+
+    // SecurityPolicies is an after-tables folder: a policy names its table, which the same deploy has just created.
+    [Test]
+    public void ASecurityPolicy_IsCreatedAfterTheTableItProtects_ByARealDeploy()
+    {
+        const string setup = "EXEC('CREATE SCHEMA sec'); EXEC('CREATE FUNCTION sec.fn_rep(@Rep AS SYSNAME) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS ok WHERE @Rep = USER_NAME()');";
+        RunScenario("DeployRls", setup, (deploy, db, cmd) =>
+        {
+            _securityPolicyScript = """
+                IF OBJECT_ID(N'[sec].[ProbePolicy]') IS NULL
+                  EXEC(N'CREATE SECURITY POLICY [sec].[ProbePolicy] ADD FILTER PREDICATE [sec].[fn_rep]([SalesRep]) ON [dbo].[DeployProbe] WITH (STATE = ON, SCHEMABINDING = ON)')
+                """;
+            const string table = """
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[SalesRep]", "DataType": "SYSNAME", "Nullable": false } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }
+                """;
+            deploy(table);
+            deploy(table);
+            cmd.CommandText = "SELECT OBJECT_NAME(target_object_id) FROM sys.security_predicates WHERE [object_id] = OBJECT_ID(N'sec.ProbePolicy')";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("DeployProbe"));
+        }, freshDatabase: true);
+    }
+
+    // A schema-bound policy holds the columns its predicates pass: changing one failed the deploy (5074 / 4922). The
+    // policy here is not in the package, the case where nothing else could put it back.
+    [Test]
+    public void ASchemaBoundSecurityPolicy_OverAChangingColumn_IsDroppedAndCreatedAgain_ByARealDeploy()
+    {
+        const string setup = "EXEC('CREATE SCHEMA sec'); EXEC('CREATE FUNCTION sec.fn_rep(@Rep AS NVARCHAR(200)) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS ok WHERE @Rep = USER_NAME()');";
+        RunScenario("DeployRlsChange", setup, (deploy, db, cmd) =>
+        {
+            string Table(string type) => $$"""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[SalesRep]", "DataType": "{{type}}", "Nullable": false } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }
+                """;
+            deploy(Table("NVARCHAR(50)"));
+            cmd.CommandText = "CREATE SECURITY POLICY [sec].[HandMade] ADD FILTER PREDICATE [sec].[fn_rep]([SalesRep]) ON [dbo].[DeployProbe], " +
+                              "ADD BLOCK PREDICATE [sec].[fn_rep]([SalesRep]) ON [dbo].[DeployProbe] AFTER INSERT WITH (STATE = OFF, SCHEMABINDING = ON)";
+            cmd.ExecuteNonQuery();
+
+            deploy(Table("NVARCHAR(100)"));
+            cmd.CommandText = "SELECT CONVERT(VARCHAR(10), max_length) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'SalesRep'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("200"), "the column changed");
+            cmd.CommandText = "SELECT CONVERT(VARCHAR(10), sp.is_enabled) + ':' + CONVERT(VARCHAR(10), sp.is_schema_bound) + ':' + " +
+                              "CONVERT(VARCHAR(10), (SELECT COUNT(*) FROM sys.security_predicates p WHERE p.[object_id] = sp.[object_id])) " +
+                              "FROM sys.security_policies sp WHERE sp.[object_id] = OBJECT_ID(N'sec.HandMade')";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("0:1:2"), "and the policy is back as it was: off, schema-bound, both predicates");
+        }, freshDatabase: true);
+    }
+
+    // A partially contained database keeps its catalog in a fixed collation and its temp tables in its own, so every
+    // comparison of the two was a collation conflict and nothing could be deployed there.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void ATable_DeploysAndRedeploys_IntoAPartiallyContainedDatabase_ByARealDeploy(bool xmlIngest)
+    {
+        RunScenario("DeployContained", null, (deploy, db, cmd) =>
+        {
+            string Table(string labelType) => $$"""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                               { "Name": "[Qty]", "DataType": "INT", "Nullable": false, "Default": "0", "CheckExpression": "[Qty] >= 0" },
+                               { "Name": "[Label]", "DataType": "{{labelType}}", "Nullable": true, "Description": "What the row is" },
+                               { "Name": "[Twice]", "DataType": "INT", "Nullable": true, "ComputedExpression": "[Qty] * 2" } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" },
+                               { "Name": "[IX_DeployProbe_Positive]", "IndexColumns": "[Qty]", "IncludeColumns": "[Label]", "FilterExpression": "[Qty] > 0" } ],
+                  "Statistics": [ { "Name": "[ST_DeployProbe_Label]", "Columns": "[Label]" } ] }
+                """;
+            deploy(Table("NVARCHAR(40)"));
+            deploy(Table("NVARCHAR(80)"));
+            cmd.CommandText = "SELECT CONVERT(VARCHAR(10), max_length) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'Label'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("160"), "the redeploy changed the column");
+        }, xmlIngest: xmlIngest, contained: true);
+    }
+
+    // SchemaQuench feeds the parse script to the server itself, outside the kindled procedures, so a JSON index has to
+    // survive that path too: created, and left alone by a redeploy.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AJsonIndex_IsCreatedAndLeftAloneByARealDeploy(bool xmlIngest)
+    {
+        RunScenario("DeployJsonIndex", null, (deploy, db, cmd) =>
+        {
+            cmd.CommandText = "SELECT CASE WHEN OBJECT_ID('sys.json_indexes') IS NULL THEN 0 ELSE 1 END";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) == 0) Assert.Ignore("JSON indexes need SQL Server 2025.");
+            const string table = """
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[Doc]", "DataType": "JSON", "Nullable": true } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ],
+                  "JsonIndexes": [ { "Name": "[JX_DeployProbe]", "Column": "[Doc]", "Paths": [ "$.b", "$.a" ] } ] }
+                """;
+            const string rowset = "SELECT MAX(p.partition_id) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] "
+                                  + "WHERE it.parent_object_id = OBJECT_ID('dbo.DeployProbe') AND it.parent_minor_id = INDEXPROPERTY(OBJECT_ID('dbo.DeployProbe'), 'JX_DeployProbe', 'IndexID')";
+            deploy(table);
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.json_index_paths WHERE [object_id] = OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(2), "the declared JSON index reaches the database with its paths");
+            cmd.CommandText = rowset;
+            var before = cmd.ExecuteScalar();
+            deploy(table);
+            cmd.CommandText = rowset;
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(before), "and a redeploy leaves it alone");
+        }, xmlIngest: xmlIngest);
+    }
+
+    [Test]
+    public void ADeclaredDisabledIndex_IsDisabledByARealDeploy()
+    {
+        RunScenario("DeployDisabledIndex", null, (deploy, db, cmd) =>
+        {
+            deploy("""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]",
+                  "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[Code]", "DataType": "INT", "Nullable": true } ],
+                  "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" },
+                               { "Name": "[IX_DeployProbe_Code]", "IndexColumns": "[Code]", "Disabled": true } ] }
+                """);
+            cmd.CommandText = "SELECT is_disabled FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'IX_DeployProbe_Code'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the declared Disabled state reaches the database");
+        });
+    }
+
+    [Test]
+    public void AnEdgeConstraint_IsCreatedByARealDeploy()
+    {
+        // Edge constraints are SQL Server 2019 (major 15). Below it the edge table deploys without one, as a recorded skip.
+        bool supported;
+        using (var conn = OpenMaster())
+        using (var probe = conn.CreateCommand())
+        {
+            probe.CommandText = "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))";
+            supported = Convert.ToInt32(probe.ExecuteScalar()) >= 15;
+        }
+        const string setup = "CREATE TABLE dbo.ProbePerson ([Id] INT NOT NULL) AS NODE; CREATE TABLE dbo.ProbeCity ([Id] INT NOT NULL) AS NODE;";
+        RunScenario("DeployEdgeConstraint", setup, (deploy, db, cmd) =>
+        {
+            deploy("""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]", "GraphType": "Edge",
+                  "Columns": [ { "Name": "[Since]", "DataType": "DATE", "Nullable": true } ],
+                  "EdgeConstraints": [ { "Name": "[EC_DeployProbe]", "Clauses": [ { "FromTable": "[dbo].[ProbePerson]", "ToTable": "[dbo].[ProbeCity]" } ], "DeleteAction": "CASCADE" } ] }
+                """);
+            if (!supported)
+            {
+                cmd.CommandText = "SELECT is_edge FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe')";
+                Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the edge table still deploys");
+                _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Edge constraint skipped: requires SQL Server 2019")));
+                return;
+            }
+            cmd.CommandText = "SELECT [name] COLLATE DATABASE_DEFAULT + ':' + delete_referential_action_desc COLLATE DATABASE_DEFAULT FROM sys.edge_constraints WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("EC_DeployProbe:CASCADE"), "the declared edge constraint reaches the database");
+        }, expectIncomplete: !supported, freshDatabase: true);
     }
 
     [Test]
@@ -647,7 +829,7 @@ public class DeployPathTableFeatureTests
     // Tracking), so a shared one would carry that into the next scenario.
     private void RunScenario(string prefix, string setupDatabase, Action<Action<string>, string, IDbCommand> body,
                              string templateExtra = "", bool expectFailure = false, string policy = "warn", bool xmlIngest = false,
-                             bool expectIncomplete = false, bool freshDatabase = false)
+                             bool expectIncomplete = false, bool freshDatabase = false, bool contained = false)
     {
         var tempDir = Path.Join(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
         var key = (setupDatabase ?? "", policy, xmlIngest);
@@ -661,7 +843,8 @@ public class DeployPathTableFeatureTests
             cmd.CommandTimeout = 300;
             var savedPath = config["SchemaPackagePath"];
             var savedEncoding = config["Target:CompatEncoding"];
-            var shared = !freshDatabase && _sharedDatabases.ContainsKey(key);
+            var shared = !freshDatabase && !contained && _sharedDatabases.ContainsKey(key);
+            var containmentWas = 1;
             var db = shared ? _sharedDatabases[key] : prefix + "_" + Guid.NewGuid().ToString("N")[..12];
 
             try
@@ -673,9 +856,18 @@ public class DeployPathTableFeatureTests
                 }
                 else
                 {
-                    cmd.CommandText = $"CREATE DATABASE [{db}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
+                    if (contained)
+                    {
+                        // A partially contained database keeps its catalog in a fixed collation, so its own must differ from it.
+                        cmd.CommandText = "SELECT CAST(value_in_use AS INT) FROM sys.configurations WHERE [name] = 'contained database authentication'";
+                        containmentWas = Convert.ToInt32(cmd.ExecuteScalar());
+                        if (containmentWas == 0) { cmd.CommandText = "EXEC sp_configure 'contained database authentication', 1; RECONFIGURE;"; cmd.ExecuteNonQuery(); }
+                        cmd.CommandText = $"CREATE DATABASE [{db}] CONTAINMENT = PARTIAL COLLATE Japanese_CS_AS_KS;";
+                    }
+                    else
+                        cmd.CommandText = $"CREATE DATABASE [{db}] COLLATE {Schema.IntegrationTests.SqlServer.ForeignCollation.For(cmd)};";
                     cmd.ExecuteNonQuery();
-                    if (!freshDatabase) _sharedDatabases[key] = db;
+                    if (!freshDatabase && !contained) _sharedDatabases[key] = db;
                     conn.ChangeDatabase(db);
                     if (setupDatabase != null) ExecuteWithDeadlockRetry(cmd, setupDatabase);
                     ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, policy: policy);
@@ -686,7 +878,7 @@ public class DeployPathTableFeatureTests
 
                 body(tableJson =>
                 {
-                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript);
+                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript, _prerequisiteScript, _securityPolicyScript);
                     _environment.ClearReceivedCalls();
                     var reportBase = Path.Join(tempDir, "summary");
                     if (expectIncomplete) _environment.CommandLine.Returns($"SchemaQuench.exe --report:{reportBase}");
@@ -710,7 +902,8 @@ public class DeployPathTableFeatureTests
             {
                 config["SchemaPackagePath"] = savedPath;
                 config["Target:CompatEncoding"] = savedEncoding;
-                if (freshDatabase) DropDatabase(cmd, db);
+                if (freshDatabase || contained) DropDatabase(cmd, db);
+                if (contained && containmentWas == 0) { cmd.CommandText = "EXEC sp_configure 'contained database authentication', 0; RECONFIGURE;"; cmd.ExecuteNonQuery(); }
                 conn.Close();
                 LogFactory.Clear();
                 FactoryContainer.Unregister<IEnvironment>();
@@ -822,7 +1015,7 @@ public class DeployPathTableFeatureTests
     }
 
     private static void WritePackage(string dir, string db, string tableJson, string templateExtra = "", string betweenScript = null,
-                                     string beforeScript = null)
+                                     string beforeScript = null, string prerequisiteScript = null, string securityPolicyScript = null)
     {
         var tables = Path.Join(dir, "Templates", "Main", "Tables");
         Directory.CreateDirectory(tables);
@@ -843,6 +1036,22 @@ public class DeployPathTableFeatureTests
             File.WriteAllText(Path.Join(before, "Prepare.sql"), beforeScript);
             folders += (folders.Length > 0 ? ", " : "") + "{ \"FolderPath\": \"Before\", \"QuenchSlot\": \"Before\" }";
         }
+        var prerequisites = Path.Join(dir, "Templates", "Main", "Prerequisites");
+        if (Directory.Exists(prerequisites)) Directory.Delete(prerequisites, true);
+        if (prerequisiteScript != null)
+        {
+            Directory.CreateDirectory(prerequisites);
+            File.WriteAllText(Path.Join(prerequisites, "AlwaysEncryptedKeys.sql"), prerequisiteScript);
+            folders = "{ \"FolderPath\": \"Prerequisites\", \"QuenchSlot\": \"Objects\" }" + (folders.Length > 0 ? ", " : "") + folders;
+        }
+        var policies = Path.Join(dir, "Templates", "Main", "SecurityPolicies");
+        if (Directory.Exists(policies)) Directory.Delete(policies, true);
+        if (securityPolicyScript != null)
+        {
+            Directory.CreateDirectory(policies);
+            File.WriteAllText(Path.Join(policies, "sec.ProbePolicy.sql"), securityPolicyScript);
+            folders += (folders.Length > 0 ? ", " : "") + "{ \"FolderPath\": \"SecurityPolicies\", \"QuenchSlot\": \"AfterTablesObjects\", \"ObjectType\": \"SecurityPolicies\" }";
+        }
         File.WriteAllText(Path.Join(dir, "Product.json"),
             "{ \"Name\": \"DeployPathProbe\", \"ValidationScript\": \"SELECT CAST(1 AS BIT)\", \"TemplateOrder\": [\"Main\"], "
             + "\"ScriptTokens\": {}, \"ScriptFolders\": [], \"Platform\": \"SqlServer\" }");
@@ -859,6 +1068,8 @@ public class DeployPathTableFeatureTests
         _environment.ClearReceivedCalls();
         _betweenScript = null;
         _beforeScript = null;
+        _prerequisiteScript = null;
+        _securityPolicyScript = null;
         _nextDeployFails = false;
         FactoryContainer.Register(_environment);
         LogFactory.Register("ErrorLog", _errorLog);

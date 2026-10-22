@@ -41,7 +41,8 @@ BEGIN
          COALESCE((elem ->> 'Cache')::BIGINT, 1) AS "Cache",
          COALESCE((elem ->> 'Cycle')::BOOLEAN, false) AS "Cycle",
          LOWER(NULLIF(TRIM(elem ->> 'PersistenceType'), '')) AS "PersistenceType",
-         COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression"
+         COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
+         elem ->> 'Description' AS "Description"
     FROM src, JSON_ARRAY_ELEMENTS(arr) AS elem;
 
   -- Evaluate ShouldApplyExpression: drop sequences whose condition is false so a conditional variant is
@@ -70,7 +71,7 @@ BEGIN
   RAISE NOTICE 'Add Missing Sequences';
   SELECT STRING_AGG('RAISE NOTICE ''  Create sequence ' || s."Schema" || '.' || s."Name" || ''';' || CHR(10) ||
                     'CREATE ' || CASE WHEN s."PersistenceType" = 'unlogged' AND "SchemaSmith"."ServerVersionNum"() >= 15 THEN 'UNLOGGED ' ELSE '' END ||
-                    'SEQUENCE "' || s."Schema" || '"."' || s."Name" || '" AS ' || s."DataType" ||
+                    'SEQUENCE ' || "SchemaSmith"."QuoteName"(s."Schema") || '.' || "SchemaSmith"."QuoteName"(s."Name") || ' AS ' || s."DataType" ||
                     ' INCREMENT BY ' || s."Increment" ||
                     CASE WHEN s."MinValue" IS NOT NULL THEN ' MINVALUE ' || s."MinValue" ELSE ' NO MINVALUE' END ||
                     CASE WHEN s."MaxValue" IS NOT NULL THEN ' MAXVALUE ' || s."MaxValue" ELSE ' NO MAXVALUE' END ||
@@ -95,7 +96,7 @@ BEGIN
   -- RESTART, because that WOULD move the current value.
   RAISE NOTICE 'Fixup Modified Sequences';
   SELECT STRING_AGG('RAISE NOTICE ''  Altering sequence ' || s."Schema" || '.' || s."Name" || ''';' || CHR(10) ||
-                    'ALTER SEQUENCE "' || s."Schema" || '"."' || s."Name" || '"' ||
+                    'ALTER SEQUENCE ' || "SchemaSmith"."QuoteName"(s."Schema") || '.' || "SchemaSmith"."QuoteName"(s."Name") ||
                     CASE WHEN FORMAT_TYPE(q.seqtypid, NULL) <> s."DataType" THEN ' AS ' || s."DataType" ELSE '' END ||
                     CASE WHEN q.seqincrement <> s."Increment" THEN ' INCREMENT BY ' || s."Increment" ELSE '' END ||
                     CASE WHEN s."MinValue" IS NOT NULL AND q.seqmin <> s."MinValue" THEN ' MINVALUE ' || s."MinValue"
@@ -136,7 +137,7 @@ BEGIN
   -- value is converged, so a package that leaves it out never touches an existing sequence.
   RAISE NOTICE 'Fixup Sequence Persistence';
   SELECT STRING_AGG('RAISE NOTICE ''  Setting sequence ' || s."Schema" || '.' || s."Name" || ' ' || UPPER(s."PersistenceType") || ''';' || CHR(10) ||
-                    'ALTER SEQUENCE "' || s."Schema" || '"."' || s."Name" || '" SET ' || UPPER(s."PersistenceType") || ';' || CHR(10) ||
+                    'ALTER SEQUENCE ' || "SchemaSmith"."QuoteName"(s."Schema") || '.' || "SchemaSmith"."QuoteName"(s."Name") || ' SET ' || UPPER(s."PersistenceType") || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
                     'VALUES (pg_backend_pid(), ''sequence'', ''' || s."Schema" || '.' || s."Name" || ''', ''modified'');', CHR(10))
     INTO sql_script
@@ -146,6 +147,23 @@ BEGIN
    WHERE s."PersistenceType" IN ('logged', 'unlogged')
      AND "SchemaSmith"."ServerVersionNum"() >= 15
      AND (s."PersistenceType" = 'unlogged') <> (c.relpersistence = 'u');
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
+
+  -- The declared description, once the object exists. '' removes the comment; an omitted one leaves whatever is there.
+  RAISE NOTICE 'Fixup Sequence Descriptions';
+  SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of sequence ' ||
+                    REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+                    'COMMENT ON SEQUENCE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' IS ' ||
+                    CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
+                    'VALUES (pg_backend_pid(), ''sequence'', ''' || REPLACE(t."Schema" || '.' || t."Name", '''', '''''') || ''', ''modified'');', CHR(10))
+    INTO sql_script
+    FROM temp_sequences t
+    JOIN pg_class c ON c.relname = t."Name" AND c.relkind = 'S'
+    JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = t."Schema"
+   WHERE t."Description" IS NOT NULL
+     AND COALESCE(OBJ_DESCRIPTION(c.oid, 'pg_class'), '') IS DISTINCT FROM t."Description";
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
   IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 END $$;

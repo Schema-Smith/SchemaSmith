@@ -79,11 +79,14 @@
     [CdcIndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [Indexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [XmlIndexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [SpatialIndexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [JsonIndexes] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [Columns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [Statistics] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [FullTextIndex] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [ForeignKeys] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [CheckConstraints] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [EdgeConstraints] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
     [GraphType] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
@@ -104,7 +107,15 @@
     [RebuildPolicyThreshold] INT NULL,
     [RebuildPolicyOnOrderMismatch] BIT NULL,
     [RebuildPolicySpecified] BIT NULL,
-    [PreventDrop] BIT NULL
+    [PreventDrop] BIT NULL,
+    [OnlineApply] VARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerViewSchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerViewName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerTransactionIdColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerSequenceNumberColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerOperationTypeColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerOperationTypeDescColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #Tables
@@ -117,6 +128,14 @@
     [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NOT NULL,
     [XmlCompression] BIT NOT NULL,
     [IsTemporal] BIT NOT NULL,
+    -- The declared period columns (GeneratedAlways RowStart / RowEnd), lifted off #Columns below so that no ordinary
+    -- column pass sees them. NULL when the package declares none: the convention on a new table, unmanaged on an old one.
+    [PeriodStart] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [PeriodStartType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
+    [PeriodStartHidden] BIT NULL,
+    [PeriodEnd] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [PeriodEndType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
+    [PeriodEndHidden] BIT NULL,
     [HistoryTableSchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [HistoryTableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [HistoryRetentionPeriod] NVARCHAR(50) COLLATE DATABASE_DEFAULT NULL,
@@ -149,7 +168,15 @@
     [RebuildPolicyThreshold] INT NULL,
     [RebuildPolicyOnOrderMismatch] BIT NULL,
     [RebuildPolicySpecified] BIT NULL,
-    [PreventDrop] BIT NOT NULL
+    [PreventDrop] BIT NOT NULL,
+    [OnlineApply] VARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerViewSchema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerViewName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerTransactionIdColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerSequenceNumberColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerOperationTypeColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [LedgerOperationTypeDescColumn] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #Columns
@@ -182,11 +209,14 @@
     [EncryptionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
     [EncryptionKey] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
     [EncryptionAlgorithm] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [GeneratedAlways] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+    [Hidden] BIT NULL,
     [OldName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [NewColumn] BIT NULL,
     [ColumnScript] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
-    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #Indexes
@@ -218,8 +248,11 @@
     [IncludeColumns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [IgnoreDuplicateKey] BIT NULL,
     [PadIndex] BIT NULL,
+    [Disabled] BIT NULL,
+    [Order] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
-    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #XmlIndexes
@@ -235,6 +268,41 @@
     [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [PrimaryIndex] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [SecondaryIndexType] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [XmlCompression] BIT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    -- A selective XML index's declaration as JSON, and the path a secondary selective index is FOR; KindPrefix and
+    -- KindSuffix are what every create and compare renders around the index's name, table and column.
+    [Selective] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [ForPath] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [KindPrefix] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+    [KindSuffix] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
+  )
+
+  -- A JSON index's key is one column and a set of paths, so it has its own working set too.
+{{JsonIndexesTable}}
+  DROP TABLE IF EXISTS #SpatialIndexes
+  -- A spatial index's key is one column and a tessellation, so it has its own working set, as #XmlIndexes does.
+  -- Every attribute but the column is NULL when the package omits it: the engine's default on create, not compared after.
+  CREATE TABLE #SpatialIndexes
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [IndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [Tessellation] NVARCHAR(30) COLLATE DATABASE_DEFAULT NULL,
+    [XMin] FLOAT NULL,
+    [YMin] FLOAT NULL,
+    [XMax] FLOAT NULL,
+    [YMax] FLOAT NULL,
+    [Level1] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level2] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level3] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [Level4] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL,
+    [CellsPerObject] INT NULL,
+    [FillFactor] TINYINT NULL,
+    [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
@@ -264,7 +332,11 @@
     [DeleteAction] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
     [UpdateAction] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
-    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    -- NULL on ingest, the default after NORMALIZE (1, 1, 0).
+    [Enforced] BIT NULL,
+    [Validated] BIT NULL,
+    [NotForReplication] BIT NULL
   )
 
   DROP TABLE IF EXISTS #CheckConstraints
@@ -277,6 +349,31 @@
     [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
     [ConstraintName] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
     [Expression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    [Enforced] BIT NULL,
+    [Validated] BIT NULL,
+    [NotForReplication] BIT NULL
+  )
+
+  -- Graph key parts (#graph): an index over $from_id / $to_id is four hidden columns in the catalog; the staging
+  -- table maps them back to the two names a package can write, and marks the graph_id column no package can.
+  IF OBJECT_ID('tempdb..#GraphKeyParts') IS NOT NULL DROP TABLE #GraphKeyParts
+  CREATE TABLE #GraphKeyParts ([object_id] INT NOT NULL, [column_id] INT NOT NULL, [graph_type] INT NOT NULL, [PseudoName] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL)
+  EXEC SchemaSmith.StageGraphKeyParts
+
+
+  DROP TABLE IF EXISTS #EdgeConstraints
+  -- Edge constraints (#graph, SQL Server 2019). ClauseSet is the CONNECTION clauses as emitted and compared: each
+  -- "[s].[from] TO [s].[to]", sorted, comma-separated, so declaration order never counts as a change.
+  CREATE TABLE #EdgeConstraints
+  (
+    [_RowId] BIGINT NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [ConstraintName] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [DeleteAction] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+    [ClauseSet] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
@@ -315,6 +412,18 @@
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
   )
 
+  DROP TABLE IF EXISTS #ExtendedProperties
+  -- One row per name in a component's Extensions.ExtendedProperties bag, read by ExtendedPropertyQuench.
+  CREATE TABLE #ExtendedProperties
+  (
+    [ObjectType] NVARCHAR(20) COLLATE DATABASE_DEFAULT NOT NULL,
+    [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+    [ObjectName] NVARCHAR(500) COLLATE DATABASE_DEFAULT NULL,
+    [Name] NVARCHAR(128) COLLATE DATABASE_DEFAULT NOT NULL,
+    [Value] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
+  )
+
   -- ===== INGEST SPLIT =====
 
   -- The fill half has to be safe to run twice against the same working set. It is retried on transient
@@ -326,10 +435,13 @@
   TRUNCATE TABLE #Tables
   TRUNCATE TABLE #Indexes
   TRUNCATE TABLE #XmlIndexes
+  TRUNCATE TABLE #SpatialIndexes
+  TRUNCATE TABLE #JsonIndexes
   TRUNCATE TABLE #ForeignKeys
   TRUNCATE TABLE #CheckConstraints
   TRUNCATE TABLE #Statistics
   TRUNCATE TABLE #FullTextIndexes
+  TRUNCATE TABLE #ExtendedProperties
 
   -- The reset lives inside the region, not with the shared ones above: a client that built these rows
   -- loaded them BEFORE this half ran, and a reset outside the region would wipe them and leave the table
@@ -361,7 +473,7 @@
     THROW 51000, @v_Msg, 1;
   END
 
-  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop])
+  INSERT INTO #TableDefinitions ([_RowId], [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [UpdateFillFactor], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [Indexes], [XmlIndexes], [SpatialIndexes], [JsonIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints], [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [OnlineApply], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn])
   -- INGEST ONLY -- raw values straight off the shred. Every transform that used to live in this
   -- SELECT moved to the NORMALIZE pass below, so a second ingestion path (C# bulk-loading these rows
   -- instead of shredding JSON) gets the identical treatment from one definition rather than a
@@ -379,12 +491,15 @@
          [CdcFilegroup],
          [CdcSupportsNetChanges],
          [CdcIndexName],
-         [Indexes], [XmlIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints],
+         [Indexes], [XmlIndexes], [SpatialIndexes], [JsonIndexes], [Columns], [Statistics], [FullTextIndex], [ForeignKeys], [CheckConstraints], [EdgeConstraints],
          [ShouldApplyExpression], [VariantName], [GraphType], [Ledger], [MemoryOptimized], [Durability], [EnableCDC], [EnableChangeTracking], [TrackColumnsUpdated], [OldName],
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch],
          [RebuildPolicySpecified] = CONVERT(BIT, CASE WHEN [RebuildPolicyJson] IS NOT NULL THEN 1 ELSE 0 END),
-         [PreventDrop]
+         -- NULL stays NULL (omitted: leave the database's description alone); '' stays '' (remove it). An
+         -- MS_Description left inside Extensions.ExtendedProperties, where extraction used to put it, still counts.
+         [PreventDrop], [OnlineApply] = UPPER(NULLIF(LTRIM(RTRIM([OnlineApply])), '')), [Description] = COALESCE([Description], [LegacyDescription]),
+         [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn]
     FROM OPENJSON(@TableDefinitions) WITH (
       [Schema] NVARCHAR(500) '$.Schema',
       [Name] NVARCHAR(500) '$.Name',
@@ -403,11 +518,14 @@
       [OldName] NVARCHAR(500) '$.OldName',
 	  [Indexes] NVARCHAR(MAX) '$.Indexes' AS JSON,
 	  [XmlIndexes] NVARCHAR(MAX) '$.XmlIndexes' AS JSON,
+	  [SpatialIndexes] NVARCHAR(MAX) '$.SpatialIndexes' AS JSON,
+	  [JsonIndexes] NVARCHAR(MAX) '$.JsonIndexes' AS JSON,
       [Columns] NVARCHAR(MAX) '$.Columns' AS JSON,
 	  [Statistics] NVARCHAR(MAX) '$.Statistics' AS JSON,
 	  [FullTextIndex] NVARCHAR(MAX) '$.FullTextIndex' AS JSON,
       [ForeignKeys] NVARCHAR(MAX) '$.ForeignKeys' AS JSON,
       [CheckConstraints] NVARCHAR(MAX) '$.CheckConstraints' AS JSON,
+      [EdgeConstraints] NVARCHAR(MAX) '$.EdgeConstraints' AS JSON,
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName',
       [EnableCDC] BIT '$.EnableCDC',
@@ -431,7 +549,16 @@
       [RebuildPolicyOnOrderMismatch] BIT '$.RebuildPolicy.OnOrderMismatch',
       -- The OBJECT, read only to answer "did this table declare a policy at all?" -- see the sentinel above.
       [RebuildPolicyJson] NVARCHAR(MAX) '$.RebuildPolicy' AS JSON,
-      [PreventDrop] BIT '$.PreventDrop'
+      [PreventDrop] BIT '$.PreventDrop',
+      [OnlineApply] NVARCHAR(20) '$.OnlineApply',
+      [Description] NVARCHAR(MAX) '$.Description',
+      [LegacyDescription] NVARCHAR(MAX) '$.Extensions.ExtendedProperties.MS_Description',
+      [LedgerViewSchema] NVARCHAR(500) '$.LedgerView.Schema',
+      [LedgerViewName] NVARCHAR(500) '$.LedgerView.Name',
+      [LedgerTransactionIdColumn] NVARCHAR(500) '$.LedgerView.TransactionIdColumn',
+      [LedgerSequenceNumberColumn] NVARCHAR(500) '$.LedgerView.SequenceNumberColumn',
+      [LedgerOperationTypeColumn] NVARCHAR(500) '$.LedgerView.OperationTypeColumn',
+      [LedgerOperationTypeDescColumn] NVARCHAR(500) '$.LedgerView.OperationTypeDescColumn'
       ) t;
   
 
@@ -473,7 +600,13 @@
         [Durability] = UPPER(RTRIM(ISNULL(NULLIF([Durability], ''), 'SCHEMA_AND_DATA'))),
         [TrackColumnsUpdated] = ISNULL([TrackColumnsUpdated], 0),
         [OldName] = SchemaSmith.fn_SafeBracketWrap([OldName]),
-        [PreventDrop] = ISNULL([PreventDrop], 0)
+        [PreventDrop] = ISNULL([PreventDrop], 0),
+        [LedgerViewSchema] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerViewSchema]), '')),
+        [LedgerViewName] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerViewName]), '')),
+        [LedgerTransactionIdColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerTransactionIdColumn]), '')),
+        [LedgerSequenceNumberColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerSequenceNumberColumn]), '')),
+        [LedgerOperationTypeColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerOperationTypeColumn]), '')),
+        [LedgerOperationTypeDescColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM([LedgerOperationTypeDescColumn]), ''))
 
   -- Identify Tables to skip based on ShouldApply expression
   -- Scoped by [_RowId] so each generated DELETE targets exactly the source row whose
@@ -483,12 +616,12 @@
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
 
-  INSERT INTO #Tables ([Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName], [NewTable], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop])
+  INSERT INTO #Tables ([Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName], [NewTable], [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct], [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified], [PreventDrop], [OnlineApply], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn])
   SELECT [Schema], [Name], [CompressionType], [XmlCompression], [IsTemporal], [HistoryTableSchema], [HistoryTableName], [HistoryRetentionPeriod], [FileGroup], [PartitionScheme], [PartitionColumn], [FileStreamFileGroup], [TextImageFileGroup], [UpdateFillFactor], [EnableCDC], [CdcFilegroup], [CdcSupportsNetChanges], [CdcIndexName], [EnableChangeTracking], [TrackColumnsUpdated], [GraphType], [Ledger], [MemoryOptimized], [Durability], [OldName], [VariantName],
          CONVERT(BIT, CASE WHEN OBJECT_ID([Schema] + '.' + [Name], 'U') IS NULL AND OBJECT_ID([Schema] + '.' + [OldName], 'U') IS NULL THEN 1 ELSE 0 END) AS NewTable,
          [DropColumnsRemovedFromProduct], [DropForeignKeysRemovedFromProduct], [DropCheckConstraintsRemovedFromProduct], [DropExcludeConstraintsRemovedFromProduct], [DropStatisticsRemovedFromProduct], [DropIndexesRemovedFromProduct],
          [RebuildPolicyMode], [RebuildPolicyThreshold], [RebuildPolicyOnOrderMismatch], [RebuildPolicySpecified],
-         ISNULL([PreventDrop], 0) AS [PreventDrop]
+         ISNULL([PreventDrop], 0) AS [PreventDrop], [OnlineApply], [Description], [LedgerViewSchema], [LedgerViewName], [LedgerTransactionIdColumn], [LedgerSequenceNumberColumn], [LedgerOperationTypeColumn], [LedgerOperationTypeDescColumn]
     FROM #TableDefinitions WITH (NOLOCK);
   
   -- Removed outright by an ingest path that supplies these rows itself, for the same reason as
@@ -496,7 +629,7 @@
   -- 6,938 ms of a 1,783-table parse against ~125 ms for the other six child tables combined.
   TRUNCATE TABLE #Columns
   RAISERROR('Parse Columns from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [AnsiPadding], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [OldName], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #Columns ([_RowId], [Schema], [TableName], [ColumnName], [DataType], [Nullable], [Default], [CheckExpression], [ComputedExpression], [Persisted], [Sparse], [FileStream], [IsColumnSet], [BackfillExistingRows], [AnsiPadding], [Collation], [DataMaskFunction], [EncryptionType], [EncryptionKey], [EncryptionAlgorithm], [GeneratedAlways], [Hidden], [OldName], [ShouldApplyExpression], [VariantName], [Description])
   -- INGEST ONLY -- raw values straight off the shred, exactly as the other tables do it. Every default,
   -- bracket-wrap, type canonicalization and the whole ColumnScript build moved to the NORMALIZE pass
   -- below, so a second ingestion path supplying these rows gets the identical treatment from one
@@ -507,8 +640,8 @@
          c.[DataType], c.[Nullable], c.[Default], c.[CheckExpression],
          c.[ComputedExpression], c.[Persisted], c.[Sparse], c.[FileStream], c.[IsColumnSet],
          c.[BackfillExistingRows], c.[AnsiPadding], c.[Collation], c.[DataMaskFunction], c.[EncryptionType],
-         c.[EncryptionKey], c.[EncryptionAlgorithm], c.[OldName],
-         c.[ShouldApplyExpression], c.[VariantName]
+         c.[EncryptionKey], c.[EncryptionAlgorithm], c.[GeneratedAlways], c.[Hidden], c.[OldName],
+         c.[ShouldApplyExpression], c.[VariantName], [Description] = COALESCE(c.[Description], c.[LegacyDescription])
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(Columns) WITH (
       [ColumnName] NVARCHAR(500) '$.Name',
@@ -528,9 +661,13 @@
       [EncryptionType] NVARCHAR(100) '$.EncryptionType',
       [EncryptionKey] NVARCHAR(500) '$.EncryptionKey',
       [EncryptionAlgorithm] NVARCHAR(500) '$.EncryptionAlgorithm',
+      [GeneratedAlways] NVARCHAR(20) '$.GeneratedAlways',
+      [Hidden] BIT '$.Hidden',
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName',
-      [OldName] NVARCHAR(500) '$.OldName'
+      [OldName] NVARCHAR(500) '$.OldName',
+      [Description] NVARCHAR(MAX) '$.Description',
+      [LegacyDescription] NVARCHAR(MAX) '$.Extensions.ExtendedProperties.MS_Description'
       ) c;
 
   -- NullableDeclared FIRST, and in its own statement, because it must capture whether the package
@@ -600,6 +737,12 @@
                    CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE' AND SchemaSmith.fn_ServerMajorVersion() >= 13
                         THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = ''' + [EncryptionAlgorithm] + ''')'
                         ELSE '' END +
+                   -- A ledger table's generated column (2022): the role, and HIDDEN when declared. Only ever in a CREATE TABLE.
+                   ISNULL(CASE UPPER([GeneratedAlways]) WHEN 'TRANSACTIONIDSTART' THEN ' GENERATED ALWAYS AS TRANSACTION_ID START'
+                                                  WHEN 'TRANSACTIONIDEND' THEN ' GENERATED ALWAYS AS TRANSACTION_ID END'
+                                                  WHEN 'SEQUENCENUMBERSTART' THEN ' GENERATED ALWAYS AS SEQUENCE_NUMBER START'
+                                                  WHEN 'SEQUENCENUMBEREND' THEN ' GENERATED ALWAYS AS SEQUENCE_NUMBER END' END +
+                          CASE WHEN ISNULL([Hidden], 0) = 1 THEN ' HIDDEN' ELSE '' END, '') +
                    CASE WHEN ISNULL(Nullable, 0) = 1 THEN ' NULL' ELSE ' NOT NULL' END +
                    CASE WHEN RTRIM(ISNULL([Default], '')) <> '' THEN ' DEFAULT ' + [Default] ELSE '' END
               END
@@ -608,6 +751,9 @@
   -- resolved to their base type). AnsiPadding stays NULL when the package omits it, which leaves the column unmanaged.
   UPDATE #Columns
     SET [PaddingApplies] = CASE WHEN RTRIM(ISNULL([ComputedExpression], '')) = '' AND [IsColumnSet] = 0 AND [FileStream] = 0 AND [EncryptionType] = 'NONE'
+                                 -- A ledger table pads every column whatever ANSI_PADDING says, so the setting never applies there.
+                                 AND NOT EXISTS (SELECT 1 FROM #Tables lt WITH (NOLOCK)
+                                                  WHERE lt.[Schema] = #Columns.[Schema] AND lt.[Name] = #Columns.[TableName] AND ISNULL(lt.[Ledger], 'Off') <> 'Off')
                                  AND EXISTS (SELECT 1 FROM sys.types ty
                                               WHERE ty.user_type_id = ISNULL(TYPE_ID(RTRIM(LEFT(SchemaSmith.fn_NormalizeDataType([DataType]), CHARINDEX('(', SchemaSmith.fn_NormalizeDataType([DataType]) + '(') - 1))), TYPE_ID(LOWER(RTRIM(LEFT(SchemaSmith.fn_NormalizeDataType([DataType]), CHARINDEX('(', SchemaSmith.fn_NormalizeDataType([DataType]) + '(') - 1)))))
                                                 AND TYPE_NAME(ty.system_type_id) IN ('char', 'varchar', 'binary', 'varbinary'))
@@ -739,6 +885,15 @@
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
 
+  -- The declared period columns go onto their table row and off #Columns, so no ordinary column pass sees them.
+  EXEC SchemaSmith.LiftPeriodColumns
+  -- A ledger table's declared generated columns, by role (sys.columns.generated_always_type 7-10). Filled by
+  -- LiftLedgerColumns; on an existing table they are off #Columns and converge in LedgerQuench.
+  IF OBJECT_ID('tempdb..#LedgerColumns') IS NOT NULL DROP TABLE #LedgerColumns
+  CREATE TABLE #LedgerColumns ([Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+                               [RoleType] TINYINT NOT NULL, [ColumnName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Hidden] BIT NOT NULL)
+  EXEC SchemaSmith.LiftLedgerColumns
+
   -- Don't try to apply tables without columns
   DELETE FROM #Tables
     WHERE NOT EXISTS (SELECT * FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = #Tables.[Schema] AND c.[TableName] = #Tables.[Name])
@@ -746,7 +901,7 @@
     WHERE NOT EXISTS (SELECT * FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = #TableDefinitions.[Schema] AND c.[TableName] = #TableDefinitions.[Name])
 
   RAISERROR('Parse Indexes from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #Indexes ([_RowId], [Schema], [TableName], [IndexName], [CompressionType], [XmlCompression], [PrimaryKey], [Unique], [UniqueConstraint], [Clustered], [ColumnStore], [FillFactor], [FilterExpression], [FileGroup], [PartitionScheme], [PartitionColumn], [BucketCount], [UpdateFillFactor], [IndexColumns], [IncludeColumns], [IgnoreDuplicateKey], [PadIndex], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #Indexes ([_RowId], [Schema], [TableName], [IndexName], [CompressionType], [XmlCompression], [PrimaryKey], [Unique], [UniqueConstraint], [Clustered], [ColumnStore], [FillFactor], [FilterExpression], [FileGroup], [PartitionScheme], [PartitionColumn], [BucketCount], [UpdateFillFactor], [IndexColumns], [IncludeColumns], [IgnoreDuplicateKey], [PadIndex], [Disabled], [Order], [ShouldApplyExpression], [VariantName], [Description])
   -- INGEST ONLY -- raw values; NORMALIZE below owns every transform, so a second ingestion path gets
   -- the same treatment from the same code rather than a reimplementation of these rules.
   -- [UpdateFillFactor] is computed here, not in NORMALIZE: it combines the @UpdateFillFactor parameter
@@ -760,8 +915,8 @@
          [UpdateFillFactor] = CONVERT(BIT, CASE WHEN @UpdateFillFactor = 1 OR t.[UpdateFillFactor] = 1 OR i.[UpdateFillFactor] = 1 THEN 1 ELSE 0 END),
          i.[IndexColumns],
          i.[IncludeColumns],
-         i.[IgnoreDuplicateKey], i.[PadIndex],
-         i.[ShouldApplyExpression], i.[VariantName]
+         i.[IgnoreDuplicateKey], i.[PadIndex], i.[Disabled], i.[Order],
+         i.[ShouldApplyExpression], i.[VariantName], [Description] = COALESCE(i.[Description], i.[LegacyDescription])
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(Indexes) WITH (
       [IndexName] NVARCHAR(500) '$.Name',
@@ -774,6 +929,8 @@
       [ColumnStore] BIT '$.ColumnStore',
       [IgnoreDuplicateKey] BIT '$.IgnoreDuplicateKey',
       [PadIndex] BIT '$.PadIndex',
+      [Disabled] BIT '$.Disabled',
+      [Order] NVARCHAR(MAX) '$.Order',
       [FillFactor] TINYINT '$.FillFactor',
       [FilterExpression] NVARCHAR(MAX) '$.FilterExpression',
       [IndexColumns] NVARCHAR(MAX) '$.IndexColumns',
@@ -784,7 +941,9 @@
       [BucketCount] INT '$.BucketCount',
       [UpdateFillFactor] BIT '$.UpdateFillFactor',
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
-      [VariantName] NVARCHAR(128) '$.VariantName'
+      [VariantName] NVARCHAR(128) '$.VariantName',
+      [Description] NVARCHAR(MAX) '$.Description',
+      [LegacyDescription] NVARCHAR(MAX) '$.Extensions.ExtendedProperties.MS_Description'
       ) i;
   
   -- NORMALIZE -- one definition, applied however the rows arrived. Every assignment reads the row's
@@ -793,7 +952,7 @@
   -- statement -- which is what keeps this a faithful move rather than a re-ordering.
   UPDATE #Indexes
      SET [IndexName]        = SchemaSmith.fn_SafeBracketWrap([IndexName]),
-         [CompressionType]  = ISNULL(NULLIF(RTRIM([CompressionType]), ''), 'NONE'),
+         [CompressionType]  = CASE WHEN ISNULL([ColumnStore], 0) = 1 AND ISNULL(NULLIF(RTRIM([CompressionType]), ''), 'NONE') = 'NONE' THEN 'COLUMNSTORE' ELSE ISNULL(NULLIF(RTRIM([CompressionType]), ''), 'NONE') END,
          [XmlCompression]   = ISNULL([XmlCompression], 0),
          [PrimaryKey]       = ISNULL([PrimaryKey], 0),
          [Unique]           = COALESCE(NULLIF([Unique], 0), NULLIF([PrimaryKey], 0), [UniqueConstraint], 0),
@@ -814,7 +973,21 @@
                                  FROM STRING_SPLIT([IncludeColumns], ',')
                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [IgnoreDuplicateKey] = ISNULL([IgnoreDuplicateKey], 0),
-         [PadIndex]         = ISNULL([PadIndex], 0);
+         [PadIndex]         = ISNULL([PadIndex], 0),
+         [Disabled]         = ISNULL([Disabled], 0),
+         -- The ordered-columnstore column list, in declared order (it is the sort order).
+         [Order]            = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
+                                 FROM STRING_SPLIT([Order], ',')
+                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '');
+
+  -- A nonclustered columnstore index has no key: its columns are included columns, which is how they are read back. Declared
+  -- in IndexColumns instead, they are moved there, so the index is created and compares equal to its extraction.
+  UPDATE #Indexes
+     SET [IncludeColumns] = STUFF((SELECT ',' + [value]
+                                     FROM SchemaSmith.fn_SplitList([IndexColumns], ',')
+                                     ORDER BY [value] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
+         [IndexColumns] = NULL
+   WHERE [ColumnStore] = 1 AND [Clustered] = 0 AND RTRIM(ISNULL([IncludeColumns], '')) = '' AND RTRIM(ISNULL([IndexColumns], '')) <> ''
 
   -- Identify Indexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #Indexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
@@ -823,12 +996,12 @@
   EXEC(@v_SQL)
   
   RAISERROR('Parse XML Indexes from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [XmlCompression], [ShouldApplyExpression], [VariantName], [Selective], [ForPath])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          -- INGEST ONLY -- NORMALIZE below owns the transforms.
          t.[Schema], t.[Name] AS [TableName], i.[IndexName], i.[IsPrimary],
          i.[Column], i.[PrimaryIndex],
-         i.[SecondaryIndexType], i.[ShouldApplyExpression], i.[VariantName]
+         i.[SecondaryIndexType], i.[XmlCompression], i.[ShouldApplyExpression], i.[VariantName], i.[Selective], i.[ForPath]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(XmlIndexes) WITH (
       [IndexName] NVARCHAR(500) '$.Name',
@@ -836,15 +1009,20 @@
       [Column] NVARCHAR(500) '$.Column',
       [PrimaryIndex] NVARCHAR(500) '$.PrimaryIndex',
 	  [SecondaryIndexType] NVARCHAR(500) '$.SecondaryIndexType',
+      [XmlCompression] BIT '$.XmlCompression',
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
-      [VariantName] NVARCHAR(128) '$.VariantName'
+      [VariantName] NVARCHAR(128) '$.VariantName',
+      [Selective] NVARCHAR(MAX) '$.Selective' AS JSON,
+      [ForPath] NVARCHAR(200) '$.ForPath'
       ) i;
 
   -- NORMALIZE -- one definition, applied however the rows arrived.
   UPDATE #XmlIndexes
      SET [IndexName]    = SchemaSmith.fn_SafeBracketWrap([IndexName]),
          [Column]       = SchemaSmith.fn_SafeBracketWrap([Column]),
-         [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap([PrimaryIndex]);
+         [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap([PrimaryIndex]),
+         [XmlCompression] = ISNULL([XmlCompression], 0);
+{{ParseSelectiveXmlIndexesJson}}
 
   -- Identify XmlIndexes to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #XmlIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
@@ -852,6 +1030,53 @@
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
   
+  RAISERROR('Parse Spatial Indexes from Json', 10, 100) WITH NOWAIT
+  INSERT INTO #SpatialIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Tessellation], [XMin], [YMin], [XMax], [YMax],
+                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])
+  SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
+         -- INGEST ONLY -- NORMALIZE below owns the transforms.
+         t.[Schema], t.[Name] AS [TableName], s.[IndexName], s.[Column], s.[Tessellation], s.[XMin], s.[YMin], s.[XMax], s.[YMax],
+         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[CompressionType], s.[ShouldApplyExpression], s.[VariantName]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(SpatialIndexes) WITH (
+      [IndexName] NVARCHAR(500) '$.Name',
+      [Column] NVARCHAR(500) '$.Column',
+      [Tessellation] NVARCHAR(30) '$.Tessellation',
+      [XMin] FLOAT '$.BoundingBox.XMin',
+      [YMin] FLOAT '$.BoundingBox.YMin',
+      [XMax] FLOAT '$.BoundingBox.XMax',
+      [YMax] FLOAT '$.BoundingBox.YMax',
+      [Level1] NVARCHAR(10) '$.Grids.Level1',
+      [Level2] NVARCHAR(10) '$.Grids.Level2',
+      [Level3] NVARCHAR(10) '$.Grids.Level3',
+      [Level4] NVARCHAR(10) '$.Grids.Level4',
+      [CellsPerObject] INT '$.CellsPerObject',
+      [FillFactor] TINYINT '$.FillFactor',
+      [CompressionType] NVARCHAR(100) '$.CompressionType',
+      [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
+      [VariantName] NVARCHAR(128) '$.VariantName'
+      ) s;
+
+  -- NORMALIZE -- names wrapped, the scheme and densities in upper case, however the rows arrived.
+  UPDATE #SpatialIndexes
+     SET [IndexName]    = SchemaSmith.fn_SafeBracketWrap([IndexName]),
+         [Column]       = SchemaSmith.fn_SafeBracketWrap([Column]),
+         [Tessellation] = UPPER(NULLIF(RTRIM([Tessellation]), '')),
+         [Level1]       = UPPER(NULLIF(RTRIM([Level1]), '')),
+         [Level2]       = UPPER(NULLIF(RTRIM([Level2]), '')),
+         [Level3]       = UPPER(NULLIF(RTRIM([Level3]), '')),
+         [Level4]       = UPPER(NULLIF(RTRIM([Level4]), '')),
+         [FillFactor]   = NULLIF([FillFactor], 0),
+         [CompressionType] = UPPER(NULLIF(RTRIM([CompressionType]), ''));
+
+  -- Identify SpatialIndexes to skip based on ShouldApply expression (scoped by [_RowId])
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('DELETE FROM #SpatialIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX))
+                           FROM #SpatialIndexes WITH (NOLOCK)
+                           WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  EXEC(@v_SQL)
+
+{{ParseJsonIndexesJson}}
   RAISERROR('Parse Foreign Keys from Json', 10, 100) WITH NOWAIT
   -- I5: missing/blank RelatedTableSchema is a programmer error after slice-1's resolver
   -- (which fills it from the platform default for regular templates or {{SchemaName}} for
@@ -862,7 +1087,7 @@
   -- (the kindling JSON for SchemaSmith's own bootstrap tables passes a single object).
   -- Post-parse the check is uniform across object / array inputs.
 
-  INSERT INTO #ForeignKeys ([_RowId], [Schema], [TableName], [KeyName], [RelatedTableSchema], [RelatedTable], [Columns], [RelatedColumns], [DeleteAction], [UpdateAction], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #ForeignKeys ([_RowId], [Schema], [TableName], [KeyName], [RelatedTableSchema], [RelatedTable], [Columns], [RelatedColumns], [DeleteAction], [UpdateAction], [ShouldApplyExpression], [VariantName], [Enforced], [Validated], [NotForReplication])
   -- INGEST ONLY -- raw values straight off the shred. Every transform that used to live in this SELECT
   -- moved to the NORMALIZE pass below, so that a second ingestion path (C# bulk-loading these rows
   -- instead of shredding JSON) gets the identical treatment from one definition rather than a
@@ -874,7 +1099,8 @@
          f.[RelatedColumns],
          f.[DeleteAction],
          f.[UpdateAction],
-         f.[ShouldApplyExpression], f.[VariantName]
+         f.[ShouldApplyExpression], f.[VariantName],
+         f.[Enforced], f.[Validated], f.[NotForReplication]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(ForeignKeys) WITH (
       [KeyName] NVARCHAR(500) '$.Name',
@@ -885,7 +1111,10 @@
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName',
       [DeleteAction] NVARCHAR(20) '$.DeleteAction',
-      [UpdateAction] NVARCHAR(20) '$.UpdateAction'
+      [UpdateAction] NVARCHAR(20) '$.UpdateAction',
+      [Enforced] BIT '$.Enforced',
+      [Validated] BIT '$.Validated',
+      [NotForReplication] BIT '$.NotForReplication'
       ) f;
 
   -- I5: post-parse RelatedTableSchema check. fn_SafeBracketWrap(NULL) returns NULL
@@ -929,16 +1158,52 @@
   EXEC(@v_SQL)
 
   RAISERROR('Parse Table Level Check Constraints from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #CheckConstraints ([_RowId], [Schema], [TableName], [ConstraintName], [Expression], [ShouldApplyExpression], [VariantName])
+  INSERT INTO #CheckConstraints ([_RowId], [Schema], [TableName], [ConstraintName], [Expression], [ShouldApplyExpression], [VariantName], [Enforced], [Validated], [NotForReplication])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
-         t.[Schema], t.[Name] AS [TableName], c.[ConstraintName], c.[Expression], c.[ShouldApplyExpression], c.[VariantName]
+         t.[Schema], t.[Name] AS [TableName], c.[ConstraintName], c.[Expression], c.[ShouldApplyExpression], c.[VariantName],
+         c.[Enforced], c.[Validated], c.[NotForReplication]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(CheckConstraints) WITH (
       [ConstraintName] NVARCHAR(500) '$.Name',
       [Expression] NVARCHAR(MAX) '$.Expression',
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
-      [VariantName] NVARCHAR(128) '$.VariantName'
+      [VariantName] NVARCHAR(128) '$.VariantName',
+      [Enforced] BIT '$.Enforced',
+      [Validated] BIT '$.Validated',
+      [NotForReplication] BIT '$.NotForReplication'
       ) c;
+
+  -- Every component's Extensions.ExtendedProperties bag, one row per name, as written. ExtendedPropertyQuench
+  -- matches the rows to the components that survive the ShouldApply pruning below, so nothing is pruned here.
+  INSERT INTO #ExtendedProperties ([ObjectType], [Schema], [TableName], [ObjectName], [Name], [Value])
+  SELECT 'table', t.[Schema], t.[Name], NULL, ep.[key], ep.[value]
+    FROM OPENJSON(@TableDefinitions) WITH ([Schema] NVARCHAR(500) '$.Schema', [Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) t
+    CROSS APPLY OPENJSON(t.[Eps]) ep
+   WHERE t.[Eps] IS NOT NULL
+  UNION ALL
+  SELECT 'column', t.[Schema], t.[Name], c.[Name], ep.[key], ep.[value]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(t.[Columns]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) c
+    CROSS APPLY OPENJSON(c.[Eps]) ep
+   WHERE c.[Eps] IS NOT NULL
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], i.[Name], ep.[key], ep.[value]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(t.[Indexes]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) i
+    CROSS APPLY OPENJSON(i.[Eps]) ep
+   WHERE i.[Eps] IS NOT NULL
+  UNION ALL
+  SELECT 'foreignKey', t.[Schema], t.[Name], k.[Name], ep.[key], ep.[value]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(t.[ForeignKeys]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) k
+    CROSS APPLY OPENJSON(k.[Eps]) ep
+   WHERE k.[Eps] IS NOT NULL
+  UNION ALL
+  SELECT 'constraint', t.[Schema], t.[Name], cc.[Name], ep.[key], ep.[value]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(t.[CheckConstraints]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) cc
+    CROSS APPLY OPENJSON(cc.[Eps]) ep
+   WHERE cc.[Eps] IS NOT NULL
 
   -- Identify CheckConstraints to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG('DELETE FROM #CheckConstraints WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');', CHAR(13) + CHAR(10))
@@ -946,6 +1211,31 @@
     WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
   EXEC(@v_SQL)
   
+  RAISERROR('Parse Edge Constraints from Json', 10, 100) WITH NOWAIT
+  INSERT INTO #EdgeConstraints ([_RowId], [Schema], [TableName], [ConstraintName], [DeleteAction], [ClauseSet], [ShouldApplyExpression], [VariantName])
+  SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
+         SchemaSmith.fn_SafeBracketWrap(t.[Schema]), SchemaSmith.fn_SafeBracketWrap(t.[Name]), SchemaSmith.fn_SafeBracketWrap(e.[ConstraintName]),
+         CASE WHEN UPPER(RTRIM(ISNULL(e.[DeleteAction], ''))) = 'CASCADE' THEN 'CASCADE' ELSE 'NO ACTION' END,
+         -- A bare table name is in the edge table's own schema, as SQL Server resolves it; a qualified one keeps its schema.
+         (SELECT STRING_AGG(CAST(x.[Clause] AS NVARCHAR(MAX)), ', ') WITHIN GROUP (ORDER BY x.[Clause])
+            FROM OPENJSON(e.[Clauses]) WITH ([FromTable] NVARCHAR(500) '$.FromTable', [ToTable] NVARCHAR(500) '$.ToTable') c
+            CROSS APPLY (SELECT [Clause] = ISNULL(QUOTENAME(PARSENAME(c.[FromTable], 2)), SchemaSmith.fn_SafeBracketWrap(t.[Schema])) + '.' + QUOTENAME(PARSENAME(c.[FromTable], 1)) + ' TO ' +
+                                            ISNULL(QUOTENAME(PARSENAME(c.[ToTable], 2)), SchemaSmith.fn_SafeBracketWrap(t.[Schema])) + '.' + QUOTENAME(PARSENAME(c.[ToTable], 1))) x),
+         e.[ShouldApplyExpression], e.[VariantName]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(EdgeConstraints) WITH (
+      [ConstraintName] NVARCHAR(500) '$.Name',
+      [DeleteAction] NVARCHAR(20) '$.DeleteAction',
+      [Clauses] NVARCHAR(MAX) '$.Clauses' AS JSON,
+      [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
+      [VariantName] NVARCHAR(128) '$.VariantName'
+      ) e;
+
+  SELECT @v_SQL = STRING_AGG(CAST('DELETE FROM #EdgeConstraints WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
+    FROM #EdgeConstraints WITH (NOLOCK)
+    WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
+  EXEC(@v_SQL)
+
   RAISERROR('Parse Statistics from Json', 10, 100) WITH NOWAIT
   INSERT INTO #Statistics ([_RowId], [Schema], [TableName], [StatisticName], [SampleSize], [FilterExpression], [Columns], [ShouldApplyExpression], [VariantName])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),

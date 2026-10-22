@@ -359,6 +359,12 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
 
             cmd.CommandText = "CREATE TABLE dbo.CompatProbe ([Qty] INT NULL)";
             cmd.ExecuteNonQuery();
+            // #508: a CHECK another tool created at compat 100, so SQL Server holds the 3-argument CONVERT. Checked on a
+            // copy in tempdb it would render at the server's level, differ, and be re-applied; the copy is in this database.
+            cmd.CommandText = "CREATE TABLE dbo.CompatAdopt ([Qty] INT NULL, CONSTRAINT [CK_CompatAdopt_Qty] CHECK (CONVERT(varchar(10), Qty) <> ''))";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "SELECT OBJECT_ID('dbo.CK_CompatAdopt_Qty')";
+            var adoptId = Convert.ToInt32(cmd.ExecuteScalar());
 
             const string tableJson = """
                 [{
@@ -366,6 +372,12 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
                     "Name": "[CompatProbe]",
                     "Columns": [ {"Name": "[Qty]", "DataType": "INT", "Nullable": true} ],
                     "CheckConstraints": [ {"Name": "[CK_CompatProbe_Qty]", "Expression": "CONVERT(varchar(10), Qty) <> ''"} ]
+                },
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[CompatAdopt]",
+                    "Columns": [ {"Name": "[Qty]", "DataType": "INT", "Nullable": true} ],
+                    "CheckConstraints": [ {"Name": "[CK_CompatAdopt_Qty]", "Expression": "CONVERT(varchar(10), Qty) <> ''"} ]
                 }]
                 """;
 
@@ -374,6 +386,7 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
                 var xml = ModelXmlSerializer.ToIngestXml(tableJson, "Tables", "Table");
                 cmd.CommandText = "DECLARE @TableDefinitions XML = @payload;\nDECLARE @UpdateFillFactor BIT = 0;\n"
                                   + ForgeKindler.GetParseTableXmlScript(Platform.SqlServer)
+                                  + "\nEXEC SchemaSmith.ExpressionMapAdopt @WhatIf = 0"
                                   + "\nEXEC SchemaSmith.MissingTableAndColumnQuench @WhatIf = 0"
                                   + "\nEXEC SchemaSmith.ModifiedTableQuench @ProductName = 'CompatProbe', @WhatIf = 0, @DropUnknownIndexes = 0, @DropTablesRemovedFromProduct = 0"
                                   + "\nEXEC SchemaSmith.MissingIndexesAndConstraintsQuench 'CompatProbe', 0"
@@ -414,6 +427,8 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
             Assert.That(frozen, Does.Contain(",0)"),
                 "precondition: at compat 100 SQL Server stores the 3-argument CONVERT -- without that this proves nothing: " + frozen);
             Assert.That(MapRow(), Does.StartWith("100|"), "the mapping must record the compat level it was written under");
+            cmd.CommandText = "SELECT OBJECT_ID('dbo.CK_CompatAdopt_Qty')";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(adoptId), "the CHECK built at compat 100 renders the same on the copy, so it is left alone");
 
             // The upgrade.
             conn.ChangeDatabase("master");
@@ -427,7 +442,7 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
             var afterUpgradeId = ObjectId();
             var afterUpgradeDef = StoredDefinition();
             var afterUpgradeRow = MapRow();
-            var reported = _messages.FindAll(m => m.Contains("Re-baselined 1 recorded expression"));
+            var reported = _messages.FindAll(m => m.Contains("Re-baselined 2 recorded expression"));
             Assert.Multiple(() =>
             {
                 Assert.That(afterUpgradeId, Is.EqualTo(id), "a compatibility-level change must NOT re-create the constraint");
@@ -447,6 +462,23 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
                 Assert.That(pass3Id, Is.EqualTo(id), "pass 3 must leave the constraint alone");
                 Assert.That(pass3Reported, Is.Empty, "pass 3 has nothing to re-baseline");
             });
+
+            // #508, PG-080's open case: the live text moved with no edit to its meaning. Re-created out of band at the new
+            // level, CK_CompatAdopt now holds the 2-argument CONVERT while its row holds the 3-argument one -- by text,
+            // indistinguishable from drift. The declared text renders to the live text on the copy, so it is re-recorded.
+            cmd.CommandText = """
+                ALTER TABLE dbo.CompatAdopt DROP CONSTRAINT [CK_CompatAdopt_Qty];
+                ALTER TABLE dbo.CompatAdopt ADD CONSTRAINT [CK_CompatAdopt_Qty] CHECK (CONVERT(varchar(10), Qty) <> '');
+                SELECT OBJECT_ID('dbo.CK_CompatAdopt_Qty')
+                """;
+            var recreatedId = Convert.ToInt32(cmd.ExecuteScalar());
+            DeployViaXml();
+            cmd.CommandText = """
+                SELECT CAST(OBJECT_ID('dbo.CK_CompatAdopt_Qty') AS VARCHAR(20)) + '|' +
+                       (SELECT [CanonicalText] FROM SchemaSmith.ExpressionMap WHERE [ObjectName] = 'CK_CompatAdopt_Qty')
+                """;
+            Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo($"{recreatedId}|(CONVERT([varchar](10),[Qty])<>'')"),
+                "left alone, and the row now holds the text the database does");
         }
         finally
         {

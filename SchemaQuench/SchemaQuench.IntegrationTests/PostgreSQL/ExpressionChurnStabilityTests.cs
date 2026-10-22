@@ -12,7 +12,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// Perpetual-churn guards: objects that were dropped and recreated on EVERY deploy because the
 /// comparison could never report them equal.
 ///
-/// <para><b>Asserted at the outcome, per Rule 32.</b> Each test authors the object in its NATURAL
+/// <para><b>Asserted at the outcome.</b> Each test authors the object in its NATURAL
 /// form, deploys three times, and requires the catalog <c>oid</c> to be unchanged. Asserting that
 /// some normalised string matches is what let these live: the existing suite authors expressions
 /// already canonicalised, so it compares the tool against its own output rather than against what a

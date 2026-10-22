@@ -32,6 +32,16 @@ namespace Schema.Domain.PostgreSQL
         [JsonProperty(Order = 107)]
         public bool InitiallyDeferred { get; set; }
 
+        /// <summary>
+        /// <c>WITHOUT OVERLAPS</c> (PostgreSQL 18+): on a primary key or unique constraint whose last column is a range or
+        /// multirange, rows with the same values in the other columns may not have overlapping ranges. The backing index
+        /// is GiST, which the flag implies (no <c>AccessMethod</c> needed); a scalar key column needs the btree_gist
+        /// extension. Below 18 the key is created without the clause and a downgrade is recorded.
+        /// </summary>
+        [SchemaProperty(Description = "PostgreSQL 18+. On a primary key or unique constraint whose last column is a range or multirange: rows with the same other key values may not have overlapping ranges (WITHOUT OVERLAPS). The backing index is GiST (a scalar key column needs the btree_gist extension). Below 18 the key is created without the clause and a downgrade is recorded.")]
+        [JsonProperty(Order = 120)]
+        public bool WithoutOverlaps { get; set; }
+
         [JsonProperty(Order = 108)]
         [SchemaProperty(AuthoredOnly = true)]
         public bool UpdateFillFactor { get; set; }

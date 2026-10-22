@@ -1,0 +1,75 @@
+# The paths CI builds, runs or reads. A change touching any of them runs the full CI matrix; a change touching none of
+# them is doc-only to CI, gets no run, and ci-docs-only-companion.yml reports the required checks for it.
+#
+# One list, read three ways: continuous-integration.yml carries it as its push and pull_request `paths` (a workflow
+# trigger cannot read a file, so there it is copied, and CiTestedPathsTests fails when the copies differ);
+# ci-docs-only-companion.yml and release.yml read this file through scripts/ci_path_filter.py.
+#
+# GitHub path-filter syntax, evaluated in order: `*` stays within one directory, `**` crosses them, a `!` line excludes
+# what the lines above matched and a later line can match it again. When unsure whether CI reads a path, list it here:
+# a wrong "tested" costs one run, a wrong "untested" lets a change reach main unchecked.
+
+[tested]
+Schema/**
+SchemaQuench/**
+SchemaTongs/**
+DataTongs/**
+SchemaShears/**
+TestProducts/**
+# Demo packages: --Validate runs over every one and some are deployed. Their scripts, READMEs and lab helpers are not read.
+Demos/**
+!Demos/**/*.md
+!Demos/**/*.ps1
+!Demos/**/*.sh
+!Demos/**/*.sql
+Demos/**/Templates/**/*.sql
+Demos/**/* Product/**/*.sql
+!**/*.md
+# Read by tests: CapabilityDocumentationTests parses the reference page, check-sweep-record.sh reads the sweep record.
+docs/end-user/reference/schemaquench.md
+docs/development/genuine-sweep-results.md
+scripts/check-coverage-thresholds.py
+scripts/check-sweep-record.sh
+scripts/provision-semantic-db.sh
+scripts/run-sqlserver-shards.sh
+scripts/suite-overhead.py
+scripts/ci_path_filter.py
+.github/ci-tested-paths.txt
+.github/workflows/continuous-integration.yml
+.github/workflows/ci-docs-only-companion.yml
+.github/engine-ceilings.json
+SchemaSmith.sln
+Directory.Build.props
+Directory.Build.targets
+Directory.Packages.props
+nuget.config
+coverage.runsettings
+.editorconfig
+.gitattributes
+
+# Top-level paths CI does not test, each a decision rather than a default: CiTestedPathsTests fails for a tracked
+# top-level path that is on neither list. A path under one of these that CI does read (a docs page a test parses) is
+# listed under [tested] above.
+[untested]
+docs
+packaging
+action
+action.yml
+build-schemaquench.sh
+build-schemaquench.cmd
+scripts
+.github
+LICENSES
+LICENSE
+LICENSE-FAQ.md
+REUSE.toml
+README.md
+CHANGELOG.md
+CONTRIBUTING.md
+CODE_OF_CONDUCT.md
+CODEOWNERS
+AGENTS.md
+SECURITY.md
+SECURITY-POSTURE.md
+.gitignore
+.dockerignore

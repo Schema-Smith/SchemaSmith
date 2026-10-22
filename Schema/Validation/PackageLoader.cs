@@ -114,7 +114,7 @@ public static class PackageLoader
         {
             return (null, BuildTemplateLoadFailure(name, product, e));
         }
-        catch (InvalidOperationException e)
+        catch (PackageException e)
         {
             return (null, BuildTemplateLoadFailure(name, product, e));
         }

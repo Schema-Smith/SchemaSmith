@@ -82,15 +82,38 @@ BEGIN
     END
   END
 
+  -- Edge constraints (CONNECTION) -- SQL Server 2019 (major 15). Below it the clause is not syntax; the edge table
+  -- itself deploys (2017 has graph tables), without the constraint -- a Skip, the table keeping its shape and data.
+  IF @v_major < 15 AND EXISTS (SELECT 1 FROM #EdgeConstraints WITH (NOLOCK))
+  BEGIN
+    IF @v_policy = 'fail'
+    BEGIN
+      SET @v_list = STUFF((SELECT ', ' + e.[Schema] + '.' + e.[TableName] + '.' + e.[ConstraintName] FROM #EdgeConstraints e WITH (NOLOCK)
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      SET @v_msg = 'Edge constraints require SQL Server 2019 (detected major ' +
+                   CONVERT(NVARCHAR(10), @v_major) + '); constraint(s): ' + LEFT(@v_list, 1800) + '.'
+      RAISERROR(@v_msg, 16, 1)
+    END
+    ELSE
+    BEGIN
+      INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT @@SPID, 'edge constraint (SQL Server 2019)', e.[Schema] + '.' + e.[TableName] + '.' + e.[ConstraintName], 'downgraded'
+          FROM #EdgeConstraints e WITH (NOLOCK)
+      RAISERROR('  Edge constraint skipped: requires SQL Server 2019 - the edge table deploys without it (downgraded)', 10, 100) WITH NOWAIT
+      DELETE FROM #EdgeConstraints
+    END
+  END
+
   -- XML compression -- SQL Server 2022 (major 16). Below it the clause is a parser error, so the emit
   -- sites gate on the same version and this block only reports what they suppressed. Clearing it
   -- deploys the table or index uncompressed: the schema is identical and only the storage saving is
   -- lost, which is the mildest Reduced degrade in this file -- nothing an application can observe.
   --
-  -- Both #Tables and #Indexes carry the property, so both are reported; an index inherits nothing from
-  -- its table here.
+  -- #Tables, #Indexes and #XmlIndexes carry the property, so each is reported; an index inherits nothing
+  -- from its table here.
   IF @v_major < 16 AND (EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE ISNULL([XmlCompression], 0) = 1)
-                     OR EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE ISNULL([XmlCompression], 0) = 1))
+                     OR EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE ISNULL([XmlCompression], 0) = 1)
+                     OR EXISTS (SELECT 1 FROM #XmlIndexes WITH (NOLOCK) WHERE ISNULL([XmlCompression], 0) = 1))
   BEGIN
     IF @v_policy = 'fail'
     BEGIN
@@ -108,9 +131,13 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'XML compression (SQL Server 2022)', I.[Schema] + '.' + I.[TableName] + '.' + I.[IndexName], 'downgraded'
           FROM #Indexes I WITH (NOLOCK) WHERE ISNULL(I.[XmlCompression], 0) = 1
+      INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT @@SPID, 'XML compression (SQL Server 2022)', X.[Schema] + '.' + X.[TableName] + '.' + X.[IndexName], 'downgraded'
+          FROM #XmlIndexes X WITH (NOLOCK) WHERE ISNULL(X.[XmlCompression], 0) = 1
       RAISERROR('  XML compression skipped: requires SQL Server 2022 - the object deploys uncompressed (downgraded)', 10, 100) WITH NOWAIT
       UPDATE #Tables SET [XmlCompression] = 0 WHERE ISNULL([XmlCompression], 0) = 1
       UPDATE #Indexes SET [XmlCompression] = 0 WHERE ISNULL([XmlCompression], 0) = 1
+      UPDATE #XmlIndexes SET [XmlCompression] = 0 WHERE ISNULL([XmlCompression], 0) = 1
     END
   END
 
@@ -137,7 +164,14 @@ BEGIN
         SELECT @@SPID, 'ledger table (SQL Server 2022)', t.[Schema] + '.' + t.[Name], 'downgraded'
           FROM #Tables t WITH (NOLOCK) WHERE ISNULL(t.[Ledger], 'Off') <> 'Off'
       RAISERROR('  Ledger skipped: requires SQL Server 2022 - the table deploys as an ordinary table (downgraded)', 10, 100) WITH NOWAIT
-      UPDATE #Tables SET [Ledger] = 'Off' WHERE ISNULL([Ledger], 'Off') <> 'Off'
+      -- The generated columns and view exist only on a ledger table, so they go with it.
+      DELETE c FROM #Columns c JOIN #Tables t ON t.[Schema] = c.[Schema] AND t.[Name] = c.[TableName]
+       WHERE ISNULL(t.[Ledger], 'Off') <> 'Off'
+         AND UPPER(c.[GeneratedAlways]) IN ('TRANSACTIONIDSTART', 'TRANSACTIONIDEND', 'SEQUENCENUMBERSTART', 'SEQUENCENUMBEREND')
+      DELETE FROM #LedgerColumns
+      UPDATE #Tables SET [Ledger] = 'Off', [LedgerViewSchema] = NULL, [LedgerViewName] = NULL, [LedgerTransactionIdColumn] = NULL,
+                         [LedgerSequenceNumberColumn] = NULL, [LedgerOperationTypeColumn] = NULL, [LedgerOperationTypeDescColumn] = NULL
+       WHERE ISNULL([Ledger], 'Off') <> 'Off'
     END
   END
 
@@ -191,6 +225,9 @@ BEGIN
   -- Shared with the --IndexOnly path, which calls this proc directly (it has only #Indexes).
   EXEC SchemaSmith.DegradeUnsupportedColumnStore
   EXEC SchemaSmith.DegradeUnsupportedFullText
+  EXEC SchemaSmith.DegradeUnsupportedSpatialIndexes
+  EXEC SchemaSmith.DegradeUnsupportedSelectiveXmlIndexes
+  EXEC SchemaSmith.DegradeUnsupportedJsonIndexes
 
   -- Table compression where the edition lacks it: below SQL Server 2016 SP1, Standard, Web and Express refuse
   -- DATA_COMPRESSION with 7738. The table is created uncompressed; index compression is handled with the indexes above.

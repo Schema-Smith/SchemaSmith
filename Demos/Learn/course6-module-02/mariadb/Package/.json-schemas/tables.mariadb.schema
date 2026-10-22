@@ -5,6 +5,10 @@
       "type": "string",
       "description": "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time."
     },
+    "Description": {
+      "type": "string",
+      "description": "Optional. A description stored on the object: an MS_Description extended property on SQL Server, COMMENT ON on PostgreSQL, the COMMENT clause on MySQL and MariaDB. On SQL Server and PostgreSQL an omitted value leaves an existing description alone and \"\" removes it; on MySQL and MariaDB an omitted value clears the comment, as the engine's own DDL does."
+    },
     "Name": {
       "type": "string"
     },
@@ -24,6 +28,10 @@
           },
           "Default": {
             "type": "string"
+          },
+          "Description": {
+            "type": "string",
+            "description": "Optional. A description stored on the object: an MS_Description extended property on SQL Server, COMMENT ON on PostgreSQL, the COMMENT clause on MySQL and MariaDB. On SQL Server and PostgreSQL an omitted value leaves an existing description alone and \"\" removes it; on MySQL and MariaDB an omitted value clears the comment, as the engine's own DDL does."
           },
           "ShouldApplyExpression": {
             "type": "string"
@@ -53,7 +61,8 @@
             "type": "string"
           },
           "Comment": {
-            "type": "string"
+            "type": "string",
+            "description": "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002)."
           },
           "Invisible": {
             "type": "boolean"
@@ -67,6 +76,15 @@
           "WithoutSystemVersioning": {
             "type": "boolean",
             "description": "MariaDB only. Excludes this column from the row history of a system-versioned table: an UPDATE that changes only this column writes no history row. Meaningless on a table that is not system-versioned — MariaDB accepts the clause there and silently discards it."
+          },
+          "CheckExpression": {
+            "type": "string",
+            "description": "MariaDB only. A column-level CHECK (`qty` >= 0), without the surrounding CHECK (...). MariaDB names it after the column and keeps it column-level across a redeploy; it converges through MODIFY COLUMN and extracts back here, not into CheckConstraints. MySQL has no column-level check: declare a named entry in CheckConstraints there."
+          },
+          "GeneratedAlways": {
+            "type": "string",
+            "pattern": "^(?:RowStart|RowEnd)$",
+            "description": "MariaDB only, on a table with IsSystemVersioned. The column is the engine's ROW START or ROW END: declare both, as TIMESTAMP(6) (or BIGINT UNSIGNED for transaction-precise history), and the pair becomes PERIOD FOR SYSTEM_TIME. Invisible hides one. Omitted, the table has the implicit hidden row_start/row_end. An existing table with the implicit pair takes declared ones from MariaDB 11.7, with SystemVersioningAlterHistory set to KEEP; below 11.7 it keeps the implicit pair and the deploy records a downgrade. MariaDB adds the ROW END column to every unique key of such a table itself, so a key declared without it compares equal."
           },
           "Extensions": {}
         },
@@ -97,6 +115,10 @@
           "IndexColumns": {
             "type": "string"
           },
+          "Description": {
+            "type": "string",
+            "description": "Optional. A description stored on the object: an MS_Description extended property on SQL Server, COMMENT ON on PostgreSQL, the COMMENT clause on MySQL and MariaDB. On SQL Server and PostgreSQL an omitted value leaves an existing description alone and \"\" removes it; on MySQL and MariaDB an omitted value clears the comment, as the engine's own DDL does."
+          },
           "ShouldApplyExpression": {
             "type": "string"
           },
@@ -107,13 +129,29 @@
           },
           "IndexType": {
             "type": "string",
-            "pattern": "^(?:BTREE|HASH|FULLTEXT|SPATIAL)$"
+            "pattern": "^(?:BTREE|HASH|FULLTEXT|SPATIAL|VECTOR)$"
           },
           "Visible": {
             "type": "boolean"
           },
           "Comment": {
-            "type": "string"
+            "type": "string",
+            "description": "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002)."
+          },
+          "WithoutOverlaps": {
+            "type": "boolean",
+            "description": "MariaDB 10.5.3+. On a primary key or unique key whose last IndexColumns part names one of the table's Periods: rows with the same other key values may not have overlapping periods (WITHOUT OVERLAPS). Below 10.5.3 the key is created over the period's end and start columns and a downgrade is recorded."
+          },
+          "M": {
+            "type": "integer",
+            "minimum": 3.0,
+            "maximum": 200.0,
+            "description": "MariaDB 11.7+. A VECTOR index's M: how many neighbours each node keeps in the graph (3 to 200). Omitted, the server's mhnsw_default_m. Applied when the index is created."
+          },
+          "Distance": {
+            "type": "string",
+            "pattern": "^(?:[Ee][Uu][Cc][Ll][Ii][Dd][Ee][Aa][Nn]|[Cc][Oo][Ss][Ii][Nn][Ee])$",
+            "description": "MariaDB 11.7+. A VECTOR index's DISTANCE: euclidean or cosine. Omitted, the server's mhnsw_default_distance. Applied when the index is created."
           },
           "Extensions": {}
         },
@@ -336,12 +374,17 @@
       "additionalProperties": false,
       "description": "When set, overrides the template-, product- and environment-level RebuildPolicy for this table only. Null inherits from the nearest level that declares one. The winning policy applies whole — a policy declared here does NOT pick up fields it omits from a higher level."
     },
+    "OnlineApply": {
+      "type": "string",
+      "pattern": "^\\s*(?:[Oo][Ff][Ff]|[Pp][Rr][Ee][Ff][Ee][Rr]|[Rr][Ee][Qq][Uu][Ii][Rr][Ee])\\s*$",
+      "description": "When set, overrides the environment's OnlineApply for this table only. Off runs the plain statements; Prefer uses the engine's online or instant form where the version and edition allow it, and the plain form otherwise; Require uses the online or instant form or refuses the deploy, naming the statement. Null inherits the environment setting."
+    },
     "Engine": {
       "type": "string"
     },
     "RowFormat": {
       "type": "string",
-      "pattern": "^(?:Dynamic|Compact|Compressed|Redundant|Fixed)$"
+      "pattern": "^(?:[Dd][Yy][Nn][Aa][Mm][Ii][Cc]|[Cc][Oo][Mm][Pp][Aa][Cc][Tt]|[Cc][Oo][Mm][Pp][Rr][Ee][Ss][Ss][Ee][Dd]|[Rr][Ee][Dd][Uu][Nn][Dd][Aa][Nn][Tt]|[Ff][Ii][Xx][Ee][Dd]|[Pp][Aa][Gg][Ee])$"
     },
     "CharacterSet": {
       "type": "string"
@@ -350,7 +393,8 @@
       "type": "string"
     },
     "Comment": {
-      "type": "string"
+      "type": "string",
+      "description": "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002)."
     },
     "AutoIncrementValue": {
       "type": "integer",
@@ -371,7 +415,12 @@
             "type": "string"
           },
           "Comment": {
-            "type": "string"
+            "type": "string",
+            "description": "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002)."
+          },
+          "Description": {
+            "type": "string",
+            "description": "Optional. The index's COMMENT. An omitted value clears a comment the server has, as the engine's own DDL does."
           },
           "ShouldApplyExpression": {
             "type": "string"
@@ -401,17 +450,73 @@
       "properties": {
         "Method": {
           "type": "string",
-          "pattern": "^(?:RANGE|LIST|HASH|KEY|RANGE COLUMNS|LIST COLUMNS)$",
-          "description": "RANGE, LIST, HASH, KEY, RANGE COLUMNS or LIST COLUMNS."
+          "pattern": "^(?:RANGE|LIST|HASH|KEY|LINEAR HASH|LINEAR KEY|RANGE COLUMNS|LIST COLUMNS|SYSTEM_TIME)$",
+          "description": "RANGE, LIST, HASH, KEY, LINEAR HASH, LINEAR KEY, RANGE COLUMNS, LIST COLUMNS or SYSTEM_TIME. The LINEAR forms take a PartitionCount, as HASH and KEY do. SYSTEM_TIME (MariaDB) partitions a system-versioned table's history and takes SystemTime instead of an Expression."
         },
         "Expression": {
           "type": "string",
-          "description": "The partitioning expression, or a comma-separated column list for the COLUMNS methods. Compared with backticks, whitespace and case normalized away, because the engines disagree on how they report it."
+          "description": "The partitioning expression, or a comma-separated column list for the COLUMNS methods. Required for every method but SYSTEM_TIME. Compared with backticks, whitespace and case normalized away, because the engines disagree on how they report it."
         },
         "PartitionCount": {
           "type": "integer",
           "minimum": 1.0,
-          "description": "Number of partitions for HASH and KEY. Not used by RANGE or LIST, which name each partition and its boundary explicitly."
+          "description": "Number of partitions for HASH and KEY. Not used by RANGE or LIST, which name each partition and its boundary explicitly. A HASH or KEY table may name its partitions in Partitions instead, and then the count is how many it names."
+        },
+        "KeyAlgorithm": {
+          "type": "integer",
+          "minimum": 1.0,
+          "maximum": 2.0,
+          "description": "KEY partitioning only: ALGORITHM 1 or 2 (the default). Set from extraction when the table uses 1. Not compared on an existing table."
+        },
+        "Subpartitioning": {
+          "type": "object",
+          "properties": {
+            "Method": {
+              "type": "string",
+              "pattern": "^(?:HASH|KEY|LINEAR HASH|LINEAR KEY)$",
+              "description": "HASH, KEY, LINEAR HASH or LINEAR KEY."
+            },
+            "Expression": {
+              "type": "string",
+              "description": "The subpartitioning expression for HASH, or the column list for KEY. Compared normalized, like the partitioning expression."
+            },
+            "Count": {
+              "type": "integer",
+              "minimum": 1.0,
+              "description": "Subpartitions in each partition."
+            },
+            "Extensions": {}
+          },
+          "additionalProperties": false,
+          "required": [
+            "Method",
+            "Expression",
+            "Count"
+          ]
+        },
+        "SystemTime": {
+          "type": "object",
+          "properties": {
+            "Interval": {
+              "type": "string",
+              "description": "A new history partition per interval, as MariaDB writes it after INTERVAL: \"1 MONTH\", \"7 DAY\"."
+            },
+            "StartsAt": {
+              "type": "string",
+              "description": "With Interval: the timestamp the first interval starts at (\"2026-01-01 00:00:00\"). MariaDB 10.5 and later."
+            },
+            "Limit": {
+              "type": "integer",
+              "minimum": 1.0,
+              "description": "A new history partition after this many history rows."
+            },
+            "Auto": {
+              "type": "boolean",
+              "description": "The engine adds history partitions as they fill (MariaDB 10.9 and later). The partition list is then the engine's and is not extracted or compared."
+            },
+            "Extensions": {}
+          },
+          "additionalProperties": false
         },
         "Partitions": {
           "type": "array",
@@ -424,7 +529,12 @@
               },
               "Values": {
                 "type": "string",
-                "description": "The VALUES LESS THAN boundary for RANGE, or the VALUES IN list for LIST. Omitted for HASH and KEY, which have no boundary."
+                "description": "The VALUES LESS THAN boundary for RANGE, or the VALUES IN list for LIST. Omitted for HASH and KEY, which have no boundary. HISTORY or CURRENT for SYSTEM_TIME."
+              },
+              "Comment": {
+                "type": "string",
+                "maxLength": 1024,
+                "description": "The partition's comment. A change on a deployed table is reported, not applied, because the engine reorganizes the partition to change it."
               },
               "Extensions": {}
             },
@@ -438,8 +548,7 @@
       },
       "additionalProperties": false,
       "required": [
-        "Method",
-        "Expression"
+        "Method"
       ]
     },
     "IsSystemVersioned": {

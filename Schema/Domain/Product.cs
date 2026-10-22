@@ -191,7 +191,7 @@ namespace Schema.Domain
             TokenHelper.RefuseCaseCollidingTokens(product.ScriptTokens.Keys, $"Product.json ({productFilePath})");
             var reserved = product.ScriptTokens.Keys.FirstOrDefault(k => k.Equals("ProductName", StringComparison.OrdinalIgnoreCase));
             if (reserved != null)
-                throw new InvalidOperationException($"Product.json ({productFilePath}) declares a script token '{reserved}'. " +
+                throw new PackageException($"Product.json ({productFilePath}) declares a script token '{reserved}'. " +
                     "ProductName is reserved: it always holds the product's Name. Rename the token.");
             product.ScriptTokens.Add("ProductName", product.Name);
 

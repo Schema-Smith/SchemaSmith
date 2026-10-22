@@ -166,6 +166,26 @@ public class LedgerTableDeployTests
         Assert.That(LedgerKind("LTwice"), Is.EqualTo("APPEND_ONLY_LEDGER_TABLE"));
     }
 
+    // A ledger table pads every char column whatever ANSI_PADDING says (measured on 2022: created and added under
+    // ANSI_PADDING OFF, each column reads is_ansi_padded = 1). A column declared AnsiPadding: false therefore never
+    // matched, and a redeploy replaced it -- moving it to the end of the table, every time.
+    [Test]
+    public void AnUnpaddedColumnOnALedgerTable_IsNotReplacedOnRedeploy()
+    {
+        var package = "[{ \"Schema\": \"[dbo]\", \"Name\": \"[LPad]\", \"Ledger\": \"Updatable\", \"Columns\": ["
+                      + " { \"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false },"
+                      + " { \"Name\": \"[Code]\", \"DataType\": \"VARCHAR(10)\", \"Nullable\": true, \"AnsiPadding\": false },"
+                      + " { \"Name\": \"[Bal]\", \"DataType\": \"INT\", \"Nullable\": true } ], \"Indexes\": ["
+                      + " { \"Name\": \"[PK_LPad]\", \"IndexColumns\": \"[Id]\", \"PrimaryKey\": true, \"Unique\": true } ] }]";
+        Deploy(package);
+        var before = Scalar("SELECT column_id FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LPad') AND name = 'Code'");
+
+        Deploy(package);
+
+        Assert.That(Scalar("SELECT column_id FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LPad') AND name = 'Code'"), Is.EqualTo(before),
+            "an unchanged column must not be replaced");
+    }
+
     [Test]
     public void ALedgerTable_RoundTripsThroughExtraction()
     {

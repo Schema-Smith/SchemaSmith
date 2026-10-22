@@ -202,6 +202,93 @@ public class TableQuench_AlwaysEncryptedTests : BaseTableQuenchTests
         }
     }
 
+    private static string AeTable(string table, bool nullable = true, string key = "[TestCEK]") => $$"""
+        { "Schema": "[dbo]", "Name": "[{{table}}]",
+          "Columns": [ {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                       {"Name": "[Secret]", "DataType": "NVARCHAR(50)", "Nullable": {{(nullable ? "true" : "false")}}, "Collation": "Latin1_General_BIN2",
+                        "EncryptionType": "DETERMINISTIC", "EncryptionKey": "{{key}}", "EncryptionAlgorithm": "AEAD_AES_256_CBC_HMAC_SHA_256"} ],
+          "Indexes": [ {"Name": "[PK_{{table}}]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]"} ] }
+        """;
+
+    private void WithAeTable(string table, System.Action<IDbCommand> body)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"DROP TABLE IF EXISTS dbo.{table}";
+        cmd.ExecuteNonQuery();
+        try { body(cmd); }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS dbo.{table}";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // The deploy read the database a key lives in (NULL for a local key) and compared it with the declared key's name,
+    // so every encrypted column looked changed and every redeploy failed on the ALTER COLUMN that followed.
+    [Test]
+    public void AnUnchangedEncryptedColumn_RedeploysWithoutTouchingIt()
+    {
+        WithAeTable("AeRedeploy", cmd =>
+        {
+            RunTableQuenchProc(cmd, AeTable("AeRedeploy"));
+            cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, AeTable("AeRedeploy"));
+            cmd.CommandText = "SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND ObjectName LIKE '%AeRedeploy%'";
+            Assert.That(System.Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero, "a redeploy changes nothing");
+        });
+    }
+
+    // ALTER COLUMN takes ENCRYPTED WITH before NULL / NOT NULL; the deploy wrote it after, a syntax error.
+    [Test]
+    public void ANullabilityChange_OnAnEncryptedColumn_IsApplied()
+    {
+        WithAeTable("AeNullability", cmd =>
+        {
+            RunTableQuenchProc(cmd, AeTable("AeNullability"));
+            RunTableQuenchProc(cmd, AeTable("AeNullability", nullable: false));
+            cmd.CommandText = "SELECT CAST(is_nullable AS INT) * 10 + CASE WHEN encryption_type_desc = 'DETERMINISTIC' THEN 1 ELSE 0 END FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.AeNullability') AND [name] = 'Secret'";
+            Assert.That(System.Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "NOT NULL now, and still encrypted");
+        });
+    }
+
+    // Another key is an encryption change the server cannot make: refused by name, like a change of type.
+    [Test]
+    public void AnotherKey_OnAnEncryptedColumn_IsRefusedByName()
+    {
+        WithAeTable("AeRekey", cmd =>
+        {
+            cmd.CommandText = """
+                IF NOT EXISTS (SELECT 1 FROM sys.column_encryption_keys WHERE [name] = N'TestCEK_Other')
+                  CREATE COLUMN ENCRYPTION KEY [TestCEK_Other] WITH VALUES (COLUMN_MASTER_KEY = [TestCMK], ALGORITHM = 'RSA_OAEP', ENCRYPTED_VALUE = 0x016E0000016300)
+                """;
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, AeTable("AeRekey"));
+            var ex = Assert.Catch(() => RunTableQuenchProc(cmd, AeTable("AeRekey", key: "[TestCEK_Other]")));
+            Assert.That(ex!.Message, Does.Contain("in-place encryption change on [dbo].[AeRekey].[Secret]").And.Contain("Before/After"), "the guard, before any DDL");
+            cmd.CommandText = "SELECT k.[name] FROM sys.columns c JOIN sys.column_encryption_keys k ON k.column_encryption_key_id = c.column_encryption_key_id WHERE c.[object_id] = OBJECT_ID('dbo.AeRekey') AND c.[name] = 'Secret'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("TestCEK"), "the column is left as it is");
+        });
+    }
+
+    // Decrypting is the same server-side impossibility in the other direction: refused by name, the column left as it is.
+    [Test]
+    public void RemovingEncryption_FromAnEncryptedColumn_IsRefusedByName()
+    {
+        WithAeTable("AeDecrypt", cmd =>
+        {
+            RunTableQuenchProc(cmd, AeTable("AeDecrypt"));
+            var plain = AeTable("AeDecrypt").Replace("\"EncryptionType\": \"DETERMINISTIC\", ", "");
+            var ex = Assert.Catch(() => RunTableQuenchProc(cmd, plain));
+            Assert.That(ex!.Message, Does.Contain("in-place encryption change on [dbo].[AeDecrypt].[Secret]").And.Contain("Before/After"), "the guard, before any DDL");
+            cmd.CommandText = "SELECT encryption_type_desc FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.AeDecrypt') AND [name] = 'Secret'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("DETERMINISTIC"), "the column is left as it is");
+        });
+    }
+
     [Test]
     public void ShouldNotAlterSwappedColumnsRedundantly()
     {
@@ -333,6 +420,70 @@ public class TableQuench_AlwaysEncryptedTests : BaseTableQuenchTests
         finally
         {
             cmd.CommandText = "DROP TABLE IF EXISTS dbo.AeBlockTypeChange";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    [Test]
+    public void ShouldBlockEncryptionTypeChange_BeforeAnyOtherTableIsTouched()
+    {
+        // #511: the guard used to fire from inside the column swap, after the indexes over every changing column in the
+        // deploy had been dropped. A plain table sharing the deploy keeps its key and its column.
+        using var conn = new SqlConnection(AeConnectionString());
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DROP TABLE IF EXISTS dbo.AeBlockOrder; DROP TABLE IF EXISTS dbo.AeBlockOrderPlain";
+        cmd.ExecuteNonQuery();
+        try
+        {
+            cmd.CommandText = $@"
+                CREATE TABLE dbo.AeBlockOrder (
+                  Id INT NOT NULL,
+                  Secret NVARCHAR(50) COLLATE Latin1_General_BIN2
+                    ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = {Cek}, ENCRYPTION_TYPE = DETERMINISTIC,
+                                    ALGORITHM = '{Algo}') NOT NULL);
+                CREATE TABLE dbo.AeBlockOrderPlain (Id INT NOT NULL CONSTRAINT PK_AeBlockOrderPlain PRIMARY KEY, Val NVARCHAR(10) NULL)";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "INSERT dbo.AeBlockOrder (Id, Secret) VALUES (@id, @secret)";
+            cmd.Parameters.Add(new SqlParameter("@id", SqlDbType.Int) { Value = 1 });
+            cmd.Parameters.Add(new SqlParameter("@secret", SqlDbType.NVarChar, 50) { Value = "DetSecret" });
+            cmd.ExecuteNonQuery();
+            cmd.Parameters.Clear();
+
+            var json = $$$"""
+                [
+                  {
+                    "Schema": "[dbo]",
+                    "Name": "[AeBlockOrder]",
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                        {"Name": "[Secret]", "DataType": "NVARCHAR(50)", "Nullable": false, "Collation": "Latin1_General_BIN2",
+                         "EncryptionType": "RANDOMIZED", "EncryptionKey": "[TestCEK]", "EncryptionAlgorithm": "{{{Algo}}}"}
+                    ]
+                  },
+                  {
+                    "Schema": "[dbo]",
+                    "Name": "[AeBlockOrderPlain]",
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "BIGINT", "Nullable": false},
+                        {"Name": "[Val]", "DataType": "NVARCHAR(10)", "Nullable": true}
+                    ],
+                    "Indexes": [{"Name": "[PK_AeBlockOrderPlain]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]"}]
+                  }
+                ]
+                """;
+
+            var ex = Assert.Throws<SqlException>(() => RunTableQuenchProc(cmd, json));
+            cmd.CommandText = "SELECT CONVERT(VARCHAR(1), (SELECT COUNT(*) FROM sys.key_constraints WHERE [name] = 'PK_AeBlockOrderPlain')) + ',' + (SELECT TYPE_NAME(system_type_id) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.AeBlockOrderPlain') AND [name] = 'Id')";
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain("Always Encrypted").IgnoreCase);
+                Assert.That(cmd.ExecuteScalar(), Is.EqualTo("1,int"), "the plain table's key and column are untouched: the guard fired before the first drop");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = "DROP TABLE IF EXISTS dbo.AeBlockOrder; DROP TABLE IF EXISTS dbo.AeBlockOrderPlain";
             cmd.ExecuteNonQuery();
         }
     }

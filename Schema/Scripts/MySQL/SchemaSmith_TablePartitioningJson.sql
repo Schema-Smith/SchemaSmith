@@ -31,33 +31,84 @@ BEGIN
     -- servers above were probed returning the same columns with the same meanings.
     DECLARE v_Method VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
     DECLARE v_Expression LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
+    DECLARE v_SubMethod VARCHAR(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
+    DECLARE v_SubExpression LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
     DECLARE v_Count INT DEFAULT 0;
+    DECLARE v_SubCount INT DEFAULT 0;
+    DECLARE v_Named INT DEFAULT 0;
     DECLARE v_Partitions LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
+    DECLARE v_Sub LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT '';
 
-    SELECT p.PARTITION_METHOD, p.PARTITION_EXPRESSION
-      INTO v_Method, v_Expression
+    -- A subpartitioned table has one row per SUBPARTITION, so every count and list below reads the first
+    -- subpartition of each partition (or the partition's own row when there are none).
+    SELECT p.PARTITION_METHOD, p.PARTITION_EXPRESSION, p.SUBPARTITION_METHOD, p.SUBPARTITION_EXPRESSION
+      INTO v_Method, v_Expression, v_SubMethod, v_SubExpression
       FROM INFORMATION_SCHEMA.PARTITIONS p
      WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
        AND SchemaSmith_IdentifierKey(p.TABLE_NAME) = v_TableKey
        AND p.PARTITION_NAME IS NOT NULL
-     ORDER BY p.PARTITION_ORDINAL_POSITION
+     ORDER BY p.PARTITION_ORDINAL_POSITION, p.SUBPARTITION_ORDINAL_POSITION
      LIMIT 1;
 
     IF v_Method IS NULL THEN
         RETURN 'null';
     END IF;
 
-    SELECT COUNT(*) INTO v_Count
+    -- v_Named counts partitions that carry a comment or a name other than the engine's own p0, p1, ...: a HASH or
+    -- KEY table with none of either is written as a count, as the engine would create it from one.
+    SELECT COUNT(*),
+           SUM(p.PARTITION_NAME <> CONCAT('p', p.PARTITION_ORDINAL_POSITION - 1) OR COALESCE(p.PARTITION_COMMENT, '') <> '')
+      INTO v_Count, v_Named
       FROM INFORMATION_SCHEMA.PARTITIONS p
      WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
        AND SchemaSmith_IdentifierKey(p.TABLE_NAME) = v_TableKey
-       AND p.PARTITION_NAME IS NOT NULL;
+       AND p.PARTITION_NAME IS NOT NULL
+       AND COALESCE(p.SUBPARTITION_ORDINAL_POSITION, 1) = 1;
+
+    IF v_SubMethod IS NOT NULL THEN
+        SELECT COUNT(*) INTO v_SubCount
+          FROM INFORMATION_SCHEMA.PARTITIONS p
+         WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
+           AND SchemaSmith_IdentifierKey(p.TABLE_NAME) = v_TableKey
+           AND p.PARTITION_ORDINAL_POSITION = 1
+           AND p.SUBPARTITION_NAME IS NOT NULL;
+        SET v_Sub = CONCAT(',"Subpartitioning":{"Method":', JSON_QUOTE(v_SubMethod),
+                           ',"Expression":', JSON_QUOTE(v_SubExpression),
+                           ',"Count":', v_SubCount, '}');
+    END IF;
+
+    -- SYSTEM_TIME (MariaDB): the engine's expression is its own (over the row-end column) and is not declared, and
+    -- INTERVAL, STARTS, LIMIT and AUTO appear only in SHOW CREATE TABLE, which SchemaTongs reads. Partitions the
+    -- engine named (history p0, p1, ... and the current pn) are written as a count; any others as a list.
+    IF v_Method = 'SYSTEM_TIME' THEN
+        SELECT SUM(CASE WHEN p.PARTITION_DESCRIPTION = 'CURRENT' THEN p.PARTITION_NAME <> 'pn'
+                        ELSE p.PARTITION_NAME <> CONCAT('p', p.PARTITION_ORDINAL_POSITION - 1) END)
+          INTO v_Named
+          FROM INFORMATION_SCHEMA.PARTITIONS p
+         WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
+           AND SchemaSmith_IdentifierKey(p.TABLE_NAME) = v_TableKey
+           AND p.PARTITION_NAME IS NOT NULL;
+        IF COALESCE(v_Named, 0) = 0 THEN
+            RETURN JSON_OBJECT('Method', v_Method, 'PartitionCount', CAST(v_Count AS UNSIGNED));
+        END IF;
+        SELECT GROUP_CONCAT(
+                   CONCAT('{"Name":', JSON_QUOTE(p.PARTITION_NAME),
+                          ',"Values":', JSON_QUOTE(IF(p.PARTITION_DESCRIPTION = 'CURRENT', 'CURRENT', 'HISTORY')), '}')
+                   ORDER BY p.PARTITION_ORDINAL_POSITION SEPARATOR ',')
+          INTO v_Partitions
+          FROM INFORMATION_SCHEMA.PARTITIONS p
+         WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
+           AND SchemaSmith_IdentifierKey(p.TABLE_NAME) = v_TableKey
+           AND p.PARTITION_NAME IS NOT NULL;
+        RETURN CONCAT('{"Method":', JSON_QUOTE(v_Method), ',"Partitions":[', COALESCE(v_Partitions, ''), ']}');
+    END IF;
 
     -- HASH and KEY have no per-partition boundary -- the engine assigns rows by hashing -- so they carry a
-    -- COUNT and no partition list. Emitting auto-generated p0..pN names for them would make the package
-    -- look hand-authored and churn if the count ever changed.
-    IF v_Method IN ('HASH', 'KEY', 'LINEAR HASH', 'LINEAR KEY') THEN
-        RETURN JSON_OBJECT('Method', v_Method, 'Expression', v_Expression, 'PartitionCount', v_Count);
+    -- COUNT and no partition list, unless a partition has a name of its own or a comment.
+    IF v_Method IN ('HASH', 'KEY', 'LINEAR HASH', 'LINEAR KEY') AND COALESCE(v_Named, 0) = 0 THEN
+        -- CAST: MariaDB writes a local INT filled by SELECT ... INTO as a JSON string ("3"), which the package's schema
+        -- refuses as an integer. MySQL writes the number either way.
+        RETURN JSON_OBJECT('Method', v_Method, 'Expression', v_Expression, 'PartitionCount', CAST(v_Count AS UNSIGNED));
     END IF;
 
     -- ORDER IS PART OF THE DEFINITION: RANGE boundaries must ascend and the engine rejects a definition
@@ -67,16 +118,23 @@ BEGIN
     -- and absent from the MariaDB floor, and CAST(x AS JSON) does not exist on MariaDB at all -- the same
     -- workaround every other nested array in GenerateTableJson uses, for the same reason.
     SELECT GROUP_CONCAT(
-               JSON_OBJECT('Name', p.PARTITION_NAME, 'Values', p.PARTITION_DESCRIPTION)
+               CONCAT('{"Name":', JSON_QUOTE(p.PARTITION_NAME),
+                      CASE WHEN v_Method IN ('HASH', 'KEY', 'LINEAR HASH', 'LINEAR KEY') THEN ''
+                           ELSE CONCAT(',"Values":', JSON_QUOTE(p.PARTITION_DESCRIPTION)) END,
+                      CASE WHEN COALESCE(p.PARTITION_COMMENT, '') = '' THEN ''
+                           ELSE CONCAT(',"Comment":', JSON_QUOTE(p.PARTITION_COMMENT)) END,
+                      '}')
                ORDER BY p.PARTITION_ORDINAL_POSITION SEPARATOR ',')
       INTO v_Partitions
       FROM INFORMATION_SCHEMA.PARTITIONS p
      WHERE p.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(p.TABLE_SCHEMA) = v_DbKey
        AND SchemaSmith_IdentifierKey(p.TABLE_NAME) = v_TableKey
-       AND p.PARTITION_NAME IS NOT NULL;
+       AND p.PARTITION_NAME IS NOT NULL
+       AND COALESCE(p.SUBPARTITION_ORDINAL_POSITION, 1) = 1;
 
     RETURN CONCAT('{"Method":', JSON_QUOTE(v_Method),
                   ',"Expression":', JSON_QUOTE(v_Expression),
+                  v_Sub,
                   ',"Partitions":[', COALESCE(v_Partitions, ''), ']}');
 END //
 

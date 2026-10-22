@@ -116,7 +116,8 @@ BEGIN
     -- row of its history. #375's blank/whitespace-OldName trap (SchemaSmith_ParseTableJson.sql) applies
     -- here too: NULLIF(TRIM(...), '') normalizes a blank OldName to "no rename", not a bogus empty name.
     SET v_OldTableName = NULLIF(TRIM(JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, '$.OldName'))), '');
-    IF v_OldTableName IS NOT NULL THEN
+    -- Under lower_case_table_names 1 or 2 an OldName differing only in case names this very table: nothing to rename.
+    IF v_OldTableName IS NOT NULL AND SchemaSmith_IdentifierKey(v_OldTableName) <> v_TableKey THEN
         SET v_OldTableKey = SchemaSmith_IdentifierKey(v_OldTableName);
         SELECT COUNT(*) INTO v_TableRenameOldExists FROM information_schema.tables
          WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_OldTableKey;
@@ -243,12 +244,23 @@ BEGIN
         SET v_RenNewName = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_RenIdx, '].Name')));
         SET v_RenOldName = NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_RenIdx, '].OldName')))), '');
 
-        IF v_RenOldName IS NOT NULL THEN
+        -- Column names are case-insensitive, so an OldName differing only in case names this very column. Respell it
+        -- from whatever spelling the table holds, and only when that differs from the declared one.
+        IF v_RenOldName IS NOT NULL AND SchemaSmith_NameKeyCI(v_RenOldName) = SchemaSmith_NameKeyCI(v_RenNewName) THEN
+            SET v_RenOldName = (SELECT MIN(column_name) FROM information_schema.columns
+                                 WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
+                                   AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_RenNewName)
+                                   AND CAST(column_name AS BINARY) <> CAST(v_RenNewName AS BINARY));
+            SET v_RenOldExists = IF(v_RenOldName IS NULL, 0, 1);
+            SET v_RenNewExists = 0;
+        ELSEIF v_RenOldName IS NOT NULL THEN
             SELECT COUNT(*) INTO v_RenOldExists FROM information_schema.columns
              WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_RenOldName);
             SELECT COUNT(*) INTO v_RenNewExists FROM information_schema.columns
              WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_RenNewName);
+        END IF;
 
+        IF v_RenOldName IS NOT NULL THEN
             IF v_RenOldExists > 0 AND v_RenNewExists > 0 THEN
                 -- Same MESSAGE_TEXT 128-char limit as the table-rename SIGNAL above -- kept short with
                 -- real headroom, not trimmed to exactly fit.

@@ -169,7 +169,8 @@ internal static class DeferredMergeBuilder
         var sb = new StringBuilder();
 
         if (!string.IsNullOrEmpty(disableRuleStmts)) sb.AppendLine(disableRuleStmts);
-        sb.AppendLine("DO $$");
+        var tag = MergeScriptHelper.PostgreSqlDataBlockTag(tableData);
+        sb.AppendLine($"DO {tag}");
         sb.AppendLine("DECLARE");
         // Only the JSON path needs a PL/pgSQL variable — xmltable() takes the payload as a literal argument.
         if (!isXml) sb.AppendLine($"  v_json JSON = '{tableData?.Replace("'", "''")}';");
@@ -265,7 +266,7 @@ internal static class DeferredMergeBuilder
         }
 
         sb.AppendLine();
-        sb.AppendLine("END $$ LANGUAGE plpgsql;");
+        sb.AppendLine($"END {tag} LANGUAGE plpgsql;");
         if (!string.IsNullOrEmpty(enableRuleStmts)) sb.AppendLine(enableRuleStmts);
 
         return sb.ToString();

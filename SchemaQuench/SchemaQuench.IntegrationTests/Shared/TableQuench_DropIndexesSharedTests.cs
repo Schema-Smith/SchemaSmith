@@ -87,6 +87,62 @@ public abstract class TableQuench_DropIndexesSharedTests : BaseTableQuenchTests
         }
     }
 
+    // Before dropping an unknown unique index, the deploy dropped every foreign key that referenced the index's TABLE --
+    // keys on another column included -- and re-created only the ones the package declares. A key outside the package
+    // was lost. No key is dropped now: an index a key references is kept, and the other unknown index still goes.
+    [Test]
+    public void DropUnknownIndexes_NeverDropsAForeignKeyThePackageDoesNotDeclare()
+    {
+        const string product = "Fk Predrop Tests";
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        string Scalar(string sql)
+        {
+            cmd.CommandText = sql;
+            return cmd.ExecuteScalar()?.ToString();
+        }
+
+        try
+        {
+            cmd.CommandText = $"""
+                CREATE TABLE `{_mainDb}`.`FkPreParent` (`Id` INT NOT NULL PRIMARY KEY, `Code` INT NOT NULL, `Other` INT NOT NULL,
+                  UNIQUE KEY `UQ_Code` (`Code`), UNIQUE KEY `UQ_Other` (`Other`));
+                CREATE TABLE `{_mainDb}`.`FkPreByCode` (`Id` INT NOT NULL PRIMARY KEY, `ParentCode` INT NOT NULL,
+                  CONSTRAINT `FK_FkPreByCode` FOREIGN KEY (`ParentCode`) REFERENCES `FkPreParent` (`Code`));
+                CREATE TABLE `{_mainDb}`.`FkPreById` (`Id` INT NOT NULL PRIMARY KEY, `ParentId` INT NOT NULL,
+                  CONSTRAINT `FK_FkPreById` FOREIGN KEY (`ParentId`) REFERENCES `FkPreParent` (`Id`));
+                """;
+            cmd.ExecuteNonQuery();
+            const string parentOnly = """
+                [{ "Name": "`FkPreParent`",
+                   "Columns": [ { "Name": "`Id`", "DataType": "INT", "Nullable": false }, { "Name": "`Code`", "DataType": "INT", "Nullable": false },
+                                { "Name": "`Other`", "DataType": "INT", "Nullable": false } ],
+                   "Indexes": [ { "Name": "`PRIMARY`", "IndexColumns": "`Id`", "Unique": true, "PrimaryKey": true } ] }]
+                """;
+            cmd.CommandText = $"CALL SchemaSmith_TableQuench('{product}', '{_mainDb}', '{parentOnly.Replace("'", "''")}', 0, 1, 0);";
+            Assert.DoesNotThrow(() => RetryingTransientConcurrency(() => cmd.ExecuteNonQuery()));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar($"SELECT GROUP_CONCAT(CONSTRAINT_NAME ORDER BY CONSTRAINT_NAME) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS " +
+                                   $"WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME IN ('FkPreByCode', 'FkPreById') AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
+                    Is.EqualTo("FK_FkPreByCode,FK_FkPreById"), "keys outside the package are not the deploy's to drop");
+                Assert.That(Scalar($"SELECT GROUP_CONCAT(DISTINCT INDEX_NAME ORDER BY INDEX_NAME) FROM INFORMATION_SCHEMA.STATISTICS " +
+                                   $"WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = 'FkPreParent'"), Is.EqualTo("PRIMARY,UQ_Code"),
+                    "the index a key references is kept; the unreferenced unknown index is dropped");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{_mainDb}`.`FkPreByCode`, `{_mainDb}`.`FkPreById`, `{_mainDb}`.`FkPreParent`; " +
+                              $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}';";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     [OneTimeSetUp]
     public void Setup()
     {

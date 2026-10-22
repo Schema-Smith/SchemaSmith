@@ -49,7 +49,7 @@
         "ObjectList": "", // Comma-separated list of specific objects to extract (blank = all)
         "ValidateScripts": false, // Validate extracted scripts against the source database
         "SaveInvalidScripts": true, // Save invalid scripts as .sqlerror files (if false, invalid scripts are discarded)
-        "ScriptDynamicDependencyRemovalForFunctions": false,
+        "ScriptDynamicDependencyRemovalForFunctions": false, // Deprecated and ignored; SchemaTongs warns when it is true
 
         // SQL Server and PostgreSQL
         "Schemas": true,
@@ -62,6 +62,8 @@
         "XMLSchemaCollections": true,
         "IndexedViews": true, // SQL Server only — indexed views
         "Synonyms": true,
+        "SecurityPolicies": true, // row-level security policies (2016+)
+        "ModuleSyntax": "CreateOrAlter", // CreateOrAlter needs SQL Server 2016 SP1; Legacy writes a guarded CREATE stub plus ALTER, which every version accepts
 
         // PostgreSQL only
         "DomainTypes": true,
@@ -73,14 +75,20 @@
         "MaterializedViews": true,
         "Collations": true, // CREATE COLLATION objects
         "Publications": true, // Logical-replication publications
+        "RangeTypes": true, // CREATE TYPE ... AS RANGE
+        "TextSearchConfigurations": true, // with the dictionaries they map to
+        "Operators": true,
+        "Casts": true,
+        "EventTriggers": true, // deploying one needs a superuser
 
         // All platforms
         "Functions": true,
         "Procedures": true,
         "TableTriggers": true,
 
-        // MySQL only
-        "Events": true
+        // MySQL and MariaDB
+        "Events": true,
+        "Packages": true // MariaDB 10.3+ only
     },
     "OrphanHandling": {
         "Mode": "Detect" // Detect, DetectWithCleanupScripts, or DetectDeleteAndCleanup

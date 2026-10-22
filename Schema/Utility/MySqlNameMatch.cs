@@ -1,5 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System;
+
 namespace Schema.Utility;
 
 /// <summary>
@@ -19,6 +21,11 @@ public static class MySqlNameMatch
     // spelling of a mixed-case database finds no routines. The prefilter therefore compares the folded value.
     public static string FoldedRoutineSchema(string catalogColumn, string valueSql) =>
         $"{catalogColumn} = {FoldedValue(valueSql)} AND {Key(catalogColumn)} = {Key(valueSql)}";
+
+    // A name as a hex literal. A quoted one depends on NO_BACKSLASH_ESCAPES: without it a backslash in the name is read as
+    // an escape and the name changes. A hex literal reads the same under every sql_mode.
+    public static string Literal(string value) =>
+        $"CONVERT(X'{Convert.ToHexString(System.Text.Encoding.UTF8.GetBytes(value))}' USING utf8mb4)";
 
     private static string FoldedValue(string sql) => $"IF(@@lower_case_table_names = 0, {sql}, LOWER({sql}))";
 

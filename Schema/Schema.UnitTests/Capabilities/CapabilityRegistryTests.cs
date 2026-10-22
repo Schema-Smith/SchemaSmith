@@ -26,21 +26,35 @@ namespace Schema.UnitTests.Capabilities
             "data compression (Enterprise edition below SQL Server 2016 SP1)",
             "columnstore index (Enterprise edition below SQL Server 2016 SP1)",
             "graph table (SQL Server 2017)",
+            "edge constraint (SQL Server 2019)",
             "ledger table (SQL Server 2022)",
             "XML compression (SQL Server 2022)",
             "data masking (SQL Server 2016)",
             "Always Encrypted (SQL Server 2016)",
             "columnstore index (SQL Server 2012/2014)",
+            "spatial AUTO_GRID tessellation (SQL Server 2012)",
+            "spatial index compression (SQL Server 2012)",
+            "selective XML index (SQL Server 2012 SP1)",
+            "JSON index (SQL Server 2025)",
+            "explicit system-time columns (MariaDB 11.7)",
             "NULLS NOT DISTINCT (PG15)",
+            "NOT ENFORCED constraint (PG18)",
+            "WITHOUT OVERLAPS (PG18)",
+            "ON DELETE SET NULL (columns) (PG15)",
             "UNLOGGED sequence (PG15)",
             "expression statistics (PG14)",
+            "statistics target (PG13)",
             "per-column compression (PG14)",
             "table access method (PG15)",
             "un-generated column, values not kept (PG13)",
             "VIRTUAL generated column (PG18)",
             "table without its PERIOD FOR clause",
+            "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)",
             "table without its WITH SYSTEM VERSIONING clause",
             "column without its WITHOUT SYSTEM VERSIONING clause",
+            "sequence (MariaDB 10.3)",
+            "sequence type (MariaDB 11.5)",
+            "INDEX (VECTOR, MariaDB 11.7)",
             "CDC (database not enabled)",
             "Change Tracking (database not enabled)",
             "FILESTREAM (server or filegroup not available)",
@@ -52,7 +66,11 @@ namespace Schema.UnitTests.Capabilities
             "column (invisible, MySQL 8.0.23 / MariaDB 10.3)",
             "column (SRID, MySQL 8.0.3)",
             "INDEX (functional/expression, MySQL 8.0.13)",
-            "table without its COMPRESSION option"
+            "table without its COMPRESSION option",
+            "table without its SYSTEM_TIME partitioning",
+            "columnstore over a (max) or computed column (SQL Server 2017)",
+            "columnstore index without its ORDER",
+            "SYSTEM_TIME partitioning without AUTO"
         };
 
         [Test]
@@ -76,6 +94,16 @@ namespace Schema.UnitTests.Capabilities
                     Assert.That(c.RequiredCompatLevel, Is.Null.Or.GreaterThan(0), $"RequiredCompatLevel for {c.Key}");
                 }
             });
+        }
+
+        // The label is written to ChangeAudit.ObjectType, NVARCHAR(64) on every engine's kindled table: a longer one fails
+        // the degrade it records with a truncation error.
+        [Test]
+        public void ManifestObjectTypes_FitTheAuditColumn()
+        {
+            var tooLong = CapabilityRegistry.All.Where(c => c.ManifestObjectType is { Length: > 64 })
+                .Select(c => $"{c.Key}/{c.Platform}: {c.ManifestObjectType.Length}").ToList();
+            Assert.That(tooLong, Is.Empty, "ManifestObjectType longer than ChangeAudit.ObjectType (64): " + string.Join("; ", tooLong));
         }
 
         [Test]

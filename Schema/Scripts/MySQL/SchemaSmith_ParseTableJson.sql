@@ -99,11 +99,23 @@ BEGIN
         PartitionMethod VARCHAR(20) DEFAULT NULL,
         PartitionExpression TEXT DEFAULT NULL,
         PartitionCount INT DEFAULT NULL,
+        PartitionKeyAlgorithm TINYINT DEFAULT NULL,
+        SubpartitionMethod VARCHAR(20) DEFAULT NULL,
+        SubpartitionExpression TEXT DEFAULT NULL,
+        SubpartitionCount INT DEFAULT NULL,
+        SystemTimeInterval VARCHAR(64) DEFAULT NULL,
+        SystemTimeStarts VARCHAR(32) DEFAULT NULL,
+        SystemTimeLimit BIGINT DEFAULT NULL,
+        SystemTimeAuto TINYINT NOT NULL DEFAULT 0,
+        -- Set once the partition list is parsed: the CREATE needs to know whether one exists, and a statement cannot
+        -- read _SchemaSmith_Partitions twice (1137).
+        HasPartitionList TINYINT NOT NULL DEFAULT 0,
         AutoIncrementValue BIGINT UNSIGNED DEFAULT NULL,
         -- MySQL's table comment ceiling is 2048 characters (COLUMN_COMMENT/COLUMN varies -- see the
         -- Columns/Indexes temp tables below). No pre-validation against that limit: an over-long
         -- comment is left for the engine's own error at CREATE/ALTER time (matching this codebase's
         -- existing convention for engine-enforced limits elsewhere).
+        -- Filled from Description, or from Comment, the pre-2.8 spelling the package may still use.
         Comment VARCHAR(2048) DEFAULT NULL,
         NewTable TINYINT DEFAULT 0,
         ShouldApply TINYINT DEFAULT 1,
@@ -129,6 +141,10 @@ BEGIN
         -- ModifiedTableQuench STEP 7.5 -- which reads this same flag -- so this is not a NewTable = 1
         -- value. (It said it was: that was true when written and stopped being true when 7.5 shipped.)
         IsSystemVersioned TINYINT DEFAULT 0,
+        -- OnlineApply: the table's own value (OFF, PREFER, REQUIRE; NULL inherits the deploy's), and OnlineMode, the one
+        -- in force, which SchemaSmith_StageOnlineApply resolves once NewTable is known.
+        OnlineApply VARCHAR(8) DEFAULT NULL,
+        OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF',
         KEY ix_tables_name (TableName),
         KEY ix_tables_key (TableKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -141,7 +157,7 @@ BEGIN
     SET v_TblIdx = 0;
     WHILE v_TblIdx < v_TblCnt DO
         IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name'))) IS NOT NULL THEN
-            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, CharacterSet, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned)
+            INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, CharacterSet, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, PartitionKeyAlgorithm, SubpartitionMethod, SubpartitionExpression, SubpartitionCount, SystemTimeInterval, SystemTimeStarts, SystemTimeLimit, SystemTimeAuto, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned, OnlineApply)
             SELECT
                 SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name')))) AS TableName,
                 COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Engine')))), ''), 'InnoDB') AS Engine,
@@ -167,8 +183,17 @@ BEGIN
                 UPPER(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.Method')))), '')) AS PartitionMethod,
                 NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.Expression')))), '') AS PartitionExpression,
                 SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.PartitionCount'))) AS PartitionCount,
+                SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.KeyAlgorithm'))) AS PartitionKeyAlgorithm,
+                UPPER(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.Subpartitioning.Method')))), '')) AS SubpartitionMethod,
+                NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.Subpartitioning.Expression')))), '') AS SubpartitionExpression,
+                SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.Subpartitioning.Count'))) AS SubpartitionCount,
+                UPPER(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.SystemTime.Interval')))), '')) AS SystemTimeInterval,
+                NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.SystemTime.StartsAt')))), '') AS SystemTimeStarts,
+                SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.SystemTime.Limit'))) AS SystemTimeLimit,
+                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.SystemTime.Auto'))), 0) AS SystemTimeAuto,
                 SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].AutoIncrementValue'))) AS AutoIncrementValue,
-                NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Comment')))), '') AS Comment,
+                COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Description')))), ''),
+                         NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Comment')))), '')) AS Comment,
                 0 AS NewTable,
                 1 AS ShouldApply,
                 NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].ShouldApplyExpression')))), '') AS ShouldApplyExpression,
@@ -188,7 +213,8 @@ BEGIN
                 -- so both fall out as 0.
                 COALESCE(JSON_TYPE(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].RebuildPolicy'))) = 'OBJECT', 0) AS RebuildPolicySpecified,
                 COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].PreventDrop'))), 0) AS PreventDrop,
-                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].IsSystemVersioned'))), 0) AS IsSystemVersioned;
+                COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].IsSystemVersioned'))), 0) AS IsSystemVersioned,
+                UPPER(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].OnlineApply')))), '')) AS OnlineApply;
         END IF;
         SET v_TblIdx = v_TblIdx + 1;
     END WHILE;
@@ -256,10 +282,19 @@ BEGIN
         IsAutoIncrement TINYINT DEFAULT 0,
         GeneratedExpression TEXT DEFAULT NULL,
         GeneratedType VARCHAR(10) DEFAULT NULL,
+        -- MariaDB only: a column-level CHECK, named after the column by the engine. NULL on MySQL, whose model has no such key.
+        CheckExpression TEXT DEFAULT NULL,
+        -- The comparison's view of DataType and CheckExpression. On MariaDB a declared JSON is the engine's longtext with
+        -- the json_valid check it adds itself, so the live column is compared with that shape while ColumnScript keeps
+        -- the declared JSON; everywhere else these are the declared values.
+        CompareDataType VARCHAR(100) DEFAULT NULL,
+        CompareCheckExpression TEXT DEFAULT NULL,
         CharacterSet VARCHAR(50) DEFAULT NULL,
         Collation VARCHAR(100) DEFAULT NULL,
         IsInvisible TINYINT DEFAULT 0,
         IsWithoutSystemVersioning TINYINT DEFAULT 0,
+        -- MariaDB: a declared system-time period column, 'ROWSTART' or 'ROWEND' (GeneratedAlways). NULL otherwise.
+        SystemTimeRole VARCHAR(10) DEFAULT NULL,
         Srid INT DEFAULT NULL,
         -- MySQL's column comment ceiling is 1024 characters. No pre-validation -- see the Tables
         -- temp table Comment column above for the same convention.
@@ -285,8 +320,8 @@ BEGIN
                AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables st WHERE st.TableName = SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Name'))))) THEN
                 INSERT INTO _SchemaSmith_Columns (
                     TableName, ColumnName, OrdinalPosition, DataType, IsNullable, NullableDeclared, DefaultValue, OnUpdateCurrentTimestamp,
-                    IsAutoIncrement, GeneratedExpression, GeneratedType,
-                    CharacterSet, Collation, IsInvisible, IsWithoutSystemVersioning, Srid, Comment, OldName, NewColumn, ShouldApply, ShouldApplyExpression, VariantName
+                    IsAutoIncrement, GeneratedExpression, GeneratedType, CheckExpression,
+                    CharacterSet, Collation, IsInvisible, IsWithoutSystemVersioning, SystemTimeRole, Srid, Comment, OldName, NewColumn, ShouldApply, ShouldApplyExpression, VariantName
                 )
                 SELECT
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Name')))) AS TableName,
@@ -305,12 +340,17 @@ BEGIN
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].AutoIncrement'))), 0) AS IsAutoIncrement,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].GenerationExpression'))) AS GeneratedExpression,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Generated'))) AS GeneratedType,
+                    SchemaSmith_CleanCheckClause(
+                        NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].CheckExpression')))), '')) AS CheckExpression,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].CharacterSet'))) AS CharacterSet,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Collation'))) AS Collation,
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Invisible'))), 0) AS IsInvisible,
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].WithoutSystemVersioning'))), 0) AS IsWithoutSystemVersioning,
+                    CASE UPPER(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].GeneratedAlways')))))
+                         WHEN 'ROWSTART' THEN 'ROWSTART' WHEN 'ROWEND' THEN 'ROWEND' END AS SystemTimeRole,
                     SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Srid'))) AS Srid,
-                    NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Comment')))), '') AS Comment,
+                    COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Description')))), ''),
+                         NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Comment')))), '')) AS Comment,
                     -- #375: blank/whitespace OldName -> NULL (no rename), same as the table-level OldName above.
                     SchemaSmith_SafeBacktickWrap(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].OldName')))), '')) AS OldName,
                     0 AS NewColumn,
@@ -329,7 +369,7 @@ BEGIN
            OldNameKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(OldName));
 
     -- =========================================================================
-    -- DATA-TYPE SYNONYM NORMALIZATION (Rule 20 parity with PostgreSQL)
+    -- DATA-TYPE SYNONYM NORMALIZATION (parity with PostgreSQL)
     -- =========================================================================
     -- Every engine has type synonyms, and the catalog reports the BASE name whatever the package
     -- declared. A column authored INTEGER is reported int, so the comparison saw a difference that
@@ -369,7 +409,7 @@ BEGIN
                  THEN CONCAT('DECIMAL', SUBSTRING(TRIM(DataType), LENGTH('NUMERIC') + 1))
             WHEN UPPER(TRIM(DataType)) LIKE 'FIXED%'
                  THEN CONCAT('DECIMAL', SUBSTRING(TRIM(DataType), LENGTH('FIXED') + 1))
-            WHEN UPPER(TRIM(DataType)) LIKE 'DEC(%' OR UPPER(TRIM(DataType)) = 'DEC'
+            WHEN UPPER(TRIM(DataType)) LIKE 'DEC(%' OR UPPER(TRIM(DataType)) LIKE 'DEC %' OR UPPER(TRIM(DataType)) = 'DEC'
                  THEN CONCAT('DECIMAL', SUBSTRING(TRIM(DataType), LENGTH('DEC') + 1))
             ELSE DataType
         END
@@ -493,17 +533,20 @@ BEGIN
                          ELSE Collation END
     WHERE CharacterSet IS NOT NULL OR Collation IS NOT NULL;
 
-    -- A bare length-taking type takes its default length, which is what the catalog reports.
+    -- A bare length-taking type takes its default length, which is what the catalog reports. Whatever follows the
+    -- keyword (DECIMAL UNSIGNED, CHAR BINARY) is kept after it. A length written after a space (DECIMAL (10,2)) is not
+    -- bare: the type is left as written.
     UPDATE _SchemaSmith_Columns
     SET DataType =
-        CASE UPPER(TRIM(DataType))
-            WHEN 'DECIMAL' THEN 'DECIMAL(10,0)'
-            WHEN 'CHAR' THEN 'CHAR(1)'
-            WHEN 'BIT' THEN 'BIT(1)'
-            WHEN 'BINARY' THEN 'BINARY(1)'
-            ELSE DataType
-        END
-    WHERE DataType IS NOT NULL;
+        CONCAT(CASE UPPER(SUBSTRING_INDEX(TRIM(DataType), ' ', 1))
+                   WHEN 'DECIMAL' THEN 'DECIMAL(10,0)'
+                   WHEN 'CHAR' THEN 'CHAR(1)'
+                   WHEN 'BIT' THEN 'BIT(1)'
+                   WHEN 'BINARY' THEN 'BINARY(1)'
+               END,
+               SUBSTRING(TRIM(DataType), LENGTH(SUBSTRING_INDEX(TRIM(DataType), ' ', 1)) + 1))
+    WHERE UPPER(SUBSTRING_INDEX(TRIM(DataType), ' ', 1)) IN ('DECIMAL', 'CHAR', 'BIT', 'BINARY')
+      AND LEFT(TRIM(SUBSTRING(TRIM(DataType), LENGTH(SUBSTRING_INDEX(TRIM(DataType), ' ', 1)) + 1)), 1) <> '(';
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Identify new columns');
 
@@ -578,6 +621,19 @@ BEGIN
        AND isc.CHARACTER_SET_NAME IS NOT NULL
        AND TRIM(c.DataType) REGEXP '^(var)?char|^(tiny|medium|long)?text|^enum|^set';
 
+    -- After every rewrite of DataType above. A declared JSON on MariaDB is compared with the engine's own rendering
+    -- (longtext, plus the json_valid check it adds from 10.4.3 -- NULL below, where it adds none); a column that
+    -- declares a check of its own keeps that as the comparison.
+    UPDATE _SchemaSmith_Columns
+       -- A bare VECTOR is stored as vector(2048) on MySQL (probed on 9.7); MariaDB refuses one without its dimension.
+       SET CompareDataType = CASE WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON' THEN 'LONGTEXT'
+                                  WHEN VERSION() NOT LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'VECTOR' THEN 'VECTOR(2048)'
+                                  ELSE DataType END,
+           CompareCheckExpression = CASE WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON'
+                                          AND (CheckExpression IS NULL OR TRIM(CheckExpression) = '')
+                                         THEN SchemaSmith_JsonAliasCheck(SchemaSmith_StripBacktickWrapping(ColumnName))
+                                         ELSE CheckExpression END;
+
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Build column scripts');
 
     -- Build ColumnScript for each column
@@ -594,6 +650,9 @@ BEGIN
     SET ColumnScript = CONCAT(
         ColumnName, ' ',
         CASE
+            -- A system-time period column (MariaDB): the type and the role, nothing else; the engine owns the value.
+            WHEN SystemTimeRole IS NOT NULL AND SchemaSmith_SupportsSystemVersioning() = 1 THEN
+                CONCAT(SchemaSmith_UpperDataType(DataType), ' GENERATED ALWAYS AS ROW ', CASE SystemTimeRole WHEN 'ROWSTART' THEN 'START' ELSE 'END' END)
             WHEN GeneratedExpression IS NOT NULL AND TRIM(GeneratedExpression) != '' THEN
                 CONCAT(
                     SchemaSmith_UpperDataType(DataType),
@@ -623,8 +682,10 @@ BEGIN
                               -- CURRENT_TIMESTAMP(3) and its synonyms are ordinary column defaults that
                               -- predate expression defaults entirely, and wrapping them turns a clause every
                               -- version accepts into a hard syntax error below 8.0.13.
+                              -- A quoted value is a literal whatever it contains (#520): wrapping 'n/a (unknown)' made it
+                              -- an expression default the compare never equalled, so the column re-altered every deploy.
                               CASE WHEN DefaultValue REGEXP '\\(' AND LEFT(DefaultValue, 1) != '('
-                                    AND NOT (LEFT(TRIM(DefaultValue), 1) IN ('''', '"') AND SchemaSmith_SupportsDefaultExpression() = 0)
+                                    AND LEFT(TRIM(DefaultValue), 1) NOT IN ('''', '"')
                                     AND UPPER(TRIM(DefaultValue)) NOT REGEXP
                                         '^(CURRENT_TIMESTAMP|NOW|LOCALTIME|LOCALTIMESTAMP)[[:space:]]*\\([0-9]*\\)$'
                                    THEN CONCAT('(', DefaultValue, ')')
@@ -652,8 +713,43 @@ BEGIN
         -- suppressing it at this single build point degrades a declared column safely everywhere rather
         -- than failing the statement. #408
         CASE WHEN IsWithoutSystemVersioning = 1 AND SchemaSmith_SupportsSystemVersioning() = 1
-             THEN ' WITHOUT SYSTEM VERSIONING' ELSE '' END
+             THEN ' WITHOUT SYSTEM VERSIONING' ELSE '' END,
+        -- MariaDB's column-level check rides the column definition, so CREATE, ADD and MODIFY all carry it and a
+        -- MODIFY without it removes it. MySQL has no column-level check and its model never supplies one.
+        CASE WHEN CheckExpression IS NOT NULL AND TRIM(CheckExpression) != '' AND VERSION() LIKE '%MariaDB%'
+             THEN CONCAT(' CHECK (', CheckExpression, ')') ELSE '' END
     );
+
+    -- Declared system-time period columns (MariaDB). A new table takes them in its CREATE, with PERIOD FOR SYSTEM_TIME;
+    -- on a table that exists they come off _SchemaSmith_Columns, so no column pass adds, alters or reorders them, and
+    -- ModifiedTableQuench adds them to a table that still has the implicit pair. LiveEndColumn is the table's own
+    -- explicit ROW END column when it has one: MariaDB adds it to every unique key, so the keys compare with it.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_SystemPeriods;
+    CREATE TEMPORARY TABLE _SchemaSmith_SystemPeriods (
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY,
+        StartColumn VARCHAR(130) DEFAULT NULL,
+        StartScript TEXT DEFAULT NULL,
+        EndColumn VARCHAR(130) DEFAULT NULL,
+        EndScript TEXT DEFAULT NULL,
+        LiveEndColumn VARCHAR(130) DEFAULT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    IF SchemaSmith_SupportsSystemVersioning() = 1 THEN
+        INSERT INTO _SchemaSmith_SystemPeriods (TableName, StartColumn, StartScript)
+        SELECT c.TableName, c.ColumnName, c.ColumnScript FROM _SchemaSmith_Columns c WHERE c.SystemTimeRole = 'ROWSTART';
+        UPDATE _SchemaSmith_SystemPeriods sp
+          JOIN _SchemaSmith_Columns c ON c.TableName = sp.TableName AND c.SystemTimeRole = 'ROWEND'
+           SET sp.EndColumn = c.ColumnName, sp.EndScript = c.ColumnScript;
+        DELETE FROM _SchemaSmith_SystemPeriods WHERE EndColumn IS NULL;
+        UPDATE _SchemaSmith_SystemPeriods sp
+           SET sp.LiveEndColumn = (SELECT CONCAT('`', c.COLUMN_NAME, '`')
+                                     FROM INFORMATION_SCHEMA.COLUMNS c
+                                    WHERE SchemaSmith_IdentifierKey(c.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
+                                      AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(sp.TableName))
+                                      AND c.GENERATION_EXPRESSION = 'ROW END' LIMIT 1);
+        DELETE c FROM _SchemaSmith_Columns c
+          JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+         WHERE t.NewTable = 0 AND c.SystemTimeRole IS NOT NULL;
+    END IF;
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Calculate generated column dependencies');
 
@@ -774,7 +870,15 @@ BEGIN
         IsUnique TINYINT DEFAULT 0,
         IndexType VARCHAR(20) DEFAULT 'BTREE',
         IndexColumns TEXT NOT NULL,
+        -- A temporal key (MariaDB): the last key part names a period. CompareColumns is the key as the catalog lists it
+        -- (the period's end and start columns in its place), EmitColumns the key as this target can build it.
+        WithoutOverlaps TINYINT DEFAULT 0,
+        CompareColumns TEXT DEFAULT NULL,
+        EmitColumns TEXT DEFAULT NULL,
         IsVisible TINYINT DEFAULT 1,
+        -- A VECTOR index's M and DISTANCE (MariaDB 11.7): NULL when not declared, so the server's default applies.
+        VectorM INT DEFAULT NULL,
+        VectorDistance VARCHAR(20) DEFAULT NULL,
         -- MySQL's index comment ceiling is 1024 characters. No pre-validation -- see the Tables
         -- temp table Comment column above for the same convention.
         Comment VARCHAR(1024) DEFAULT NULL,
@@ -794,7 +898,7 @@ BEGIN
             IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Name'))) IS NOT NULL
                AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables st WHERE st.TableName = SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Name'))))) THEN
                 INSERT INTO _SchemaSmith_Indexes (
-                    TableName, IndexName, IsPrimaryKey, IsUnique, IndexType, IndexColumns, IsVisible, Comment, ShouldApply, ShouldApplyExpression, VariantName
+                    TableName, IndexName, IsPrimaryKey, IsUnique, IndexType, IndexColumns, WithoutOverlaps, IsVisible, VectorM, VectorDistance, Comment, ShouldApply, ShouldApplyExpression, VariantName
                 )
                 SELECT
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Name')))) AS TableName,
@@ -803,8 +907,12 @@ BEGIN
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Unique'))), SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].PrimaryKey'))), 0) AS IsUnique,
                     COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].IndexType')))), ''), 'BTREE') AS IndexType,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].IndexColumns'))) AS IndexColumns,
+                    COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].WithoutOverlaps'))), 0) AS WithoutOverlaps,
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Visible'))), 1) AS IsVisible,
-                    NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Comment')))), '') AS Comment,
+                    SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].M'))) AS VectorM,
+                    LOWER(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Distance')))), '')) AS VectorDistance,
+                    COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Description')))), ''),
+                         NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Comment')))), '')) AS Comment,
                     1 AS ShouldApply,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].ShouldApplyExpression')))), '') AS ShouldApplyExpression,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].VariantName')))), '') AS VariantName;
@@ -817,6 +925,11 @@ BEGIN
     UPDATE _SchemaSmith_Indexes
        SET TableKey = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(TableName)),
            IndexKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(IndexName));
+
+    -- A key part naming its column in another case is respelled as the column, which is how the catalog reports it.
+    UPDATE _SchemaSmith_Indexes
+       SET IndexColumns = SchemaSmith_RespellIndexColumns(IndexColumns, TableName, p_DatabaseName)
+     WHERE IndexColumns IS NOT NULL;
 
     -- A prefix as long as its column indexes the whole column, and is reported with no prefix; written that way
     -- it compares equal instead of being rebuilt on every deploy.
@@ -898,6 +1011,9 @@ BEGIN
         TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         Expression TEXT NOT NULL,
+        -- 0 declares NOT ENFORCED (MySQL 8.0.16+; MariaDB has no such state). Omitted is enforced.
+        -- NULL when omitted: an existing check's enforcement is converged only when the package declares it.
+        Enforced TINYINT NULL,
         ShouldApply TINYINT DEFAULT 1,
         ShouldApplyExpression VARCHAR(4000) DEFAULT NULL,
         VariantName VARCHAR(128) DEFAULT NULL,
@@ -912,25 +1028,19 @@ BEGIN
         WHILE v_ChkInnerIdx < v_ChkInnerCnt DO
             IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Name'))) IS NOT NULL
                AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables st WHERE st.TableName = SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].Name'))))) THEN
-                INSERT INTO _SchemaSmith_CheckConstraints (TableName, ConstraintName, Expression, ShouldApply, ShouldApplyExpression, VariantName)
+                INSERT INTO _SchemaSmith_CheckConstraints (TableName, ConstraintName, Expression, ShouldApply, ShouldApplyExpression, VariantName, Enforced)
                 SELECT
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].Name')))) AS TableName,
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Name')))) AS ConstraintName,
-                    -- Strip MySQL charset introducers (_utf8mb4, _utf8, etc.) and backslash-escaped quotes
-                    -- from CHECK_CLAUSE expressions. MySQL's INFORMATION_SCHEMA stores these internally
-                    -- but they're not needed in DDL and cause PREPARE failures. Nested REPLACE (not
-                    -- REGEXP_REPLACE, which is MySQL 8.0+) keeps this version-agnostic down to the 5.7 floor;
-                    -- the longer introducers must be stripped before their prefixes (_utf8mb4/_utf8mb3 before
-                    -- _utf8), so they are the innermost. (_utf8mb3 is emitted by MySQL 8.0.30+ for legacy
-                    -- 3-byte utf8; kept in sync with GenerateTableJson's regex list.)
-                    REPLACE(
-                        REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-                            SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Expression'))),
-                            '_utf8mb4', ''), '_utf8mb3', ''), '_utf8', ''), '_latin1', ''), '_binary', ''),
-                        '\\''', '''') AS Expression,
+                    -- Strip the charset introducers and backslash-escaped quotes an extracted CHECK_CLAUSE carries:
+                    -- not needed in DDL, and they cause PREPARE failures. SchemaSmith_CleanCheckClause removes only an
+                    -- introducer that opens a literal, so a name or text ending in one (`raw_binary`) is kept.
+                    SchemaSmith_CleanCheckClause(
+                        SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Expression')))) AS Expression,
                     1 AS ShouldApply,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].ShouldApplyExpression')))), '') AS ShouldApplyExpression,
-                    NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].VariantName')))), '') AS VariantName;
+                    NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].VariantName')))), '') AS VariantName,
+                    IF(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Enforced'))) IS NULL, NULL, IF(LOWER(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ChkOuterIdx, '].CheckConstraints[', v_ChkInnerIdx, '].Enforced')))) = 'false', 0, 1)) AS Enforced;
             END IF;
             SET v_ChkInnerIdx = v_ChkInnerIdx + 1;
         END WHILE;
@@ -987,7 +1097,8 @@ BEGIN
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Name')))) AS IndexName,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Columns'))) AS Columns,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Parser')))), '') AS Parser,
-                    NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Comment')))), '') AS Comment,
+                    COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Description')))), ''),
+                         NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Comment')))), '')) AS Comment,
                     1 AS ShouldApply,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].ShouldApplyExpression')))), '') AS ShouldApplyExpression,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].VariantName')))), '') AS VariantName;
@@ -1035,6 +1146,31 @@ BEGIN
         SET v_PdOuterIdx = v_PdOuterIdx + 1;
     END WHILE;
 
+    -- A temporal key's last part is a period, which the catalog lists as its end and start columns (in that order): that
+    -- is the key's compare form. The emit form keeps the period and adds WITHOUT OVERLAPS where the engine has it
+    -- (MariaDB 10.5.3) and is the compare form below -- the same key over the period's columns, the recorded downgrade.
+    UPDATE _SchemaSmith_Indexes i
+      JOIN _SchemaSmith_Periods pd
+        ON pd.TableName = i.TableName
+       AND SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(pd.PeriodName))
+           = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(TRIM(SUBSTRING_INDEX(i.IndexColumns, ',', -1))))
+       SET i.CompareColumns = CONCAT(SUBSTRING(i.IndexColumns, 1, CHAR_LENGTH(i.IndexColumns) - CHAR_LENGTH(SUBSTRING_INDEX(i.IndexColumns, ',', -1))),
+                                     pd.EndColumn, ',', pd.StartColumn)
+     WHERE i.WithoutOverlaps = 1;
+    UPDATE _SchemaSmith_Indexes
+       SET CompareColumns = COALESCE(CompareColumns, IndexColumns),
+           EmitColumns = CASE WHEN WithoutOverlaps = 1 AND SchemaSmith_SupportsWithoutOverlaps() = 1 THEN CONCAT(IndexColumns, ' WITHOUT OVERLAPS')
+                              WHEN WithoutOverlaps = 1 THEN COALESCE(CompareColumns, IndexColumns)
+                              ELSE IndexColumns END;
+    -- A unique key of a table with explicit system-time columns ends in its ROW END column, put there by MariaDB, so a
+    -- key declared without it compares with it. One that already names it is left as it is.
+    UPDATE _SchemaSmith_Indexes i
+      JOIN _SchemaSmith_SystemPeriods sp ON sp.TableName = i.TableName AND sp.LiveEndColumn IS NOT NULL
+       SET i.CompareColumns = CONCAT(i.CompareColumns, ',', sp.LiveEndColumn)
+     WHERE (i.IsPrimaryKey = 1 OR i.IsUnique = 1) AND i.WithoutOverlaps = 0
+       AND SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(TRIM(SUBSTRING_INDEX(i.CompareColumns, ',', -1))))
+           <> SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(sp.LiveEndColumn));
+
 
     -- Partitioning (#partitioning, K3): the ORDERED per-partition list. Order is load-bearing -- RANGE
     -- boundaries must ascend and the engine rejects a definition where they do not -- so Ordinal is carried
@@ -1049,6 +1185,7 @@ BEGIN
         Ordinal INT NOT NULL,
         PartitionName VARCHAR(128) NOT NULL,
         PartitionValues TEXT DEFAULT NULL,
+        PartitionComment TEXT DEFAULT NULL,
         KEY ix_pt_table_name (TableName, Ordinal)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
@@ -1060,17 +1197,22 @@ BEGIN
         WHILE v_PdInnerIdx < v_PdInnerCnt DO
             IF SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_PdOuterIdx, '].Partitioning.Partitions[', v_PdInnerIdx, '].Name'))) IS NOT NULL
                AND EXISTS (SELECT 1 FROM _SchemaSmith_Tables st WHERE st.TableName = SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_PdOuterIdx, '].Name'))))) THEN
-                INSERT INTO _SchemaSmith_Partitions (TableName, Ordinal, PartitionName, PartitionValues)
+                INSERT INTO _SchemaSmith_Partitions (TableName, Ordinal, PartitionName, PartitionValues, PartitionComment)
                 SELECT
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_PdOuterIdx, '].Name')))) AS TableName,
                     v_PdInnerIdx AS Ordinal,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_PdOuterIdx, '].Partitioning.Partitions[', v_PdInnerIdx, '].Name'))) AS PartitionName,
-                    NULLIF(TRIM(COALESCE(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_PdOuterIdx, '].Partitioning.Partitions[', v_PdInnerIdx, '].Values'))), '')), '') AS PartitionValues;
+                    NULLIF(TRIM(COALESCE(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_PdOuterIdx, '].Partitioning.Partitions[', v_PdInnerIdx, '].Values'))), '')), '') AS PartitionValues,
+                    NULLIF(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_PdOuterIdx, '].Partitioning.Partitions[', v_PdInnerIdx, '].Comment'))), '') AS PartitionComment;
             END IF;
             SET v_PdInnerIdx = v_PdInnerIdx + 1;
         END WHILE;
         SET v_PdOuterIdx = v_PdOuterIdx + 1;
     END WHILE;
+
+    UPDATE _SchemaSmith_Tables t
+       SET t.HasPartitionList = 1
+     WHERE EXISTS (SELECT 1 FROM _SchemaSmith_Partitions pt WHERE pt.TableName = t.TableName);
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Evaluate ShouldApplyExpression');
 

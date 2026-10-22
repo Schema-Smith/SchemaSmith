@@ -40,8 +40,9 @@ Every database object SchemaSmith reads from a live database, models as part of 
 | Covering / INCLUDE indexes | ✓ | ✓ | n/a | n/a | PG 11+; `IncludeColumns` |
 | Columnstore indexes | ✓ | n/a | n/a | n/a | `ColumnStore` flag |
 | Full-text indexes | ✓ | n/a | ✓ | ✓ | SQL Server: 1 per table; MySQL: multiple |
-| XML indexes | ✓ | n/a | n/a | n/a | `XmlIndexes` array; primary + secondary |
-| Spatial indexes | n/a | ✓ | ✓ | ✓ | PG via `gist`/`spgist` AccessMethod; MySQL via index on spatial column |
+| XML indexes | ✓ | n/a | n/a | n/a | `XmlIndexes` array; primary + secondary, selective + secondary selective (2012 SP1+) |
+| JSON indexes | ✓ | n/a | n/a | n/a | `JsonIndexes` array (2025+); paths, array search |
+| Spatial indexes | ✓ | ✓ | ✓ | ✓ | SQL Server via `SpatialIndexes` array; PG via `gist`/`spgist` AccessMethod; MySQL via index on spatial column |
 | Statistics | ✓ | ✓ | n/a | n/a | SQL Server traditional; PG extended (`ndistinct`, `dependencies`, `mcv`) |
 | Views | ✓ | ✓ | ✓ | ✓ | Script folder |
 | Indexed views | ✓ | n/a | n/a | n/a | `Indexed Views/*.json` |
@@ -86,7 +87,7 @@ Per-table options, column attributes, and table-scoped behavior beyond the basic
 | Row format | n/a | n/a | ✓ | ✓ | `RowFormat`: DYNAMIC / COMPACT / COMPRESSED / REDUNDANT |
 | Initial auto-increment value | n/a | n/a | ✓ | ✓ | `AutoIncrementValue` |
 | Data compression | ✓ | n/a | n/a | n/a | `CompressionType`: NONE / ROW / PAGE |
-| XML compression | ✓ | n/a | n/a | n/a | `XmlCompression` on table and index; deploy 2022+, extract 2025+ |
+| XML compression | ✓ | n/a | n/a | n/a | `XmlCompression` on table, index and XML index; deploy 2022+, extract 2025+ and 2022 CU26+ |
 | Memory-optimized (Hekaton) tables | ✓ | n/a | n/a | n/a | `MemoryOptimized` + `Durability` (SCHEMA_AND_DATA / SCHEMA_ONLY); indexes declared inline; the memory-optimized nature, durability, and inline index shape are refused on change; ownership tracked in `SchemaSmith.ProductOwnership` (extended properties are rejected on such tables); requires In-Memory OLTP support + a `MEMORY_OPTIMIZED_DATA` filegroup |
 | Table-level access method | n/a | ✓ | n/a | n/a | `AccessMethod` |
 | Persistence type (UNLOGGED / TEMPORARY) | n/a | ✓ | n/a | n/a | `PersistenceType` |
@@ -186,7 +187,7 @@ Programmable objects — procedures, functions, triggers, views — deploy via `
 | Rules | n/a | ✓ | n/a | n/a | `Rules/` |
 | Events (scheduled) | n/a | n/a | ✓ | ✓ | `Events/` |
 | Dependency-aware retry on Objects slot | ✓ | ✓ | ✓ | ✓ | Up to 4 passes |
-| Auto dependency drop / recreate for functions | ✓ | ✓ | ✓ | ✓ | `ScriptDynamicDependencyRemovalForFunctions` |
+| Schema-bound dependents of a changed module dropped and put back | ✓ | n/a | n/a | n/a | Declared dependents only; undeclared ones stop the deploy by name |
 | `CREATE OR ALTER` formatting on extraction | ✓ | ✓ | ✓ | ✓ | Where engine supports it |
 | Idempotency-test second pass | ✓ | ✓ | ✓ | ✓ | `RunScriptsTwice` |
 
@@ -260,7 +261,6 @@ The extraction engine. Reads a live database into a versioned schema package usi
 | Auto-exclusion of system / SchemaSmith objects | ✓ | ✓ | ✓ | ✓ | Objects under `sys` / `INFORMATION_SCHEMA` (SQL Server), `pg_*` / `information_schema` (PG), `mysql` / `information_schema` / `performance_schema` / `sys` (MySQL), and the `SchemaSmith` infrastructure schema. `dbo` (SQL Server) and `public` (PG) are extracted normally — they're user schemas, not system. |
 | Encrypted object skip + warn | ✓ | n/a | n/a | n/a | NULL `sys.sql_modules.definition` |
 | Replication-artifact exclusion | ✓ | n/a | n/a | n/a | `MSPeer_`, `MSPub_` |
-| Dynamic function-dependency drop / recreate scripting | ✓ | ✓ | ✓ | ✓ | `ScriptDynamicDependencyRemovalForFunctions` |
 | Filesystem-illegal character percent-encoding | ✓ | ✓ | ✓ | ✓ | |
 
 ## DataTongs — Data MERGE Generation

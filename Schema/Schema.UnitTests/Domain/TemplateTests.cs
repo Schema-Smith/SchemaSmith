@@ -328,6 +328,25 @@ namespace Schema.UnitTests.Domain
         }
 
         [Test]
+        public void GetDefaultTemplateFolders_SqlServer_RunsPrerequisitesFirst_InTheObjectsPass_AndNotInASchemaTemplate()
+        {
+            var folders = Template.GetDefaultTemplateFolders(Platform.SqlServer);
+            Assert.Multiple(() =>
+            {
+                Assert.That(folders[0].FolderPath, Is.EqualTo("Prerequisites"), "first of the Objects folders");
+                Assert.That(folders[0].QuenchSlot, Is.EqualTo(TemplateQuenchSlot.Objects), "the pass that runs ahead of table creation");
+                Assert.That(folders[0].ObjectType, Is.EqualTo(ScriptObjectType.None), "so it runs on every deploy");
+                Assert.That(Template.GetDefaultTemplateFolders(Platform.SqlServer, isSchemaTemplate: true).Select(f => f.FolderPath),
+                    Has.No.Member("Prerequisites"), "database-scoped, so never fanned out per schema");
+                Assert.That(Template.GetDefaultTemplateFolders(Platform.PostgreSQL).Select(f => f.FolderPath), Has.No.Member("Prerequisites"));
+                var policies = folders.Single(f => f.ObjectType == ScriptObjectType.SecurityPolicies);
+                Assert.That(policies.QuenchSlot, Is.EqualTo(TemplateQuenchSlot.AfterTablesObjects), "after the tables and predicate functions");
+                Assert.That(folders.IndexOf(policies), Is.GreaterThan(folders.FindIndex(f => f.ObjectType == ScriptObjectType.SchemaBoundFunctions)));
+                Assert.That(Schema.Utility.ScriptFolderTypeInference.InferFromFolderName("SecurityPolicies"), Is.EqualTo(ScriptObjectType.SecurityPolicies));
+            });
+        }
+
+        [Test]
         public void GetDefaultTemplateFolders_SqlServer_DoesNotContainLegacyFolderNames()
         {
             var folders = Template.GetDefaultTemplateFolders(Platform.SqlServer);

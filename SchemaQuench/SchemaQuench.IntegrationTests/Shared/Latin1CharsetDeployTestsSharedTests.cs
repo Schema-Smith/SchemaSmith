@@ -268,7 +268,7 @@ public abstract class Latin1CharsetDeployTestsSharedTests
         var serverConnectionString = BaseConnectionString + "Database=information_schema;";
         const string json = """
             [{ "Name": "夜間_集計", "Definition": "SET @ss_noop = '集計'", "ScheduleType": "EVERY", "Interval": "1 DAY",
-               "Status": "DISABLE", "Preserve": false, "Comment": "毎晩の集計" }]
+               "Status": "DISABLE", "Preserve": false, "Description": "毎晩の集計" }]
             """;
 
         lock (FactoryContainer.SharedLockObject)

@@ -58,22 +58,22 @@ namespace Schema.UnitTests.Domain
         // stamped into, which is the convention editors expect.
         [Test]
         public void Table_SerializedShape_IsPinned() => AssertOrder<Table>(
-            "DataDeliveries", "$schema", "Name", "Columns", "Indexes", "ForeignKeys", "CheckConstraints",
+            "DataDeliveries", "$schema", "Name", "Description", "Columns", "Indexes", "ForeignKeys", "CheckConstraints",
             "ShouldApplyExpression", "DataDelivery", "VariantName", "DropColumnsRemovedFromProduct",
             "DropForeignKeysRemovedFromProduct", "DropCheckConstraintsRemovedFromProduct",
             "DropExcludeConstraintsRemovedFromProduct", "DropStatisticsRemovedFromProduct",
-            "DropIndexesRemovedFromProduct", "OldName", "PreventDrop", "RebuildPolicy", "Extensions");
+            "DropIndexesRemovedFromProduct", "OldName", "PreventDrop", "RebuildPolicy", "OnlineApply", "Extensions");
 
         [Test]
         // "NullableDeclared" leads for the DataDeliveries reason above: it is [JsonIgnore]d, so it is in this
         // reflected list and in no file and no .json-schema.
         public void Column_SerializedShape_IsPinned() => AssertOrder<Column>(
-            "NullableDeclared", "Name", "DataType", "Nullable", "Default", "ShouldApplyExpression", "OldName", "VariantName",
+            "NullableDeclared", "Name", "DataType", "Nullable", "Default", "Description", "ShouldApplyExpression", "OldName", "VariantName",
             "Extensions");
 
         [Test]
         public void Index_SerializedShape_IsPinned() => AssertOrder<Index>(
-            "Name", "PrimaryKey", "Unique", "UniqueConstraint", "IndexColumns", "ShouldApplyExpression",
+            "Name", "PrimaryKey", "Unique", "UniqueConstraint", "IndexColumns", "Description", "ShouldApplyExpression",
             "VariantName", "Extensions");
 
         [Test]

@@ -5,7 +5,7 @@
 IF OBJECT_ID('SchemaSmith.fn_NormalizeDataType') IS NOT NULL DROP FUNCTION SchemaSmith.fn_NormalizeDataType
 GO
 -- Maps a declared data type onto the spelling the catalog reports back, so a package that authors a
--- SYNONYM does not read as a type change on every quench (Rule 20 parity -- PostgreSQL has had this
+-- SYNONYM does not read as a type change on every quench (parity -- PostgreSQL has had this
 -- in its parse step for some time; SQL Server had only ROWVERSION, inline, in three separate places).
 --
 -- ONE PLACE TO ADD THE NEXT SYNONYM. The three scattered REPLACE(..., 'ROWVERSION', 'TIMESTAMP')
@@ -37,6 +37,8 @@ BEGIN
 
   DECLARE @trimmed NVARCHAR(MAX) = LTRIM(RTRIM(@p_DataType))
   DECLARE @upper NVARCHAR(MAX) = UPPER(@trimmed)
+  -- A computed column declared in DataType is an expression, not a type: its column names must keep their case.
+  IF @upper LIKE 'AS[ (]%' RETURN @trimmed
   DECLARE @t NVARCHAR(MAX)
 
   SET @t = CASE

@@ -306,4 +306,303 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
         }
         conn.Close();
     }
+
+    [Test]
+    public void SpatialIndexes_OnTheXmlTier_Deploy_Redeploy_ExtractAndConverge_ThroughBothTheFullAndIndexOnlyPaths()
+    {
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        const string geometry = "{\"Name\": \"[SX_Shape]\", \"Column\": \"[Shape]\", \"Tessellation\": \"GEOMETRY_GRID\", \"BoundingBox\": {\"XMin\": 0, \"YMin\": 0, \"XMax\": 500, \"YMax\": 200}, "
+                              + "\"Grids\": {\"Level1\": \"MEDIUM\", \"Level2\": \"LOW\", \"Level3\": \"HIGH\", \"Level4\": \"MEDIUM\"}, \"CellsPerObject\": 64, \"FillFactor\": 80, \"CompressionType\": \"PAGE\"}";
+        const string geography = "{\"Name\": \"[SX_Location]\", \"Column\": \"[Location]\", \"Tessellation\": \"GEOGRAPHY_GRID\"}";
+        string Xml(string spatial) => ModelXmlSerializer.ToIngestXml("[{\"Schema\": \"[dbo]\", \"Name\": \"[XmlSpatial]\", \"Columns\": ["
+            + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false}, {\"Name\": \"[Shape]\", \"DataType\": \"GEOMETRY\", \"Nullable\": true}, {\"Name\": \"[Location]\", \"DataType\": \"GEOGRAPHY\", \"Nullable\": true}],"
+            + "\"Indexes\": [{\"Name\": \"[PK_XmlSpatial]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"}],"
+            + "\"SpatialIndexes\": [" + spatial + "]}]", "Tables", "Table");
+        string Shape()
+        {
+            cmd.CommandText = "SELECT i.name COLLATE DATABASE_DEFAULT + ':' + i.tessellation_scheme COLLATE DATABASE_DEFAULT + ':' + ISNULL(CONVERT(VARCHAR(20), tz.bounding_box_xmax), '-') + ':' + ISNULL(tz.level_2_grid_desc COLLATE DATABASE_DEFAULT, '-') + ':' + CONVERT(VARCHAR(10), tz.cells_per_object) + ',' "
+                            + "FROM sys.spatial_indexes i JOIN sys.spatial_index_tessellations tz ON tz.[object_id] = i.[object_id] AND tz.index_id = i.index_id "
+                            + "WHERE i.[object_id] = OBJECT_ID('dbo.XmlSpatial') ORDER BY i.name FOR XML PATH('')";
+            return cmd.ExecuteScalar() as string ?? "";
+        }
+        string Compression(string index)
+        {
+            cmd.CommandText = "SELECT MAX(p.data_compression_desc) FROM sys.indexes i JOIN sys.internal_tables it ON it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id "
+                            + $"JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1 WHERE i.[object_id] = OBJECT_ID('dbo.XmlSpatial') AND i.name = '{index}'";
+            return cmd.ExecuteScalar() as string ?? "(no index)";
+        }
+        int Audits()
+        {
+            cmd.CommandText = "SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND ObjectName LIKE '%XmlSpatial%'";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+        try
+        {
+            cmd.CommandTimeout = 300;
+            cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Xml(geometry + "," + geography).Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+            Assert.That(Shape(), Is.EqualTo("SX_Location:GEOGRAPHY_GRID:-:MEDIUM:16,SX_Shape:GEOMETRY_GRID:500:LOW:64,"), "created as declared");
+            Assert.That(Compression("SX_Shape") + "|" + Compression("SX_Location"), Is.EqualTo("PAGE|NONE"), "compressed as declared");
+
+            cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Xml(geometry + "," + geography).Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+            Assert.That(Audits(), Is.Zero, "a redeploy touches nothing");
+
+            cmd.CommandText = "EXEC SchemaSmith.GenerateTableXml @p_Schema='dbo', @p_Table='XmlSpatial'";
+            var sb = new System.Text.StringBuilder();
+            using (var reader = cmd.ExecuteReader())
+                while (reader.Read())
+                    sb.Append(reader.GetValue(0)?.ToString());
+            var table = (Schema.Domain.SqlServer.SqlServerTable)PlatformDeserializer.DeserializeTable(ModelXmlSerializer.FromIngestXml(sb.ToString()), Platform.SqlServer);
+            var shape = table.SpatialIndexes.Single(s => s.Name == "[SX_Shape]");
+            Assert.Multiple(() =>
+            {
+                Assert.That(table.SpatialIndexes.Select(s => s.Name), Is.EquivalentTo(new[] { "[SX_Shape]", "[SX_Location]" }));
+                Assert.That($"{shape.Column}|{shape.Tessellation}|{shape.BoundingBox?.XMin}|{shape.BoundingBox?.YMax}|{shape.Grids?.Level3}|{shape.CellsPerObject}|{shape.FillFactor}|{shape.CompressionType}",
+                    Is.EqualTo("[Shape]|GEOMETRY_GRID|0|200|HIGH|64|80|PAGE"), "extracted as declared");
+                Assert.That(table.SpatialIndexes.Single(s => s.Name == "[SX_Location]").CompressionType, Is.Null, "an uncompressed index is extracted without it");
+            });
+
+            cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Xml(geometry.Replace("\"CellsPerObject\": 64", "\"CellsPerObject\": 32").Replace("PAGE", "ROW")).Replace("'", "''")}'";
+            cmd.ExecuteNonQuery();
+            Assert.That(Shape(), Is.EqualTo("SX_Shape:GEOMETRY_GRID:500:LOW:32,"), "the index-only path re-creates a changed one and drops one no longer declared");
+            Assert.That(Compression("SX_Shape"), Is.EqualTo("ROW"), "with the compression it declares");
+
+            string Changed(string compression) => Xml(geometry.Replace("\"CellsPerObject\": 64", "\"CellsPerObject\": 32").Replace("PAGE", compression)).Replace("'", "''");
+            cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Changed("ROW")}'";
+            cmd.ExecuteNonQuery();
+            Assert.That(Audits(), Is.Zero, "an index-only redeploy leaves the compressed index alone");
+
+            cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = 'XmlSpatial', @TableDefinitions = N'{Changed("PAGE")}'";
+            cmd.ExecuteNonQuery();
+            Assert.That(Compression("SX_Shape"), Is.EqualTo("PAGE"), "a compression change alone re-creates it on the index-only path");
+        }
+        finally
+        {
+            DropTables(cmd, "dbo.XmlSpatial");
+        }
+
+        conn.Close();
+    }
+
+    // The XML tier parses a table's OnlineApply on its own, on both the full and the index-only paths: a table that asks for
+    // Prefer gets its new index built online with the environment left at Off, and an option-only change is rebuilt in place.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void OnlineApply_OnTheXmlTier_ATablesOwnPrefer_BuildsOnline_AndAnOptionOnlyChangeIsRebuiltInPlace(bool indexOnly)
+    {
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        var table = indexOnly ? "XmlOnlineIdx" : "XmlOnlineFull";
+        string Xml(string indexes) => ModelXmlSerializer.ToIngestXml("[{\"Schema\": \"[dbo]\", \"Name\": \"[" + table + "]\", \"OnlineApply\": \"Prefer\", \"Columns\": ["
+            + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false}, {\"Name\": \"[V]\", \"DataType\": \"INT\", \"Nullable\": true}],"
+            + "\"Indexes\": [{\"Name\": \"[PK_" + table + "]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"}" + indexes + "]}]", "Tables", "Table");
+        void Quench(string indexes, bool path)
+        {
+            var defs = Xml(indexes).Replace("'", "''");
+            cmd.CommandText = path
+                ? $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = 'XmlOnline', @TableDefinitions = N'{defs}', @DropUnknownIndexes = 1"
+                : $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlOnline', @TableDefinitions = N'{defs}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+        }
+        string Audits()
+        {
+            cmd.CommandText = "SELECT STUFF((SELECT ',' + ObjectName + '|' + ActionType + '|' + ISNULL(Mode, '-') FROM SchemaSmith.ChangeAudit "
+                            + $"WHERE SessionId = @@SPID AND ObjectName LIKE '%{table}%' ORDER BY Id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '')";
+            return cmd.ExecuteScalar() as string ?? "";
+        }
+        try
+        {
+            cmd.CommandTimeout = 300;
+            Quench("", false);
+            cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+            cmd.ExecuteNonQuery();
+            Quench(",{\"Name\": \"[IX_" + table + "]\", \"IndexColumns\": \"[V]\"}", indexOnly);
+            Assert.That(Audits(), Is.EqualTo($"[dbo].[{table}].[IX_{table}]|created|online"));
+
+            cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+            cmd.ExecuteNonQuery();
+            Quench(",{\"Name\": \"[IX_" + table + "]\", \"IndexColumns\": \"[V]\", \"PadIndex\": true}", indexOnly);
+            cmd.CommandText = $"SELECT is_padded FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.{table}') AND name = 'IX_{table}'";
+            var padded = Convert.ToBoolean(cmd.ExecuteScalar());
+            Assert.Multiple(() =>
+            {
+                Assert.That(Audits(), Is.EqualTo($"[dbo].[{table}].[IX_{table}]|modified|online"), "rebuilt in place, online");
+                Assert.That(padded, Is.True);
+            });
+        }
+        finally
+        {
+            DropTables(cmd, $"dbo.{table}");
+        }
+
+        conn.Close();
+    }
+
+    [Test]
+    public void LedgerNames_OnTheXmlTier_AreCreatedAsDeclared_AndExtractedWhereTheyDiffer()
+    {
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) < 16) Assert.Ignore("Ledger tables need SQL Server 2022 (major 16).");
+        try
+        {
+            var json = "[{\"Schema\": \"[dbo]\", \"Name\": \"[XmlLedger]\", \"Ledger\": \"Updatable\", \"LedgerView\": {\"Name\": \"[XmlLedgerView]\", \"OperationTypeColumn\": \"[Op]\"},"
+                     + "\"Columns\": [{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false},"
+                     + "{\"Name\": \"[TxStart]\", \"DataType\": \"BIGINT\", \"Nullable\": false, \"GeneratedAlways\": \"TransactionIdStart\", \"Hidden\": true}],"
+                     + "\"Indexes\": [{\"Name\": \"[PK_XmlLedger]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"}]}]";
+            var xml = ModelXmlSerializer.ToIngestXml(json, "Tables", "Table");
+            cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlLedger', @TableDefinitions = N'{xml.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = "EXEC SchemaSmith.GenerateTableXml @p_Schema='dbo', @p_Table='XmlLedger'";
+            var sb = new System.Text.StringBuilder();
+            using (var reader = cmd.ExecuteReader())
+                while (reader.Read())
+                    sb.Append(reader.GetValue(0)?.ToString());
+            var table = (Schema.Domain.SqlServer.SqlServerTable)PlatformDeserializer.DeserializeTable(ModelXmlSerializer.FromIngestXml(sb.ToString()), Platform.SqlServer);
+            Assert.Multiple(() =>
+            {
+                Assert.That(table.Columns.OfType<Schema.Domain.SqlServer.SqlServerColumn>().Where(c => c.GeneratedAlways != null).Select(c => $"{c.Name}:{c.GeneratedAlways}:{c.Hidden}"),
+                    Is.EqualTo(new[] { "[TxStart]:TransactionIdStart:True" }), "the declared column, not the engine's three");
+                Assert.That($"{table.LedgerView?.Schema}|{table.LedgerView?.Name}|{table.LedgerView?.OperationTypeColumn}|{table.LedgerView?.TransactionIdColumn}",
+                    Is.EqualTo("|[XmlLedgerView]|[Op]|"));
+            });
+        }
+        finally
+        {
+            DropTables(cmd, "dbo.XmlLedger");
+        }
+
+        conn.Close();
+    }
+
+    [Test]
+    public void TableQuench_XmlTier_AppliesDescriptions_AndGenerateTableXml_ReadsThemBack()
+    {
+        // The XML twin shreds Description, and the legacy MS_Description inside Extensions, through its own
+        // .value() list; the JSON path proving it says nothing about this one.
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            var json = "[{\"Schema\": \"[dbo]\", \"Name\": \"[XmlDesc]\", \"Description\": \"the table\","
+                + "\"Columns\": ["
+                + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false, \"Description\": \"the key\"},"
+                + "{\"Name\": \"[V]\", \"DataType\": \"INT\", \"Nullable\": true, \"Extensions\": {\"ExtendedProperties\": {\"MS_Description\": \"from the bag\"}}}"
+                + "],"
+                + "\"Indexes\": [{\"Name\": \"[PK_XmlDesc]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\", \"Description\": \"the key index\"},"
+                + "{\"Name\": \"[IX_XmlDesc_V]\", \"IndexColumns\": \"[V]\", \"Description\": \"the lookup\"}]"
+                + "}]";
+            var xml = ModelXmlSerializer.ToIngestXml(json, "Tables", "Table");
+            cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlDesc', @TableDefinitions = N'{xml.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+
+            string Ep(string level2)
+            {
+                cmd.CommandText = "SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'SCHEMA', N'dbo', N'TABLE', N'XmlDesc'" + level2 + ")";
+                return cmd.ExecuteScalar() as string;
+            }
+            Assert.Multiple(() =>
+            {
+                Assert.That(Ep(", default, default"), Is.EqualTo("the table"));
+                Assert.That(Ep(", N'COLUMN', N'Id'"), Is.EqualTo("the key"));
+                Assert.That(Ep(", N'COLUMN', N'V'"), Is.EqualTo("from the bag"), "the pre-2.8 spelling still deploys on the XML tier");
+                Assert.That(Ep(", N'CONSTRAINT', N'PK_XmlDesc'"), Is.EqualTo("the key index"));
+                Assert.That(Ep(", N'INDEX', N'IX_XmlDesc_V'"), Is.EqualTo("the lookup"));
+            });
+
+            // A property added outside the package comes back in the bag on extraction, beside the description.
+            cmd.CommandText = "EXEC sys.sp_addextendedproperty @name=N'OwningTeam', @value=N'Billing', @level0type=N'SCHEMA', @level0name=N'dbo', @level1type=N'TABLE', @level1name=N'XmlDesc', @level2type=N'COLUMN', @level2name=N'V'";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "EXEC SchemaSmith.GenerateTableXml @p_Schema='dbo', @p_Table='XmlDesc'";
+            var sb = new System.Text.StringBuilder();
+            using (var reader = cmd.ExecuteReader())
+                while (reader.Read())
+                    sb.Append(reader.GetValue(0)?.ToString());
+            var table = PlatformDeserializer.DeserializeTable(ModelXmlSerializer.FromIngestXml(sb.ToString()), Platform.SqlServer);
+            var v = table.Columns.Single(c => c.Name == "[V]");
+            Assert.Multiple(() =>
+            {
+                Assert.That(table.Description, Is.EqualTo("the table"));
+                Assert.That(table.Columns.Single(c => c.Name == "[Id]").Description, Is.EqualTo("the key"));
+                Assert.That(v.Description, Is.EqualTo("from the bag"), "read back as Description, whichever spelling put it there");
+                Assert.That(table.Indexes.Single(i => i.Name == "[PK_XmlDesc]").Description, Is.EqualTo("the key index"));
+                Assert.That(table.Indexes.Single(i => i.Name == "[IX_XmlDesc_V]").Description, Is.EqualTo("the lookup"));
+                Assert.That(((JObject)table.Extensions)?["ExtendedProperties"]?["MS_Description"], Is.Null, "it has a key of its own now");
+                Assert.That((string)((JObject)v.Extensions)?["ExtendedProperties"]?["OwningTeam"], Is.EqualTo("Billing"), "the rest of the bag is untouched");
+            });
+        }
+        finally
+        {
+            DropTables(cmd, "dbo.XmlDesc");
+        }
+
+        conn.Close();
+    }
+
+    [Test]
+    public void TableQuench_XmlTier_AppliesExtendedPropertyBags_IncludingASpacedName()
+    {
+        // The ingest XML carries each bag as <ExtendedProperties><p n="Name">Value</p></ExtendedProperties>, because
+        // a property's name need not be an element name, and the XML twin shreds that form on every component.
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            var json = "[{\"Schema\": \"[dbo]\", \"Name\": \"[XmlEp]\", \"Extensions\": {\"ExtendedProperties\": {\"My Note\": \"a & b < c\", \"OwningTeam\": \"Billing\"}},"
+                + "\"Columns\": ["
+                + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false, \"Extensions\": {\"ExtendedProperties\": {\"Classification\": \"Key\"}}},"
+                + "{\"Name\": \"[ParentId]\", \"DataType\": \"INT\", \"Nullable\": true},"
+                + "{\"Name\": \"[Qty]\", \"DataType\": \"INT\", \"Nullable\": true}"
+                + "],"
+                + "\"Indexes\": [{\"Name\": \"[PK_XmlEp]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"},"
+                + "{\"Name\": \"[IX_XmlEp_Qty]\", \"IndexColumns\": \"[Qty]\", \"Extensions\": {\"ExtendedProperties\": {\"IdxNote\": \"hot\"}}}],"
+                + "\"ForeignKeys\": [{\"Name\": \"[FK_XmlEp_Parent]\", \"Columns\": \"[ParentId]\", \"RelatedTableSchema\": \"[dbo]\", \"RelatedTable\": \"[XmlEp]\", \"RelatedColumns\": \"[Id]\", \"Extensions\": {\"ExtendedProperties\": {\"FkNote\": \"self\"}}}],"
+                + "\"CheckConstraints\": [{\"Name\": \"[CK_XmlEp_Qty]\", \"Expression\": \"[Qty] >= 0\", \"Extensions\": {\"ExtendedProperties\": {\"CkNote\": \"non-negative\"}}}]"
+                + "}]";
+            var xml = ModelXmlSerializer.ToIngestXml(json, "Tables", "Table");
+            Assert.That(xml, Does.Contain("<p n=\"My Note\">"), "the ingest encoding must carry the name as an attribute");
+            cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlEp', @TableDefinitions = N'{xml.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
+            cmd.ExecuteNonQuery();
+
+            string Ep(string name, string level2)
+            {
+                cmd.CommandText = $"SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'{name}', N'SCHEMA', N'dbo', N'TABLE', N'XmlEp'{level2})";
+                return cmd.ExecuteScalar() as string;
+            }
+            Assert.Multiple(() =>
+            {
+                Assert.That(Ep("My Note", ", default, default"), Is.EqualTo("a & b < c"));
+                Assert.That(Ep("OwningTeam", ", default, default"), Is.EqualTo("Billing"));
+                Assert.That(Ep("Classification", ", N'COLUMN', N'Id'"), Is.EqualTo("Key"));
+                Assert.That(Ep("IdxNote", ", N'INDEX', N'IX_XmlEp_Qty'"), Is.EqualTo("hot"));
+                Assert.That(Ep("FkNote", ", N'CONSTRAINT', N'FK_XmlEp_Parent'"), Is.EqualTo("self"));
+                Assert.That(Ep("CkNote", ", N'CONSTRAINT', N'CK_XmlEp_Qty'"), Is.EqualTo("non-negative"));
+            });
+        }
+        finally
+        {
+            DropTables(cmd, "dbo.XmlEp");
+        }
+
+        conn.Close();
+    }
 }

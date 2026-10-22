@@ -210,6 +210,78 @@ EXEC sys.sp_addextendedproperty 'Description', 'Table level check constraint', '
     }
 
     [Test]
+    public void ADoubleQuoteOrBackslash_InAnExpressionOrAPropertyValue_IsExtractedExactly()
+    {
+        // The generator once rewrote every escaped quote in its output to a bare one, so any expression holding a double
+        // quote came back as JSON that could not be read, and the table could not be extracted at all.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.TestDoubleQuotes (
+    MyInt INT NOT NULL,
+    MyString NVARCHAR(100) NULL CONSTRAINT [DF_TestDoubleQuotes_MyString] DEFAULT (N'say ""hi""'),
+    CONSTRAINT [CK_TestDoubleQuotes_MyString] CHECK (MyString <> N'""')
+)
+
+EXEC sys.sp_addextendedproperty 'Note', N'a ""b"" \c / d', 'SCHEMA', [dbo], 'TABLE', [TestDoubleQuotes], 'COLUMN', [MyString];
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "dbo", "TestDoubleQuotes");
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.CheckConstraints.Single().Expression, Is.EqualTo("[MyString]<>N'\"'"), "a check holding a double quote");
+            Assert.That(result.Columns.Single(c => c.Name == "[MyString]").Default, Is.EqualTo("N'say \"hi\"'"), "and a default holding two");
+            Assert.That(result.Columns.Single(c => c.Name == "[MyString]").Extensions?["ExtendedProperties"]?["Note"]?.ToString(),
+                Is.EqualTo("a \"b\" \\c / d"), "and a property value holding quotes, a backslash and a solidus");
+        });
+        conn.Close();
+    }
+
+    [Test]
+    public void ANamedSingleColumnCheck_KeepsItsName_ASystemNamedOne_IsTheColumnsExpression_AndTwoOnOneColumn_DoNotFail()
+    {
+        // SS-114 and SS-062: every check bound to one column used to fold into that column's CheckExpression, losing a
+        // user's name, and a second check on the same column failed the scalar subquery. Only a check SQL Server named
+        // itself is the column's; anything else is a CheckConstraints entry under its own name.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.CheckLevel (
+    Qty INT NOT NULL CHECK (Qty >= 0),
+    Price INT NOT NULL,
+    Other INT NULL CHECK (Other <> 0),
+    Twice INT NULL CHECK (Twice > 0),
+    CONSTRAINT [CK_CheckLevel_Price] CHECK (Price > 0)
+);
+-- SQL Server allows one inline column check; a second one, named or not, is added afterwards and binds to the column all the same.
+ALTER TABLE dbo.CheckLevel ADD CONSTRAINT [CK_CheckLevel_OtherNamed] CHECK (Other < 100);
+ALTER TABLE dbo.CheckLevel ADD CHECK (Twice < 10);";
+        cmd.ExecuteNonQuery();
+
+        var result = GenerateTable(cmd, "dbo", "CheckLevel");
+
+        SqlServerColumn Column(string name) => (SqlServerColumn)result.Columns.Single(c => c.Name == $"[{name}]");
+        // Added by ALTER TABLE, so its generated name carries no column part: find it by what it reads.
+        var secondOnTwice = result.CheckConstraints.Single(c => c.Expression.Contains("[Twice]") && c.Name.StartsWith("[CK__", StringComparison.Ordinal));
+        Assert.Multiple(() =>
+        {
+            Assert.That(Column("Qty").CheckExpression, Is.EqualTo("[Qty]>=(0)"), "a system-named check is the column's");
+            Assert.That(Column("Price").CheckExpression, Is.Null, "a named check on one column is not folded");
+            Assert.That(Column("Other").CheckExpression, Is.EqualTo("[Other]<>(0)"), "the system-named one of two is the column's");
+            Assert.That(result.CheckConstraints.Select(c => c.Name).OrderBy(n => n, StringComparer.Ordinal),
+                Is.EqualTo(new[] { "[CK_CheckLevel_OtherNamed]", "[CK_CheckLevel_Price]", secondOnTwice.Name }.OrderBy(n => n, StringComparer.Ordinal)),
+                "the named ones keep their names, and the second system-named check on Twice is an entry under its generated name");
+            Assert.That(result.CheckConstraints.Single(c => c.Name == "[CK_CheckLevel_Price]").Expression, Is.EqualTo("[Price]>(0)"));
+            Assert.That(new[] { Column("Twice").CheckExpression, secondOnTwice.Expression }.OrderBy(x => x, StringComparer.Ordinal),
+                Is.EqualTo(new[] { "[Twice]<(10)", "[Twice]>(0)" }), "both checks on Twice survive, one each way");
+        });
+
+        conn.Close();
+    }
+
+    [Test]
     public void ShouldGenerateCorrectJsonForStatistics()
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
@@ -224,6 +296,12 @@ CREATE TABLE dbo.TestStatistics (
 
 CREATE STATISTICS [ST_TestStatistics_MyInt] ON dbo.TestStatistics (MyInt)
 CREATE STATISTICS [ST_TestStatistics_MyBigInt_ForNullStrings] ON dbo.TestStatistics (MyBigInt) WHERE MyString IS NULL
+-- Named like the engine's own statistics; still user-created, so still extracted. The catalog flags decide, not the name.
+CREATE STATISTICS [hind_TestStatistics_MyString] ON dbo.TestStatistics (MyString)
+CREATE STATISTICS [stat_TestStatistics_MyInt_MyString] ON dbo.TestStatistics (MyInt, MyString)
+-- A predicate on a column the optimizer has no statistic for makes it create one (auto_created = 1), which is never extracted.
+INSERT INTO dbo.TestStatistics (MyInt, MyBigInt, MyString) VALUES (1, 1, 'A'), (2, 2, 'B')
+SELECT COUNT(*) FROM dbo.TestStatistics WHERE MyBigInt = 1
 ";
         cmd.ExecuteNonQuery();
         var result = GenerateTable(cmd, "dbo", "TestStatistics");
@@ -233,11 +311,68 @@ CREATE STATISTICS [ST_TestStatistics_MyBigInt_ForNullStrings] ON dbo.TestStatist
         Assert.That(result.Columns, Is.Not.Null);
         Assert.That(result.Columns, Has.Count.EqualTo(3));
         Assert.That(result.Statistics, Is.Not.Null);
-        Assert.That(result.Statistics, Has.Count.EqualTo(2));
+        Assert.That(result.Statistics.Select(s => s.Name), Is.EquivalentTo(new[] { "[hind_TestStatistics_MyString]", "[ST_TestStatistics_MyBigInt_ForNullStrings]", "[ST_TestStatistics_MyInt]", "[stat_TestStatistics_MyInt_MyString]" }),
+            "every user-created statistic and nothing the engine created");
+        Assert.That(result.Statistics, Has.Count.EqualTo(4));
+        result.Statistics.RemoveAll(s => s.Name.StartsWith("[hind_") || s.Name.StartsWith("[stat_"));
 
         AssertStatisticProperties(result.Statistics[0], "ST_TestStatistics_MyBigInt_ForNullStrings", "[MyBigInt]", "[MyString] IS NULL");
         AssertStatisticProperties(result.Statistics[1], "ST_TestStatistics_MyInt", "[MyInt]", null);
 
+        conn.Close();
+    }
+
+    [Test]
+    public void ShouldExtractADisabledIndex_MarkedDisabled()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.TestDisabledIndexes (
+    MyInt INT NOT NULL,
+    MyString VARCHAR(100) NULL,
+    CONSTRAINT [PK_TestDisabledIndexes] PRIMARY KEY CLUSTERED (MyInt)
+)
+CREATE UNIQUE NONCLUSTERED INDEX [UX_TestDisabledIndexes_MyString] ON dbo.TestDisabledIndexes (MyString)
+ALTER INDEX [UX_TestDisabledIndexes_MyString] ON dbo.TestDisabledIndexes DISABLE
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "dbo", "TestDisabledIndexes");
+        Assert.That(result.Indexes.Select(i => i.Name), Is.EquivalentTo(new[] { "[PK_TestDisabledIndexes]", "[UX_TestDisabledIndexes_MyString]" }), "a disabled index is still the table's index");
+        Assert.Multiple(() =>
+        {
+            Assert.That(((SqlServerIndex)result.Indexes.Single(i => i.Name == "[UX_TestDisabledIndexes_MyString]")).Disabled, Is.True);
+            Assert.That(((SqlServerIndex)result.Indexes.Single(i => i.Name == "[PK_TestDisabledIndexes]")).Disabled, Is.False);
+        });
+        conn.Close();
+    }
+
+    [Test]
+    public void ShouldExtractVectorColumns_WithTheirDimensionsAndBasePrecision()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) < 17) Assert.Ignore("VECTOR is a SQL Server 2025 type.");
+        // float16 is behind the preview switch, which takes effect from the next batch, not within the one that sets it.
+        cmd.CommandText = "ALTER DATABASE SCOPED CONFIGURATION SET PREVIEW_FEATURES = ON";
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = @"
+CREATE TABLE dbo.TestVectors (
+    MyInt INT NOT NULL,
+    Emb VECTOR(3) NULL,
+    Half VECTOR(1536, float16) NULL
+)
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "dbo", "TestVectors");
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Columns.Single(c => c.Name == "[Emb]").DataType, Is.EqualTo("VECTOR(3)"));
+            Assert.That(result.Columns.Single(c => c.Name == "[Half]").DataType, Is.EqualTo("VECTOR(1536, float16)"));
+        });
         conn.Close();
     }
 
@@ -531,10 +666,11 @@ EXEC sys.sp_addextendedproperty 'MS_Description', 'An index', 'SCHEMA', [dbo], '
             // ProductName should be filtered from all EP locations
             Assert.That(json, Does.Not.Contain("ProductName"));
 
-            // User EPs should still be present
-            Assert.That(result.Extensions?["ExtendedProperties"]?["MS_Description"]?.ToString(), Is.EqualTo("A test table"));
-            Assert.That(result.Columns[0].Extensions?["ExtendedProperties"]?["MS_Description"]?.ToString(), Is.EqualTo("An integer column"));
-            Assert.That(result.Indexes[0].Extensions?["ExtendedProperties"]?["MS_Description"]?.ToString(), Is.EqualTo("An index"));
+            // MS_Description has a key of its own and stays out of the bag.
+            Assert.That(result.Description, Is.EqualTo("A test table"));
+            Assert.That(result.Columns[0].Description, Is.EqualTo("An integer column"));
+            Assert.That(result.Indexes[0].Description, Is.EqualTo("An index"));
+            Assert.That(json, Does.Not.Contain("MS_Description"), "it is Description now, not an entry in ExtendedProperties");
         });
 
         conn.Close();

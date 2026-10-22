@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Data.Common;
 using System.Globalization;
 using System.IO;
 using System.Linq;
@@ -73,7 +74,8 @@ public static class ForgeKindler
             if (platform == Platform.SqlServer && serverMajorVersion == 0)
                 serverMajorVersion = TargetVersionDetector.TryDetect(command, Platform.SqlServer)?.ServerComparable ?? 0;
 
-            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode);
+            bool? xmlCompressionReadable = platform == Platform.SqlServer ? ReportsXmlCompression(command) : null;
+            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode, xmlCompressionReadable);
             var current = ReadStamp(command, platform);
             if (!forceReKindle && string.Equals(current, expected, StringComparison.Ordinal))
             {
@@ -98,7 +100,7 @@ public static class ForgeKindler
             if (platform == Platform.PostgreSQL)
                 DropSupersededPostgreSqlOverloads(command);
 
-            KindleScripts(command, platform, encoding, serverMajorVersion, policy);
+            KindleScripts(command, platform, encoding, serverMajorVersion, policy, xmlCompressionReadable);
             if (platform.GetBasePlatform() == Platform.MySQL)
                 CleanupMySqlStatusMessages(command);
 
@@ -111,11 +113,26 @@ public static class ForgeKindler
     }
 
     private static void KindleScripts(IDbCommand command, Platform platform, IngestEncoding encoding,
-        int serverMajorVersion, string policy)
+        int serverMajorVersion, string policy, bool? xmlCompressionReadable)
     {
         foreach (var s in GetKindlingScripts(platform, encoding))
             KindleOneFile(command, s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
-                serverMajorVersion, policy);
+                serverMajorVersion, policy, xmlCompressionReadable);
+    }
+
+    // Whether sys.partitions carries xml_compression on this server. COL_LENGTH reads metadata only, so the question is
+    // safe on every supported version; a server that cannot answer is treated as not reporting it.
+    public static bool ReportsXmlCompression(IDbCommand command)
+    {
+        try
+        {
+            command.CommandText = "SELECT CASE WHEN COL_LENGTH('sys.partitions', 'xml_compression') IS NULL THEN 0 ELSE 1 END";
+            return Convert.ToString(command.ExecuteScalar(), CultureInfo.InvariantCulture) == "1";
+        }
+        catch (DbException)
+        {
+            return false;
+        }
     }
 
     // MySQL only: clear orphaned status rows from crashed sessions. Operational, not schema
@@ -145,7 +162,7 @@ public static class ForgeKindler
     /// </summary>
     internal static string ResolveKindleScript(string fileName, Platform platform,
         bool replaceParseJson, bool replaceTableDef, IngestEncoding encoding = IngestEncoding.Json,
-        int serverMajorVersion = 0, string policy = "warn")
+        int serverMajorVersion = 0, string policy = "warn", bool? xmlCompressionReadable = null)
     {
         var script = ResourceLoader.Load(fileName, platform)
             ?? throw new Exception($"Script '{fileName}' not found for platform '{platform}'.");
@@ -170,8 +187,9 @@ public static class ForgeKindler
                        .Replace("{{UnsupportedPolicy}}", policy);
 
         // {{XmlCompressionRead}} is a COLUMN REFERENCE, not a value, and that is why it is resolved here
-        // rather than guarded at runtime. sys.partitions.xml_compression does not exist before SQL Server
-        // 2025 -- verified on 2022 CU25, where the column lives only on sys.internal_partitions -- and a
+        // rather than guarded at runtime. sys.partitions.xml_compression is missing on 2022 CU25 (the column
+        // lives only on sys.internal_partitions) and present on 2022 CU26 and 2025, so the kindle asks the
+        // server (ReportsXmlCompression) rather than inferring it from the major version -- and a
         // procedure naming a column the server does not have fails to CREATE, taking the whole kindle
         // down. A runtime IF cannot save it because binding happens first. Composing the reference out at
         // kindle time is the same move LedgerViewFilter() makes in C# for sys.tables.ledger_view_id, and
@@ -190,12 +208,28 @@ public static class ForgeKindler
         // disagreement impossible by construction.
         script = script.Replace("{{CdcRotateTable}}", SqlServerCdcRotateTable)
                        .Replace("{{RenderableIndexTypes}}", SqlServerRenderableIndexTypes)
-                       .Replace("{{CollectSelectiveXmlIndexes}}", SqlServerCollectSelectiveXmlIndexes);
+                       .Replace("{{CollectSelectiveXmlIndexes}}", SqlServerCollectSelectiveXmlIndexes)
+                       .Replace("{{ParseSelectiveXmlIndexesJson}}", SqlServerParseSelectiveXmlIndexesJson)
+                       .Replace("{{ParseSelectiveXmlIndexesXml}}", SqlServerParseSelectiveXmlIndexesXml)
+                       .Replace("{{CollectJsonIndexes}}", SqlServerCollectJsonIndexes)
+                       .Replace("{{JsonIndexesTable}}", SqlServerJsonIndexesTable)
+                       .Replace("{{ParseJsonIndexesJson}}", SqlServerParseJsonIndexesJson)
+                       .Replace("{{ParseJsonIndexesXml}}", SqlServerParseJsonIndexesXml)
+                       .Replace("{{DetectJsonIndexChanges}}", SqlServerDetectJsonIndexChanges)
+                       .Replace("{{CreateMissingJsonIndexes}}", SqlServerCreateMissingJsonIndexes);
 
-        var xmlCompressionReadable = serverMajorVersion >= 17;
+        var xmlReadable = xmlCompressionReadable ?? serverMajorVersion >= 17;
         script = script.Replace("{{XmlCompressionRead}}",
-                            xmlCompressionReadable ? "p.xml_compression" : "CONVERT(BIT, NULL)")
-                       .Replace("{{XmlCompressionCanRead}}", xmlCompressionReadable ? "1" : "0");
+                            xmlReadable ? "p.xml_compression" : "CONVERT(BIT, NULL)")
+                       .Replace("{{XmlCompressionCanRead}}", xmlReadable ? "1" : "0");
+
+        // The ordered-columnstore key arrived with 2022 (sys.index_columns.column_store_order_ordinal), and naming the column
+        // on an older server fails the CREATE as xml_compression does, so the read is composed out at kindle time.
+        // Two tokens from one value, as for XML compression: the degrade clears a declared ORDER wherever the read cannot see
+        // one, so an index is never created ordered where the next deploy would read it as unordered and re-create it.
+        var columnStoreOrderReadable = serverMajorVersion >= 16;
+        script = script.Replace("{{ColumnStoreOrderList}}", columnStoreOrderReadable ? SqlServerColumnStoreOrderList : "CONVERT(NVARCHAR(MAX), NULL)")
+                       .Replace("{{ColumnStoreOrderCanRead}}", columnStoreOrderReadable ? "1" : "0");
 
         return script;
     }
@@ -207,12 +241,13 @@ public static class ForgeKindler
     /// </summary>
     public static void KindleOneFile(IDbCommand command, string fileName, Platform platform,
         bool replaceParseJsonToken = false, bool replaceTableDefToken = false,
-        IngestEncoding encoding = IngestEncoding.Json, int serverMajorVersion = 0, string policy = "warn")
+        IngestEncoding encoding = IngestEncoding.Json, int serverMajorVersion = 0, string policy = "warn",
+        bool? xmlCompressionReadable = null)
     {
         try
         {
             var script = ResolveKindleScript(fileName, platform, replaceParseJsonToken, replaceTableDefToken,
-                encoding, serverMajorVersion, policy);
+                encoding, serverMajorVersion, policy, xmlCompressionReadable);
 
             if (platform.GetBasePlatform() == Platform.MySQL)
             {
@@ -258,8 +293,12 @@ public static class ForgeKindler
     /// </summary>
     public static string GetParseTableJsonScript(Platform platform)
     {
-        return ResourceLoader.Load("ParseTableJsonIntoTempTables.sql", platform)
-            ?? throw new Exception($"ParseTableJsonIntoTempTables.sql not found for platform '{platform}'.");
+        // Resolved here as well as in the kindle chain: SchemaQuench inlines this script into its own batches.
+        return (ResourceLoader.Load("ParseTableJsonIntoTempTables.sql", platform)
+            ?? throw new Exception($"ParseTableJsonIntoTempTables.sql not found for platform '{platform}'."))
+            .Replace("{{ParseSelectiveXmlIndexesJson}}", SqlServerParseSelectiveXmlIndexesJson)
+            .Replace("{{JsonIndexesTable}}", SqlServerJsonIndexesTable)
+            .Replace("{{ParseJsonIndexesJson}}", SqlServerParseJsonIndexesJson);
     }
 
     /// <summary>
@@ -307,8 +346,11 @@ public static class ForgeKindler
     /// </summary>
     public static string GetParseTableXmlScript(Platform platform)
     {
-        return ResourceLoader.Load("ParseTableXmlIntoTempTables.sql", platform)
-            ?? throw new Exception($"ParseTableXmlIntoTempTables.sql not found for platform '{platform}'.");
+        return (ResourceLoader.Load("ParseTableXmlIntoTempTables.sql", platform)
+            ?? throw new Exception($"ParseTableXmlIntoTempTables.sql not found for platform '{platform}'."))
+            .Replace("{{ParseSelectiveXmlIndexesXml}}", SqlServerParseSelectiveXmlIndexesXml)
+            .Replace("{{JsonIndexesTable}}", SqlServerJsonIndexesTable)
+            .Replace("{{ParseJsonIndexesXml}}", SqlServerParseJsonIndexesXml);
     }
 
     /// <summary>
@@ -347,14 +389,224 @@ public static class ForgeKindler
     // render it as a plain index: an undeployable package, or an index the deploy drops as unknown.
     public const string SqlServerRenderableIndexTypes = "1, 2, 5, 6, 7";
 
-    // Selective XML indexes cannot be declared yet, and without xml_index_type they read as primary XML indexes. The
-    // column arrived with them (2012 SP1), so a server without it has none to leave out, and the read is dynamic so
-    // the procedure still installs there.
-    internal const string SqlServerCollectSelectiveXmlIndexes =
+    // A columnstore index's ORDER columns, in sort order, or NULL when it has none. Reads the caller's sys.indexes as si.
+    internal const string SqlServerColumnStoreOrderList =
+        "(SELECT STUFF((SELECT ',' + QUOTENAME(COL_NAME(oc.[object_id], oc.column_id)) COLLATE DATABASE_DEFAULT " +
+        "FROM sys.index_columns oc WHERE oc.[object_id] = si.[object_id] AND oc.index_id = si.index_id AND oc.column_store_order_ordinal > 0 " +
+        "ORDER BY oc.column_store_order_ordinal FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''))";
+
+    // A selective XML index (2012 SP1) is compared as its rendered WITH XMLNAMESPACES ... FOR (...) clause, built by this one
+    // renderer from the declared paths and from the catalog's, so the compare is a string compare. Paths and namespaces are
+    // sorted, so neither order matters. In the match, {0} is the paths or namespaces alias.
+    private static string SelectiveXmlForClause(string paths, string namespaces, string match) =>
+        "ISNULL(' WITH XMLNAMESPACES (' + STUFF((SELECT ', ' + CASE WHEN n.[Prefix] IS NULL THEN 'DEFAULT ' ELSE '' END + '''' + REPLACE(n.[Uri], '''', '''''') + '''' + ISNULL(' AS ' + n.[Prefix], '') " +
+        $"FROM {namespaces} n WHERE {match.Replace("{0}", "n")} ORDER BY n.[Prefix] COLLATE Latin1_General_BIN2 " +
+        "FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '') + ')', '') + " +
+        "' FOR (' + STUFF((SELECT ', ' + QUOTENAME(p.[Name]) + ' = ''' + REPLACE(p.[Path], '''', '''''') + '''' + " +
+        "CASE WHEN p.[Type] IS NULL THEN '' WHEN p.[Type] = 'node()' OR p.[Type] LIKE 'xs:%' THEN ' AS XQUERY ''' + p.[Type] + '''' ELSE ' AS SQL ' + p.[Type] END + " +
+        "CASE WHEN p.[MaxLength] > 0 THEN ' MAXLENGTH(' + CAST(p.[MaxLength] AS NVARCHAR(10)) + ')' ELSE '' END + " +
+        "CASE WHEN p.[Singleton] = 1 THEN ' SINGLETON' ELSE '' END " +
+        $"FROM {paths} p WHERE {match.Replace("{0}", "p")} ORDER BY p.[Name] COLLATE Latin1_General_BIN2 " +
+        "FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '') + ')'";
+
+    // A SQL-typed path as the declared side normalizes it: upper case, no spaces, the engine's default length or precision.
+    private const string SqlServerSelectiveXmlLiveSqlType =
+        "UPPER(TYPE_NAME(p.user_type_id)) + CASE WHEN TYPE_NAME(p.user_type_id) IN ('nvarchar', 'nchar') THEN '(' + CASE WHEN p.max_length = -1 THEN 'MAX' ELSE CAST(p.max_length / 2 AS VARCHAR(10)) END + ')' " +
+        "WHEN TYPE_NAME(p.user_type_id) IN ('varchar', 'char', 'varbinary', 'binary') THEN '(' + CASE WHEN p.max_length = -1 THEN 'MAX' ELSE CAST(p.max_length AS VARCHAR(10)) END + ')' " +
+        "WHEN TYPE_NAME(p.user_type_id) IN ('decimal', 'numeric') THEN '(' + CAST(p.[precision] AS VARCHAR(10)) + ',' + CAST(p.scale AS VARCHAR(10)) + ')' " +
+        "WHEN TYPE_NAME(p.user_type_id) IN ('datetime2', 'time', 'datetimeoffset') THEN '(' + CAST(p.scale AS VARCHAR(10)) + ')' ELSE '' END";
+
+    // The catalog side: every selective XML index in the database, its paths and namespaces in the declared vocabulary, and
+    // the KindPrefix / KindSuffix the live script is built from. xml_index_type and the selective views arrived with them
+    // (2012 SP1), so a server without the column has none, and the reads are dynamic so the procedure still installs there.
+    internal static readonly string SqlServerCollectSelectiveXmlIndexes =
         "IF OBJECT_ID('tempdb..#SelectiveXmlIndexes') IS NOT NULL DROP TABLE #SelectiveXmlIndexes\n" +
-        "CREATE TABLE #SelectiveXmlIndexes ([object_id] INT, index_id INT)\n" +
+        "CREATE TABLE #SelectiveXmlIndexes ([object_id] INT, index_id INT, [ForPath] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [UsingIndex] NVARCHAR(200) COLLATE DATABASE_DEFAULT, " +
+        "[KindPrefix] NVARCHAR(20) COLLATE DATABASE_DEFAULT, [KindSuffix] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT)\n" +
+        "IF OBJECT_ID('tempdb..#SelectiveXmlPaths') IS NOT NULL DROP TABLE #SelectiveXmlPaths\n" +
+        "CREATE TABLE #SelectiveXmlPaths ([object_id] INT, index_id INT, path_id INT, [Name] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Path] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT, " +
+        "[Type] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [MaxLength] INT, [Singleton] BIT)\n" +
+        "IF OBJECT_ID('tempdb..#SelectiveXmlNamespaces') IS NOT NULL DROP TABLE #SelectiveXmlNamespaces\n" +
+        "CREATE TABLE #SelectiveXmlNamespaces ([object_id] INT, index_id INT, [Prefix] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Uri] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT)\n" +
         "IF COL_LENGTH('sys.xml_indexes', 'xml_index_type') IS NOT NULL\n" +
-        "  EXEC('INSERT #SelectiveXmlIndexes SELECT [object_id], index_id FROM sys.xml_indexes WHERE xml_index_type NOT IN (0, 1)')";
+        "  EXEC('" + (
+            "INSERT #SelectiveXmlIndexes ([object_id], index_id, [ForPath], [UsingIndex]) " +
+            "SELECT x.[object_id], x.index_id, sp.[name], u.[name] FROM sys.xml_indexes x " +
+            "LEFT JOIN sys.xml_indexes u ON u.[object_id] = x.[object_id] AND u.index_id = x.using_xml_index_id " +
+            "LEFT JOIN sys.selective_xml_index_paths sp ON sp.[object_id] = x.[object_id] AND sp.index_id = x.using_xml_index_id AND sp.path_id = x.path_id " +
+            "WHERE x.xml_index_type IN (2, 3); " +
+            "INSERT #SelectiveXmlPaths ([object_id], index_id, path_id, [Name], [Path], [Type], [MaxLength], [Singleton]) " +
+            "SELECT p.[object_id], p.index_id, p.path_id, p.[name], p.[path], " +
+            "CASE WHEN p.is_node = 1 THEN 'node()' WHEN p.path_type_desc = 'SQL' THEN " + SqlServerSelectiveXmlLiveSqlType + " " +
+            "WHEN p.is_xquery_type_inferred = 1 THEN NULL ELSE p.xquery_type_description END, " +
+            "CASE WHEN p.xquery_max_length > 0 AND p.is_xquery_max_length_inferred = 0 THEN p.xquery_max_length END, p.is_singleton " +
+            "FROM sys.selective_xml_index_paths p JOIN sys.xml_indexes x ON x.[object_id] = p.[object_id] AND x.index_id = p.index_id AND x.xml_index_type = 2; " +
+            "INSERT #SelectiveXmlNamespaces ([object_id], index_id, [Prefix], [Uri]) " +
+            "SELECT n.[object_id], n.index_id, CASE WHEN n.is_default_uri = 1 THEN NULL ELSE n.prefix END, n.uri FROM sys.selective_xml_index_namespaces n").Replace("'", "''") + "')\n" +
+        "UPDATE s SET [KindPrefix] = CASE WHEN s.[ForPath] IS NULL THEN 'SELECTIVE ' ELSE '' END,\n" +
+        "             [KindSuffix] = CASE WHEN s.[ForPath] IS NOT NULL THEN ' USING XML INDEX ' + QUOTENAME(s.[UsingIndex]) + ' FOR (' + QUOTENAME(s.[ForPath]) + ')'\n" +
+        "                                 ELSE " + SelectiveXmlForClause("#SelectiveXmlPaths", "#SelectiveXmlNamespaces", "{0}.[object_id] = s.[object_id] AND {0}.index_id = s.index_id") + " END\n" +
+        "  FROM #SelectiveXmlIndexes s";
+
+    // The declared side, after #XmlIndexes is parsed (its Selective column holds the declaration as JSON or as XML, by tier):
+    // the paths and namespaces into #XmlIndexPaths / #XmlIndexNamespaces, SQL types normalized as the catalog side renders
+    // them, IsPrimary settled (a selective index is a primary, a ForPath one a secondary), and the KindPrefix / KindSuffix
+    // every create and compare site renders the index with.
+    private const string SqlServerSelectiveXmlTables =
+        "IF OBJECT_ID('tempdb..#XmlIndexPaths') IS NOT NULL DROP TABLE #XmlIndexPaths\n" +
+        "CREATE TABLE #XmlIndexPaths ([_RowId] BIGINT, [Name] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Path] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT, " +
+        "[Type] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [MaxLength] INT, [Singleton] BIT)\n" +
+        "IF OBJECT_ID('tempdb..#XmlIndexNamespaces') IS NOT NULL DROP TABLE #XmlIndexNamespaces\n" +
+        "CREATE TABLE #XmlIndexNamespaces ([_RowId] BIGINT, [Prefix] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Uri] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT)\n";
+
+    private const string SqlServerParseSelectiveXmlJson =
+        "INSERT INTO #XmlIndexPaths ([_RowId], [Name], [Path], [Type], [MaxLength], [Singleton])\n" +
+        "SELECT x.[_RowId], SchemaSmith.fn_StripBracketWrapping(sp.[Name]), sp.[Path], NULLIF(LTRIM(RTRIM(sp.[Type])), ''), sp.[MaxLength], ISNULL(sp.[Singleton], 0)\n" +
+        "  FROM #XmlIndexes x\n" +
+        "  CROSS APPLY OPENJSON(x.[Selective], '$.Paths') WITH ([Name] NVARCHAR(200) '$.Name', [Path] NVARCHAR(MAX) '$.Path', [Type] NVARCHAR(200) '$.Type', " +
+        "[MaxLength] INT '$.MaxLength', [Singleton] BIT '$.SingletonCardinality') sp\n" +
+        "  WHERE x.[Selective] IS NOT NULL\n" +
+        "INSERT INTO #XmlIndexNamespaces ([_RowId], [Prefix], [Uri])\n" +
+        "SELECT x.[_RowId], NULLIF(sn.[Prefix], ''), sn.[Uri]\n" +
+        "  FROM #XmlIndexes x\n" +
+        "  CROSS APPLY OPENJSON(x.[Selective], '$.Namespaces') WITH ([Prefix] NVARCHAR(200) '$.Prefix', [Uri] NVARCHAR(MAX) '$.Uri') sn\n" +
+        "  WHERE x.[Selective] IS NOT NULL\n";
+
+    private const string SqlServerParseSelectiveXmlXml =
+        "INSERT INTO #XmlIndexPaths ([_RowId], [Name], [Path], [Type], [MaxLength], [Singleton])\n" +
+        "SELECT x.[_RowId], SchemaSmith.fn_StripBracketWrapping(sp.value('(Name/text())[1]', 'NVARCHAR(200)')), sp.value('(Path/text())[1]', 'NVARCHAR(MAX)'),\n" +
+        "       NULLIF(LTRIM(RTRIM(sp.value('(Type/text())[1]', 'NVARCHAR(200)'))), ''), sp.value('(MaxLength/text())[1]', 'INT'),\n" +
+        "       CASE LOWER(sp.value('(SingletonCardinality/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 ELSE 0 END\n" +
+        "  FROM #XmlIndexes x\n" +
+        "  CROSS APPLY x.[Selective].nodes('/Selective/Paths') AS SP(sp)\n" +
+        "  WHERE x.[Selective] IS NOT NULL\n" +
+        "INSERT INTO #XmlIndexNamespaces ([_RowId], [Prefix], [Uri])\n" +
+        "SELECT x.[_RowId], NULLIF(sn.value('(Prefix/text())[1]', 'NVARCHAR(200)'), ''), sn.value('(Uri/text())[1]', 'NVARCHAR(MAX)')\n" +
+        "  FROM #XmlIndexes x\n" +
+        "  CROSS APPLY x.[Selective].nodes('/Selective/Namespaces') AS SN(sn)\n" +
+        "  WHERE x.[Selective] IS NOT NULL\n";
+
+    private static readonly string SqlServerRenderDeclaredXmlIndexes =
+        "UPDATE #XmlIndexPaths SET [Type] = UPPER(REPLACE(REPLACE(REPLACE(REPLACE([Type], ' ', ''), CHAR(9), ''), CHAR(13), ''), CHAR(10), '')) " +
+        "WHERE [Type] <> 'node()' AND [Type] NOT LIKE 'xs:%'\n" +
+        "UPDATE #XmlIndexPaths SET [Type] = [Type] + CASE WHEN [Type] IN ('NVARCHAR', 'NCHAR', 'VARCHAR', 'CHAR', 'VARBINARY', 'BINARY') THEN '(1)' " +
+        "WHEN [Type] IN ('DECIMAL', 'NUMERIC') THEN '(18,0)' WHEN [Type] IN ('DATETIME2', 'TIME', 'DATETIMEOFFSET') THEN '(7)' ELSE '' END " +
+        "WHERE CHARINDEX('(', [Type]) = 0 AND [Type] NOT LIKE 'xs:%'\n" +
+        "UPDATE #XmlIndexPaths SET [Type] = REPLACE([Type], ')', ',0)') WHERE ([Type] LIKE 'DECIMAL(%' OR [Type] LIKE 'NUMERIC(%') AND CHARINDEX(',', [Type]) = 0\n" +
+        "UPDATE #XmlIndexes SET [IsPrimary] = CASE WHEN [ForPath] IS NOT NULL THEN 0 WHEN [Selective] IS NOT NULL THEN 1 ELSE [IsPrimary] END\n" +
+        "UPDATE x SET [KindPrefix] = CASE WHEN x.[ForPath] IS NOT NULL THEN '' WHEN x.[Selective] IS NOT NULL THEN 'SELECTIVE ' WHEN x.[IsPrimary] = 1 THEN 'PRIMARY ' ELSE '' END,\n" +
+        "             [KindSuffix] = CASE WHEN x.[ForPath] IS NOT NULL THEN ' USING XML INDEX ' + x.[PrimaryIndex] + ' FOR (' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(x.[ForPath])) + ')'\n" +
+        "                                 WHEN x.[Selective] IS NOT NULL THEN " + SelectiveXmlForClause("#XmlIndexPaths", "#XmlIndexNamespaces", "{0}.[_RowId] = x.[_RowId]") + "\n" +
+        "                                 WHEN x.[IsPrimary] = 0 THEN ' USING XML INDEX ' + x.[PrimaryIndex] + ' FOR ' + x.[SecondaryIndexType]\n" +
+        "                                 ELSE '' END\n" +
+        "  FROM #XmlIndexes x";
+
+    internal static readonly string SqlServerParseSelectiveXmlIndexesJson = SqlServerSelectiveXmlTables + SqlServerParseSelectiveXmlJson + SqlServerRenderDeclaredXmlIndexes;
+    internal static readonly string SqlServerParseSelectiveXmlIndexesXml = SqlServerSelectiveXmlTables + SqlServerParseSelectiveXmlXml + SqlServerRenderDeclaredXmlIndexes;
+
+    // JSON indexes (2025): one json column and a set of SQL/JSON paths. Both sides render the FOR list the same way -- every
+    // path quoted, sorted binary (JSON keys are case-sensitive), none meaning the whole document -- so one binary comparison
+    // of the rendered list finds any change, and the create writes the same text.
+    private static string JsonIndexForClause(string pathsFrom) =>
+        "' FOR (' + ISNULL(STUFF((SELECT ', N''' + REPLACE(p.[Path], '''', '''''') + '''' FROM " + pathsFrom +
+        " AND RTRIM(p.[Path]) <> '' ORDER BY p.[Path] COLLATE Latin1_General_BIN2 FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''), 'N''$''') + ')'";
+
+    // The catalog side: every JSON index in the database. sys.json_indexes arrived with them, so the reads are dynamic and
+    // the procedures still install on a server without it, where the list is simply empty.
+    internal static readonly string SqlServerCollectJsonIndexes =
+        "IF OBJECT_ID('tempdb..#LiveJsonIndexes') IS NOT NULL DROP TABLE #LiveJsonIndexes\n" +
+        "CREATE TABLE #LiveJsonIndexes ([object_id] INT, index_id INT, [Name] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT, " +
+        "[OptimizeForArraySearch] BIT, [FillFactor] TINYINT, [ForClause] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT, [Compression] NVARCHAR(60) COLLATE DATABASE_DEFAULT)\n" +
+        "IF OBJECT_ID('tempdb..#LiveJsonIndexPaths') IS NOT NULL DROP TABLE #LiveJsonIndexPaths\n" +
+        "CREATE TABLE #LiveJsonIndexPaths ([object_id] INT, index_id INT, [Path] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT)\n" +
+        "IF OBJECT_ID('sys.json_indexes') IS NOT NULL\n" +
+        "  EXEC('" + (
+            "INSERT #LiveJsonIndexes ([object_id], index_id, [Name], [Column], [OptimizeForArraySearch], [FillFactor]) " +
+            "SELECT j.[object_id], j.index_id, j.[name], QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)), j.optimize_for_array_search, NULLIF(j.fill_factor, 0) " +
+            "FROM sys.json_indexes j JOIN sys.index_columns ic ON ic.[object_id] = j.[object_id] AND ic.index_id = j.index_id; " +
+            "INSERT #LiveJsonIndexPaths ([object_id], index_id, [Path]) SELECT p.[object_id], p.index_id, p.[path] FROM sys.json_index_paths p").Replace("'", "''") + "')\n" +
+        "UPDATE l SET [ForClause] = " + JsonIndexForClause("#LiveJsonIndexPaths p WHERE p.[object_id] = l.[object_id] AND p.index_id = l.index_id") + "\n" +
+        "  FROM #LiveJsonIndexes l\n" +
+        // DATA_COMPRESSION lands on the index's internal table, not on the index.
+        "UPDATE l SET [Compression] = (SELECT MAX(p.data_compression_desc) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1\n" +
+        "                              WHERE it.parent_object_id = l.[object_id] AND it.parent_minor_id = l.index_id)\n" +
+        "  FROM #LiveJsonIndexes l";
+
+    // The declared side's working set. On the JSON tier it is created before the ingest split, so it outlives the fill.
+    internal const string SqlServerJsonIndexesTable =
+        "IF OBJECT_ID('tempdb..#JsonIndexes') IS NOT NULL DROP TABLE #JsonIndexes\n" +
+        "CREATE TABLE #JsonIndexes ([_RowId] BIGINT NULL, [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, " +
+        "[IndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Paths] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, " +
+        "[ForClause] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, [OptimizeForArraySearch] BIT NULL, [FillFactor] TINYINT NULL, [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL, " +
+        "[ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL)\n";
+
+    // NORMALIZE, then the ShouldApplyExpression filter, for either tier's rows.
+    private const string SqlServerNormalizeJsonIndexes =
+        "UPDATE #JsonIndexes SET [IndexName] = SchemaSmith.fn_SafeBracketWrap([IndexName]), [Column] = SchemaSmith.fn_SafeBracketWrap([Column]),\n" +
+        "       [OptimizeForArraySearch] = ISNULL([OptimizeForArraySearch], 0), [FillFactor] = NULLIF([FillFactor], 0), [CompressionType] = UPPER(NULLIF(RTRIM([CompressionType]), ''))\n" +
+        "SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('DELETE FROM #JsonIndexes WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');' AS NVARCHAR(MAX))\n" +
+        "                         FROM #JsonIndexes WITH (NOLOCK)\n" +
+        "                         WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''\n" +
+        "                         FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')\n" +
+        "EXEC(@v_SQL)\n";
+
+    internal static readonly string SqlServerParseJsonIndexesJson =
+        "RAISERROR('Parse JSON Indexes from Json', 10, 100) WITH NOWAIT\n" +
+        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Paths], [OptimizeForArraySearch], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])\n" +
+        "SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), t.[Schema], t.[Name], j.[IndexName], j.[Column], j.[Paths], j.[OptimizeForArraySearch], j.[FillFactor], j.[CompressionType], j.[ShouldApplyExpression], j.[VariantName]\n" +
+        "  FROM #TableDefinitions t WITH (NOLOCK)\n" +
+        "  CROSS APPLY OPENJSON(t.[JsonIndexes]) WITH ([IndexName] NVARCHAR(500) '$.Name', [Column] NVARCHAR(500) '$.Column', [Paths] NVARCHAR(MAX) '$.Paths' AS JSON, " +
+        "[OptimizeForArraySearch] BIT '$.OptimizeForArraySearch', [FillFactor] TINYINT '$.FillFactor', [CompressionType] NVARCHAR(100) '$.CompressionType', [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression', " +
+        "[VariantName] NVARCHAR(128) '$.VariantName') j\n" +
+        "UPDATE j SET [ForClause] = " + JsonIndexForClause("OPENJSON(j.[Paths]) WITH ([Path] NVARCHAR(MAX) '$') p WHERE 1 = 1") + ", [Paths] = NULL FROM #JsonIndexes j\n" +
+        SqlServerNormalizeJsonIndexes;
+
+    internal static readonly string SqlServerParseJsonIndexesXml =
+        "RAISERROR('Parse JSON Indexes from Xml', 10, 100) WITH NOWAIT\n" +
+        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [ForClause], [OptimizeForArraySearch], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])\n" +
+        "SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), t.[Schema], t.[Name], jx.value('(Name/text())[1]', 'NVARCHAR(500)'), jx.value('(Column/text())[1]', 'NVARCHAR(500)'),\n" +
+        "       " + JsonIndexForClause("(SELECT n.value('.', 'NVARCHAR(MAX)') AS [Path] FROM jx.nodes('Paths') AS P(n)) p WHERE 1 = 1") + ",\n" +
+        "       jx.value('(OptimizeForArraySearch/text())[1]', 'BIT'), jx.value('(FillFactor/text())[1]', 'TINYINT'), jx.value('(CompressionType/text())[1]', 'NVARCHAR(100)'),\n" +
+        "       jx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'), jx.value('(VariantName/text())[1]', 'NVARCHAR(128)')\n" +
+        "  FROM #TableDefinitions t WITH (NOLOCK)\n" +
+        "  CROSS APPLY t.[TableXml].nodes('/Table/JsonIndexes') AS Y(jx)\n" +
+        SqlServerNormalizeJsonIndexes;
+
+    // A declared index whose column, paths or array-search option differ from the live one, or whose declared fill factor
+    // or compression does, is re-created. Needs {{CollectJsonIndexes}} first.
+    internal const string SqlServerDetectJsonIndexChanges =
+        "IF OBJECT_ID('tempdb..#JsonIndexChanges') IS NOT NULL DROP TABLE #JsonIndexChanges\n" +
+        "SELECT j.[Schema], j.[TableName], j.[IndexName]\n" +
+        "  INTO #JsonIndexChanges\n" +
+        "  FROM #JsonIndexes j WITH (NOLOCK)\n" +
+        "  JOIN #LiveJsonIndexes l WITH (NOLOCK) ON l.[object_id] = OBJECT_ID(j.[Schema] + '.' + j.[TableName]) AND l.[Name] = SchemaSmith.fn_StripBracketWrapping(j.[IndexName])\n" +
+        "  WHERE l.[Column] <> j.[Column] COLLATE DATABASE_DEFAULT\n" +
+        "     OR l.[ForClause] <> j.[ForClause] COLLATE Latin1_General_BIN2\n" +
+        "     OR l.[OptimizeForArraySearch] <> j.[OptimizeForArraySearch]\n" +
+        "     OR (j.[FillFactor] IS NOT NULL AND j.[FillFactor] <> ISNULL(l.[FillFactor], 100))\n" +
+        "     OR (j.[CompressionType] IS NOT NULL AND j.[CompressionType] <> ISNULL(l.[Compression], 'NONE') COLLATE DATABASE_DEFAULT)\n";
+
+    // Sets @v_SQL to one CREATE JSON INDEX per declared index the table does not have; each caller runs it its own way.
+    internal const string SqlServerCreateMissingJsonIndexes =
+        "RAISERROR('Add Missing JSON Indexes', 10, 100) WITH NOWAIT\n" +
+        "SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Creating JSON index ' + j.[Schema] + '.' + j.[TableName] + '.' + j.[IndexName] +\n" +
+        "                                CASE WHEN RTRIM(ISNULL(j.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(j.[VariantName]), '''', '''''') + ')' ELSE '' END +\n" +
+        "                                CASE WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +\n" +
+        "                                'CREATE JSON INDEX ' + j.[IndexName] + ' ON ' + j.[Schema] + '.' + j.[TableName] + ' (' + j.[Column] + ')' + j.[ForClause] +\n" +
+        "                                CASE WHEN j.[OptimizeForArraySearch] = 1 OR j.[FillFactor] IS NOT NULL OR j.[CompressionType] IS NOT NULL\n" +
+        "                                     THEN ' WITH (' + STUFF(CASE WHEN j.[OptimizeForArraySearch] = 1 THEN ', OPTIMIZE_FOR_ARRAY_SEARCH = ON' ELSE '' END +\n" +
+        "                                                            ISNULL(', FILLFACTOR = ' + CONVERT(NVARCHAR(10), j.[FillFactor]), '') +\n" +
+        "                                                            ISNULL(', DATA_COMPRESSION = ' + j.[CompressionType], ''), 1, 2, '') + ')' ELSE '' END + ';' + CHAR(13) + CHAR(10) +\n" +
+        "                                'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''index'', ''' + REPLACE(j.[Schema] + '.' + j.[TableName] + '.' + j.[IndexName], '''', '''''') + ''', ''created'', ' +\n" +
+        "                                CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');' AS NVARCHAR(MAX))\n" +
+        "  FROM #JsonIndexes j WITH (NOLOCK)\n" +
+        // The caller's #OnlineForms: a JSON index has no online build, so under OnlineApply it is recorded as built offline.
+        "  LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'jsonIndex' AND ol.[Schema] = j.[Schema] AND ol.[TableName] = j.[TableName]\n" +
+        "                                         AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(j.[IndexName])\n" +
+        "  WHERE OBJECT_ID(j.[Schema] + '.' + j.[TableName]) IS NOT NULL\n" +
+        "    AND INDEXPROPERTY(OBJECT_ID(j.[Schema] + '.' + j.[TableName]), SchemaSmith.fn_StripBracketWrapping(j.[IndexName]), 'IndexID') IS NULL\n" +
+        "  ORDER BY j.[Schema], j.[TableName], j.[IndexName]\n" +
+        "  FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')\n";
 
     internal readonly record struct KindleScript(string FileName, bool ReplaceParseJson = false, bool ReplaceTableDef = false);
 
@@ -369,6 +621,7 @@ public static class ForgeKindler
                 new("Kindling_SchemaSmith_Schema.sql"),
                 new("SchemaSmith.BootstrapTableQuench.sql"),
                 new("Kindling_KindleStamp_Table.sql", ReplaceTableDef: true),
+                new("Kindling_ScriptStamp_Table.sql", ReplaceTableDef: true),
                 // Ownership fallback for tables that cannot carry the ProductName extended property
                 // (memory-optimized tables reject it). Regular tables still use the extended property;
                 // this mirrors the table-based ownership PostgreSQL and MySQL use for every table.
@@ -384,6 +637,8 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_ExpressionMapUnchanged.sql"),
                 new("SchemaSmith.fn_ExpressionMapEffective.sql"),
                 new("SchemaSmith.ExpressionMapRecord.sql"),
+                // #508: an unrecorded expression is checked on a scratch copy before it is re-applied.
+                new("SchemaSmith.ExpressionMapAdopt.sql"),
                 new("SchemaSmith.fn_ColumnTypeArguments.sql"),
                 new("SchemaSmith.fn_StripLeadingSelect.sql"),
                 new("SchemaSmith.fn_StripBracketWrapping.sql"),
@@ -399,13 +654,37 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_RebuildBlockedReason.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.fn_EnterpriseFeaturesUnavailable.sql"),
+                new("SchemaSmith.fn_OnlineOperationsAvailable.sql"),
+                new("SchemaSmith.fn_OnlineIndexForm.sql"),
+                new("SchemaSmith.fn_OnlineAlterColumnForm.sql"),
+                new("SchemaSmith.StageOnlineForms.sql"),
+                new("SchemaSmith.ResolvePausedIndexBuilds.sql"),
+                new("SchemaSmith.RefuseUnmetOnlineRequire.sql"),
+                new("SchemaSmith.RebuildOptionOnlyIndexChanges.sql"),
                 new("SchemaSmith.DegradeUnsupportedColumnStore.sql"),
                 new("SchemaSmith.DegradeUnsupportedFullText.sql"),
+                new("SchemaSmith.DegradeUnsupportedSpatialIndexes.sql"),
+                new("SchemaSmith.DegradeUnsupportedSelectiveXmlIndexes.sql"),
+                new("SchemaSmith.DegradeUnsupportedJsonIndexes.sql"),
                 new("SchemaSmith.DegradeDatabaseToggles.sql"),
                 new("SchemaSmith.DegradeUnsupportedFeatures.sql"),
+                // Fills the caller's #GraphKeyParts: the graph columns behind a $from_id / $to_id key part (2017+, dynamic).
+                new("SchemaSmith.StageGraphKeyParts.sql"),
+                // Moves declared period columns from #Columns onto #Tables; both parse tiers CALL it, so it precedes them.
+                new("SchemaSmith.LiftPeriodColumns.sql"),
+                // Records a ledger table's declared generated columns; both parse tiers CALL it, so it precedes them.
+                new("SchemaSmith.LiftLedgerColumns.sql"),
                 new("SchemaSmith.PrintWithNoWait.sql"),
                 new("SchemaSmith.RecordWouldChanges.sql"),
                 new("SchemaSmith.CdcPreflight.sql"),
+                // What a drop or a swap takes off an object and the package does not carry. Must follow
+                // PrintWithNoWait (the WhatIf output) and precede RebuildTable and the view quench, which call the
+                // pair around the drop.
+                new("SchemaSmith.CapturePermissions.sql"),
+                new("SchemaSmith.ReapplyPermissions.sql"),
+                // A changed module's signatures, captured before the ALTER that strips them and applied again after.
+                new("SchemaSmith.CaptureSignatures.sql"),
+                new("SchemaSmith.ReapplySignatures.sql"),
                 // Must follow fn_RebuildBlockedReason (it calls it to refuse) and PrintWithNoWait (its
                 // WhatIf output), and precede the quench procedures that will elect a rebuild.
                 new("SchemaSmith.RebuildTable.sql"),
@@ -418,13 +697,25 @@ public static class ForgeKindler
                 // Must precede ModifiedTableQuench, which CALLs it, for the same compile-cost reason.
                 new("SchemaSmith.CdcIndexGuard.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
+                // A temporal table's period columns; MissingIndexesAndConstraintsQuench CALLs it before its index pass.
+                new("SchemaSmith.PeriodColumnQuench.sql"),
+                new("SchemaSmith.LedgerQuench.sql"),
                 new("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"),
+                // Declared descriptions (MS_Description), converged once every table, column and index exists.
+                // Must precede TableQuench and IndexOnlyQuench, which CALL it.
+                new("SchemaSmith.ExtendedPropertyQuench.sql"),
                 // Must follow MissingIndexesAndConstraintsQuench: enabling change tracking requires a
                 // primary key, which a table created in the same run does not have until that pass.
                 new("SchemaSmith.ChangeTrackingQuench.sql"),
                 new("SchemaSmith.FileStreamColumnQuench.sql"),
                 new("SchemaSmith.CdcQuench.sql"),
                 new("SchemaSmith.ForeignKeyQuench.sql"),
+                // Edge constraints (2019), after the foreign keys and once every node table exists; floor-safe (dynamic reads).
+                new("SchemaSmith.EdgeConstraintQuench.sql"),
+                new("SchemaSmith.ConstraintStateQuench.sql"),
+                // A declared index's Disabled state, converged once the index exists. Must precede TableQuench and
+                // IndexOnlyQuench, which CALL it.
+                new("SchemaSmith.IndexStateQuench.sql"),
                 new("SchemaSmith.TableQuench.sql", ReplaceParseJson: true),
                 new("SchemaSmith.IndexOnlyQuench.sql"),
                 new("SchemaSmith.fn_FormatJson.sql"),
@@ -439,6 +730,7 @@ public static class ForgeKindler
                 new("Kindling_SchemaSmith_Schema.sql"),
                 new("SchemaSmith.BootstrapTableQuench.sql"),
                 new("Kindling_KindleStamp_Table.sql", ReplaceTableDef: true),
+                new("Kindling_ScriptStamp_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ProductOwnership_Table.sql", ReplaceTableDef: true),
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
@@ -454,12 +746,22 @@ public static class ForgeKindler
                 // SQL-language functions are validated at creation, so the splitter and StripParenWrapping
                 // must be kindled before the statistics forms that call them.
                 new("SchemaSmith.SplitTopLevelList.sql"),
+                // One reading of an index key's expression, COLLATE, operator class and parameters, behind the
+                // declared-side normaliser and quoter and the live-side rendering.
+                new("SchemaSmith.IndexKeyForms.sql"),
                 new("SchemaSmith.NormalizeIndexColumnList.sql"),
                 new("SchemaSmith.StripParenWrapping.sql"),
                 new("SchemaSmith.StatisticsDefinitionForms.sql"),
+                // A declared statistics target (13+), converged after the create pass by MissingIndexesAndConstraintsQuench
+                // and IndexOnlyQuench, which CALL it; below 13 it routes the declaration through the policy.
+                new("SchemaSmith.StatisticsTargetQuench.sql"),
                 // #242: the authored-vs-canonical decision and the pass that records it.
                 new("SchemaSmith.ExpressionMapUnchanged.sql"),
                 new("SchemaSmith.ExpressionMapRecord.sql"),
+                // #508: an unrecorded expression is checked on a scratch copy before it is re-applied.
+                new("SchemaSmith.ExpressionMapAdopt.sql"),
+                // Read by ModifiedTableQuench: a declared identity sequence option that differs from the live sequence.
+                new("SchemaSmith.IdentityOptionChanges.sql"),
                 new("SchemaSmith.ColumnTypeArguments.sql"),
                 // Calls ColumnTypeArguments and QuoteName, and is called by extraction and the table quench.
                 new("SchemaSmith.ColumnDataType.sql"),
@@ -467,24 +769,47 @@ public static class ForgeKindler
                 new("SchemaSmith.ServerVersionNum.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.IndexNullsNotDistinct.sql"),
+                // The engine's fill factor per access method, so an index declared without one compares against what
+                // the engine actually uses; and the one rendering of an index's WITH clause every create arm shares.
+                new("SchemaSmith.IndexFillFactorDefault.sql"),
+                new("SchemaSmith.IndexWithClause.sql"),
+                // PG18-adaptive conperiod read: a primary key or unique constraint declared WITHOUT OVERLAPS.
+                new("SchemaSmith.ConstraintWithoutOverlaps.sql"),
+                // PG15-adaptive confdelsetcols read: the columns an ON DELETE SET NULL (col, ...) applies to.
+                new("SchemaSmith.ForeignKeySetNullColumns.sql"),
+                new("SchemaSmith.ConstraintEnforced.sql"),
+                new("SchemaSmith.CheckPredicate.sql"),
                 new("SchemaSmith.ColumnCompression.sql"),
                 new("SchemaSmith.StatisticsExpressionColumns.sql"),
                 new("SchemaSmith.StripLeadingSelect.sql"),
                 new("SchemaSmith.RebuildBlockedReason.sql"),
+                // What a drop or a swap takes off an object and the package does not carry. Must follow
+                // ExecuteOrDebug and precede RebuildTable and MaterializedViewQuench, which call the pair.
+                new("SchemaSmith.CapturePermissions.sql"),
+                new("SchemaSmith.ReapplyPermissions.sql"),
                 // Must follow RebuildBlockedReason (it calls it to refuse) and ExecuteOrDebug (its
                 // execute/preview path), and precede the quench procedures that will elect a rebuild.
                 new("SchemaSmith.RebuildTable.sql"),
                 new("SchemaSmith.ValidateTableOwnership.sql"),
                 new("SchemaSmith.FixupTableOwnership.sql"),
                 new("SchemaSmith.FixupIndexOwnership.sql"),
+                // OnlineApply: the form a statement takes, the queue its CONCURRENTLY statements wait in until the
+                // procedure returns, and the REQUIRE refusal. Read by the table and index quenches below.
+                new("SchemaSmith.OnlineApplyForm.sql"),
+                new("SchemaSmith.DeferOnlineWork.sql"),
+                new("SchemaSmith.RefuseUnmetOnlineRequire.sql"),
                 new("SchemaSmith.MissingTableAndColumnQuench.sql"),
                 new("SchemaSmith.BuildExistingIndexesSnapshot.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 new("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"),
+                // Declared descriptions (COMMENT ON), converged once every table, column and index exists.
+                // Must precede TableQuench and IndexOnlyQuench, which CALL it.
+                new("SchemaSmith.DescriptionQuench.sql"),
                 // Must follow MissingIndexesAndConstraintsQuench: REPLICA IDENTITY USING INDEX names an
                 // index, which a table created in the same run does not have until that pass.
                 new("SchemaSmith.ReplicaIdentityQuench.sql"),
                 new("SchemaSmith.ForeignKeyQuench.sql"),
+                new("SchemaSmith.ConstraintStateQuench.sql"),
                 new("SchemaSmith.TableQuench.sql", ReplaceParseJson: true),
                 // Same {{ParseJson}} body as TableQuench, exposed on its own so SchemaQuench can hand the
                 // model over as an argument instead of escaping it into an anonymous DO block.
@@ -522,6 +847,7 @@ public static class ForgeKindler
                 new("SchemaSmith_NameKeyCI.sql"),
                 new("SchemaSmith_BootstrapTableQuench.sql"),
                 new("Kindling_KindleStamp_Table.sql", ReplaceTableDef: true),
+                new("Kindling_ScriptStamp_Table.sql", ReplaceTableDef: true),
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ProductOwnership_Table.sql", ReplaceTableDef: true),
                 new("Kindling_StatusMessages_Table.sql", ReplaceTableDef: true),
@@ -556,6 +882,8 @@ public static class ForgeKindler
                 // means DROP + CREATE, so a false "changed" would reset its schedule on every deploy.
                 new("SchemaSmith_EventMatches.sql"),
                 new("SchemaSmith_EventQuench.sql"),
+                // Declared sequences (MariaDB 10.3+): the MariaDb override converges them, the MySQL file refuses them.
+                new("SchemaSmith_SequenceQuench.sql"),
                 new("SchemaSmith_GenerateEventJson.sql"),
                 new("SchemaSmith_SupportsApplicationTimePeriods.sql"),
                 // Gates the per-column WITHOUT SYSTEM VERSIONING clause (#408). MariaDB-only, like the
@@ -569,10 +897,14 @@ public static class ForgeKindler
                 new("SchemaSmith_IndexKeyPartsUnsupported.sql"),
                 // Calls IndexHasFunctionalKeyPart, above; read by ParseTableJson.
                 new("SchemaSmith_StripFullLengthPrefixes.sql"),
+                // Calls IndexHasFunctionalKeyPart, NameKeyCI and IdentifierKey; read by ParseTableJson.
+                new("SchemaSmith_RespellIndexColumns.sql"),
                 new("SchemaSmith_NormalizeCheckExpression.sql"),
                 // #242: the authored-vs-canonical decision and the pass that records it.
                 new("SchemaSmith_ExpressionMapUnchanged.sql"),
                 new("SchemaSmith_ExpressionMapRecord.sql"),
+                // #508: an unrecorded expression is checked on a scratch copy before it is re-applied.
+                new("SchemaSmith_ExpressionMapAdopt.sql"),
                 // Canonicalises a partition expression before comparing declared against live
                 // (#partitioning, K3) -- MySQL 5.7 echoes the text the user wrote while every other
                 // supported engine rewrites it, so a literal compare would be engine-specific.
@@ -586,21 +918,58 @@ public static class ForgeKindler
                 // the same way. Must follow it: it calls it.
                 new("SchemaSmith_NormalizeDeclaredDefault.sql"),
                 new("SchemaSmith_NumericDefaultsEqual.sql"),
+                // #520: a default is a literal or an expression by the catalog's own account, and an expression default
+                // compares through the engine's own rendering. In call order: the last calls the first two.
+                new("SchemaSmith_IsExpressionDefault.sql"),
+                new("SchemaSmith_ExpressionDefaultText.sql"),
+                new("SchemaSmith_CleanCheckClause.sql"),
+                new("SchemaSmith_ExpressionDefaultsEqual.sql"),
                 new("SchemaSmith_ColumnOnUpdateClause.sql"),
                 new("SchemaSmith_IndexIsVisible.sql"),
                 new("SchemaSmith_ColumnSrid.sql"),
+                // NULL on MySQL; the MariaDb override reads the check MariaDB names after the column (its column-level check).
+                new("SchemaSmith_ColumnLevelCheck.sql"),
+                // The check MariaDB adds to a JSON column itself (NULL on MySQL and below MariaDB 10.4.3), and whether a
+                // live column is that shape: the generator folds it to JSON, the parse compares a declared JSON with it.
+                new("SchemaSmith_JsonAliasCheck.sql"),
+                new("SchemaSmith_IsJsonAliasColumn.sql"),
+                // Temporal keys: the gate (MariaDB 10.5.3; MySQL never) and the period a key is declared over (NULL on
+                // MySQL; the MariaDb override reads KEY_PERIOD_USAGE from 11.4).
+                new("SchemaSmith_SupportsWithoutOverlaps.sql"),
+                new("SchemaSmith_SupportsVectorIndex.sql"),
+                new("SchemaSmith_IndexPeriodJson.sql"),
                 new("SchemaSmith_IsSystemTimePeriodColumn.sql"),
+                // MySQL 8.0.30+'s generated invisible primary key (my_row_id): neither extracted nor dropped (0 on MariaDB).
+                new("SchemaSmith_IsGeneratedInvisiblePrimaryKey.sql"),
+                // A declared system-time period column's role, and the gate for adding explicit ones to an implicit table (11.7).
+                new("SchemaSmith_SystemTimePeriodRole.sql"),
+                // Read by ModifiedTableQuench's generated-status passes: a VIRTUAL <-> STORED switch is a drop and re-add.
+                new("SchemaSmith_GeneratedKindChanged.sql"),
+                // Read by ModifiedTableQuench STEP 2.9: a type change takes down the foreign keys on its column first (MA-054).
+                new("SchemaSmith_ColumnTypeDiffers.sql"),
+                // Read by the index detectors: a case-only respelling a foreign key blocks is a no-op on these MariaDB patches.
+                new("SchemaSmith_CaseRespellKeepsOldSpelling.sql"),
+                new("SchemaSmith_SupportsExplicitSystemTimeConversion.sql"),
                 new("SchemaSmith_SetSystemVersioningAlterHistory.sql"),
+                // KEEP around a new versioned table's index work only (MySQL no-op, MariaDb override); the index pass CALLs it.
+                new("SchemaSmith_KeepHistoryForNewVersionedTable.sql"),
                 new("SchemaSmith_TablePeriodsJson.sql"),
                 // The catalog-to-package read for partitioning (#partitioning, K3). ONE shared
                 // definition, unlike its Periods sibling: INFORMATION_SCHEMA.PARTITIONS exists on every
                 // supported version of both engines, so no MariaDb override is needed.
                 new("SchemaSmith_TablePartitioningJson.sql"),
+                // SYSTEM_TIME partitioning (MariaDB): the count/STARTS and AUTO gates, and whether a declaration can be created.
+                new("SchemaSmith_SupportsSystemTimePartitionCount.sql"),
+                new("SchemaSmith_SupportsSystemTimeAutoPartitions.sql"),
+                new("SchemaSmith_SystemTimePartitionable.sql"),
                 new("SchemaSmith_SnapshotIndexVisibility.sql"),
                 new("SchemaSmith_SnapshotIndexExistence.sql"),
                 new("SchemaSmith_DropCheckClause.sql"),
                 new("SchemaSmith_IndexInvisibleClause.sql"),
                 new("SchemaSmith_RebuildBlockedReason.sql"),
+                // The grants a DROP takes off a routine, captured and put back around a script that drops it.
+                new("SchemaSmith_CapturePermissions.sql"),
+                new("SchemaSmith_ReapplyPermissions.sql"),
                 // Must follow SchemaSmith_RebuildBlockedReason (it calls it to refuse) and the identifier
                 // helpers above, and precede the quench procedures that will elect a rebuild.
                 new("SchemaSmith_RebuildTable.sql"),
@@ -625,8 +994,19 @@ public static class ForgeKindler
                 new("SchemaSmith_CatalogSnapshot.sql"),
                 new("SchemaSmith_ParseTableJson.sql"),
                 new("SchemaSmith_RefuseUnsupportedIndexes.sql"),
+                // A VECTOR index where the engine has none is skipped with a downgrade; called beside the refusals.
+                new("SchemaSmith_DegradeVectorIndexes.sql"),
+                // OnlineApply: each table's mode and its added columns' positions, and the INSTANT / INPLACE, LOCK=NONE
+                // ladder every converted ALTER runs through. Called by the table and index quenches below.
+                new("SchemaSmith_StageOnlineApply.sql"),
+                new("SchemaSmith_ExecuteOnline.sql"),
                 new("SchemaSmith_MissingTableAndColumnQuench.sql"),
+                // #530: a table's FullTextIndexes, created and re-created by both index paths, not only the index-only one.
+                new("SchemaSmith_DropModifiedFullTextIndexes.sql"),
+                new("SchemaSmith_CreateMissingFullTextIndexes.sql"),
                 new("SchemaSmith_ModifiedTableQuench.sql"),
+                // An existing table's declared primary key, added or replaced; both index paths call it.
+                new("SchemaSmith_ConvergePrimaryKeys.sql"),
                 new("SchemaSmith_MissingIndexesAndConstraintsQuench.sql"),
                 new("SchemaSmith_ForeignKeyQuench.sql"),
                 new("SchemaSmith_IndexOnlyQuench.sql"),
@@ -849,7 +1229,7 @@ public static class ForgeKindler
     /// -> the next kindle re-runs automatically (alternating version/policy across runs re-kindles; cheap).
     /// </summary>
     public static string ComputeKindleStamp(Platform platform, IngestEncoding encoding = IngestEncoding.Json,
-        int serverMajorVersion = 0, string policy = "warn", string sqlMode = null)
+        int serverMajorVersion = 0, string policy = "warn", string sqlMode = null, bool? xmlCompressionReadable = null)
     {
         var sb = new StringBuilder();
         if (!string.IsNullOrEmpty(sqlMode))
@@ -858,7 +1238,7 @@ public static class ForgeKindler
         // resolved text — and therefore the stamp — already differs from Json; no extra discriminator needed.
         foreach (var s in GetKindlingScripts(platform, encoding))
             sb.Append(ResolveKindleScript(s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
-                serverMajorVersion, policy));
+                serverMajorVersion, policy, xmlCompressionReadable));
 
         using var sha = SHA256.Create();
         var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(sb.ToString()));
@@ -930,6 +1310,13 @@ public static class ForgeKindler
             // overloads can satisfy, which resolves as "procedure is not unique" rather than picking one.
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ModifiedTableQuench\"(boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean)",
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"TableQuench\"(varchar, text, boolean, boolean, boolean, boolean)",
+            // The pre-OnlineApply arities, for the same reason.
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ModifiedTableQuench\"(boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, text, integer, boolean)",
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"TableQuench\"(varchar, text, boolean, boolean, boolean, boolean, text, integer, boolean)",
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"IndexOnlyQuench\"(varchar, text, boolean, boolean, boolean, boolean, boolean)",
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"MissingIndexesAndConstraintsQuench\"(boolean)",
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ForeignKeyQuench\"(boolean)",
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ConstraintStateQuench\"(boolean)",
         ];
         foreach (var sql in drops)
         {

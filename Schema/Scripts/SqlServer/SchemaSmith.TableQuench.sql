@@ -26,7 +26,10 @@ CREATE PROCEDURE SchemaSmith.TableQuench
     -- Template-level CdcFilegroup (#417): the default for tables that declare none. NULL = unmanaged.
     @CdcFilegroup NVARCHAR(128) = NULL,
     -- Template-level CdcSupportsNetChanges (#426): the default for CDC tables that declare none. NULL = unset.
-    @CdcSupportsNetChanges BIT = NULL
+    @CdcSupportsNetChanges BIT = NULL,
+    -- OnlineApply (OFF, PREFER or REQUIRE) and the resumable build's minutes, forwarded to the table and index passes.
+    @OnlineApply VARCHAR(7) = 'OFF',
+    @OnlineApplyMaxDuration INT = NULL
 AS
 BEGIN TRY
     SET NOCOUNT ON
@@ -39,12 +42,25 @@ BEGIN TRY
   -- Template CDC defaults, and the capture-instance limit refused before any column is added (#427).
   EXEC SchemaSmith.CdcPreflight @CdcFilegroup = @CdcFilegroup, @CdcSupportsNetChanges = @CdcSupportsNetChanges
 
+  -- #508: undo for what ExpressionMapAdopt writes under WhatIf; ExpressionMapRecord puts the map back from it.
+  IF OBJECT_ID('tempdb..#ExpressionMapAdoptUndo') IS NOT NULL DROP TABLE #ExpressionMapAdoptUndo
+  CREATE TABLE #ExpressionMapAdoptUndo (ObjectSchema NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, ObjectTable NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL,
+    ObjectKind VARCHAR(32) COLLATE DATABASE_DEFAULT NOT NULL, ObjectName NVARCHAR(256) COLLATE DATABASE_DEFAULT NOT NULL, Slot VARCHAR(32) COLLATE DATABASE_DEFAULT NOT NULL,
+    WasPresent BIT NOT NULL, AuthoredText NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, CanonicalText NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
+    PlatformName VARCHAR(20) COLLATE DATABASE_DEFAULT NULL, EngineVersion VARCHAR(200) COLLATE DATABASE_DEFAULT NULL, CompatLevel INT NULL, UpdatedUtc DATETIME2(3) NULL)
+  -- #508: before any table or column is created, so only what already exists is checked on a scratch copy.
+  EXEC SchemaSmith.ExpressionMapAdopt @WhatIf
   EXEC SchemaSmith.MissingTableAndColumnQuench @WhatIf
   -- Filled by ModifiedTableQuench's CDC headroom check, consumed by CdcQuench once every column exists.
   {{CdcRotateTable}}
   EXEC SchemaSmith.ModifiedTableQuench @ProductName = @ProductName, @WhatIf = @WhatIf, @DropUnknownIndexes = @DropUnknownIndexes, @DropTablesRemovedFromProduct = @DropTablesRemovedFromProduct, @DropSchemaBoundDependents = @DropSchemaBoundDependents,
-                                       @RebuildPolicyMode = @RebuildPolicyMode, @RebuildPolicyThreshold = @RebuildPolicyThreshold, @RebuildPolicyOnOrderMismatch = @RebuildPolicyOnOrderMismatch
-  EXEC SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName, @WhatIf
+                                       @RebuildPolicyMode = @RebuildPolicyMode, @RebuildPolicyThreshold = @RebuildPolicyThreshold, @RebuildPolicyOnOrderMismatch = @RebuildPolicyOnOrderMismatch,
+                                       @OnlineApply = @OnlineApply, @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
+  EXEC SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName, @WhatIf, @OnlineApply = @OnlineApply, @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
+  -- Once every index exists: a declared Disabled state is state on an index that must already be there. Before the
+  -- foreign keys and constraint states, because disabling a key's index disables the keys that reference it, and
+  -- ConstraintStateQuench is what puts a declared Enforced back.
+  EXEC SchemaSmith.IndexStateQuench @WhatIf
   -- Also after the indexes/constraints pass, and for a closely related reason: SQL Server refuses a
   -- FILESTREAM column unless the table already has a ROWGUIDCOL column covered by a unique CONSTRAINT.
   EXEC SchemaSmith.FileStreamColumnQuench @WhatIf
@@ -54,6 +70,13 @@ BEGIN TRY
   -- which for a table created in this same run does not exist until the line above has run.
   EXEC SchemaSmith.ChangeTrackingQuench @WhatIf
   EXEC SchemaSmith.ForeignKeyQuench @ProductName, @WhatIf
+  -- Edge constraints need their node tables, which exist by now; the procedure is floor-safe, the guard only saves the call.
+  IF SchemaSmith.fn_ServerMajorVersion() >= 15 EXEC SchemaSmith.EdgeConstraintQuench @WhatIf
+  -- After the keys exist: enforcement and validation are state on a constraint that must already be there.
+  EXEC SchemaSmith.ConstraintStateQuench @WhatIf
+  -- After every pass that creates an object: an extended property, a description included, belongs to something
+  -- that must already exist, and a foreign key's only exists from the line above.
+  EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf
   -- #242: last, so anything the passes above created is recorded on this run rather than churning once more.
   EXEC SchemaSmith.ExpressionMapRecord @WhatIf
   SET NOCOUNT OFF

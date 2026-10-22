@@ -12,9 +12,18 @@ namespace SchemaTongs;
 
 public static class Program
 {
+    internal static readonly FirstRunSetting[] FirstRunSettings =
+    [
+        new(SettingsKeys.Source.Server, "the server to extract from"),
+        new(SettingsKeys.Source.Platform, "SqlServer, PostgreSQL, MySQL or MariaDb"),
+        new(SettingsKeys.Source.Database, "the database to extract"),
+        new(SettingsKeys.Target.Platform, null)
+    ];
+
     public static void Main(string[] args)
     {
         CommandLineParser.HandleCommonSwitches("SchemaTongs", ToolSpecificSwitches);
+        if (GettingStarted.ShowIfUnconfigured("SchemaTongs", "extracts an existing database into a schema package", FirstRunSettings, args)) return;
 
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;
@@ -101,9 +110,9 @@ public static class Program
     internal static Platform ResolvePlatform()
     {
         var config = FactoryContainer.ResolveOrCreate<Microsoft.Extensions.Configuration.IConfigurationRoot>();
-        var platformValue = config[SettingsKeys.Target.Platform] ?? config[SettingsKeys.Source.Platform];
+        var platformValue = config[SettingsKeys.Source.Platform] ?? config[SettingsKeys.Target.Platform];
         if (string.IsNullOrWhiteSpace(platformValue))
-            throw new RunFailedException("Platform is required. Set 'Target:Platform' or 'Source:Platform' in SchemaTongs.settings.json.");
+            throw new RunFailedException("Platform is required. Set 'Source:Platform' or 'Target:Platform' in SchemaTongs.settings.json.");
 
         return PlatformExtensions.ParsePlatform(platformValue);
     }

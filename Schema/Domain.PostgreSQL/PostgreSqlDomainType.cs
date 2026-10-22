@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System.Collections.Generic;
+using System.ComponentModel;
 using Newtonsoft.Json;
 
 namespace Schema.Domain.PostgreSQL
@@ -86,6 +87,10 @@ namespace Schema.Domain.PostgreSQL
         [JsonProperty(Order = 7, NullValueHandling = NullValueHandling.Ignore)]
         public string Collation { get; set; }
 
+        [SchemaProperty(Description = "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it.")]
+        [JsonProperty(Order = 8, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
         [JsonProperty(Order = 10, NullValueHandling = NullValueHandling.Ignore)]
         public string ShouldApplyExpression { get; set; }
 
@@ -115,5 +120,10 @@ namespace Schema.Domain.PostgreSQL
             Description = "The predicate, using VALUE for the value under test (VALUE > 0). Without the surrounding CHECK (...).")]
         [JsonProperty(Order = 2)]
         public string Expression { get; set; } = "";
+
+        [SchemaProperty(Description = "false adds the constraint NOT VALID, so the values already stored in the domain's columns are not checked. true over a NOT VALID constraint validates it, which fails when any value violates it. Omitted means validated.")]
+        [JsonProperty(Order = 3)]
+        [DefaultValue(true)]
+        public bool Validated { get; set; } = true;
     }
 }

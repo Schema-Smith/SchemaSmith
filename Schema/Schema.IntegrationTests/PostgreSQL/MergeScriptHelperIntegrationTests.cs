@@ -37,7 +37,8 @@ public class MergeScriptHelperIntegrationTests
         using var probe = _connection.CreateCommand();
         if (TargetVersionDetector.Detect(probe, Platform.PostgreSQL).ServerComparable < 15
             && TestContext.CurrentContext.Test.MethodName is not (nameof(BuildMergeScript_NativeVersion_DeletesRowsAbsentFromSource)
-                or nameof(GetKeyColumns_TakesOnlyAWholeTableUniqueKey_AndTheUpsertKeepsEveryRow)))
+                or nameof(GetKeyColumns_TakesOnlyAWholeTableUniqueKey_AndTheUpsertKeepsEveryRow)
+                or nameof(BuildMergeScript_RowsCarryingDollarQuotes_AreDeliveredIntact)))
             Assert.Ignore("MergeScriptHelper modern-MERGE execution tests require PostgreSQL 15+; the below-15 path is covered by BuildMergeScript_NativeVersion and the SchemaQuench legacy-upsert integration tests.");
     }
 
@@ -80,6 +81,40 @@ public class MergeScriptHelperIntegrationTests
 
             command.CommandText = $@"SELECT STRING_AGG(id || ':' || grp || ':' || v || ':' || name, ',' ORDER BY id) FROM public.""{tableName}""";
             Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1:1:7:A,2:1:-2:b"));
+        }
+        finally
+        {
+            command.CommandText = $@"DROP TABLE IF EXISTS public.""{tableName}""";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // The rows sit inside a dollar-quoted block; a value carrying $$ closed the block mid-literal and the delivery failed.
+    // Inlined, the block's tag is one the data does not contain, even the default one. Tokenized, the data is not known
+    // when the script is written, so the tag is fixed: one no value is likely to hold.
+    [TestCase(false, "$SchemaSmithData$ it's")]
+    [TestCase(true, "$q$ it's $")]
+    public void BuildMergeScript_RowsCarryingDollarQuotes_AreDeliveredIntact(bool tokenizeScripts, string second)
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"_test_dollar_{Guid.NewGuid():N}"[..40];
+        try
+        {
+            command.CommandText = $@"CREATE TABLE public.""{tableName}"" (id INT NOT NULL PRIMARY KEY, body TEXT NOT NULL);
+                SELECT current_setting('server_version_num')::int / 10000";
+            var serverMajor = Convert.ToInt32(command.ExecuteScalar());
+
+            var tableData = @"[{""id"":1,""body"":""a $$ b""},{""id"":2,""body"":""" + second + @"""}]";
+            var script = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, command, "public", tableName, tableData,
+                "\"id\"", mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: tokenizeScripts,
+                mergeFilter: null, pgServerVersionNum: serverMajor, contentFileToken: "Rows.tabledata");
+            if (tokenizeScripts)
+                script = SqlScript.TokenReplace(script, [new("Rows.tabledata", tableData)], Platform.PostgreSQL);
+            command.CommandText = script;
+            command.ExecuteNonQuery();
+
+            command.CommandText = $@"SELECT STRING_AGG(id || ':' || body, ',' ORDER BY id) FROM public.""{tableName}""";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1:a $$ b,2:" + second));
         }
         finally
         {

@@ -67,11 +67,12 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | `DropColumnsRemovedFromProduct` | bool | `true` | Drop columns that exist in the database but aren't defined in the schema package. Resolves across a four-tier cascade (env → product → template → table) with explicit-false-sticky semantics. See [DropColumnsRemovedFromProduct](#dropcolumnsremovedfromproduct). |
 | `DeliverData` | bool | `true` | Run the per-table `DataDelivery` step and the `TableData`-slot scripts. Set to `false` to ship a structure-only deployment that leaves reference data untouched -- pairs naturally with `UpdateTables: true` for "deploy schema, skip data" pipelines. |
 | `RunScriptsTwice` | bool | `false` | Run object scripts twice to verify idempotency. A CI/testing tool. |
+| `SkipUnchangedObjects` | bool | `true` | Do not re-run an object script whose text is unchanged since it last applied and whose object the server still renders as it was left. A hand change on the server, an edited script, an `[ALWAYS]` name or a `-- SchemaSmith: AlwaysRun` comment runs it again. See [Unchanged Object Scripts](#unchanged-object-scripts). |
 | `TrackRunOnceMigrations` | bool | `true` | Track run-once migration scripts. When `false`, all scripts run on every deployment. |
 | `PruneObsoleteMigrationTracking` | bool | `true` | Remove tracking entries for scripts no longer in the package. When `Target` filters are active, prune is restricted to the targeted scope. See [PruneObsoleteMigrationTracking](#pruneobsoletemigrationtracking). |
 | `CheckpointDirectory` | string | `""` | Directory for checkpoint files used by `--ResumeQuench`. When blank, defaults to a per-platform temp location. See [Checkpoint and Resume](#checkpoint-and-resume). |
 | `MaxThreads` | int | `10` | Maximum parallel work units. Covers both database-level and schema-level iterations. Range 1--20. See [MaxThreads](#maxthreads). |
-| `VerboseLogging` | bool | `false` | Include `PRINT` / `RAISE NOTICE` / equivalent informational output from user scripts in logs. |
+| `VerboseLogging` | bool | `false` | Include informational output from user scripts in the progress log: `PRINT` and low-severity messages on SQL Server, `RAISE NOTICE` on PostgreSQL. SchemaSmith's own progress messages always appear. SchemaQuench does not log informational messages from MySQL or MariaDB scripts, so the setting has no effect there. |
 | `ScriptTokens` | object | `{}` | Config-level overrides for product script tokens. |
 
 ### Full settings file example
@@ -99,6 +100,7 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
   "DropColumnsRemovedFromProduct": true,
   "DeliverData": true,
   "RunScriptsTwice": false,
+  "SkipUnchangedObjects": true,
   "TrackRunOnceMigrations": true,
   "PruneObsoleteMigrationTracking": true,
   "CheckpointDirectory": "",
@@ -245,7 +247,7 @@ With schema templates, a single database can contribute many work units -- one p
 
 ## ContinueOnDatabaseFailure
 
-Failure isolation at the database level applies to all templates -- both regular templates and schema templates. When `ContinueOnDatabaseFailure` is `true` (the default), one database's failure does not abort the product run; SchemaQuench logs the failure, continues processing remaining databases, and exits with code 2 after all work units have completed or failed. Continuing does not make the run complete: after any failure, the product's `After Product` scripts and its `VersionStampScript` are skipped, so the next run is not told this version is deployed. A later `--ResumeQuench` that finishes the failed work runs them.
+`ContinueOnDatabaseFailure` governs regular templates. When it is `true` (the default), one database's failure does not abort the product run; SchemaQuench logs the failure, continues processing remaining databases, and exits with code 2 after all work units have completed or failed. Continuing does not make the run complete: after any failure, the product's `After Product` scripts and its `VersionStampScript` are skipped, so the next run is not told this version is deployed. A later `--ResumeQuench` that finishes the failed work runs them.
 
 When `false`, the first database-level failure aborts subsequent iterations. In-flight work units drain naturally -- SchemaQuench does not cancel active database connections because an incomplete transaction is more hazardous than a completed one. The product run exits with code 2.
 
@@ -259,7 +261,7 @@ When `false`, the first database-level failure aborts subsequent iterations. In-
 }
 ```
 
-For schema templates, `ContinueOnDatabaseFailure` governs database-level failures during work unit enumeration (a bad `DatabaseIdentificationScript`, an unreachable server). Schema iteration failures inside a schema template are governed separately by `ContinueOnSchemaFailure`. See [ContinueOnSchemaFailure](#continueonschemafailure) for the schema-level analog.
+A schema template ignores `ContinueOnDatabaseFailure`: every failure inside it -- a bad `DatabaseIdentificationScript`, an unreachable server, a failed schema iteration -- is governed by `ContinueOnSchemaFailure`. See [ContinueOnSchemaFailure](#continueonschemafailure).
 
 ---
 
@@ -285,16 +287,16 @@ When SchemaQuench runs, the product quench executes these steps in order:
 2. **Test server connection** -- Opens a connection to the target server and runs a platform-appropriate liveness check. Aborts if the connection fails.
 3. **Validate server** -- If `Product.ValidationScript` is configured, executes it against the platform's administrative database (`master` on SQL Server, `postgres` on PostgreSQL, `information_schema` on MySQL and MariaDB). Aborts if the result is falsy.
 4. **Validate baseline** -- If `Product.BaselineValidationScript` is configured, executes it. Aborts if the result is falsy.
-5. **Product Before scripts** -- Executes scripts from `Before Product` folder(s). On SQL Server with secondary servers, scripts run in parallel to all eligible servers.
-6. **Quench each template** -- For each template name in `Product.TemplateOrder`:
-   - Loads `Template.json` and merges template-level `ScriptTokens` over the product token set.
+5. **Load and check templates** -- Loads every template in `Product.TemplateOrder`, merging template-level `ScriptTokens` over the product token set, then checks `TemplateTargets` and `Target.Templates` against them and, on a MySQL or MariaDB server that folds table names, refuses two tables differing only in case. None of this touches a database, so an error here stops the run before anything has changed.
+6. **Product Before scripts** -- Executes scripts from `Before Product` folder(s). On SQL Server with secondary servers, scripts run in parallel to all eligible servers.
+7. **Quench each template** -- For each template in scope, in `Product.TemplateOrder`:
    - Executes `DatabaseIdentificationScript` against the administrative database to discover target databases.
    - For schema templates: executes `SchemaIdentificationScript` against each discovered database to produce one work unit per `(database, schema)` pair. For regular templates: one work unit per discovered database.
    - Dispatches all work units to a pool of up to `MaxThreads` concurrent workers. Each worker runs the full [database quench sequence](#database-quench-sequence) for its assigned iteration.
    - If any iteration fails, logs the failure. Failure routing follows the template's `ContinueOnDatabaseFailure` (regular templates) or `ContinueOnSchemaFailure` (schema templates) settings.
-7. **Product After scripts** -- Executes scripts from `After Product` folder(s).
-8. **Stamp product version** -- If `Product.VersionStampScript` is configured, executes it.
-9. **Log completion** -- Logs "Completed quench of {ProductName}".
+8. **Product After scripts** -- Executes scripts from `After Product` folder(s).
+9. **Stamp product version** -- If `Product.VersionStampScript` is configured, executes it.
+10. **Log completion** -- Logs "Completed quench of {ProductName}".
 
 After the quench returns, the calling program backs up log files to a numbered directory and exits with code 0 (see [Exit Codes](configuration.md#exit-codes)).
 
@@ -306,24 +308,26 @@ For each work unit dispatched by a template -- one identified database for regul
 
 1. **Kindle the Forge** -- Deploys SchemaSmith helper procedures, functions, and the migration tracking table for the active platform. Skipped if `KindleTheForge` is `false`.
 2. **Validate baseline** -- Executes `Template.BaselineValidationScript` if configured. Aborts if falsy.
-3. **Object scripts (first pass)** -- Executes scripts from all `Objects`-slot folders using the dependency retry loop. If `RunScriptsTwice` is enabled, resets all scripts and runs a complete second pass to verify idempotency.
-4. **Parse table JSON** -- Serializes all `Tables/*.json` definitions into temp/staging tables for the modular procedures to consume.
-5. **MissingTableAndColumnQuench** -- Creates missing tables and adds missing columns.
-6. **Object scripts (second opportunity)** -- Re-attempts any Objects-slot scripts that failed in step 3, now that missing tables exist.
+3. **Object scripts (first pass)** -- Executes `Objects`-slot scripts that need no query-token values, using the dependency retry loop. If `RunScriptsTwice` is enabled, runs a complete second pass to verify idempotency.
+4. **Domain types, enum types, sequences** (PostgreSQL) -- Deploys the template's declared domain types, enum types, and sequences, before the tables whose columns can use them.
+5. **MissingTableAndColumnQuench** -- Parses `Tables/*.json` into session staging tables for the later steps, then creates missing tables and adds missing columns.
+6. **Object scripts (second pass)** -- Retries the `Objects`-slot scripts that need no query-token values, now that missing tables exist, then resolves the template's query tokens. Scripts that use them run in step 15.
 7. **Before scripts** -- Executes migration scripts from any folder in the `Before` slot. Sequential and tracked.
-8. **ModifiedTableQuench** -- Alters existing columns (type changes, nullability, defaults, computed/generated columns) and manages indexes and check constraints.
-9. **Object scripts (third opportunity)** -- Re-attempts any remaining failed Objects-slot scripts now that table modifications are complete.
-10. **BetweenTablesAndKeys scripts** -- Executes migration scripts from any folder in the `BetweenTablesAndKeys` slot. Sequential and tracked.
-11. **MissingIndexesAndConstraintsQuench** -- Creates missing indexes, check constraints, default constraints, and (where supported) statistics.
-12. **AfterTablesScripts** -- Executes migration scripts from any folder in the `AfterTablesScripts` slot. Sequential and tracked.
-13. **AfterTablesObjects scripts** -- Executes scripts from `AfterTablesObjects`-slot folders (triggers, DDL triggers, rules, post-table views) using the dependency retry loop. Also retries any still-unresolved Objects-slot scripts.
-14. **Table data delivery** -- Merges table data described by per-table `DataDelivery` blocks, ordered by foreign key dependencies. See [Table Data Delivery](#table-data-delivery). Then executes any hand-written scripts in the `TableData` slot using the dependency retry loop.
-15. **ForeignKeyQuench** -- Creates, drops, and modifies foreign keys to match the schema package.
-16. **Indexed view / materialized view quench** -- If the template defines indexed views (SQL Server) or materialized views (PostgreSQL), deploys them via the platform's view quench procedure.
-17. **After scripts** -- Executes migration scripts from any folder in the `After` slot. Sequential and tracked.
-18. **Stamp version** -- Executes `Template.VersionStampScript` if configured.
+8. **Database-level CDC and Change Tracking check** (SQL Server, when the template has Before scripts) -- Decides whether the database has the Change Data Capture and Change Tracking its tables ask for, after the Before scripts so a Before script can enable them. Without Before scripts this check runs in the pre-flight, before step 1.
+9. **ModifiedTableQuench** -- Alters existing columns (type changes, nullability, defaults, computed/generated columns), drops tables removed from the product, and manages indexes and check constraints.
+10. **AfterTablesObjects scripts** -- Executes `AfterTablesObjects`-slot scripts (triggers, DDL triggers, rules, post-table views) using the dependency retry loop.
+11. **BetweenTablesAndKeys scripts** -- Executes migration scripts from any folder in the `BetweenTablesAndKeys` slot. Sequential and tracked.
+12. **MissingIndexesAndConstraintsQuench** -- Creates missing indexes, check constraints, default constraints, and (where supported) statistics.
+13. **Table features** (SQL Server) -- Applies Change Data Capture, Change Tracking, and FILESTREAM as declared.
+14. **AfterTablesScripts** -- Executes migration scripts from any folder in the `AfterTablesScripts` slot. Sequential and tracked.
+15. **Object scripts (final pass)** -- Runs every `Objects`- or `AfterTablesObjects`-slot script not yet applied, including those that use query tokens.
+16. **Table data delivery** -- Merges table data described by per-table `DataDelivery` blocks, ordered by foreign key dependencies. See [Table Data Delivery](#table-data-delivery). Then executes any hand-written scripts in the `TableData` slot using the dependency retry loop. Skipped when `DeliverData` is `false`.
+17. **ForeignKeyQuench** -- Creates, drops, and modifies foreign keys to match the schema package.
+18. **Materialized views** (PostgreSQL), **scheduled events** (MySQL, MariaDB), **indexed views** (SQL Server) -- Deployed through the platform's procedure when the template declares any.
+19. **After scripts** -- Executes migration scripts from any folder in the `After` slot. Sequential and tracked.
+20. **Stamp version** -- Executes `Template.VersionStampScript` if configured.
 
-When `UpdateTables` is `false`, steps 4 through 16 are skipped entirely. When `IndexOnlyTableQuenches` is enabled on a template, steps 4--8 (parse JSON, missing tables, second Objects pass, Before scripts, modified tables) are replaced by a single call to the platform's `IndexOnlyQuench` procedure. Steps 9--16 still execute, with `MissingIndexesAndConstraintsQuench` (step 11) and `ForeignKeyQuench` (step 15) skipped.
+When `UpdateTables` is `false`, the table steps -- 5, 8, 9, 12, 13 and 17 -- are skipped; scripts, data delivery and step 18 still run. When `IndexOnlyTableQuenches` is enabled on a template, steps 5, 8, 9, 13 and 17 are skipped and step 12 runs the platform's `IndexOnlyQuench` procedure instead, so the template manages only the indexes of tables it does not own.
 
 ---
 
@@ -406,10 +410,15 @@ A feature a target version lacks is either taken by an equivalent longer path (s
 | **`MERGE` data delivery** (`Insert/Update`) | PostgreSQL 15 | uses a manual, NULL-safe INSERT + UPDATE upsert with identical semantics |
 | **In-place generated-column expression change** (`SET EXPRESSION`) | PostgreSQL 17 | drops and re-adds the generated column (data type, collation, nullability, storage, compression preserved) |
 | **Per-column compression** (`SET COMPRESSION`) | PostgreSQL 14 | omits the compression + records a downgrade |
+| **Statistics target** (`StatisticsTarget` on an extended-statistics object) | PostgreSQL 13 | creates the object without a target + records a downgrade |
 | **Expression statistics** (`CREATE STATISTICS` on an expression) | PostgreSQL 14 | skips the statistic + records a downgrade |
 | **Removing a column's generation** (`DROP EXPRESSION`) | PostgreSQL 13 | drops and re-adds the column as a plain column + records a downgrade (the previously-computed values are not preserved, unlike the in-place conversion available on 13+). Under `fail` the deploy is refused before anything is dropped |
 | **Table access method** (changing it on an existing table, `SET ACCESS METHOD`) | PostgreSQL 15 | leaves the table on its current access method + records a downgrade. A new table gets its declared method on every supported version (`CREATE TABLE ... USING`, PostgreSQL 12) |
 | **`VIRTUAL` generated columns** | PostgreSQL 18 | skips the column + records a downgrade (`STORED` is unaffected — it has been available since 12) |
+| **`NOT ENFORCED` constraints** (a check constraint or foreign key with `Enforced: false`) | PostgreSQL 18 | creates the constraint enforced + records a downgrade; `Validated: false` (`NOT VALID`) is available since 12 |
+| **`WITHOUT OVERLAPS`** (a primary key or unique constraint with `WithoutOverlaps: true`, a temporal key) | PostgreSQL 18 | creates the key without the clause + records a downgrade; on 18 the key needs the `btree_gist` extension when a key column is scalar |
+| **Online foreign key on a partitioned table** (`OnlineApply` `Prefer`) | PostgreSQL 18 | adds the key with the plain statement, which checks the rows while it holds its locks, and records `unavailable` as its mode; under `Require` the deploy is refused, naming the key |
+| **`ON DELETE SET NULL (columns)`** (a foreign key with `SetNullColumns`, also `SET DEFAULT`) | PostgreSQL 15 | creates the key with the plain action, which sets every key column + records a downgrade |
 
 The version-sensitive system-catalog reads SchemaSmith uses to compare and extract state (per-column compression, expression statistics, `NULLS NOT DISTINCT`, INCLUDE columns) are branched automatically so they parse on the older server too — extraction and idempotency work the same on 12 as on current PostgreSQL. Delete-on-absence data delivery uses a single `MERGE … WHEN NOT MATCHED BY SOURCE THEN DELETE` on 17+ and a `MERGE` + follow-on `DELETE … WHERE NOT EXISTS` (keyed identically, same merge filter) on 15/16; below 15 it is the same version-agnostic `DELETE`. In every case the end state is identical — deploy the same package to PostgreSQL 12 through current and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
@@ -457,9 +466,22 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 | **Clustered columnstore index** | SQL Server 2014 | skips the index + records a downgrade |
 | **Writable nonclustered columnstore** | SQL Server 2016 | skips the index + records a downgrade. On 2012 and 2014 a nonclustered columnstore index makes its table read-only, so creating it would change what the application can do. An index already on the table is left in place |
 | **Clustered columnstore beside rowstore indexes** | SQL Server 2016 | skips the columnstore index and keeps the rowstore indexes, which carry keys and uniqueness + records a downgrade. SQL Server 2014 refuses the combination. An index already on the table is left in place |
+| **Clustered columnstore over a `(max)` or computed column** (a new clustered columnstore index on a table with a `(max)` or non-persisted computed column) | SQL Server 2017 | skips the index + records a downgrade; the engine refuses it below 2017 |
+| **Ordered clustered columnstore** (`Order` on a clustered columnstore index) | SQL Server 2022 | creates the index unordered + records a downgrade |
+| **Ordered nonclustered columnstore** (`Order` on a nonclustered columnstore index) | SQL Server 2025 | creates the index unordered + records a downgrade |
+| **Spatial index AUTO_GRID tessellation** (`GEOMETRY_AUTO_GRID`, `GEOGRAPHY_AUTO_GRID`) | SQL Server 2012 | creates the index with the `GRID` scheme of the same family, and that scheme's defaults for anything not declared + records a downgrade. A redeploy leaves it as it is |
+| **Spatial index compression** (`SpatialIndexes` `CompressionType` `ROW` or `PAGE`) | SQL Server 2012 | creates the index uncompressed + records a downgrade; 2008 R2 has no `DATA_COMPRESSION` on a spatial index on any edition. A redeploy leaves it as it is |
+| **Memory-optimized constraints** (a foreign key, `CHECK`, `UNIQUE` index or constraint, or `(max)` column on a `MemoryOptimized` table) | SQL Server 2016 | refuses the deploy before any change, naming each table and what it declares: 2014's In-Memory OLTP has none of them and cannot alter the table to add them later. (2014 hosts memory-optimized tables only on Enterprise, Developer and Evaluation editions.) |
+| **Memory-optimized computed columns** | SQL Server 2017 | refuses the deploy before any change, naming each table, for the same reason |
+| **Online index build** (`OnlineApply` `Prefer`) | SQL Server 2012, Enterprise or Developer edition, or Azure SQL | builds the index with the plain statement and records `unavailable` as its mode; Standard, Web and Express have no online build at any version. Under `Require` the deploy is refused, naming the index |
+| **Online column change** (`OnlineApply` `Prefer`) | SQL Server 2016, Enterprise or Developer edition, or Azure SQL | changes the column with the plain `ALTER COLUMN` and records `unavailable` as its mode. Under `Require` the deploy is refused, naming the column |
+| **Resumable index build** (`OnlineApplyMaxDuration`) | SQL Server 2019 | builds the index online without `RESUMABLE` |
+| **Selective XML index** (`Selective`, `ForPath`) | SQL Server 2012 SP1 | skips the selective XML index and every secondary on it, so the table deploys without them + records a downgrade. On SQL Server 2012 the feature is also off in each database until `sys.sp_db_selective_xml_index` turns it on, and it is skipped the same way until then |
+| **JSON index** (`JsonIndexes`) | SQL Server 2025 | skips the JSON index, so the table deploys without it + records a downgrade. A JSON index needs a `json` column, which is 2025 too, so this is reached only by a package that declares one on another type |
 | **Graph tables** (`NODE` / `EDGE`) | SQL Server 2017 | creates the table with all its declared columns, *without* graph semantics + records a downgrade |
+| **Edge constraints** (`EdgeConstraints` on an edge table) | SQL Server 2019 | creates the edge table without the constraint + records a downgrade |
 | **Ledger tables** | SQL Server 2022 | creates an ordinary table + records a downgrade. The direction is deliberate: a ledger table cannot be converted or dropped afterwards, so not creating one is far easier to recover from than creating one by accident |
-| **XML compression** | SQL Server 2022 | creates the table or index without the compression clause + records a downgrade. Nothing an application can observe changes — only the storage saving is lost |
+| **XML compression** | SQL Server 2022 | creates the table, index or XML index without the compression clause + records a downgrade. Nothing an application can observe changes — only the storage saving is lost |
 
 > **Check the manifest before deploying to a pre-2016 target.** Under the default `warn`, a masked column is created unmasked and an Always Encrypted column is created unencrypted — the deploy succeeds and the downgrade is recorded, but the protection is not there. If a silently-unprotected column is worse for you than a failed deployment, set `Target:UnsupportedFeaturePolicy=fail`.
 
@@ -483,7 +505,9 @@ The schema model itself parses on every supported version — a version-agnostic
 |---|---|---|
 | **Column rename** (`RENAME COLUMN`) | MySQL 8.0 / MariaDB 10.5.2 | reproduces the rename with `CHANGE COLUMN`, reconstructing the current column definition (same end state) |
 | **Index rename** (`RENAME INDEX`) | MariaDB 10.5.2 (MySQL 5.7 has it) | drops and recreates the index under the new name from its live definition (same end state) |
-| **CHECK constraints** | MySQL 8.0.16 / MariaDB 10.2.22 | emits the table *without* the check + records a downgrade (MySQL before 8.0.16 parses and ignores CHECK, so it can neither be created nor detected; MariaDB before 10.2.22 has no `INFORMATION_SCHEMA.CHECK_CONSTRAINTS`, so a deployed check cannot be read back) |
+| **Instant column add or drop** (`OnlineApply` `Prefer` or `Require`) | MySQL 8.0.29 / MariaDB 10.4 | adds or drops the column with `ALGORITHM=INPLACE, LOCK=NONE` instead, which rebuilds the table without blocking writes, and records `online` as its mode. MySQL 8.0.12–8.0.28 and MariaDB 10.3 add instantly only at the end of the table; MySQL 5.7 and MariaDB 10.2 have no `INSTANT` |
+| **Online table copy** (`OnlineApply` `Prefer`, `ALGORITHM=COPY, LOCK=NONE`) | MariaDB 11.2 | a change `INPLACE` cannot take, such as a column type change, runs as written, blocking writes while it copies, and records `unavailable` as its mode; under `Require` the deploy is refused, naming the statement |
+| **CHECK constraints** | MySQL 8.0.16 / MariaDB 10.2.22 | emits the table *without* the check + records a downgrade (MySQL before 8.0.16 parses and ignores CHECK, so it can neither be created nor detected; MariaDB before 10.2.22 has no `INFORMATION_SCHEMA.CHECK_CONSTRAINTS`, so a deployed check cannot be read back). A check's `Enforced: false` (`NOT ENFORCED`, MySQL only) rides the same gate |
 | **Invisible index** (`INVISIBLE`; MariaDB `IGNORED`) | MySQL 8.0 / MariaDB 10.6 | stores the index *visible* — the visibility clause is suppressed — + records a downgrade. The modified-index compare ignores the visibility difference below the floor, so re-deploys stay idempotent instead of churning the index every run |
 | **Invisible column** (`Column.Invisible`) | MySQL 8.0.23 / MariaDB 10.3 | stores the column *visible* — the `INVISIBLE` clause is suppressed — + records a downgrade. The modified-column compare ignores the visibility difference below the floor, so re-deploys stay idempotent instead of churning the column every run |
 | **Descending index key parts** (`… DESC`) | MySQL 8.0 / MariaDB 10.8 | stores the key part ascending (the engine silently does so anyway) + records a downgrade |
@@ -493,8 +517,15 @@ The schema model itself parses on every supported version — a version-agnostic
 | **Column SRID restriction** (`SRID n` on a spatial column) | MySQL 8.0.3 (MariaDB: no equivalent at any version) | creates the column without the SRID restriction + records a downgrade |
 | **Long unique key** (`UNIQUE ... USING HASH`, extracted from MariaDB 10.4+) | MariaDB 10.4 | refuses the deploy by name before anything is created, under either policy. InnoDB on 10.2/10.3 cannot enforce the key, and skipping it would drop the uniqueness. Only a key too wide for a B-tree is refused (a `TEXT`, `BLOB` or `JSON` column used in full, or a character column over 768 characters); a narrower one is built as a B-tree, as it always was |
 | **Application-time period** (`PERIOD FOR`) | MariaDB 10.4.3 (MySQL: no equivalent at any version) | creates the table without the period + records a downgrade |
+| **Temporal key** (a unique or primary key with `WithoutOverlaps: true` over a period) | MariaDB 10.5.3 (MySQL: no equivalent at any version) | creates the key over the period's end and start columns, without `WITHOUT OVERLAPS` + records a downgrade |
+| **Vector index** (`IndexType: VECTOR`) | MariaDB 11.7 (MySQL: no vector index in the Community server at any version) | skips the index + records a downgrade |
+| **Explicit system-time columns** (declared `GeneratedAlways` `RowStart` / `RowEnd` on an existing table that has the implicit pair) | MariaDB 11.7 (MySQL: no system versioning at any version) | keeps the table's hidden `row_start` / `row_end` + records a downgrade. A new table takes the declared columns on every version that has system versioning |
 | **Table-level system versioning** (`WITH SYSTEM VERSIONING`) | MariaDB 10.3 (MySQL: no equivalent) | creates an ordinary, non-versioned table + records a downgrade |
+| **`SYSTEM_TIME` partitioning by count or with `STARTS`** (a `SYSTEM_TIME` table with no partition list, or with `StartsAt`) | MariaDB 10.5 (MySQL: no equivalent) | creates the versioned table without its `SYSTEM_TIME` partitioning + records a downgrade. MariaDB 10.3 and 10.4 accept only a list that names every partition, which deploys there |
+| **`SYSTEM_TIME` partitioning with `AUTO`** | MariaDB 10.9.1 (MySQL: no equivalent) | creates the partitioning without `AUTO` + records a downgrade: the history is still partitioned, and new history partitions are added by hand |
 | **Per-column history exclusion** (`WITHOUT SYSTEM VERSIONING`) | MariaDB 10.3.4 (MySQL: no equivalent) | creates the column without the exclusion + records a downgrade — the column survives, the exclusion does not |
+| **Declared sequence** (`Sequences/*.json`) | MariaDB 10.3 (MySQL: no equivalent at any version) | skips the sequence + records a downgrade |
+| **Sequence data type** (`DataType` other than `bigint`) | MariaDB 11.5 | creates the sequence as a signed `bigint` + records a downgrade |
 
 > **A `DEFAULT` expression below MySQL 8.0.13 costs you the column, not the default.** Every other degrade in this table relaxes an aspect and keeps the object; this one skips the whole column, so under the default `warn` the deploy succeeds and a column your package declares is simply not there. If any table targets MySQL below 8.0.13 and uses an expression default, either give it a literal default or set `Target:UnsupportedFeaturePolicy=fail`.
 
@@ -533,10 +564,20 @@ MySQL and MariaDB decide whether two names are the same object from the server s
 
 Column, index, CHECK and foreign-key names are case-insensitive on every setting. When the server holds one of them under a spelling that differs from your package only in case, SchemaSmith keeps the object and its data and converges it to your package's spelling. MySQL renames the index; MariaDB drops and re-creates it instead, because a case-only index rename corrupts the index dictionary on some MariaDB versions. On MariaDB, an index that starts with a foreign key's column keeps its existing spelling, because the engine will not drop an index a foreign key depends on.
 
+**One exception, on older MariaDB patches.** From 10.3 until 10.6.26, 10.11.17 and 11.4.11 (and the series between them, which never received the fix), MariaDB cannot change the case of an index's name while a foreign key needs that index: the statement runs and the old spelling stays. On those versions SchemaSmith leaves such an index under its existing spelling and warns, naming it, rather than rebuilding the table on every deploy to no effect. The index, the key and their data are untouched; only the spelling differs from your package. Upgrade the server to converge it.
+
 A server on setting `1` or `2` has two consequences worth knowing:
 
 - **Extraction:** SchemaTongs run against a server on setting `1` writes lowercase table names, because the server holds no other spelling. Setting `2` keeps the declared spelling.
 - **Case-colliding tables:** a template that declares two tables whose names differ only in case is refused (exit code `2`) on a server on setting `1` or `2`, before any database is touched -- the server would hold one table for both. Variants gated by `ShouldApplyExpression` are not a collision. [`--Validate`](validate.md) reports such a pair as `SS-DUP-001` whatever the target.
+
+### Triggers and views on MySQL and MariaDB
+
+Two things a deploy does on this family that the other engines do not, because the engines give no other way:
+
+- **A changed trigger is dropped and created again.** Neither engine can alter a trigger in place, so a trigger script is `DROP TRIGGER IF EXISTS` followed by `CREATE TRIGGER`, and a row written to the table between the two statements is not seen by the trigger. The window is one statement wide and exists only on a deploy that changes the trigger: an unchanged script is not re-run (see [Unchanged Object Scripts](#unchanged-object-scripts)). Deploy a trigger change when the table is quiet, or inside the maintenance window the change already needs.
+- **A redeployed view belongs to the deploying account.** `CREATE OR REPLACE VIEW` records the account that ran it as the view's `DEFINER`, so a view created by one account and redeployed by another changes definer, and with it whose privileges a `SQL SECURITY DEFINER` view runs under. A view whose script carries an explicit `DEFINER` clause keeps it, provided the deploying account may set it.
+
 
 ### Server settings on MySQL and MariaDB
 
@@ -551,8 +592,43 @@ scripts (Before, After, Objects, migration scripts and `ValidationScript`) alway
 | `time_zone` | DataTongs extracts at `+00:00` and records that on the delivery it configures (`TimeZone`). Delivery uses the recorded zone, so `TIMESTAMP` values arrive unchanged whatever zone either server runs in. A delivery without `TimeZone` runs in the session's zone. |
 | `sql_mode` during data delivery | `NO_AUTO_VALUE_ON_ZERO` is added, so a row whose `AUTO_INCREMENT` key is `0` keeps `0`. |
 | `sql_require_primary_key` (MySQL), `innodb_force_primary_key` (MariaDB) | SchemaSmith's own tables all have primary keys. Your tables must declare one, because the server refuses any table without it. |
+| `sql_generate_invisible_primary_key` (MySQL 8.0.30+) | A table created without a primary key gets the server's invisible `my_row_id` key. Extraction leaves it out, a deploy never drops it, and a primary key you declare replaces it. See [Generated invisible primary keys](schema-packages.md#generated-invisible-primary-keys-mysql). |
 | `information_schema_stats_expiry` (MySQL 8.0+) | Read past for `AUTO_INCREMENT`, on deploy and on extraction, so a stale statistics cache cannot hide the table's current value. |
 | `lower_case_table_names` | See [Name case on MySQL](#name-case-on-mysql). |
+
+### Upgrading MySQL or MariaDB under a package
+
+A package that deploys cleanly today can stop deploying after the server is upgraded, because a newer engine refuses
+something the older one accepted. SchemaSmith's own DDL is kept to forms every supported version accepts; these are
+the changes that reach your declarations and your own scripts. Each was checked on the version named unless it says
+"release notes".
+
+**MySQL**
+
+| From | What changes | What to do |
+|---|---|---|
+| 8.4 | `AUTO_INCREMENT` on a `FLOAT` or `DOUBLE` column is refused (`1063 Incorrect column specifier`). | Make the column an integer type. |
+| 8.4 | `SET_USER_ID` is gone; setting another account as a routine's or view's `DEFINER` needs `SET_ANY_DEFINER`, and naming an account that does not exist needs `ALLOW_NONEXISTENT_DEFINER` (8.2 per release notes). | Grant the deploying account the new privilege if your scripts carry `DEFINER` clauses. |
+| 8.4 | A foreign key whose related columns are not a whole primary or unique key is refused while `restrict_fk_on_non_standard_key` is on, its default (`6125`). | `--Validate` warns (`SS-FK-008`); point the key at a whole key. |
+| 8.4.11 | With `sql_require_primary_key` on, a table whose only key is `UNIQUE` over `NOT NULL` columns is accepted (8.0 refuses it). | Nothing; on 8.0 such a table still needs a primary key. |
+| 9.6 | `MD5()`, `SHA1()` and `SHA()` are removed (checked on 9.7: `1305 FUNCTION ... does not exist`). | `--Validate` warns where a column, check, index or partitioning expression calls one (`SS-COL-004`); use `SHA2()`. Your own scripts need the same change. |
+| 9.7 | `enable_cascade_triggers` exists, off by default: triggers do not fire for rows changed by a foreign key's cascade. | Nothing changes unless it is turned on, and then a cascade fires triggers it did not before. |
+| 9.5 | `INTERPRET_UTF8_AS_UTF8MB4` is an `sql_mode` flag; with it set, a declared `utf8` means `utf8mb4`. | SchemaSmith writes a declared `utf8` as `utf8mb3`, so the columns it creates keep the character set the package declares. In your own scripts `utf8` means `utf8mb4` while the flag is set. |
+| 9.7 | A stricter row-size check refuses some very wide tables (release notes). | Split the table or move wide columns to `TEXT`/`BLOB`. |
+| current patches | Widening an indexed column past 767 bytes on a `COMPACT` or `REDUNDANT` row format is refused (`1071`; 8.0.46, 8.4.11, 9.7.2); older patches allowed it. | Use `DYNAMIC` (the default) or keep the column narrow enough. |
+| 8.0.29 | Before it, from 8.0.23, the catalog leaves an invisible column out of a foreign key's column list, so extraction writes the key short. | Extract from 8.0.29 or later. |
+
+`VALUES()` inside `ON DUPLICATE KEY UPDATE` is deprecated (warning `1287`) but still runs through 26.7; SchemaSmith's own
+scripts use it.
+
+**MariaDB**
+
+| From | What changes | What to do |
+|---|---|---|
+| 11.4 | The default `utf8mb4` collation is `utf8mb4_uca1400_ai_ci` (Debian and Ubuntu packages from 11.3.2). | See the collation note under [MariaDB (MySQL family)](#mariadb-mysql-family--where-the-native-ddl-diverges); an extraction carries it, see [SchemaTongs](schematongs.md#deploying-an-extraction-to-an-older-server). |
+| 11.8 | `innodb_snapshot_isolation` is on by default: a transaction that reads a row another transaction changed after its snapshot gets error `1020` instead of reading past it. | Retry such transactions in your own scripts, or turn the setting off. |
+| 11.8 | A column with `CHARACTER SET x COMPRESSED` is refused; `COMPRESSED CHARACTER SET x` still works. | Reorder it in your scripts. SchemaSmith writes the type, with any `COMPRESSED`, before the character set. |
+| 12.3 | `CONVERSION` and `TO_DATE` are reserved words: a table or column of that name must be quoted. | The DDL SchemaSmith writes quotes table and column names; quote them in your scripts. |
 
 ---
 
@@ -583,7 +659,7 @@ Product scripts run against the administrative connection, outside the per-datab
 
 **Sequential, tracked** -- scripts run in alphabetical order and are recorded in `CompletedMigrationScripts` so they only run once (unless marked `[ALWAYS]`).
 
-**Dependency retry loop** -- scripts are retried in rounds until all succeed or no progress is made. See [Dependency Retry Loop](#dependency-retry-loop).
+**Dependency retry loop** -- scripts are retried in rounds until all succeed or no progress is made. See [Dependency Retry Loop](#dependency-retry-loop). An `Objects` or `AfterTablesObjects` script that is unchanged since it last applied, and whose object the server still holds as it was left, is not re-run. See [Unchanged Object Scripts](#unchanged-object-scripts).
 
 ---
 
@@ -787,10 +863,16 @@ was created under -- so a database migrated from 100 to 160 holds both forms ind
 expression-bearing object on the first deploy after a compatibility bump would be a far larger event than the
 churn this removes, so SchemaSmith re-baselines and leaves your objects alone.
 
-**No record means no opinion.** For an object SchemaSmith has not applied yet -- a pre-existing database, or the
-first deploy after upgrading -- the comparison behaves exactly as it did before, and the record is written as
-part of that deploy. Nothing needs migrating, and the table can be emptied at any time: the worst case is one
-more comparison.
+**An expression SchemaSmith has not applied is checked by the engine itself.** A database built by hand or by
+another tool, or a declaration you reworded, has no record yet. Rather than re-apply every such expression whose
+text differs, SchemaQuench applies your declared text to an empty copy of the table, reads back what the engine
+stored, and compares that with the live object byte for byte. Identical means the live object *is* your
+declaration: it is recorded and left alone, and the log says how many were verified this way. Anything else --
+a different rendering, or an expression the copy could not take -- is applied, as it would have been. The copy
+lives in the same database (so it renders at that database's compatibility level and can call its functions) and
+is rolled back on SQL Server and PostgreSQL, which is why the check runs under `WhatIf` too. On MySQL and MariaDB
+the copy is a real table for a moment, so `WhatIf` skips the check and previews such an expression as a change.
+Nothing needs migrating, and the table can be emptied at any time: the worst case is one more check.
 
 **A re-baseline is logged, not silent.** The deploy log says how many records were refreshed and for which
 version -- `Re-baselined 3 recorded expression(s) ... No object was changed.` -- so an engine upgrade is visible in
@@ -799,8 +881,10 @@ the first deploy after it.
 **Covered surfaces:** check constraints, computed columns, column defaults, and filtered-index and
 filtered-statistic predicates (SQL Server); check constraints, generated columns, partial-index predicates,
 extended-statistics expressions, row-level security `USING` / `WITH CHECK` expressions and materialized view
-bodies (PostgreSQL); check constraints and generated columns (MySQL, MariaDB). Index and statistic predicates
+bodies (PostgreSQL); check constraints, generated columns and expression defaults (MySQL, MariaDB). Index and statistic predicates
 are covered by `IndexOnlyTableQuenches` too, which compares indexes separately from the full table quench.
+The engine check on a copy covers the same surfaces except PostgreSQL's extended statistics, policies and
+materialized views, which are re-applied once and then recorded, as before.
 
 Some surfaces never had this problem and are unchanged: SQL Server indexed view bodies and literal column
 defaults, and PostgreSQL column defaults and exclude constraints, all already compared equal after the
@@ -1012,7 +1096,100 @@ On the **final attempt** (the last pass when errors are reported), failures are 
 
 This mechanism allows scripts with interdependencies to coexist in the same folder without requiring a specific naming order. For example, if View B references View A and is alphabetically first, it will fail on the first pass but succeed on the retry after View A has been created.
 
+A script that is unchanged since it last applied is not part of the loop at all -- see [Unchanged Object Scripts](#unchanged-object-scripts).
+
 The Objects slot gets four opportunities to resolve: (1) before the table quench, (2) after missing tables are created, (3) after table modifications are complete, and (4) during the AfterTablesObjects pass alongside triggers. This handles cases where a view or function references a table column that doesn't yet exist on the first pass.
+
+---
+
+## Unchanged Object Scripts
+
+Most of a package does not change between two deployments, yet every view, function, procedure and trigger script used to run again on every quench. Each run was harmless on paper -- `CREATE OR ALTER` and its equivalents leave an unchanged object as it was -- but it still rewrote the object, invalidated cached plans, fired DDL triggers, and on MySQL and MariaDB, where a module is a `DROP` and a `CREATE`, briefly removed it. SchemaQuench now records what each object script left behind and runs it again only when something has moved.
+
+**What is recorded.** After an `Objects` or `AfterTablesObjects` script applies, SchemaQuench stores two hashes in the `SchemaSmith.ScriptStamp` table on the target database, keyed by product, template and the script's path within the package: a hash of the script text, and a hash of the engine's own rendering of the object the script created (`sys.sql_modules` on SQL Server; `pg_get_viewdef`, `pg_get_functiondef` and `pg_get_triggerdef` on PostgreSQL; `SHOW CREATE` on MySQL and MariaDB -- with a trigger's enabled state and a module's `sql_mode` included where the engine keeps them apart). A script is stamped only when it comes from a folder declared with an `ObjectType` and contains exactly one `CREATE` of a view, function, procedure, trigger or event, so the rendering is of the object it declares; any other script runs every time, as before.
+
+**When a script runs again.** On the next quench the script is skipped only when both hashes still match: the text is as it was, *and* the server still renders the object as the last run left it. Edit the script and it runs. Change the object by hand on the server -- an `ALTER`, a disabled trigger, a dropped and recreated view -- and the rendering no longer matches, so the script runs and puts the declared definition back. Drop the object and it runs. A skipped script is logged as `Unchanged, not re-run`, recorded as `unchanged` in the change audit, and counted as `Unchanged (object scripts)` in the deployment summary, separately from the scripts that ran.
+
+**What is never skipped.** A script with `[ALWAYS]` in its name runs on every quench, as it always has, and so does a script carrying a `-- SchemaSmith: AlwaysRun` comment anywhere in its text -- the opt-out for a script with side effects whose object may well be unchanged. A script from a folder declared without an `ObjectType` (a custom folder) is never stamped. `RunScriptsTwice` runs every script twice, as before: it exists to prove scripts re-run cleanly, which a skipped script cannot. Scripts in the sequential slots (`Before`, `BetweenTablesAndKeys`, `AfterTablesScripts`, `After`) are migration scripts and keep their own run-once tracking. A WhatIf run reads the stamps and reports a script it would skip as `SKIP (unchanged)`, but records nothing; a script that uses query tokens is always previewed as would-apply, because WhatIf does not resolve the tokens and so cannot compare the text. Set `SkipUnchangedObjects: false` to run every object script on every deployment; while it is off nothing is stamped, so the first deploy after turning it back on runs everything once.
+
+> **A module the engine rewrites is still unchanged.** The rendering is compared only with the engine's own earlier rendering of the same object, never with the script text, so an engine that reformats a body, expands a `*` or re-quotes identifiers does not cause a re-run. Only a rendering that differs from the one recorded after the script last applied does.
+
+## Preserved Permissions
+
+Some changes can only be made by replacing an object: a table whose declared shape needs a rebuild is replaced under its own name, and an indexed view or materialized view whose definition changed is dropped and created again. The replacement is built from the package, and the package does not declare who may read the table or what its columns are documented as -- so everything of that kind used to be gone after the deploy, with a successful exit code.
+
+**What is carried.** Before the drop or the swap SchemaQuench captures what sits on the object and is not in the package, and puts it back once the replacement exists:
+
+| Engine | Carried across |
+|---|---|
+| SQL Server | `GRANT` and `DENY` on the object and its columns, `WITH GRANT OPTION`, an owner set on the object (`ALTER AUTHORIZATION`), and extended properties on the object and its columns |
+| PostgreSQL | the ACL on the relation or routine and on each column, the owner, and `COMMENT ON` the object and its columns |
+| MySQL, MariaDB | the grants on a procedure or function |
+
+MySQL and MariaDB key a table's grants by name, so a rebuilt table keeps them without help; only a routine's grants are lost by a `DROP`, and only those are captured.
+
+**Where it applies.** Around a table rebuild, around the drop and re-create of an indexed view (SQL Server) and a materialized view (PostgreSQL), around a module dropped so a change can apply and then re-created from the package -- a schema-bound view or function blocking a column change ([`DropSchemaBoundDependents`](configuration.md#dropschemabounddependents)) or a changed function (SQL Server), and a view, materialized view or SQL-standard routine over a column whose type changes (PostgreSQL) -- and around any object script that drops its own procedure, function or view before creating it -- the `DROP PROCEDURE IF EXISTS ... CREATE PROCEDURE` form that MySQL and MariaDB require, or the same shape on another engine. A script that alters in place (`CREATE OR ALTER`, `CREATE OR REPLACE`) loses nothing and needs nothing.
+
+**What you see.** The log names the object as its permissions are put back, and the run manifest records a `reapplied` row for it. Under `WhatIf` the statements are printed and the manifest records `wouldReapply` instead.
+
+**Limits.** An extended property value is written back as text. A MySQL or MariaDB deploy user that cannot read `mysql.procs_priv` cannot see a routine's grants; the run says so and the deploy continues without them.
+
+---
+
+## Schema-Bound Dependents
+
+SQL Server will not alter a module while a schema-bound object references it: a view or function created `WITH SCHEMABINDING`, a CHECK constraint, a computed column or an indexed view that calls it locks it in place, and `CREATE OR ALTER` fails with error 3729. On the other engines a function change never locks a dependent, so this section is SQL Server only.
+
+**What the deploy does.** When a changed function or view is refused that way, SchemaQuench lists the dependents from the catalog, drops the ones the package declares, applies the change, and puts them back in the same run:
+
+| Dependent | Counts as declared when | Put back by |
+|---|---|---|
+| A schema-bound view or function | the package scripts it, normally in the `SchemaBound Views` or `SchemaBound Functions` folder | the deploy, right after the change |
+| A CHECK constraint | the table's JSON declares it | the table pass |
+| A computed column and the indexes on it | the table's JSON declares the column and every index | the table pass |
+| An indexed view | the package declares it | the indexed-view pass, with its permissions re-applied |
+
+A chain is handled deepest-first: a view bound to a view bound to the changed function comes out before the inner one and goes back after it.
+
+**What stops the deploy.** A dependent the package does not declare -- a view someone created by hand, an index on the computed column the JSON does not list -- or an encrypted module, which nothing could recreate. The deploy stops before anything is dropped, and the error names each one and what would make it declared. Nothing is ever dropped on the strength of a name match alone.
+
+**What you see.** The log names each dependent as it is dropped and the manifest records it as `dropped`; under `WhatIf` the run lists what it would drop as `wouldDrop`, or warns that it would stop and why. An unchanged module is never altered, so none of this happens on a deploy that changes nothing.
+
+**A column under a schema-bound security policy.** A row-level security policy created `WITH (SCHEMABINDING = ON)` holds the columns its predicates pass, so changing one of them is refused the same way (SQL Server 2016 and later). The catalog describes a policy in full, so it does not need to be in the package: the deploy scripts it, drops it before the column changes, and creates it again right after with its predicates, state and `NOT FOR REPLICATION` setting. The manifest records it as `dropped` and `created`; under `WhatIf`, as `wouldDrop`.
+
+---
+
+## Column Type Changes on PostgreSQL
+
+PostgreSQL will not change a column's type while a view, materialized view, SQL-standard routine (`BEGIN ATOMIC` or `RETURN`, PostgreSQL 14) or row-level security policy reads the column. SchemaQuench drops each of them before the change and puts it back in the same run: views and routines by their scripts, materialized views by the materialized-view pass, and policies by the table pass. Each is recorded as `dropped` in the manifest.
+
+A dependent the package does not declare could not be put back, so the deploy stops before changing anything and the error names it. Add it to the package, or drop it in a `Before` script.
+
+Two dependents need no declaring, because the catalog describes them in full: a trigger whose `WHEN` clause or `UPDATE OF` list reads the column, and a publication whose row filter or column list does (PostgreSQL 15). The deploy scripts each one, takes it down before the change and puts it back after it -- a trigger with its enabled state and comment -- and records both steps in the manifest.
+
+**A type PostgreSQL will not cast on its own.** SchemaQuench changes a column's type with `SET DATA TYPE` and no `USING` clause, so PostgreSQL converts the existing values with its own assignment casts. Where none exists -- `text` to `integer`, `text` to `jsonb`, `integer` to `boolean` -- the deploy fails with `column "code" cannot be cast automatically to type integer`. Say how to convert in a template `Before` script, which runs before the table pass: change the column there with `USING`, and guard it so it does nothing once the column has its new type. The table pass then finds the column already declared and leaves it alone.
+
+```sql
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM information_schema.columns
+             WHERE table_schema = 'public' AND table_name = 'orders' AND column_name = 'code' AND data_type = 'text') THEN
+    ALTER TABLE public.orders ALTER COLUMN code TYPE integer USING trim(code)::integer;
+  END IF;
+END $$;
+```
+
+Declare the new type in the table's JSON as usual.
+
+---
+
+## Signed Modules
+
+`ALTER` strips a SQL Server module's signatures, and the private key that made them cannot be read, so a signature cannot be scripted into a package. On SQL Server the deploy looks at a module's signatures (`sys.crypt_properties`) before its script runs, and after the change applies it signs the module again with every certificate or asymmetric key whose private key is encrypted by the database master key, which the server can use without a password. The manifest records that as `resigned` (`wouldResign` under `WhatIf`).
+
+A key whose private key is absent or password-protected cannot be used that way. The change still applies, and the run warns by name that the module needs signing by hand. An unchanged module is never altered, so its signatures are never touched.
+
+---
 
 ---
 
@@ -1428,7 +1605,7 @@ SchemaQuench writes checkpoints as it goes. Every completed quench step and ever
 SchemaQuench --ResumeQuench
 ```
 
-With `--ResumeQuench`, SchemaQuench reads the existing checkpoint files (if any) and skips anything already recorded as complete. Without the switch, the resume logic is off -- every step executes regardless of prior state.
+With `--ResumeQuench`, SchemaQuench reads the existing checkpoint files (if any) and skips anything already recorded as complete. Without the switch, the resume logic is off -- every step executes regardless of prior state, and each database the run reaches starts a fresh checkpoint.
 
 ### Where checkpoints live
 
@@ -1440,34 +1617,37 @@ By default, checkpoints live in `%TEMP%/schemaquench-checkpoints` (or the platfo
 
 The same value can be set in `SchemaQuench.settings.json` via the `CheckpointDirectory` key. The CLI switch wins if both are present.
 
+Checkpoint files are named by product, template, server and database, not by run, so two runs at the same time that share those names write to the same files. Only `--ResumeQuench` reads them, so that never changes what a run does -- but if you may need to resume one of two concurrent runs, give each its own `CheckpointDirectory`.
+
 ### Checkpoint scopes
 
-SchemaQuench tracks two kinds of progress:
-
-**Product-scoped** -- Cross-database work shared by all templates:
-- `Before` and `After` product-level scripts (per server, for SQL Server Availability Group deployments).
-- Completed templates (a template with every database finished is itself recorded as complete).
-
-**Database-scoped** -- One checkpoint file per `{product, template, server, database}` combination:
+Progress is recorded per database: one checkpoint file per `{product, template, server, database}` combination. A
+resumed run enters every template again and each database continues from its own file. Product-level `Before` and
+`After` scripts are not checkpointed, so a resumed run runs them again, as every deployment does.
 
 | Step name | What it covers |
 |---|---|
-| `KindleForge` | Helper procedure deployment for this database. |
 | `ValidateBaseline` | Baseline validation script. |
-| `MissingTablesAndColumns` | Adding missing tables and missing columns. |
+| `DomainTypeQuench` | PostgreSQL domain type deployment. |
+| `EnumTypeQuench` | PostgreSQL enum type deployment. |
+| `SequenceQuench` | PostgreSQL sequence deployment. |
 | `ModifiedTables` | Altering existing columns, computed / generated columns, dropping tables. |
 | `IndexesAndConstraints` | Creating missing indexes, check constraints, defaults, statistics. |
+| `TableFeatures` | SQL Server table features: Change Data Capture, Change Tracking, FILESTREAM. |
 | `TableDataDelivery` | Both passes of FK-aware data delivery for tables with `DataDelivery` blocks. |
 | `ForeignKeys` | Creating, modifying, and dropping foreign keys. |
 | `MaterializedViewQuench` | PostgreSQL materialized view deployment. |
+| `EventQuench` | MySQL and MariaDB scheduled event deployment. |
 | `IndexedViewQuench` | SQL Server indexed view deployment. |
 | `VersionStamp` | Version stamp script. |
+
+Kindling the helper procedures and adding missing tables and columns are never checkpointed: they rebuild session state the later steps need, so a resumed run always repeats them. Both are safe to repeat.
 
 In addition, each template slot (`Before`, `Objects`, `BetweenTablesAndKeys`, `AfterTablesScripts`, `AfterTablesObjects`, `TableData`, `After`) records the exact scripts that ran, so resumed runs skip each individual script that already succeeded.
 
 ### Automatic cleanup after success
 
-Checkpoints exist to protect against failures. When the quench completes without error, SchemaQuench deletes every checkpoint file associated with the product. A clean run leaves no residue to mislead the next deployment. A failed run leaves the checkpoint files in place, ready for the next `--ResumeQuench` invocation.
+Checkpoints exist to protect against failures. When the quench completes without error, SchemaQuench deletes the checkpoint files of the databases it deployed. Another database's checkpoint -- a failed deploy of the same product to a different target, with a different settings file -- is left in place, so that deploy can still be resumed. A failed run leaves its checkpoint files in place, ready for the next `--ResumeQuench` invocation.
 
 ### Practical resume workflow
 

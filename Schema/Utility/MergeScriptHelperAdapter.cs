@@ -8,8 +8,8 @@ using Schema.Delivery;
 namespace Schema.Utility;
 
 /// <summary>
-/// Adapts Community's static MergeScriptHelper to Pro's IMergeScriptHelper interface.
-/// Provides platform-specific SQL fragments that Pro uses to assemble merge scripts.
+/// Adapts the static MergeScriptHelper to the IMergeScriptHelper interface.
+/// Provides the platform-specific SQL fragments a merge script is assembled from.
 /// Registered in FactoryContainer by tool startup code.
 /// </summary>
 public class MergeScriptHelperAdapter : IMergeScriptHelper

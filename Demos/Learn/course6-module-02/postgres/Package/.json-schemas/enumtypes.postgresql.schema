@@ -27,6 +27,10 @@
       "maxLength": 128,
       "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
     },
+    "Description": {
+      "type": "string",
+      "description": "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it."
+    },
     "Extensions": {}
   },
   "additionalProperties": false,

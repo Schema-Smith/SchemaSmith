@@ -4,11 +4,13 @@ using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
 using System;
+using System.Data.Common;
 using System.IO;
 using System.Linq;
 
 using System.Collections.Generic;
 using NUnit.Framework;
+using Newtonsoft.Json.Linq;
 using Schema.Utility;
 
 namespace DataTongs.IntegrationTests.Shared;
@@ -504,6 +506,70 @@ public abstract class DataTongsEndToEndSharedTests
         }
     }
 
+    // A VECTOR (MySQL 9, MariaDB 11.7) failed extraction on MySQL (1210) and was written as mangled bytes on MariaDB. The
+    // engines' text form keeps six significant digits, so the bytes travel as base64 and must arrive identical: 0.123456789
+    // is a float32 the text form would change.
+    [Test]
+    public void EndToEnd_RoundTrip_VectorArrivesWithItsExactBytes()
+    {
+        if (!TargetHasNativeJsonTable)
+            Assert.Ignore("Data delivery requires native JSON_TABLE (MySQL 8.0 / MariaDB 10.6).");
+        using var command = _connection.CreateCommand();
+        var sourceTable = $"_e2e_vec_s_{Guid.NewGuid():N}".Substring(0, 30);
+        var targetTable = $"_e2e_vec_t_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            try
+            {
+                command.CommandText = $"CREATE TABLE `{_testDb}`.`{sourceTable}` (id INT PRIMARY KEY, e VECTOR(3) NULL)";
+                command.ExecuteNonQuery();
+            }
+            catch (DbException)
+            {
+                Assert.Ignore("VECTOR arrived in MySQL 9.0 and MariaDB 11.7.");
+            }
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{targetTable}` (id INT PRIMARY KEY, e VECTOR(3) NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{sourceTable}` VALUES (1, UNHEX('EAD6FC3D0000804B0000C0BF')), (2, NULL)";
+            command.ExecuteNonQuery();
+
+            var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
+            var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT GROUP_CONCAT(s.id) FROM `{_testDb}`.`{sourceTable}` s LEFT JOIN `{_testDb}`.`{targetTable}` d ON d.id = s.id
+                WHERE d.id IS NULL OR NOT (HEX(d.e) <=> HEX(s.e))";
+            Assert.That(Convert.ToString(command.ExecuteScalar()), Is.Empty,
+                "every vector must arrive with its source's bytes; the list names the rows that did not. Extracted: " + json);
+
+            // Delivering the same file again changes nothing.
+            command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{targetTable}`";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(2));
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
+            {
+                if (string.IsNullOrWhiteSpace(batch)) continue;
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+            command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{targetTable}` WHERE HEX(e) = 'EAD6FC3D0000804B0000C0BF'";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(1), "a second delivery leaves the vector as it is");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     // MariaDB's JSON_OBJECT writes a ZEROFILL number with its padding (MDEV-30962): {"n": 00007}, which is not JSON, so
     // DataTongs wrote a file delivery could not parse. Extracted and delivered here; the value must arrive as 7.
     [Test]
@@ -593,6 +659,46 @@ public abstract class DataTongsEndToEndSharedTests
         }
     }
 
+    // The rows were aggregated on the server, and an aggregate longer than max_allowed_packet comes back NULL with only a
+    // warning, so the table was extracted as empty: a MergeDelete delivery of that file deletes every row. The table is
+    // built past the server's own packet size; on a server whose packet is too large to pass cheaply it is skipped.
+    [Test]
+    public void Extraction_OfATableLargerThanMaxAllowedPacket_IsComplete()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT @@GLOBAL.max_allowed_packet";
+        var packet = Convert.ToInt64(command.ExecuteScalar());
+        if (packet > 16 * 1048576) Assert.Ignore($"max_allowed_packet is {packet}; passing it would take a table this test should not build.");
+        var rows = (int)(packet / 50000) + 20;
+        var table = $"_e2e_pkt_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (id INT PRIMARY KEY, v LONGTEXT NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{table}` (id, v) VALUES (@id, REPEAT('x', 50000))";
+            var id = command.CreateParameter();
+            id.ParameterName = "@id";
+            command.Parameters.Add(id);
+            for (var i = 1; i <= rows; i++)
+            {
+                id.Value = i;
+                command.ExecuteNonQuery();
+            }
+            command.Parameters.Clear();
+
+            var json = _dataTongs.GetTableDataJson(command, null, _testDb, table, "`id`", null);
+
+            Assert.That(json.Length, Is.GreaterThan(packet), "the extract must pass max_allowed_packet for this to test anything");
+            Assert.That(JsonText.ParseArray(json).Count, Is.EqualTo(rows), "every row is extracted");
+        }
+        finally
+        {
+            command.Parameters.Clear();
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     // Fractional seconds were formatted away ('%s' with no '%f'): DATETIME(6) 10:11:12.123456 extracted as 10:11:12.
     // A whole-second column must still extract without a fraction, so existing files do not change.
     [Test]
@@ -637,6 +743,65 @@ public abstract class DataTongsEndToEndSharedTests
             command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{sourceTable}`";
             command.ExecuteNonQuery();
             command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{targetTable}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // The rows are written in key order so the file is stable across extractions. JSON_ARRAYAGG takes no ORDER BY on
+    // MySQL, and an ORDER BY on the one-row aggregate orders nothing, so the rows came out in scan order: the primary
+    // key's, not the key the data is matched on.
+    [Test]
+    public void TableDataJson_RowsFollowTheOrderColumns_NotTheScanOrder()
+    {
+        using var command = _connection.CreateCommand();
+        var table = $"_e2e_ord_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (id INT PRIMARY KEY, code VARCHAR(10) NOT NULL UNIQUE, note VARCHAR(10) NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{table}` VALUES (1, 'c', 'x'), (2, 'a', 'y'), (3, 'b', 'z')";
+            command.ExecuteNonQuery();
+
+            var json = _dataTongs.GetTableDataJsonMySql(command, _testDb, table, "`code`", null, null);
+
+            var codes = JArray.Parse(json).Select(row => (string)row["code"]).ToArray();
+            Assert.That(codes, Is.EqualTo(new[] { "a", "b", "c" }), json);
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // The file is written as the server prints it, so ordering the rows must not change how they print: in key order
+    // the output is exactly what the engine's own JSON_ARRAYAGG prints, and an existing data file does not churn.
+    [Test]
+    public void TableDataJson_InKeyOrder_PrintsAsJsonArrayAggDoes()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT VERSION()";
+        var version = Convert.ToString(command.ExecuteScalar()) ?? "";
+        var parts = version.Split('.', '-');
+        if (Platform == Platform.MariaDb && int.Parse(parts[0]) * 100 + int.Parse(parts[1]) < 1005)
+            Assert.Ignore("MariaDB has JSON_ARRAYAGG from 10.5.");
+        var table = $"_e2e_fmt_{Guid.NewGuid():N}".Substring(0, 30);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (id INT PRIMARY KEY, s VARCHAR(50) NULL, d DECIMAL(10,3) NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{table}` VALUES (1, 'he said \\\"hi\\\"', 1.500), (2, NULL, NULL), (3, 'ünïcødé', -0.001)";
+            command.ExecuteNonQuery();
+
+            var json = _dataTongs.GetTableDataJsonMySql(command, _testDb, table, "`id`", null, null);
+
+            var decimalValue = Platform == Platform.MariaDb ? "d" : "CAST(d AS CHAR)";
+            command.CommandText = $"SELECT CAST(JSON_ARRAYAGG(JSON_OBJECT('id', id, 's', s, 'd', {decimalValue})) AS CHAR) FROM `{_testDb}`.`{table}`";
+            Assert.That(json, Is.EqualTo(Convert.ToString(command.ExecuteScalar())));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
             command.ExecuteNonQuery();
         }
     }

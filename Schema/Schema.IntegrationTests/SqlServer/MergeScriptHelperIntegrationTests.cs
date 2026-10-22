@@ -408,6 +408,47 @@ CREATE TABLE [dbo].[{tableName.Replace("]", "]]")}] (
         }
     }
 
+    // A ledger or memory-optimized table is delivered through a #temp copy of the rows, and a #temp table's column names
+    // follow the SERVER's collation. So on a case-sensitive server, a key column named in another case than the table's
+    // failed against the copy even though the case-insensitive database itself accepted it. Reds only on such a server.
+    [Test]
+    public void BuildMergeScript_LedgerTable_KeyColumnNamedInAnotherCase_DeliversOnACaseInsensitiveDatabase()
+    {
+        using var master = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
+            new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(FixtureSetup.GetMainDbConnectionString()) { InitialCatalog = "master" }.ConnectionString);
+        master.Open();
+        using var masterCmd = master.CreateCommand();
+        masterCmd.CommandText = "SELECT CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(50)), 4) AS INT)";
+        if (Convert.ToInt32(masterCmd.ExecuteScalar()) < 16) Assert.Ignore("Ledger tables need SQL Server 2022.");
+
+        var db = $"MergeCi_Test_{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}"[..37];
+        masterCmd.CommandText = $"CREATE DATABASE [{db}] COLLATE Latin1_General_CI_AS";
+        masterCmd.ExecuteNonQuery();
+        try
+        {
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
+                new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(FixtureSetup.GetMainDbConnectionString()) { InitialCatalog = db }.ConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "CREATE TABLE dbo.L (Id INT NOT NULL PRIMARY KEY, V NVARCHAR(20) NULL) WITH (LEDGER = ON (APPEND_ONLY = ON)); " +
+                              "INSERT dbo.L (Id, V) VALUES (1, 'a');";
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd, "dbo", "L",
+                @"[{""Id"":1,""V"":""a""},{""Id"":2,""V"":""c""}]", "[id]",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = "SELECT STRING_AGG(CONCAT(Id, ':', V), ',') WITHIN GROUP (ORDER BY Id) FROM dbo.L";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("1:a,2:c"));
+        }
+        finally
+        {
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
+            TestDatabaseDrop.Drop(masterCmd, db);
+        }
+    }
+
     #endregion
 
     #region XML Tests

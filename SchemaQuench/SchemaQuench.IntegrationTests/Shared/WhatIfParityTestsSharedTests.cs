@@ -108,13 +108,19 @@ public abstract class WhatIfParityTestsSharedTests
                 Assert.That(WouldDeliver(whatIfLogs), Has.Count.EqualTo(deliverySkipped ? 0 : 1),
                     "the WhatIf summary's wouldDeliver must list the JSON delivery the console announces, and none the real run skips");
 
-                // Scripts: WhatIf's wouldApply must name every script the real run ran, by file.
+                // Scripts: WhatIf's wouldApply must name every script the real run ran, by file. The token view is unchanged
+                // since v1, so the real run skips it; WhatIf cannot compare a script whose query tokens it does not resolve,
+                // so it still previews that one.
                 var previewedScripts = WouldApply(whatIfLogs);
                 var ranScripts = ScriptsRan(realLogs);
-                Assert.That(ranScripts, Is.SupersetOf(new[] { "WhatIfProductBefore.sql", "WhatIfPlainView.sql", "WhatIfTokenView.sql" }),
-                    "the real v2 deploy must run the product script and both views, or this test proves nothing about scripts");
-                Assert.That(previewedScripts, Is.EquivalentTo(ranScripts),
-                    "WhatIf's wouldApply must list the scripts the real run ran");
+                Assert.That(ranScripts, Is.SupersetOf(new[] { "WhatIfProductBefore.sql", "WhatIfPlainView.sql" }),
+                    "the real v2 deploy must run the product script and the changed view, or this test proves nothing about scripts");
+                Assert.That(ranScripts, Does.Not.Contain("WhatIfTokenView.sql"),
+                    "the token view is unchanged since v1, so the real v2 deploy must not re-run it");
+                Assert.That(Unchanged(realLogs), Is.EqualTo(new[] { "WhatIfTokenView.sql" }),
+                    "the real v2 deploy must record the unchanged token view as unchanged, and nothing else");
+                Assert.That(previewedScripts, Is.EquivalentTo(ranScripts.Append("WhatIfTokenView.sql")),
+                    "WhatIf's wouldApply must list the scripts the real run ran, plus the query-token view it cannot judge");
 
                 var onlyPreviewed = Difference(previewed, applied);
                 var onlyApplied = Difference(applied, previewed);
@@ -157,7 +163,7 @@ public abstract class WhatIfParityTestsSharedTests
 
         return ((JArray)summary.SelectToken("objectChanges.details") ?? [])
             .Select(d => (Type: (string)d["objectType"], Name: (string)d["objectName"], Action: (string)d["action"]))
-            .Where(d => d.Action != "ran")
+            .Where(d => d.Action is not ("ran" or "unchanged"))
             .Select(d => $"{d.Type}|{d.Name}|{Executed(d.Action)}")
             .ToList();
     }
@@ -176,6 +182,13 @@ public abstract class WhatIfParityTestsSharedTests
         var summary = JObject.Parse(File.ReadAllText(Path.Join(logDir, "SchemaQuench - Summary.json")));
         return ((JArray)summary.SelectToken("whatIf.wouldApply") ?? [])
             .Select(e => Path.GetFileName((string)e["script"])).Distinct().OrderBy(x => x).ToList();
+    }
+
+    private static List<string> Unchanged(string logDir)
+    {
+        var summary = JObject.Parse(File.ReadAllText(Path.Join(logDir, "SchemaQuench - Summary.json")));
+        return ((JArray)summary.SelectToken("objectChanges.details") ?? [])
+            .Where(d => (string)d["action"] == "unchanged").Select(d => Path.GetFileName((string)d["objectName"])).Distinct().OrderBy(x => x).ToList();
     }
 
     // Object scripts appear as "ran" change rows; product and template migration scripts in migrationScripts.
@@ -234,7 +247,7 @@ public abstract class WhatIfParityTestsSharedTests
               "Name": "Main",
               "DatabaseIdentificationScript": "{{IdentificationScript}}",
               "ScriptTokens": { "WhatIfAnswer": "<*Query*>SELECT 42" },
-              "ScriptFolders": [ { "FolderPath": "Views", "QuenchSlot": "Objects" } ]
+              "ScriptFolders": [ { "FolderPath": "Views", "QuenchSlot": "Objects", "ObjectType": "Views" } ]
             }
             """);
 
@@ -245,7 +258,8 @@ public abstract class WhatIfParityTestsSharedTests
         File.WriteAllText(Path.Join(productBeforeDir, "WhatIfProductBefore.sql"), "SELECT 1");
         var viewsDir = Path.Join(templateDir, "Views");
         Directory.CreateDirectory(viewsDir);
-        File.WriteAllText(Path.Join(viewsDir, "WhatIfPlainView.sql"), View("WhatIfPlainView", "1"));
+        // v2 changes the plain view and leaves the token view as it was, so the second deploy has one view to run and one to skip.
+        File.WriteAllText(Path.Join(viewsDir, "WhatIfPlainView.sql"), View("WhatIfPlainView", version == 1 ? "1" : "2"));
         File.WriteAllText(Path.Join(viewsDir, "WhatIfTokenView.sql"), View("WhatIfTokenView", "{{WhatIfAnswer}}"));
 
         if (version == 1)

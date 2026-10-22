@@ -29,5 +29,10 @@ namespace Schema.Domain.PostgreSQL
         [SchemaProperty(Description = "The statistics object's schema, when it is not its table's. Left out, it is created in the table's schema.")]
         [JsonProperty(Order = 6, NullValueHandling = NullValueHandling.Ignore)]
         public string Schema { get; set; }
+
+        [SchemaProperty(Minimum = 0, Maximum = 10000,
+            Description = "PostgreSQL 13+. The statistics target (ALTER STATISTICS … SET STATISTICS n), the sample size ANALYZE uses for this object. Omit to leave it unmanaged; declared, it is applied when the object is created and converged in place when it changes. Below 13 a declared target follows the unsupported-feature policy.")]
+        [JsonProperty(Order = 7, NullValueHandling = NullValueHandling.Ignore)]
+        public int? StatisticsTarget { get; set; }
     }
 }

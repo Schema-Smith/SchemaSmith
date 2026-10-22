@@ -31,7 +31,7 @@ public class ExpressionChurnAcrossVersionsTests
 {
     private const string ProductName = "ExprBands";
 
-    // Natural form throughout -- never the catalog's rendering (Rule 32). Every one of these is rewritten on
+    // Natural form throughout -- never the catalog's rendering. Every one of these is rewritten on
     // storage: the CHECK and computed column gain brackets and parentheses, getdate() becomes (getdate()), and
     // the filter predicates are re-parenthesised.
     private const string TableJson = """

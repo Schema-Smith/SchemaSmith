@@ -161,7 +161,7 @@ public class SchemaGeneratorTests
     {
         // Asserts what the pattern ACCEPTS, not its text. The literal form was what let 21 declarations
         // ship unanchored: a text assertion passes just as happily over a pattern that also accepts
-        // "XNO ACTIONY", which is the defect (Rule 32 -- assert the outcome, not the mechanism).
+        // "XNO ACTIONY", which is the defect (assert the outcome, not the mechanism).
         var schema = SchemaGenerator.GenerateSchema(typeof(PatternClass));
         var pattern = schema["properties"]?["Action"]?["pattern"]?.ToString();
         Assert.Multiple(() =>

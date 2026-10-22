@@ -13,15 +13,17 @@ namespace Schema.DataAccess;
 /// </summary>
 public static class MySqlSessionSettings
 {
-    // Modes that change how SQL text is parsed or how SHOW CREATE renders it. The kindled procedures and the generated
-    // delivery scripts are written for the default reading, and a stored routine keeps the mode it was created under.
+    // Modes that change how SQL text is parsed, what it means (HIGH_NOT_PRECEDENCE, REAL_AS_FLOAT), how values read back
+    // (PAD_CHAR_TO_FULL_LENGTH) or how SHOW CREATE renders it. The kindled procedures and the generated delivery scripts
+    // are written for the default reading, and a stored routine keeps the mode it was created under.
     // Strictness flags (STRICT_*, NO_ZERO_DATE, ONLY_FULL_GROUP_BY) are the server's to choose and are left alone.
     internal static readonly HashSet<string> ParseAlteringModes = new(StringComparer.OrdinalIgnoreCase)
     {
         "ANSI_QUOTES", "PIPES_AS_CONCAT", "NO_BACKSLASH_ESCAPES", "IGNORE_SPACE",
         "ANSI", "ORACLE", "MSSQL", "DB2", "POSTGRESQL", "MAXDB",
         "NO_KEY_OPTIONS", "NO_TABLE_OPTIONS", "NO_FIELD_OPTIONS",
-        "EMPTY_STRING_IS_NULL", "SIMULTANEOUS_ASSIGNMENT"
+        "EMPTY_STRING_IS_NULL", "SIMULTANEOUS_ASSIGNMENT",
+        "HIGH_NOT_PRECEDENCE", "REAL_AS_FLOAT", "PAD_CHAR_TO_FULL_LENGTH"
     };
 
     /// <summary>The mode with every parse-altering flag removed, plus <paramref name="add"/>, in a stable order.</summary>
@@ -75,9 +77,8 @@ public static class MySqlSessionSettings
             readOnly?.Invoke();
             return null;
         }
-        return new RestoreOnDispose(() =>
+        return new RestoreOnDispose(command, () =>
         {
-            if (command.Connection?.State != ConnectionState.Open) return;
             command.CommandText = "SET SESSION explicit_defaults_for_timestamp = 0";
             command.ExecuteNonQuery();
         });
@@ -95,9 +96,8 @@ public static class MySqlSessionSettings
         if (original == offset) return null;
         command.CommandText = $"SET SESSION time_zone = '{offset}'";
         command.ExecuteNonQuery();
-        return new RestoreOnDispose(() =>
+        return new RestoreOnDispose(command, () =>
         {
-            if (command.Connection?.State != ConnectionState.Open) return;
             command.CommandText = $"SET SESSION time_zone = '{original.Replace("'", "''")}'";
             command.ExecuteNonQuery();
         });
@@ -119,14 +119,31 @@ public static class MySqlSessionSettings
             throw new ArgumentException($"TimeZone '{offset}' is not an offset such as +00:00.", nameof(offset));
     }
 
-    private sealed class RestoreOnDispose(Action restore) : IDisposable
+    private sealed class RestoreOnDispose(IDbCommand command, Action restore) : IDisposable
     {
         private Action _restore = restore;
 
         public void Dispose()
         {
-            _restore?.Invoke();
+            var restoreNow = _restore;
             _restore = null;
+            if (restoreNow != null) Restore(command, restoreNow);
+        }
+    }
+
+    // A connection that died inside the scope took the session, and its settings, with it: there is nothing left to
+    // restore, and the restore's own failure ("Failed to read the result set") would replace the error that killed it.
+    // A restore that fails on a connection still open is a real failure and is thrown.
+    private static void Restore(IDbCommand command, Action restore)
+    {
+        if (command.Connection?.State != ConnectionState.Open) return;
+        try
+        {
+            restore();
+        }
+        catch (System.Data.Common.DbException) when (command.Connection?.State != ConnectionState.Open)
+        {
+            // The session ended with the connection; see above.
         }
     }
 
@@ -156,8 +173,8 @@ public static class MySqlSessionSettings
         {
             if (_disposed) return;
             _disposed = true;
-            if (Mode != _original && _command.Connection?.State == ConnectionState.Open)
-                SetSqlMode(_command, _original);
+            if (Mode != _original)
+                Restore(_command, () => SetSqlMode(_command, _original));
         }
     }
 }

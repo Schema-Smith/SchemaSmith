@@ -28,6 +28,10 @@ namespace Schema.Domain
         [JsonProperty(Order = 10)]
         public string IndexColumns { get; set; } = "";
 
+        [SchemaProperty(Description = "Optional. A description stored on the object: an MS_Description extended property on SQL Server, COMMENT ON on PostgreSQL, the COMMENT clause on MySQL and MariaDB. On SQL Server and PostgreSQL an omitted value leaves an existing description alone and \"\" removes it; on MySQL and MariaDB an omitted value clears the comment, as the engine's own DDL does.")]
+        [JsonProperty(Order = 11, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
         [JsonProperty(Order = 90)]
         public string ShouldApplyExpression { get; set; }
 

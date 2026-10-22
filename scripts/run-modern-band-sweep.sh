@@ -57,7 +57,7 @@ BANDS="14340:2017-latest 14341:2019-latest 14342:2022-latest 14345:2025-latest"
 
 cleanup() {
   for band in $BANDS; do
-    docker rm -f "ss-band-${band%%:*}" >/dev/null 2>&1
+    docker rm -fv "ss-band-${band%%:*}" >/dev/null 2>&1
   done
 }
 trap cleanup EXIT
@@ -74,8 +74,8 @@ for band in $BANDS; do
   name="ss-band-$port"
   echo "===== band $image on $port ====="
 
-  docker rm -f "$name" >/dev/null 2>&1
-  if ! docker run -d --name "$name" -p "$port:1433" \
+  docker rm -fv "$name" >/dev/null 2>&1
+  if ! docker run -d --name "$name" --memory 4g --memory-swap 4g -p "$port:1433" \
        -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$PASSWORD" "$image" >/dev/null; then
     echo "  could not start $image -- recording as NOT RUN rather than skipping silently"
     SWEEP_ROWS="${SWEEP_ROWS}| $image @ $port | CONTAINER FAILED TO START | full SqlServer category |
@@ -108,7 +108,7 @@ for band in $BANDS; do
     echo "  full-text install FAILED -- recording as NOT RUN rather than certifying without it"
     SWEEP_ROWS="${SWEEP_ROWS}| $image @ $port | FULL-TEXT INSTALL FAILED | full SqlServer category |
 "
-    docker rm -f "$name" >/dev/null 2>&1
+    docker rm -fv "$name" >/dev/null 2>&1
     continue
   fi
   docker restart "$name" >/dev/null
@@ -148,7 +148,7 @@ for band in $BANDS; do
     echo "  never became ready"
     SWEEP_ROWS="${SWEEP_ROWS}| $image @ $port | NEVER READY | full SqlServer category |
 "
-    docker rm -f "$name" >/dev/null 2>&1
+    docker rm -fv "$name" >/dev/null 2>&1
     continue
   fi
 
@@ -212,7 +212,7 @@ for band in $BANDS; do
   fi
   SWEEP_ROWS="${SWEEP_ROWS}| $image ($version) @ $port | ${summary:-NO RESULT}$SEMANTIC_NOTE | full SqlServer category, 0 failed |
 "
-  docker rm -f "$name" >/dev/null 2>&1
+  docker rm -fv "$name" >/dev/null 2>&1
 done
 
 # Appended to the same record the pre-PR sweep writes, so one file answers "what was this commit

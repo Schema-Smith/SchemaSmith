@@ -112,6 +112,34 @@ namespace Schema.UnitTests.Utility
         }
 
         [Test]
+        public void ToIngestXml_EncodesExtendedProperties_AsNamedPElements()
+        {
+            // The inverse of FromIngestXml: a property's name need not be an XML element name, so the bag goes
+            // out attribute-encoded, on every component that carries one.
+            var xml = ModelXmlSerializer.ToIngestXml(
+                "[{\"Name\":\"[T]\",\"Extensions\":{\"ExtendedProperties\":{\"My Note\":\"a & b\",\"Gone\":null}},"
+                + "\"Columns\":[{\"Name\":\"[C]\",\"Extensions\":{\"ExtendedProperties\":{\"Classification\":\"Key\"}}}]}]",
+                "Tables", "Table");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(xml, Does.Contain("<ExtendedProperties><p n=\"My Note\">a &amp; b</p><p n=\"Gone\""));
+                Assert.That(xml, Does.Contain("<p n=\"Classification\">Key</p>"));
+                Assert.That(xml, Does.Not.Contain("<My"), "a spaced name must never become an element name");
+            });
+        }
+
+        [Test]
+        public void ToIngestXml_ThenFromIngestXml_RoundTripsASpacedName()
+        {
+            var json = "{\"Name\":\"[T]\",\"Extensions\":{\"ExtendedProperties\":{\"My Note\":\"a & b < c\"}}}";
+
+            var back = JObject.Parse(ModelXmlSerializer.FromIngestXml(ModelXmlSerializer.ToIngestXmlObject(json, "Table")));
+
+            Assert.That((string)back["Extensions"]?["ExtendedProperties"]?["My Note"], Is.EqualTo("a & b < c"));
+        }
+
+        [Test]
         public void ToIngestXml_WrapsArrayInRoot_WithRepeatedItemElement()
         {
             const string json = "[{\"Schema\":\"dbo\",\"Name\":\"A\"},{\"Schema\":\"dbo\",\"Name\":\"B\"}]";

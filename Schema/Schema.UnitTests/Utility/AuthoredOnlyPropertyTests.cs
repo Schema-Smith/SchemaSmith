@@ -71,7 +71,7 @@ public class AuthoredOnlyPropertyTests
 
             // Drive the PUBLIC entry point SchemaTongs actually calls, not the copier directly.
             // Calling the copier straight would still pass with the call site removed -- which is
-            // precisely what the first version of this test did (caught by mutation, Rule 33).
+            // precisely what the first version of this test did (caught by mutation).
             if (original is Table origTable && extracted is Table newTable)
                 ImportTableHelper.PreserveDataDeliveryAndCustomProperties(newTable, origTable, _ => true);
             else

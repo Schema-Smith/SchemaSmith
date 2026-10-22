@@ -36,6 +36,16 @@ namespace Schema.Domain.SqlServer
                 var scriptTokens = tableTokens.Concat(GetCustomTokens(xmlIndex.Extensions)).ToList();
                 xmlIndex.ShouldApplyExpression = TableTokenReplace(xmlIndex.ShouldApplyExpression, scriptTokens);
             }
+            foreach (var spatialIndex in SpatialIndexes)
+            {
+                var scriptTokens = tableTokens.Concat(GetCustomTokens(spatialIndex.Extensions)).ToList();
+                spatialIndex.ShouldApplyExpression = TableTokenReplace(spatialIndex.ShouldApplyExpression, scriptTokens);
+            }
+            foreach (var jsonIndex in JsonIndexes)
+            {
+                var scriptTokens = tableTokens.Concat(GetCustomTokens(jsonIndex.Extensions)).ToList();
+                jsonIndex.ShouldApplyExpression = TableTokenReplace(jsonIndex.ShouldApplyExpression, scriptTokens);
+            }
             foreach (var statistic in Statistics)
             {
                 var scriptTokens = tableTokens.Concat(GetCustomTokens(statistic.Extensions)).ToList();
@@ -63,15 +73,15 @@ namespace Schema.Domain.SqlServer
         // PAGE compressed and XML compressed at once.
         //
         // THE VERSION STORY IS ASYMMETRIC, and verified live rather than read. The clause deploys from
-        // SQL Server 2022, but sys.partitions.xml_compression does NOT exist there: on 2022 CU25 the
-        // column is only on sys.internal_partitions, which reports NULL for an ordinary table. It appears
-        // on sys.partitions in 2025. So 2022-2024 can deploy this and can never read it back, the same
-        // shape as MariaDB application-time periods (declarable 10.4.3, readable 11.4). Extraction on
-        // those versions therefore PRESERVES whatever the package already declared instead of emitting
-        // nothing, which would silently drop it -- see ImportTableHelper.
+        // SQL Server 2022, but sys.partitions.xml_compression is missing on 2022 CU25 (the column is only on
+        // sys.internal_partitions, which reports NULL for an ordinary table) and present on 2022 CU26 and
+        // 2025. So a server without it can deploy this and never read it back, the same shape as MariaDB
+        // application-time periods (declarable 10.4.3, readable 11.4). The kindle and SchemaTongs ask the
+        // server whether the column is there; where it is not, extraction PRESERVES whatever the package
+        // already declared instead of emitting nothing, which would silently drop it -- see ImportTableHelper.
         //
         // Unlike TextImageFileGroup this is not create-time only: ALTER TABLE ... REBUILD WITH changes it.
-        [SchemaProperty(Description = "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022, but only EXTRACTABLE from 2025** — sys.partitions.xml_compression does not exist before then, so on 2022-2024 SchemaTongs carries the value forward from the package it is refreshing rather than dropping it.")]
+        [SchemaProperty(Description = "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022; extracted where the server reports sys.partitions.xml_compression** (2025, and 2022 from CU26; 2022 CU25 does not). On a server without it, SchemaTongs carries the value forward from the package it is refreshing rather than dropping it.")]
         [JsonProperty(Order = 118)]
         public bool XmlCompression { get; set; }
 
@@ -100,8 +110,29 @@ namespace Schema.Domain.SqlServer
         [JsonProperty(Order = 103)]
         public List<XmlIndex> XmlIndexes { get; set; } = [];
 
+        // Spatial indexes have their own list for the reason XmlIndexes does: the key is a column and a tessellation, not a
+        // column list. Written only when the table has one, so existing packages stay byte for byte.
+        [JsonProperty(Order = 126)]
+        public List<SpatialIndex> SpatialIndexes { get; set; } = [];
+
+        public bool ShouldSerializeSpatialIndexes() => SpatialIndexes is { Count: > 0 };
+
+        // JSON indexes (2025) have their own list for the same reason: the key is a column and a set of paths.
+        [JsonProperty(Order = 128)]
+        public List<JsonIndex> JsonIndexes { get; set; } = [];
+
+        public bool ShouldSerializeJsonIndexes() => JsonIndexes is { Count: > 0 };
+
         [JsonProperty(Order = 104)]
         public List<Statistic> Statistics { get; set; } = [];
+
+        // Edge constraints (SQL Server 2019): only on an edge table. Created in the foreign-key pass, once every node
+        // table exists; a change to the clauses or the action is a drop and re-create, as there is no ALTER.
+        [SchemaProperty(Description = "SQL Server 2019+, on a table whose GraphType is Edge: which node tables the edges may connect (CONNECTION clauses) and what a delete of a connected node does. Below 2019 the constraint is skipped and a downgrade recorded.")]
+        [JsonProperty(Order = 117)]
+        public List<EdgeConstraint> EdgeConstraints { get; set; } = [];
+
+        public bool ShouldSerializeEdgeConstraints() => EdgeConstraints is { Count: > 0 };
 
         [JsonProperty(Order = 105)]
         [JsonConverter(typeof(FullTextIndexListJsonConverter))]
@@ -214,6 +245,10 @@ namespace Schema.Domain.SqlServer
         [SchemaProperty(Pattern = "Off|AppendOnly|Updatable")]
         [JsonProperty(Order = 116, NullValueHandling = NullValueHandling.Ignore)]
         public string Ledger { get; set; }
+
+        [SchemaProperty(Description = "SQL Server 2022, with Ledger. The ledger view and its four column names; a member left out takes the engine's default (<table>_Ledger in the table's schema, ledger_transaction_id and so on). A new name for the view, in its schema, is applied with sp_rename; another schema or other column names are reported, since SQL Server cannot change them.")]
+        [JsonProperty(Order = 127, NullValueHandling = NullValueHandling.Ignore)]
+        public SqlServerLedgerView LedgerView { get; set; }
 
         // Partition placement (#partitioning): the NAME of an existing partition scheme, plus the column
         // the table is partitioned on. Both or neither -- a scheme with no column is not a placement.

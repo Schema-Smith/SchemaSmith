@@ -158,7 +158,9 @@ public class FixtureSetup
             cmd.CommandTimeout = 120;
 
             cmd.CommandText = "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA "
-                              + "WHERE SCHEMA_NAME REGEXP '^(TestMain|TestSecondary)_Test_[0-9]{8}_'";
+                              + "WHERE SCHEMA_NAME REGEXP '^(TestMain|TestSecondary)_Test_[0-9]{8}_' "
+                              // Plus every per-class database, <prefix>_Test_<yyyyMMdd>_<HHmmss>_<8>, matched by shape.
+                              + "OR SCHEMA_NAME REGEXP '_[Tt]est_[0-9]{8}_[0-9]{6}_[0-9a-fA-F]{8}$'";
             var stale = new List<string>();
             using (var reader = cmd.ExecuteReader())
                 while (reader.Read())

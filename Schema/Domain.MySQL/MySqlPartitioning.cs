@@ -19,12 +19,12 @@ namespace Schema.Domain.MySQL
     public class MySqlPartitioning : DynamicBase
     {
         /// <summary>
-        /// RANGE, LIST, HASH, KEY, or the COLUMNS forms of the first two. The COLUMNS variants take a
+        /// RANGE, LIST, HASH, KEY, their LINEAR forms (a powers-of-two hash, still a count), or the COLUMNS forms of the first two. The COLUMNS variants take a
         /// column LIST rather than an expression and compare values column-by-column, which is why they are
         /// distinct methods rather than a flag.
         /// </summary>
-        [SchemaProperty(Required = true, Pattern = "RANGE|LIST|HASH|KEY|RANGE COLUMNS|LIST COLUMNS",
-            Description = "RANGE, LIST, HASH, KEY, RANGE COLUMNS or LIST COLUMNS.")]
+        [SchemaProperty(Required = true, Pattern = "RANGE|LIST|HASH|KEY|LINEAR HASH|LINEAR KEY|RANGE COLUMNS|LIST COLUMNS|SYSTEM_TIME",
+            Description = "RANGE, LIST, HASH, KEY, LINEAR HASH, LINEAR KEY, RANGE COLUMNS, LIST COLUMNS or SYSTEM_TIME. The LINEAR forms take a PartitionCount, as HASH and KEY do. SYSTEM_TIME (MariaDB) partitions a system-versioned table's history and takes SystemTime instead of an Expression.")]
         [JsonProperty(Order = 1)]
         public string Method { get; set; }
 
@@ -38,27 +38,93 @@ namespace Schema.Domain.MySQL
         /// that is identical. Backticks and whitespace are stripped and case is folded before comparing.
         /// </para>
         /// </summary>
-        [SchemaProperty(Required = true,
-            Description = "The partitioning expression, or a comma-separated column list for the COLUMNS methods. Compared with backticks, whitespace and case normalized away, because the engines disagree on how they report it.")]
+        [SchemaProperty(
+            Description = "The partitioning expression, or a comma-separated column list for the COLUMNS methods. Required for every method but SYSTEM_TIME. Compared with backticks, whitespace and case normalized away, because the engines disagree on how they report it.")]
         [JsonProperty(Order = 2)]
         public string Expression { get; set; }
 
         /// <summary>
-        /// HASH and KEY only: how many partitions to spread across. RANGE and LIST name their partitions
+        /// HASH, KEY and their LINEAR forms only: how many partitions to spread across. RANGE and LIST name their partitions
         /// individually in <see cref="Partitions"/> instead, because each one carries its own boundary.
         /// </summary>
         [SchemaProperty(Minimum = 1,
-            Description = "Number of partitions for HASH and KEY. Not used by RANGE or LIST, which name each partition and its boundary explicitly.")]
+            Description = "Number of partitions for HASH and KEY. Not used by RANGE or LIST, which name each partition and its boundary explicitly. A HASH or KEY table may name its partitions in Partitions instead, and then the count is how many it names.")]
         [JsonProperty(Order = 3, NullValueHandling = NullValueHandling.Ignore)]
         public int? PartitionCount { get; set; }
+
+        /// <summary>
+        /// KEY and LINEAR KEY only: the hashing algorithm, 1 (MySQL 5.1's) or 2 (the default). It decides which partition a
+        /// row lands in, so a table created with 1 must say so or a copy built from the package places rows differently.
+        /// Both engines report it only in <c>SHOW CREATE TABLE</c>, and only when it is 1, so it is extracted from there and
+        /// is not compared on a table that already exists.
+        /// </summary>
+        [SchemaProperty(Minimum = 1, Maximum = 2,
+            Description = "KEY partitioning only: ALGORITHM 1 or 2 (the default). Set from extraction when the table uses 1. Not compared on an existing table.")]
+        [JsonProperty(Order = 4, NullValueHandling = NullValueHandling.Ignore)]
+        public int? KeyAlgorithm { get; set; }
+
+        /// <summary>
+        /// RANGE and LIST only: each partition is split again by HASH or KEY into <see cref="MySqlSubpartitioning.Count"/>
+        /// subpartitions, which the engine names <c>&lt;partition&gt;sp&lt;n&gt;</c>. Explicitly named subpartitions are not
+        /// modelled, and extraction refuses a table that has them.
+        /// </summary>
+        [JsonProperty(Order = 5, NullValueHandling = NullValueHandling.Ignore)]
+        public MySqlSubpartitioning Subpartitioning { get; set; }
+
+        /// <summary>
+        /// SYSTEM_TIME only (MariaDB): when a history partition is closed and the next begins. The partition list, when
+        /// the table names one, holds the HISTORY partitions and the one CURRENT partition. Under <c>Auto</c> the engine
+        /// adds history partitions as time passes, so neither the list nor the count is compared on a deployed table,
+        /// and the options are not compared either: the engine reports them only in <c>SHOW CREATE TABLE</c>.
+        /// </summary>
+        [JsonProperty(Order = 6, NullValueHandling = NullValueHandling.Ignore)]
+        public MariaDbSystemTimePartitioning SystemTime { get; set; }
 
         /// <summary>
         /// The partitions, <b>in declared order</b>. Order is load-bearing for RANGE — the boundaries must
         /// ascend, and the engine rejects a definition where they do not — so this is a list rather than a
         /// set and extraction reads it by <c>PARTITION_ORDINAL_POSITION</c>.
         /// </summary>
-        [JsonProperty(Order = 4)]
+        [JsonProperty(Order = 7)]
         public List<MySqlPartition> Partitions { get; set; } = [];
+    }
+
+    /// <summary>How a SYSTEM_TIME partitioned table rotates its history (MariaDB).</summary>
+    public class MariaDbSystemTimePartitioning : DynamicBase
+    {
+        [SchemaProperty(Description = "A new history partition per interval, as MariaDB writes it after INTERVAL: \"1 MONTH\", \"7 DAY\".")]
+        [JsonProperty(Order = 1, NullValueHandling = NullValueHandling.Ignore)]
+        public string Interval { get; set; }
+
+        [SchemaProperty(Description = "With Interval: the timestamp the first interval starts at (\"2026-01-01 00:00:00\"). MariaDB 10.5 and later.")]
+        [JsonProperty(Order = 2, NullValueHandling = NullValueHandling.Ignore)]
+        public string StartsAt { get; set; }
+
+        [SchemaProperty(Minimum = 1, Description = "A new history partition after this many history rows.")]
+        [JsonProperty(Order = 3, NullValueHandling = NullValueHandling.Ignore)]
+        public long? Limit { get; set; }
+
+        [SchemaProperty(Description = "The engine adds history partitions as they fill (MariaDB 10.9 and later). The partition list is then the engine's and is not extracted or compared.")]
+        [JsonProperty(Order = 4, NullValueHandling = NullValueHandling.Ignore)]
+        public bool? Auto { get; set; }
+    }
+
+    /// <summary>How each RANGE or LIST partition is split again: by HASH or KEY, into a count of subpartitions.</summary>
+    public class MySqlSubpartitioning : DynamicBase
+    {
+        [SchemaProperty(Required = true, Pattern = "HASH|KEY|LINEAR HASH|LINEAR KEY",
+            Description = "HASH, KEY, LINEAR HASH or LINEAR KEY.")]
+        [JsonProperty(Order = 1)]
+        public string Method { get; set; }
+
+        [SchemaProperty(Required = true,
+            Description = "The subpartitioning expression for HASH, or the column list for KEY. Compared normalized, like the partitioning expression.")]
+        [JsonProperty(Order = 2)]
+        public string Expression { get; set; }
+
+        [SchemaProperty(Required = true, Minimum = 1, Description = "Subpartitions in each partition.")]
+        [JsonProperty(Order = 3)]
+        public int Count { get; set; }
     }
 
     /// <summary>One named partition and the boundary that selects it.</summary>
@@ -73,8 +139,17 @@ namespace Schema.Domain.MySQL
         /// or <c>MAXVALUE</c>) or <c>VALUES IN</c> for LIST. Null for HASH and KEY, which have no boundary —
         /// the engine assigns rows by hashing.
         /// </summary>
-        [SchemaProperty(Description = "The VALUES LESS THAN boundary for RANGE, or the VALUES IN list for LIST. Omitted for HASH and KEY, which have no boundary.")]
+        [SchemaProperty(Description = "The VALUES LESS THAN boundary for RANGE, or the VALUES IN list for LIST. Omitted for HASH and KEY, which have no boundary. HISTORY or CURRENT for SYSTEM_TIME.")]
         [JsonProperty(Order = 2, NullValueHandling = NullValueHandling.Ignore)]
         public string Values { get; set; }
+
+        /// <summary>
+        /// The partition's comment. Changing it on a deployed table is reported, not applied: the engine changes a
+        /// partition's comment only by reorganizing the partition, which rewrites its rows.
+        /// </summary>
+        [SchemaProperty(MaxLength = 1024,
+            Description = "The partition's comment. A change on a deployed table is reported, not applied, because the engine reorganizes the partition to change it.")]
+        [JsonProperty(Order = 3, NullValueHandling = NullValueHandling.Ignore)]
+        public string Comment { get; set; }
     }
 }

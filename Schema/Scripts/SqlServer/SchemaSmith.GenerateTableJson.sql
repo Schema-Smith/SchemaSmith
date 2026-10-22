@@ -18,6 +18,15 @@ CREATE PROCEDURE SchemaSmith.GenerateTableJSON
 AS
 SET NOCOUNT ON
 DECLARE @v_DatabaseCollation NVARCHAR(200) = CAST(DATABASEPROPERTYEX(DB_NAME(), 'Collation') AS NVARCHAR(200))
+-- The period columns are written only when they differ from the convention a package that omits them gets
+-- (ValidFrom / ValidTo, DATETIME2(7), not hidden), so a table built from an IsTemporal-only package re-extracts
+-- byte for byte. COLUMNPROPERTY is NULL before 2016, where there are none.
+DECLARE @v_PeriodColumnsDeclared BIT = CASE WHEN EXISTS (
+  SELECT 1 FROM sys.columns pc
+   WHERE pc.[object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table))
+     AND COLUMNPROPERTY(pc.[object_id], pc.[name], 'GeneratedAlwaysType') IN (1, 2)
+     AND NOT (pc.[name] = CASE COLUMNPROPERTY(pc.[object_id], pc.[name], 'GeneratedAlwaysType') WHEN 1 THEN 'ValidFrom' ELSE 'ValidTo' END
+              AND pc.scale = 7 AND ISNULL(COLUMNPROPERTY(pc.[object_id], pc.[name], 'IsHidden'), 0) = 0)) THEN 1 ELSE 0 END
 -- SchemaSmith-internal extended properties to exclude from extraction (one-line change to add new names)
 DECLARE @InternalEPNames TABLE ([Name] NVARCHAR(128))
 INSERT @InternalEPNames VALUES (N'ProductName'), (N'PreventDrop'), (N'SchemaSmith_SuspendedHistory')  -- PreventDrop is a SchemaSmith ownership marker, not a user extended property (#270)
@@ -36,10 +45,51 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
      WHERE [object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table));',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Ledger NVARCHAR(12) OUTPUT',
     @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Ledger = @v_Ledger OUTPUT
+-- The ledger view (2022), written only for the members that differ from the engine's defaults.
+DECLARE @v_LvSchema NVARCHAR(300), @v_LvName NVARCHAR(300), @v_LvTx NVARCHAR(300), @v_LvSeq NVARCHAR(300), @v_LvOp NVARCHAR(300), @v_LvOpDesc NVARCHAR(300)
+IF SchemaSmith.fn_ServerMajorVersion() >= 16
+  EXEC sp_executesql N'
+    SELECT @p_LvSchema = CASE WHEN OBJECT_SCHEMA_NAME(st.ledger_view_id) <> @p_Schema THEN QUOTENAME(OBJECT_SCHEMA_NAME(st.ledger_view_id)) END,
+           @p_LvName = CASE WHEN OBJECT_NAME(st.ledger_view_id) <> @p_Table + ''_Ledger'' THEN QUOTENAME(OBJECT_NAME(st.ledger_view_id)) END,
+           @p_LvTx = (SELECT QUOTENAME(vc.[name]) FROM sys.columns vc WHERE vc.[object_id] = st.ledger_view_id AND vc.ledger_view_column_type = 1 AND vc.[name] <> ''ledger_transaction_id''),
+           @p_LvSeq = (SELECT QUOTENAME(vc.[name]) FROM sys.columns vc WHERE vc.[object_id] = st.ledger_view_id AND vc.ledger_view_column_type = 2 AND vc.[name] <> ''ledger_sequence_number''),
+           @p_LvOp = (SELECT QUOTENAME(vc.[name]) FROM sys.columns vc WHERE vc.[object_id] = st.ledger_view_id AND vc.ledger_view_column_type = 3 AND vc.[name] <> ''ledger_operation_type''),
+           @p_LvOpDesc = (SELECT QUOTENAME(vc.[name]) FROM sys.columns vc WHERE vc.[object_id] = st.ledger_view_id AND vc.ledger_view_column_type = 4 AND vc.[name] <> ''ledger_operation_type_desc'')
+      FROM sys.tables st WHERE st.[object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table)) AND st.ledger_view_id IS NOT NULL;',
+    N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_LvSchema NVARCHAR(300) OUTPUT, @p_LvName NVARCHAR(300) OUTPUT, @p_LvTx NVARCHAR(300) OUTPUT, @p_LvSeq NVARCHAR(300) OUTPUT, @p_LvOp NVARCHAR(300) OUTPUT, @p_LvOpDesc NVARCHAR(300) OUTPUT',
+    @p_Schema = @p_Schema, @p_Table = @p_Table, @p_LvSchema = @v_LvSchema OUTPUT, @p_LvName = @v_LvName OUTPUT, @p_LvTx = @v_LvTx OUTPUT, @p_LvSeq = @v_LvSeq OUTPUT, @p_LvOp = @v_LvOp OUTPUT, @p_LvOpDesc = @v_LvOpDesc OUTPUT
 -- CDC change-table filegroup (#417). The cdc schema exists only in a CDC-enabled database, so the read is
 -- dynamic and guarded. It takes the NEWEST capture instance first and only then asks whether its filegroup is
 -- a non-default one -- filtering to non-default first would report an older instance's placement. NULL (the
 -- catalog's "default filegroup") and the default itself both extract no key, so existing packages are unchanged.
+-- Graph key parts (#graph): an index over $from_id / $to_id is four hidden columns in the catalog; the staging
+-- table maps them back to the two names a package can write, and marks the graph_id column no package can.
+IF OBJECT_ID('tempdb..#GraphKeyParts') IS NOT NULL DROP TABLE #GraphKeyParts
+CREATE TABLE #GraphKeyParts ([object_id] INT NOT NULL, [column_id] INT NOT NULL, [graph_type] INT NOT NULL, [PseudoName] NVARCHAR(10) COLLATE DATABASE_DEFAULT NULL)
+EXEC SchemaSmith.StageGraphKeyParts
+
+-- A bound rule or default (sp_bindrule / sp_bindefault, deprecated since SQL Server 2005) is not modelled. The column is
+-- written without it -- a bound default's text is a CREATE DEFAULT no column can carry -- and the warning says so.
+DECLARE @v_BoundWarning NVARCHAR(2000)
+DECLARE bound_objects CURSOR LOCAL FAST_FORWARD FOR
+  SELECT 'WARNING: Column ' + QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table) + '.' + QUOTENAME(sc.[name]) + ' has the bound ' + b.[Kind] + ' ' +
+         QUOTENAME(OBJECT_SCHEMA_NAME(b.[object_id])) + '.' + QUOTENAME(OBJECT_NAME(b.[object_id])) + ' (' + b.[Procedure] + '), which is not modelled: the column is written without it.'
+    FROM sys.columns sc
+    CROSS APPLY (SELECT [Kind] = 'rule', [Procedure] = 'sp_bindrule', [object_id] = sc.rule_object_id WHERE sc.rule_object_id <> 0
+                 UNION ALL
+                 SELECT 'default', 'sp_bindefault', d.[object_id] FROM sys.objects d WHERE d.[object_id] = sc.default_object_id AND d.parent_object_id = 0) b
+   WHERE sc.[object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table))
+   ORDER BY sc.column_id, b.[Kind]
+OPEN bound_objects
+FETCH NEXT FROM bound_objects INTO @v_BoundWarning
+WHILE @@FETCH_STATUS = 0
+BEGIN
+  RAISERROR('%s', 10, 100, @v_BoundWarning) WITH NOWAIT
+  FETCH NEXT FROM bound_objects INTO @v_BoundWarning
+END
+CLOSE bound_objects
+DEALLOCATE bound_objects
+
 DECLARE @v_CdcFilegroup NVARCHAR(260) = NULL
 IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   EXEC sp_executesql N'
@@ -65,8 +115,25 @@ IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_en
      ORDER BY ct.create_date DESC, ct.[object_id] DESC;',
     N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128), @p_Net BIT OUTPUT, @p_Idx NVARCHAR(260) OUTPUT',
     @p_Schema = @p_Schema, @p_Table = @p_Table, @p_Net = @v_CdcNetChanges OUTPUT, @p_Idx = @v_CdcIndexName OUTPUT
+-- Edge constraints (#graph, 2019+). sys.edge_constraints is read through a version-guarded dynamic statement into
+-- a temp table the static SELECT below reads, so this proc CREATEs on 2017 where the view does not exist. One row per
+-- clause; the constraint's own attributes repeat on each.
+IF OBJECT_ID('tempdb..#EdgeConstraintsCat') IS NOT NULL DROP TABLE #EdgeConstraintsCat
+CREATE TABLE #EdgeConstraintsCat ([ConstraintName] NVARCHAR(500) COLLATE DATABASE_DEFAULT NOT NULL, [DeleteAction] NVARCHAR(20) COLLATE DATABASE_DEFAULT NULL,
+                                  [ClauseNumber] INT NOT NULL, [FromTable] NVARCHAR(500) COLLATE DATABASE_DEFAULT NOT NULL, [ToTable] NVARCHAR(500) COLLATE DATABASE_DEFAULT NOT NULL)
+IF SchemaSmith.fn_ServerMajorVersion() >= 15
+  EXEC sp_executesql N'
+    INSERT INTO #EdgeConstraintsCat ([ConstraintName], [DeleteAction], [ClauseNumber], [FromTable], [ToTable])
+    SELECT ec.[name], CASE WHEN ec.delete_referential_action = 1 THEN ''CASCADE'' END, cl.clause_number,
+           QUOTENAME(OBJECT_SCHEMA_NAME(cl.from_object_id)) + ''.'' + QUOTENAME(OBJECT_NAME(cl.from_object_id)),
+           QUOTENAME(OBJECT_SCHEMA_NAME(cl.to_object_id)) + ''.'' + QUOTENAME(OBJECT_NAME(cl.to_object_id))
+      FROM sys.edge_constraints ec
+      JOIN sys.edge_constraint_clauses cl ON cl.[object_id] = ec.[object_id]
+     WHERE ec.parent_object_id = OBJECT_ID(QUOTENAME(@p_Schema) + ''.'' + QUOTENAME(@p_Table))',
+    N'@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128)', @p_Schema = @p_Schema, @p_Table = @p_Table
 {{CollectSelectiveXmlIndexes}}
-SELECT [Line] FROM SchemaSmith.fn_FormatJson(REPLACE(REPLACE(REPLACE((
+{{CollectJsonIndexes}}
+SELECT [Line] FROM SchemaSmith.fn_FormatJson((
 SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        QUOTENAME(TABLE_NAME) AS [Name],
        -- sys.partitions is one row PER PARTITION, and compression can legitimately differ across
@@ -155,6 +222,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        -- Ledger (#ledger, 2022+). Emitted only when the table IS one. ledger_type_desc is 2022, so
        -- it is read through a version-gated helper rather than referenced here -- see @v_Ledger.
        @v_Ledger AS [Ledger],
+       JSON_QUERY(CASE WHEN COALESCE(@v_LvSchema, @v_LvName, @v_LvTx, @v_LvSeq, @v_LvOp, @v_LvOpDesc) IS NOT NULL
+                       THEN (SELECT @v_LvSchema AS [Schema], @v_LvName AS [Name], @v_LvTx AS [TransactionIdColumn], @v_LvSeq AS [SequenceNumberColumn],
+                                    @v_LvOp AS [OperationTypeColumn], @v_LvOpDesc AS [OperationTypeDescColumn] FOR JSON PATH, WITHOUT_ARRAY_WRAPPER) END) AS [LedgerView],
        -- Table-level Change Tracking round-trip. Emitted only when ON, like IsTemporal above: every
        -- extracted package would otherwise gain "EnableChangeTracking": false on every table.
        -- sys.change_tracking_tables shipped with Change Tracking in 2008, so it is safe to read
@@ -201,9 +271,11 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     FROM fn_listextendedproperty(N'PreventDrop', N'Schema', @p_Schema, N'Table', @p_Table, default, default)) = 'true'
             THEN CAST(1 AS BIT) END AS [PreventDrop],
        '' AS [OldName],
+       -- MS_Description is the one extended property with a key of its own; it stays out of the ExtendedProperties bag below.
+       (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, default, default)) AS [Description],
        (SELECT *
           FROM (SELECT QUOTENAME(c.COLUMN_NAME) AS [Name],
-                       CASE WHEN ut.is_user_defined = 1 THEN USER_TYPE ELSE UPPER(USER_TYPE) END + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, NUMERIC_SCALE, DATETIME_PRECISION,
+                       CASE WHEN ut.is_user_defined = 1 THEN USER_TYPE ELSE UPPER(USER_TYPE) END + SchemaSmith.fn_ColumnTypeArguments(USER_TYPE, CHARACTER_MAXIMUM_LENGTH, NUMERIC_PRECISION, ISNULL(NUMERIC_SCALE, sc.scale), DATETIME_PRECISION,
                                                CASE WHEN sc.xml_collection_id <> 0
                                                     THEN (SELECT CASE WHEN sc.is_xml_document = 1 THEN 'DOCUMENT ' ELSE '' END + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) FROM sys.xml_schema_collections xc WHERE xc.xml_collection_id = sc.xml_collection_id)
                                                     END,
@@ -213,11 +285,21 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                                     CASE WHEN ic.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END
                                                ELSE '' END AS [DataType],                   
                        CAST(CASE WHEN c.IS_NULLABLE = 'YES' THEN 1 ELSE 0 END AS BIT) AS [Nullable],
-		               NULLIF(SchemaSmith.fn_StripParenWrapping(COLUMN_DEFAULT), 'NULL') AS [Default],
-                       (SELECT SchemaSmith.fn_StripParenWrapping([definition])
+		               -- A bound default (parent_object_id 0) is left out; the warning at the top names it.
+		               -- A period column's default is the one the deploy writes to fill existing rows, not the author's.
+		               CASE WHEN sc.generated_always_type IN (1, 2) THEN NULL
+		                    WHEN NOT EXISTS (SELECT 1 FROM sys.objects bd WHERE bd.[object_id] = sc.default_object_id AND bd.parent_object_id = 0)
+		                    THEN NULLIF(SchemaSmith.fn_StripParenWrapping(COLUMN_DEFAULT), 'NULL') END AS [Default],
+                       -- A single-column check SQL Server named itself (CK__...) is the column's CheckExpression; one with a
+                       -- name of its own stays in CheckConstraints under that name, which the fold used to lose. TOP 1 by
+                       -- name: a second system-named check on the same column goes to CheckConstraints too, rather than
+                       -- failing the scalar subquery.
+                       (SELECT TOP 1 SchemaSmith.fn_StripParenWrapping([definition])
                           FROM sys.check_constraints
                           WHERE parent_object_id = st.[object_id]
-                            AND parent_column_id = sc.column_id) AS [CheckExpression],
+                            AND parent_column_id = sc.column_id
+                            AND is_system_named = 1
+                          ORDER BY [name]) AS [CheckExpression],
                        SchemaSmith.fn_StripParenWrapping(cc.[definition]) AS ComputedExpression,
                        ISNULL(cc.is_persisted, CAST(0 AS BIT)) AS [Persisted],
                        sc.is_sparse AS [Sparse],
@@ -236,8 +318,11 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                  FROM sys.column_encryption_keys cek
                                 WHERE cek.column_encryption_key_id = sc.column_encryption_key_id), '') COLLATE DATABASE_DEFAULT AS EncryptionKey,
                        ISNULL(sc.encryption_algorithm_name, '') COLLATE DATABASE_DEFAULT AS EncryptionAlgorithm,
+                       CASE sc.generated_always_type WHEN 1 THEN 'RowStart' WHEN 2 THEN 'RowEnd' WHEN 7 THEN 'TransactionIdStart' WHEN 8 THEN 'TransactionIdEnd' WHEN 9 THEN 'SequenceNumberStart' WHEN 10 THEN 'SequenceNumberEnd' END AS [GeneratedAlways],
+                       CASE WHEN sc.generated_always_type IN (1, 2, 7, 8, 9, 10) AND sc.is_hidden = 1 THEN CAST(1 AS BIT) END AS [Hidden],
                        '' AS [OldName],
-                       JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Column', c.COLUMN_NAME) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+                       (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Column', c.COLUMN_NAME)) AS [Description],
+                       JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Column', c.COLUMN_NAME) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
                   FROM INFORMATION_SCHEMA.COLUMNS c
                   JOIN sys.columns sc ON sc.[object_id] = st.[object_id] AND sc.[name] = c.COLUMN_NAME
                   JOIN (SELECT CASE WHEN SCHEMA_NAME(typ.[schema_id]) IN ('sys', 'dbo')
@@ -254,7 +339,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     -- Exclude the temporal period columns (GENERATED ALWAYS AS ROW START/END). SchemaSmith
                     -- regenerates ValidFrom/ValidTo from IsTemporal by convention on apply, so emitting them
                     -- as user columns would double-declare them on re-deploy (#369).
-                    AND sc.generated_always_type = 0
+                    AND (sc.generated_always_type = 0 OR (sc.generated_always_type IN (1, 2) AND @v_PeriodColumnsDeclared = 1)
+                         -- A ledger table's generated column is written only when it is not the engine's own (its name, hidden).
+                         OR (sc.generated_always_type IN (7, 8, 9, 10) AND (sc.[name] <> CASE sc.generated_always_type WHEN 7 THEN 'ledger_start_transaction_id' WHEN 8 THEN 'ledger_end_transaction_id' WHEN 9 THEN 'ledger_start_sequence_number' ELSE 'ledger_end_sequence_number' END OR sc.is_hidden = 0)))
                     -- Exclude SQL Server graph pseudo-columns. A node or edge table carries
                     -- system-generated columns ($node_id, $edge_id, $from_id, $to_id, graph_id and
                     -- the *_obj_id pair) whose names end in a per-table GUID, so emitting them
@@ -268,7 +355,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                     -- and every hidden column: what remains of one after GENERATED ALWAYS and graph is a dropped
                     -- ledger column (2022), kept hidden by the engine; extracted, it came back visible on deploy.
                     -- COLUMNPROPERTY is NULL where IsHidden is unknown (before 2016).
-                    AND ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0) x
+                    AND (ISNULL(COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden'), 0) = 0 OR sc.generated_always_type IN (1, 2, 7, 8, 9, 10))) x
           -- Column sequence: 'Name' (default) or 'Physical', the table's own order. The ordinal is looked up
           -- rather than projected: this is SELECT * over the derived table, so adding ORDINAL_POSITION to it
           -- would write the ordinal into the package file. The lookup only runs when Physical is asked for.
@@ -330,18 +417,24 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                CASE WHEN fill_factor = 100 THEN 0 ELSE fill_factor END AS [FillFactor],
                CONVERT(BIT, ignore_dup_key) AS [IgnoreDuplicateKey],
                CONVERT(BIT, is_padded) AS [PadIndex],
-               (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
+               CONVERT(BIT, is_disabled) AS [Disabled],
+               {{ColumnStoreOrderList}} AS [Order],
+               (SELECT STRING_AGG(CAST(CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) COLLATE DATABASE_DEFAULT ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
                   FROM sys.index_columns ic
+                  LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0) AS [IndexColumns],
                (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY index_column_id)
                   FROM sys.index_columns ic
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1) AS [IncludeColumns],
 			   CASE WHEN has_filter = 1 THEN SchemaSmith.fn_StripParenWrapping(filter_definition) ELSE NULL END AS [FilterExpression],
-			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + [Value] + '"' AS NVARCHAR(MAX)), ',')
+               -- The property may sit on the index or, for a key constraint, on the constraint.
+               COALESCE((SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Index', si.[Name])),
+                        (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Constraint', si.[Name]))) AS [Description],
+			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE([Value], 'json') + '"' AS NVARCHAR(MAX)), ',')
                         FROM (SELECT ISNULL(i.[Name], c.[Name]) AS [Name], RTRIM(COALESCE(CONVERT(NVARCHAR(MAX), c.[Value]) + ' ', '') + COALESCE(CONVERT(NVARCHAR(MAX), i.[Value]), '')) AS [Value]
                                 FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', si.[Name]) i
                                 FULL OUTER JOIN fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', si.[Name]) c ON i.[Name] = c.[Name]) x
-                        WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames))
+                        WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description')
                    + '}}') AS [Extensions]
           FROM sys.indexes si
           WHERE si.[object_id] = st.[object_id]
@@ -349,31 +442,77 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
             -- Kinds a package cannot declare yet (spatial, JSON) are left out, and SchemaTongs warns for each.
             AND si.[type] IN ({{RenderableIndexTypes}})
             AND is_hypothetical = 0
-            AND is_disabled = 0
             AND index_id > 0
-            -- A graph table also gets a system-generated GRAPH_UNIQUE_INDEX_<guid> over its
-            -- graph_id column. Both names carry a per-table GUID, so emitting the index is the
-            -- same undeployable-package problem as emitting the column, and excluding the columns
-            -- alone leaves an index pointing at one that is no longer declared.
+            -- A graph table also gets a system-generated GRAPH_UNIQUE_INDEX_<guid> over its graph_id column.
+            -- Both names carry a per-table GUID, so emitting that index is the same undeployable-package
+            -- problem as emitting the column. An index a user made over $from_id / $to_id is a different
+            -- thing: its key parts render as those names (#GraphKeyParts), which deploy anywhere.
             AND NOT EXISTS (SELECT 1 FROM sys.index_columns gic
-                            JOIN sys.columns gc
-                              ON gc.[object_id] = gic.[object_id] AND gc.column_id = gic.column_id
+                            JOIN #GraphKeyParts gc ON gc.[object_id] = gic.[object_id] AND gc.column_id = gic.column_id
                            WHERE gic.[object_id] = si.[object_id] AND gic.index_id = si.index_id
-                             AND gc.graph_type IS NOT NULL)
+                             AND gc.graph_type = 1)
           ORDER BY [Name]
           FOR JSON AUTO) AS [Indexes],
        (SELECT QUOTENAME(i.[name] COLLATE DATABASE_DEFAULT) AS [Name],
                QUOTENAME(COL_NAME(i.[Object_id], ic.column_id)) AS [Column],
-               CONVERT(BIT, CASE WHEN i.xml_index_type = 0 THEN 1 ELSE 0 END) AS [IsPrimary],
-               (SELECT QUOTENAME([Name] COLLATE DATABASE_DEFAULT) FROM sys.xml_indexes i2 WHERE i2.[object_id] = i.[object_id] AND i2.index_id = i.using_xml_index_id AND i.xml_index_type = 1) AS [PrimaryIndex],
+               CONVERT(BIT, CASE WHEN i.xml_index_type IN (0, 2) THEN 1 ELSE 0 END) AS [IsPrimary],
+               (SELECT QUOTENAME([Name] COLLATE DATABASE_DEFAULT) FROM sys.xml_indexes i2 WHERE i2.[object_id] = i.[object_id] AND i2.index_id = i.using_xml_index_id AND i.xml_index_type IN (1, 3)) AS [PrimaryIndex],
                i.secondary_type_desc COLLATE DATABASE_DEFAULT AS [SecondaryIndexType],
-			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + x.[Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+               -- An XML index's rows live in an internal node table whose index carries the XML index's name; its
+               -- partitions hold the compression. Same kindle-time read as the table-level [XmlCompression].
+               (SELECT CASE WHEN MAX(CONVERT(TINYINT, {{XmlCompressionRead}})) = 1 THEN CONVERT(BIT, 1) END
+                  FROM sys.internal_tables it
+                  JOIN sys.indexes xsi ON xsi.[object_id] = it.[object_id] AND xsi.[name] = i.[name]
+                  JOIN sys.partitions p ON p.[object_id] = xsi.[object_id] AND p.index_id = xsi.index_id
+                  WHERE it.parent_object_id = i.[object_id]) AS [XmlCompression],
+               -- A selective index's namespaces and paths (in declaration order) and a secondary one's path, as collected above.
+               JSON_QUERY((SELECT JSON_QUERY((SELECT n.[Prefix], n.[Uri] FROM #SelectiveXmlNamespaces n
+                                                WHERE n.[object_id] = i.[object_id] AND n.index_id = i.index_id ORDER BY n.[Prefix] FOR JSON PATH)) AS [Namespaces],
+                                  JSON_QUERY((SELECT p.[Name], p.[Path], p.[Type], p.[MaxLength], CASE WHEN p.[Singleton] = 1 THEN CONVERT(BIT, 1) END AS [SingletonCardinality]
+                                                FROM #SelectiveXmlPaths p
+                                                WHERE p.[object_id] = i.[object_id] AND p.index_id = i.index_id ORDER BY p.path_id FOR JSON PATH)) AS [Paths]
+                            WHERE i.xml_index_type = 2
+                            FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)) AS [Selective],
+               (SELECT s.[ForPath] FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id) AS [ForPath],
+			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE(x.[Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.xml_indexes i
           JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
           WHERE i.[object_id] = st.[object_id]
-            AND NOT EXISTS (SELECT 1 FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id)
           ORDER BY i.[Name]
           FOR JSON AUTO) AS [XmlIndexes],
+       -- Spatial indexes (sys.spatial_indexes, 2008): the column, the scheme, the bounding box (geometry only), the four
+       -- grid densities (GRID schemes only) and the cells per object, as the engine holds them; FILLFACTOR when set,
+       -- DATA_COMPRESSION when not NONE (it lives on the index's internal table).
+       (SELECT QUOTENAME(i.[name] COLLATE DATABASE_DEFAULT) AS [Name],
+               QUOTENAME(COL_NAME(i.[object_id], ic.column_id)) AS [Column],
+               i.tessellation_scheme COLLATE DATABASE_DEFAULT AS [Tessellation],
+               tz.bounding_box_xmin AS [BoundingBox.XMin], tz.bounding_box_ymin AS [BoundingBox.YMin],
+               tz.bounding_box_xmax AS [BoundingBox.XMax], tz.bounding_box_ymax AS [BoundingBox.YMax],
+               tz.level_1_grid_desc COLLATE DATABASE_DEFAULT AS [Grids.Level1], tz.level_2_grid_desc COLLATE DATABASE_DEFAULT AS [Grids.Level2],
+               tz.level_3_grid_desc COLLATE DATABASE_DEFAULT AS [Grids.Level3], tz.level_4_grid_desc COLLATE DATABASE_DEFAULT AS [Grids.Level4],
+               tz.cells_per_object AS [CellsPerObject],
+               NULLIF(i.fill_factor, 0) AS [FillFactor],
+               NULLIF((SELECT MAX(p.data_compression_desc) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1
+                        WHERE it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id) COLLATE DATABASE_DEFAULT, 'NONE') AS [CompressionType]
+          FROM sys.spatial_indexes i
+          JOIN sys.spatial_index_tessellations tz ON tz.[object_id] = i.[object_id] AND tz.index_id = i.index_id
+          JOIN sys.index_columns ic ON ic.[object_id] = i.[object_id] AND ic.index_id = i.index_id
+          WHERE i.[object_id] = st.[object_id]
+          ORDER BY i.[name]
+          FOR JSON PATH) AS [SpatialIndexes],
+       -- JSON indexes (2025): the column, the paths (left out when the whole document is indexed), the array-search option
+       -- when it is on, FILLFACTOR when set, DATA_COMPRESSION when not NONE. Paths sort binary, as the compare renders them.
+       (SELECT QUOTENAME(l.[Name]) AS [Name], l.[Column] AS [Column],
+               JSON_QUERY((SELECT '[' + STRING_AGG(CAST('"' + STRING_ESCAPE(p.[Path], 'json') + '"' AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY p.[Path] COLLATE Latin1_General_BIN2) + ']'
+                             FROM #LiveJsonIndexPaths p
+                             WHERE p.[object_id] = l.[object_id] AND p.index_id = l.index_id AND p.[Path] <> '$')) AS [Paths],
+               CASE WHEN l.[OptimizeForArraySearch] = 1 THEN CAST(1 AS BIT) END AS [OptimizeForArraySearch],
+               l.[FillFactor] AS [FillFactor],
+               NULLIF(l.[Compression], 'NONE') AS [CompressionType]
+          FROM #LiveJsonIndexes l
+          WHERE l.[object_id] = st.[object_id]
+          ORDER BY l.[Name]
+          FOR JSON PATH) AS [JsonIndexes],
 	   (SELECT QUOTENAME([Name]) AS [Name],
                (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(fc.[parent_object_id], fc.parent_column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY fc.constraint_column_id)
                             FROM sys.foreign_key_columns fc
@@ -385,7 +524,12 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                             WHERE fk.[object_id] = fc.[constraint_object_id]) AS [RelatedColumns],
                REPLACE(fk.delete_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT AS [DeleteAction],
                REPLACE(fk.update_referential_action_desc, '_', ' ') COLLATE DATABASE_DEFAULT AS [UpdateAction],
-               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', fk.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+               -- Enforced, Validated and NotForReplication: written only when not the default, so a key in its ordinary
+               -- state carries no attribute keys (FOR JSON leaves a NULL out).
+               CASE WHEN fk.is_disabled = 1 THEN CAST(0 AS BIT) END AS [Enforced],
+               CASE WHEN fk.is_not_trusted = 1 THEN CAST(0 AS BIT) END AS [Validated],
+               CASE WHEN fk.is_not_for_replication = 1 THEN CAST(1 AS BIT) END AS [NotForReplication],
+               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', fk.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.foreign_keys fk
           WHERE fk.parent_object_id = st.[object_id]
           ORDER BY [Name]
@@ -395,25 +539,42 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                   FROM sys.stats_columns sc
                   WHERE s.[object_id] = sc.[object_id] AND s.stats_id = sc.stats_id) AS [Columns],
                SchemaSmith.fn_StripParenWrapping([filter_definition]) AS FilterExpression,
-			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Statistic', s.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Statistic', s.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.stats s
           WHERE [object_id] = st.[object_id]
             AND auto_created = 0
             AND user_created = 1
             AND is_temporary = 0
-            AND [Name] NOT LIKE 'stat[_]%'
-            AND [Name] NOT LIKE 'hind[_]%'
+            -- The flags above decide what is a user statistic; a name is not evidence either way.
           ORDER BY [Name]
           FOR JSON AUTO) AS [Statistics],
        (SELECT QUOTENAME([Name]) AS [Name],
                SchemaSmith.fn_StripParenWrapping([definition]) AS [Expression],
-               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', cc.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+               CASE WHEN cc.is_disabled = 1 THEN CAST(0 AS BIT) END AS [Enforced],
+               CASE WHEN cc.is_not_trusted = 1 THEN CAST(0 AS BIT) END AS [Validated],
+               CASE WHEN cc.is_not_for_replication = 1 THEN CAST(1 AS BIT) END AS [NotForReplication],
+               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Constraint', cc.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
           FROM sys.check_constraints cc
           WHERE parent_object_id = st.[object_id]
-            AND parent_column_id = 0
+            -- Table-level, or bound to a column but not the one system-named check that column's CheckExpression carries.
+            AND (parent_column_id = 0
+                 OR cc.[name] <> ISNULL((SELECT TOP 1 x.[name] FROM sys.check_constraints x
+                                   WHERE x.parent_object_id = cc.parent_object_id AND x.parent_column_id = cc.parent_column_id
+                                     AND x.is_system_named = 1
+                                   ORDER BY x.[name]), ''))
           ORDER BY [Name]
           FOR JSON AUTO) AS [CheckConstraints],
-       (SELECT FullTextCatalog = QUOTENAME((SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
+       (SELECT QUOTENAME(ec.[ConstraintName]) AS [Name],
+               (SELECT c.[FromTable], c.[ToTable]
+                  FROM #EdgeConstraintsCat c WITH (NOLOCK)
+                 WHERE c.[ConstraintName] = ec.[ConstraintName]
+                 ORDER BY c.[ClauseNumber]
+                 FOR JSON PATH) AS [Clauses],
+               ec.[DeleteAction]
+          FROM (SELECT DISTINCT [ConstraintName], [DeleteAction] FROM #EdgeConstraintsCat WITH (NOLOCK)) ec
+          ORDER BY [Name]
+          FOR JSON PATH) AS [EdgeConstraints],
+       JSON_QUERY((SELECT FullTextCatalog = QUOTENAME((SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
                KeyIndex = QUOTENAME((SELECT i.[Name] FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
                ChangeTracking = change_tracking_state_desc,
                [StopList] = QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)),
@@ -445,8 +606,8 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                   WHERE fi.[object_id] = fc.[object_id]) AS [Columns]
           FROM sys.fulltext_indexes fi
           WHERE fi.[object_id] = st.[object_id]
-          FOR JSON PATH,WITHOUT_ARRAY_WRAPPER) AS [FullTextIndex],
-	   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + [Name] + '": "' + CONVERT(NVARCHAR(MAX), [Value]) + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, default, default) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+          FOR JSON PATH,WITHOUT_ARRAY_WRAPPER)) AS [FullTextIndex],
+	   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, default, default) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
   FROM INFORMATION_SCHEMA.TABLES t
   JOIN sys.tables st ON st.[object_id] = OBJECT_ID(QUOTENAME(@p_Schema) + '.' + QUOTENAME(@p_Table))
   LEFT JOIN sys.change_tracking_tables ctt ON ctt.[object_id] = st.[object_id]
@@ -455,5 +616,5 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
   WHERE TABLE_NAME = @p_Table
     AND TABLE_SCHEMA = @p_Schema
   FOR JSON AUTO, WITHOUT_ARRAY_WRAPPER
-), '\"', '"'), '"}"', '" }'), '"{"', '{ "'), 1)
+), 1)
 ORDER BY [LineNo]

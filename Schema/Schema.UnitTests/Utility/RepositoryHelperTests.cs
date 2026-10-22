@@ -35,6 +35,18 @@ public class RepositoryHelperTests
     }
 
     [Test]
+    public void GetSchemaFileNames_MariaDb_AddsSequences()
+    {
+        var names = RepositoryHelper.GetSchemaFileNames(Platform.MariaDb);
+
+        // MySQL's four plus one: MariaDB has sequences (10.3+) and MySQL has none at any version, so the
+        // Sequences/*.json an author writes needs a schema here and --Validate needs one to check it against.
+        Assert.That(names, Has.Length.EqualTo(5));
+        Assert.That(names[3], Does.StartWith("events."));
+        Assert.That(names[4], Is.EqualTo("sequences.mariadb.schema"));
+    }
+
+    [Test]
     public void GetSchemaFileNames_MySQL_ReturnsPlatformSpecificNames()
     {
         var names = RepositoryHelper.GetSchemaFileNames(Platform.MySQL);

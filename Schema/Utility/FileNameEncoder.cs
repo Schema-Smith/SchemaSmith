@@ -27,7 +27,8 @@ public static class FileNameEncoder
         {
             if (c == '%')
                 sb.Append("%25");
-            else if (Array.IndexOf(IllegalChars, c) >= 0)
+            // Control characters are refused in Windows file names, and break Git checkouts there.
+            else if (c < ' ' || Array.IndexOf(IllegalChars, c) >= 0)
                 sb.Append($"%{(byte)c:X2}");
             else
                 sb.Append(c);
@@ -55,7 +56,8 @@ public static class FileNameEncoder
         if (endIdx < result.Length - 1)
             result = result[..(endIdx + 1)] + trailEncoded;
 
-        if (ReservedNames.Contains(name))
+        // Windows reserves a device name before the first dot as well (aux.users.json, con.sql), not only alone.
+        if (ReservedNames.Contains(name.Split('.')[0]))
             result = $"%{(byte)name[0]:X2}" + result[1..];
 
         return result;

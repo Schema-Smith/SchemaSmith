@@ -198,7 +198,7 @@ public class DataDeliveryProcessor : IDataDelivery
                         continue;
                     }
                     tableDataMap[(table, index)] = jsonAsXml && !IsXml(delivery)
-                        ? new DeliveryContent(MergeScriptHelper.JsonPayloadToXml(content), "Xml")
+                        ? new DeliveryContent(MergeScriptHelper.JsonPayloadToXml(content), "Xml", $" (converted to Xml for compatibility level {context.SqlServerCompatibilityLevel})")
                         : new DeliveryContent(content, delivery.ContentEncoding ?? "Json");
                 }
                 catch (Exception ex)
@@ -322,6 +322,8 @@ public class DataDeliveryProcessor : IDataDelivery
                     try
                     {
                         ExecuteDelivery(context, delivery, table.Name, mergeScript);
+                        // Recorded here, not after pass 1: until pass 2 lands, the deferred columns are still NULL.
+                        context.RecordDelivery?.Invoke($"{tableKey}{VariantSuffix(delivery)}");
                     }
                     catch (Exception ex)
                     {
@@ -393,7 +395,7 @@ public class DataDeliveryProcessor : IDataDelivery
 
             if (deferredColumns.Count > 0 && !isCircularFallback)
             {
-                log($"    Delivering {tableKey}{VariantSuffix(delivery)} (pass 1 - deferred columns as NULL)");
+                log($"    Delivering {tableKey}{VariantSuffix(delivery)}{content.Note} (pass 1 - deferred columns as NULL)");
 
                 var mergeScript = BuildDeferredMergeScript(context, schemaOrDb, table, delivery, content, keyColumns, deferredColumns);
 
@@ -410,11 +412,10 @@ public class DataDeliveryProcessor : IDataDelivery
                 pendingArtifacts.Remove(artifactKey);   // pass-1 succeeded — clear any earlier deferred artifact
                 pass2Units.Add((table, index, delivery, deferredColumns));
                 deliverySucceeded.Add(deliveryKey);
-                context.RecordDelivery?.Invoke($"{tableKey}{VariantSuffix(delivery)}");
             }
             else
             {
-                log($"    Delivering {tableKey}{VariantSuffix(delivery)}");
+                log($"    Delivering {tableKey}{VariantSuffix(delivery)}{content.Note}");
                 var update = (delivery.MergeType ?? "").IndexOf("Update", StringComparison.OrdinalIgnoreCase) >= 0;
                 var delete = (delivery.MergeType ?? "").IndexOf("Delete", StringComparison.OrdinalIgnoreCase) >= 0;
                 var mergeFilter = ResolveMergeFilter(delivery.MergeFilter, context.SchemaName);
@@ -459,7 +460,7 @@ public class DataDeliveryProcessor : IDataDelivery
 
     // A delivery's content as read, and the encoding it is delivered in, which differs from the declared one when a JSON
     // delivery was converted to XML for a target below compatibility level 130.
-    internal readonly record struct DeliveryContent(string Data, string Encoding);
+    internal readonly record struct DeliveryContent(string Data, string Encoding, string Note = "");
 
     private static bool IsXml(DataDelivery delivery) =>
         string.Equals(delivery.ContentEncoding, "Xml", StringComparison.OrdinalIgnoreCase);
@@ -520,8 +521,8 @@ public class DataDeliveryProcessor : IDataDelivery
     private static string BuildMySqlCascadeQuery(string databaseName, string tableName) => $@"
 SELECT rc.CONSTRAINT_NAME, rc.TABLE_NAME, rc.DELETE_RULE
 FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
-WHERE {MySqlNameMatch.Folded("rc.UNIQUE_CONSTRAINT_SCHEMA", $"'{databaseName.Replace("'", "''")}'")}
-  AND {MySqlNameMatch.Folded("rc.REFERENCED_TABLE_NAME", $"'{tableName.Replace("'", "''")}'")}
+WHERE {MySqlNameMatch.Folded("rc.UNIQUE_CONSTRAINT_SCHEMA", MySqlNameMatch.Literal(databaseName))}
+  AND {MySqlNameMatch.Folded("rc.REFERENCED_TABLE_NAME", MySqlNameMatch.Literal(tableName))}
   AND rc.DELETE_RULE = 'CASCADE';
 ";
 

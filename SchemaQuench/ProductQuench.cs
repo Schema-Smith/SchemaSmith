@@ -87,7 +87,6 @@ public class ProductQuench
     // Captured pre-run (before this run marks any of its own steps complete) so the report
     // reflects whether the run RESUMED — reading the checkpoint at emit time would see this
     // run's own in-progress completions and report true for nearly every run.
-    private bool _resumedFromCheckpoint;
 
     // Thread-safe collection of every work unit's outcome + duration (#243 Deployment Summary
     // Report, slice E4a). Passive capture only — a later slice (E4d) assembles this into the
@@ -377,6 +376,21 @@ public class ProductQuench
         }
     }
 
+    // Read at the first table pass, a mistyped OnlineApply failed the deploy after the product's Before scripts and
+    // everything ahead of that pass had run. Checked here, it fails before anything is touched.
+    internal void ValidateOnlineApply()
+    {
+        try
+        {
+            DatabaseQuench.ResolveOnlineApply(_config[SettingsKeys.OnlineApply]);
+            DatabaseQuench.ResolveOnlineApplyMaxDuration(_config[SettingsKeys.OnlineApplyMaxDuration]);
+        }
+        catch (InvalidOperationException e)
+        {
+            throw new RunFailedException(e.Message);
+        }
+    }
+
     internal void ValidateMinimumVersion()
     {
         if (string.IsNullOrWhiteSpace(_product.MinimumVersion))
@@ -480,14 +494,6 @@ public class ProductQuench
     internal bool IsWhatIfOnly => _product.Platform == Platform.PostgreSQL
         ? _whatIfOnly == "true"
         : _whatIfOnly == "1";
-
-    private TrackingScope ProductScope => new TrackingScope { ProductName = _product.Name };
-
-    private TrackingScope ProductScopeForServer(string server) => new TrackingScope
-    {
-        ProductName = _product.Name,
-        Server = server
-    };
 
     internal virtual IDbCommand GetCommand(string server)
     {
@@ -684,7 +690,7 @@ public class ProductQuench
             {
                 units = ApplyPerTemplateTargetFilter(template, units);
             }
-            catch (InvalidOperationException ex)
+            catch (RunFailedException ex)
             {
                 _progressLog.Error($"Target filter rejection for template '{template.Name}': {ex.Message}");
                 _errorLog.Error($"Target filter rejection for template '{template.Name}': {ex.Message}");
@@ -709,17 +715,25 @@ public class ProductQuench
         return true;
     }
 
-    private bool RefuseFoldedTableNameCollisions(Template template)
+    // Every template in scope is checked before anything deploys, so a later template's collision cannot leave the
+    // earlier templates, or the Before scripts, applied.
+    private bool RefuseFoldedTableNameCollisions(IEnumerable<Template> templates)
     {
         if (_product.Platform.GetBasePlatform() != Platform.MySQL) return false;
-        var collisions = FoldedTableNameCollisions.Find(template);
-        if (collisions.Count == 0 || !ServerFoldsNames()) return false;
+        var messages = templates
+            .Select(t => (Template: t, Collisions: FoldedTableNameCollisions.Find(t)))
+            .Where(c => c.Collisions.Count > 0)
+            .Select(c => $"Template '{c.Template.Name}' declares tables whose names differ only in case ({string.Join("; ", c.Collisions)}). " +
+                         "The target server folds table names (lower_case_table_names >= 1), so each pair would be one table. " +
+                         "Rename one of each pair, or deploy to a server with lower_case_table_names = 0.")
+            .ToList();
+        if (messages.Count == 0 || !ServerFoldsNames()) return false;
 
-        var message = $"Template '{template.Name}' declares tables whose names differ only in case ({string.Join("; ", collisions)}). " +
-                      "The target server folds table names (lower_case_table_names >= 1), so each pair would be one table. " +
-                      "Rename one of each pair, or deploy to a server with lower_case_table_names = 0.";
-        _progressLog.Error(message);
-        _errorLog.Error(message);
+        foreach (var message in messages)
+        {
+            _progressLog.Error(message);
+            _errorLog.Error(message);
+        }
         _updateFailed = true;
         _anyFailure = true;
         EmitFailureRollup();
@@ -823,6 +837,8 @@ public class ProductQuench
 
         LogProductInfo();
 
+        ValidateOnlineApply();
+
         TestServerConnections();
 
         ValidateServerVersionFloor();
@@ -831,10 +847,8 @@ public class ProductQuench
 
         RemoveOldTableQuenchScripts();
 
-        var summary = _checkpointing.GetProductCheckpointSummary(_product.Name);
-        _resumedFromCheckpoint = summary.HasAnyCompleted;
-        if (summary.HasAnyCompleted)
-            _progressLog.Info($"Resuming from checkpoint (Before Scripts: {summary.TotalBeforeScripts} across {summary.ServersWithBeforeScripts} server(s), Templates: {summary.CompletedTemplates}, After Scripts: {summary.TotalAfterScripts} across {summary.ServersWithAfterScripts} server(s))");
+        if (CommandLineParser.ContainsSwitch("ResumeQuench"))
+            _progressLog.Info("Resuming: each database continues from its own checkpoint, and product scripts run again");
 
         using var command = GetCommand(_primaryServer);
 
@@ -874,8 +888,8 @@ public class ProductQuench
                     script.ReplaceQueryTokens(_product.QueryTokens.ToList());
             }
 
-            QuenchProductScriptsWithCheckpoint(_product.BeforeFolders, "Before Product", true);
-
+            // Loading and checking the templates touches no database, so a package or target error stops the run
+            // here, before the Before scripts change anything.
             var templates = LoadTemplates();
             var suppressKindling = suppressKindlingForTesting || _skipKindling;
 
@@ -896,25 +910,15 @@ public class ProductQuench
             if (!TryFilterTemplatesByTarget(templates, out var templatesInScope))
                 return;
 
+            if (RefuseFoldedTableNameCollisions(templatesInScope)) return;
+
+            QuenchProductScriptsWithCheckpoint(_product.BeforeFolders, "Before Product", true);
+
             foreach (var template in templatesInScope)
             {
-                var stepName = $"Template:{template.Name}";
-                if (_checkpointing.HasCompleted(ProductScope, stepName))
-                {
-                    _progressLog.Info($"Skipping template '{template.Name}' (previously completed per checkpoint)");
-                    continue;
-                }
-                // Explicit check-then-mark rather than Track(): QuenchTemplate handles its own
-                // failure via LogBackup.BackupLogsAndExit(2), which terminates the process in
-                // production but is a mocked no-op under tests. Using Track() would interpret the
-                // non-throwing return as success and record the template as complete even when
-                // _updateFailed is set, leading to the template being skipped on the next run.
+                // A template is not checkpointed: each of its databases resumes from its own checkpoint.
                 QuenchTemplate(template, suppressKindling);
-                if (!_updateFailed)
-                {
-                    _checkpointing.MarkStepCompleted(ProductScope, stepName);
-                }
-                else if (ShouldAbortOnFailure(template))
+                if (_updateFailed && ShouldAbortOnFailure(template))
                 {
                     // Abort mode: BackupLogsAndExit(2) was called. In production, the process
                     // terminates. In tests (mocked exit), we break here to preserve the
@@ -987,7 +991,7 @@ public class ProductQuench
         try
         {
             var mode = IsWhatIfOnly ? RunMode.WhatIf : RunMode.Quench;
-            var resumed = _resumedFromCheckpoint;
+            var resumed = _checkpointing.ResumedAny;
             var summary = DeploymentSummaryAssembler.Assemble(
                 _product.Name, _product.Platform.ToString(), ToolVersion(),
                 _startedUtc, DateTime.UtcNow, mode, outcome, exitCode, resumed,
@@ -1115,13 +1119,13 @@ public class ProductQuench
 
     // A package that cannot be loaded (a missing path, malformed JSON, an invalid template setting) is the author's to
     // fix, so it is a failed run rather than a defect in the tool.
-    private static T LoadPackage<T>(Func<T> load)
+    internal static T LoadPackage<T>(Func<T> load)
     {
         try
         {
             return load();
         }
-        catch (InvalidOperationException e)
+        catch (PackageException e)
         {
             throw new RunFailedException(e.Message, e);
         }
@@ -1304,9 +1308,16 @@ public class ProductQuench
             file.Delete();
     }
 
+    internal bool HasDatabasesToIdentify(Template template)
+    {
+        if (!string.IsNullOrWhiteSpace(template.DatabaseIdentificationScript)) return true;
+        _progressLog.Warn($"Template {template.Name} has no DatabaseIdentificationScript, so it names no database to deploy to — skipped.");
+        return false;
+    }
+
     private void QuenchTemplate(Template template, bool suppressKindling)
     {
-        if (string.IsNullOrWhiteSpace(template.DatabaseIdentificationScript)) return;
+        if (!HasDatabasesToIdentify(template)) return;
 
         _progressLog.Info($"Quenching Template: {template.Name}");
         LogSchemaTemplateFieldsIfSet(template);
@@ -1314,8 +1325,6 @@ public class ProductQuench
             LogScriptTokens("Template Script Tokens:", template.LoggableTokens);
 
         _updateFailed = false;
-
-        if (RefuseFoldedTableNameCollisions(template)) return;
 
         // Slice-3 fan-out: enumerate the flat work-unit list across all eligible servers, then
         // dispatch to a single MaxThreads-bounded pool. SQL Server's per-server ServerToQuench
@@ -1338,7 +1347,7 @@ public class ProductQuench
         {
             workUnits = ApplyPerTemplateTargetFilter(template, workUnits);
         }
-        catch (InvalidOperationException ex)
+        catch (RunFailedException ex)
         {
             _progressLog.Error($"Target filter rejection for template '{template.Name}': {ex.Message}");
             _errorLog.Error($"Target filter rejection for template '{template.Name}': {ex.Message}");
@@ -1792,6 +1801,10 @@ public class ProductQuench
         _progressLog.Info(
             $"[{server}] Database '{databaseName}' does not exist and " +
             $"TemplateTargets CreateIfMissing is false — skipping all iterations for this server-database pair.");
+        // No work unit is created for it, so the summary's target row is written here, or the skip leaves no trace there.
+        if (!previewOnly)
+            _targetResults.Add(new TargetResult($"[{server}].[{databaseName}]", server, databaseName, "", template.Name,
+                TargetOutcome.Skipped, 0, $"TemplateTargets:{template.Name}:Databases"));
         return new DbAxisGate(false, false);
     }
 
@@ -2114,14 +2127,6 @@ public class ProductQuench
 
         foreach (var script in scriptList)
         {
-            if (_checkpointing.HasCompletedScript(ProductScopeForServer(server), slot, script.LogPath))
-            {
-                _progressLog.Info($"{serverMsg}[{initDb}]    {(IsWhatIfOnly ? "Would SKIP" : "Skipping")} (previously quenched per checkpoint) {script.LogPath}");
-                if (IsWhatIfOnly) _whatIf.Record(WhatIfCategory.Skip, $"{serverMsg}[{initDb}]", script.LogPath);
-                script.HasBeenQuenched = true;
-                continue;
-            }
-
             if (IsWhatIfOnly)
             {
                 _progressLog.Info($"{serverMsg}[{initDb}]    Would Quench {script.LogPath}");
@@ -2143,14 +2148,12 @@ public class ProductQuench
                         currentBatchIndex = batchIndex;
                         var batch = script.Batches[batchIndex];
                         needDBReset = needDBReset || batch.ContainsIgnoringCase("USE ");
-                        destCmd.CommandText = batch;
-                        destCmd.ExecuteNonQuery();
+                        ScriptStatement.Execute(destCmd, batch);
                     }
                 }
 
                 script.HasBeenQuenched = true;
                 script.Error = null;
-                _checkpointing.MarkScriptCompleted(ProductScopeForServer(server), slot, script.LogPath);
                 _migrationScripts.Record(server, "", "", "", slot, MakeScriptPathRelative(script.LogPath, Path.GetDirectoryName(_product.FilePath) ?? ""));
             }
             catch (Exception ex)

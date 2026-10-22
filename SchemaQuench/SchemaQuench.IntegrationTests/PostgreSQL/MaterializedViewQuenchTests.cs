@@ -734,6 +734,54 @@ END $$;";
         RunMaterializedViewQuench(cmd, "[]");
     }
 
+    // A materialized view's index carries the same extras as a table's: storage parameters, a fill factor written only
+    // when declared, and an operator class or collation in the key. Declared, they are written; a redeploy is a no-op;
+    // a changed storage parameter replaces the index.
+    [Test]
+    public void IndexExtras_AreWritten_AndRedeployAsANoOp()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+
+        static string Definition(string pagesPerRange) =>
+            @"[{""Name"":""mv_test"",""Schema"":""public"",""Definition"":""SELECT id, name, amount FROM public.test_source"",""WithData"":true,""Indexes"":[" +
+            @"{""Name"":""ix_mv_test_brin"",""AccessMethod"":""brin"",""IndexColumns"":""id"",""StorageParameters"":{""pages_per_range"":""" + pagesPerRange + @"""}}," +
+            @"{""Name"":""ix_mv_test_name"",""IndexColumns"":""name COLLATE \""C\"" text_pattern_ops"",""FillFactor"":70}]}]";
+        string State(string index)
+        {
+            cmd.CommandText = $"SELECT i.oid::text || '|' || pg_get_indexdef(i.oid) || '|' || COALESCE(array_to_string(i.reloptions, ','), '-') FROM pg_class i WHERE i.relname = '{index}' AND i.relkind = 'i'";
+            return cmd.ExecuteScalar()?.ToString() ?? "";
+        }
+
+        EnsureViewDropped(cmd);
+        RunMaterializedViewQuench(cmd, Definition("16"));
+        var brin = State("ix_mv_test_brin");
+        var name = State("ix_mv_test_name");
+        Assert.Multiple(() =>
+        {
+            Assert.That(brin, Does.EndWith("|pages_per_range=16"), brin);
+            Assert.That(name, Does.Contain("(name COLLATE \"C\" text_pattern_ops)").And.EndWith("|fillfactor=70"), name);
+        });
+
+        RunMaterializedViewQuench(cmd, Definition("16"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(State("ix_mv_test_brin"), Is.EqualTo(brin), "the redeploy neither dropped nor altered the brin index");
+            Assert.That(State("ix_mv_test_name"), Is.EqualTo(name), "the redeploy neither dropped nor altered the collated index");
+        });
+
+        RunMaterializedViewQuench(cmd, Definition("32"));
+        var changed = State("ix_mv_test_brin");
+        Assert.Multiple(() =>
+        {
+            Assert.That(changed, Does.EndWith("|pages_per_range=32"), changed);
+            Assert.That(changed.Split('|')[0], Is.Not.EqualTo(brin.Split('|')[0]), "a changed storage parameter replaces the index");
+        });
+        EnsureViewDropped(cmd);
+    }
+
     [Test]
     public void WithNoData_CreatesEmptyMaterializedView()
     {
@@ -784,5 +832,87 @@ END $$;";
         Assert.That((long)cmd.ExecuteScalar()!, Is.GreaterThan(0), "Materialized view should contain data");
 
         conn.Close();
+    }
+
+    [Test]
+    public void DefinitionChange_KeepsPrivilegesOwnerAndComments_OnTheRecreatedView()
+    {
+        var role = "mv_perm_" + Guid.NewGuid().ToString("N")[..8];
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            EnsureViewDropped(cmd);
+            EnsureViewExists(cmd);
+            cmd.CommandText = $@"
+CREATE ROLE ""{role}"" NOLOGIN;
+GRANT SELECT ON public.mv_test TO ""{role}"";
+COMMENT ON MATERIALIZED VIEW public.mv_test IS 'kept view';
+COMMENT ON COLUMN public.mv_test.id IS 'kept column';
+ALTER MATERIALIZED VIEW public.mv_test OWNER TO ""{role}"";";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "SELECT 'public.mv_test'::regclass::oid::bigint";
+            var oidBefore = (long)cmd.ExecuteScalar()!;
+
+            RunMaterializedViewQuench(cmd, ViewDefinitionWithWhereClause());
+
+            cmd.CommandText = "SELECT 'public.mv_test'::regclass::oid::bigint";
+            Assert.That((long)cmd.ExecuteScalar()!, Is.Not.EqualTo(oidBefore), "A definition change drops and re-creates the view; without that the assertions below are vacuous.");
+            Assert.Multiple(() =>
+            {
+                cmd.CommandText = $"SELECT has_table_privilege('{role}', 'public.mv_test', 'SELECT')";
+                Assert.That(cmd.ExecuteScalar() as bool?, Is.True, "DROP MATERIALIZED VIEW takes the ACL with it, so the re-created view has to get the grant back.");
+                cmd.CommandText = "SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'public.mv_test'::regclass";
+                Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo(role), "The view is re-created by the deploying role, so the original owner has to be put back.");
+                cmd.CommandText = "SELECT obj_description('public.mv_test'::regclass, 'pg_class')";
+                Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("kept view"), "the view comment is not in the package, so the re-create has to carry it");
+                cmd.CommandText = "SELECT col_description('public.mv_test'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.mv_test'::regclass AND attname = 'id'))";
+                Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("kept column"), "a column comment has to come across too");
+            });
+        }
+        finally
+        {
+            try
+            {
+                cmd.CommandText = $@"DROP OWNED BY ""{role}""; DROP ROLE IF EXISTS ""{role}"";";
+                cmd.ExecuteNonQuery();
+            }
+            catch (NpgsqlException) { /* best-effort cleanup must not mask a test result */ }
+        }
+        conn.Close();
+    }
+
+    private static string ViewDefinitionWithDescription(string description) =>
+        ViewDefinitionWithIndex().Replace("\"Name\":\"mv_test\",", "\"Name\":\"mv_test\",\"Description\":\"" + description + "\",");
+
+    private static string ViewComment(IDbCommand cmd)
+    {
+        cmd.CommandText = "SELECT obj_description('public.mv_test'::regclass, 'pg_class')";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    [Test]
+    public void ADeclaredDescription_IsSet_ChangedInPlace_LeftAloneWhenOmitted_AndRemovedByAnEmptyString()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithDescription("the rollup"));
+        Assert.That(ViewComment(cmd), Is.EqualTo("the rollup"), "set on create");
+
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithDescription("the nightly rollup"));
+        Assert.That(ViewComment(cmd), Is.EqualTo("the nightly rollup"), "a change converges in place, without a rebuild");
+
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithIndex());
+        Assert.That(ViewComment(cmd), Is.EqualTo("the nightly rollup"), "omitted means the comment is not managed, so the database's stays");
+
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithDescription(""));
+        Assert.That(ViewComment(cmd), Is.Null, "an empty string is the request to remove it");
+        EnsureViewDropped(cmd);
     }
 }

@@ -78,5 +78,21 @@ namespace Schema.Domain.SqlServer
                                       "true pads it as usual. Leaving it out leaves an existing column's padding as it is.")]
         public bool? AnsiPadding { get; set; }
 
+        /// <summary>
+        /// The column is one the engine fills, declared by its role: a temporal table's period columns are <c>RowStart</c>
+        /// and <c>RowEnd</c>, and the pair becomes <c>PERIOD FOR SYSTEM_TIME</c>. Declared, the name, <c>DATETIME2(n)</c> and
+        /// <c>Hidden</c> are the author's; undeclared on a new temporal table, the convention <c>ValidFrom</c>/<c>ValidTo</c>
+        /// <c>DATETIME2(7)</c> applies, and on an existing table the live pair is left alone. A ledger table's generated
+        /// columns are <c>TransactionIdStart</c>/<c>End</c> and <c>SequenceNumberStart</c>/<c>End</c>; one left out takes the
+        /// engine's name.
+        /// </summary>
+        [JsonProperty(Order = 113, NullValueHandling = NullValueHandling.Ignore)]
+        [SchemaProperty(Pattern = "RowStart|RowEnd|TransactionIdStart|TransactionIdEnd|SequenceNumberStart|SequenceNumberEnd",
+            Description = "A column the engine fills. RowStart or RowEnd (SQL Server 2016+): a temporal table's period column; declare both, as DATETIME2(n), on a table with IsTemporal, and the pair becomes PERIOD FOR SYSTEM_TIME. A rename or a change to Hidden is applied in place; a precision change is reported, because SQL Server cannot alter a period column. Omitted on a new temporal table, the columns are ValidFrom and ValidTo DATETIME2(7). TransactionIdStart, TransactionIdEnd, SequenceNumberStart or SequenceNumberEnd (SQL Server 2022): a ledger table's generated column, BIGINT; an append-only table has only the two Start columns. One left out takes the engine's name (ledger_start_transaction_id and so on), hidden. A rename or a change to Hidden is applied in place.")]
+        public string GeneratedAlways { get; set; }
+
+        [JsonProperty(Order = 114)]
+        [SchemaProperty(Description = "SQL Server 2016+, with GeneratedAlways. The column is HIDDEN: left out of SELECT * and of an INSERT without a column list. Changed in place.")]
+        public bool Hidden { get; set; }
     }
 }

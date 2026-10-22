@@ -24,6 +24,12 @@ namespace Schema.Domain
         [JsonProperty(Order = 2)]
         public string Name { get; set; } = "";
 
+        // Shares Name's Order on purpose: Json.NET keeps declaration order within an Order, so the
+        // description follows the name and precedes the column list, where a reader looks for it.
+        [SchemaProperty(Description = "Optional. A description stored on the object: an MS_Description extended property on SQL Server, COMMENT ON on PostgreSQL, the COMMENT clause on MySQL and MariaDB. On SQL Server and PostgreSQL an omitted value leaves an existing description alone and \"\" removes it; on MySQL and MariaDB an omitted value clears the comment, as the engine's own DDL does.")]
+        [JsonProperty(Order = 2, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
         [JsonProperty(Order = 3)]
         public List<Column> Columns { get; set; } = [];
 
@@ -94,6 +100,12 @@ namespace Schema.Domain
         [SchemaProperty(AuthoredOnly = true, Description = "When set, overrides the template-, product- and environment-level RebuildPolicy for this table only. Null inherits from the nearest level that declares one. The winning policy applies whole — a policy declared here does NOT pick up fields it omits from a higher level.")]
         [JsonProperty(Order = 92)]
         public RebuildPolicy RebuildPolicy { get; set; }
+
+        // AuthoredOnly: a deployment-window choice, which no catalog records.
+        [SchemaProperty(AuthoredOnly = true, Pattern = "OFF|PREFER|REQUIRE", PatternIgnoreCase = true, PatternAllowPadding = true,
+            Description = "When set, overrides the environment's OnlineApply for this table only. Off runs the plain statements; Prefer uses the engine's online or instant form where the version and edition allow it, and the plain form otherwise; Require uses the online or instant form or refuses the deploy, naming the statement. Null inherits the environment setting.")]
+        [JsonProperty(Order = 93)]
+        public string OnlineApply { get; set; }
 
         [JsonProperty(Order = 90)]
         public string OldName { get; set; }

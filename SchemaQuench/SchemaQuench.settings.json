@@ -15,6 +15,11 @@
                                               // is too old for a declared feature. warn degrades it and records
                                               // a 'downgraded' audit row; fail refuses the deploy rather than
                                               // shipping something quietly weaker.
+        // "SkipUnchangedObjects": true, // true (default) | false — an object script (view, function, procedure,
+                                        // trigger, event) is not re-run when its text is unchanged since it
+                                        // last applied AND the server still renders the object as it was left.
+                                        // A hand change on the server, an edited script, or an [ALWAYS] name
+                                        // runs it again. false re-runs every object script on every deploy.
         // "CompatEncoding": "", // Override the model-payload encoding chosen for the target's compatibility
                                  // level (Json | Xml). Blank = choose automatically. Diagnostic escape hatch.
         "ConnectionProperties": {}, // Driver-level properties passed through verbatim, e.g.
@@ -76,6 +81,14 @@
     // shape it never actually had. That is a data-retention decision, so it is off by default and the
     // engine refuses instead. Set KEEP only if rewriting history is what you want.
     // "SystemVersioningAlterHistory": "KEEP",
+
+    // --- Online and instant apply --------------------------------------------------------------
+    // Off (default) runs the plain statements. Prefer uses the engine's lower-lock form of a change to an existing
+    // table where the version and edition allow it (SQL Server: ONLINE index builds and column changes, on Enterprise,
+    // Developer or Azure SQL), and the plain form otherwise; Require refuses the deploy instead, naming the statement.
+    // A table's own OnlineApply overrides it.
+    // "OnlineApply": "Prefer", // Off | Prefer | Require
+    // "OnlineApplyMaxDuration": 60, // SQL Server 2019+: minutes a resumable online index build may run. The engine then pauses it and ends the session; the next deploy resumes it.
 
     // --- Helper objects (the Forge) ---------------------------------------------------------------
     "KindleTheForge": true, // Install SchemaSmith helper functions/procedures in target database

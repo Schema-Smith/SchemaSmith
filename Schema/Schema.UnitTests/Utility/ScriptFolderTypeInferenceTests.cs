@@ -30,6 +30,12 @@ public class ScriptFolderTypeInferenceTests
     [TestCase("Rules", ScriptObjectType.Rules)]
     [TestCase("Collations", ScriptObjectType.Collations)]
     [TestCase("Publications", ScriptObjectType.Publications)]
+    [TestCase("Range Types", ScriptObjectType.RangeTypes)]
+    [TestCase("Text Search Configurations", ScriptObjectType.TextSearchConfigurations)]
+    [TestCase("Operators", ScriptObjectType.Operators)]
+    [TestCase("Casts", ScriptObjectType.Casts)]
+    [TestCase("Event Triggers", ScriptObjectType.EventTriggers)]
+    [TestCase("Packages", ScriptObjectType.Packages)]
     [TestCase("Events", ScriptObjectType.Events)]
     public void InferFromFolderName_KnownScriptFolder_ReturnsExpectedType(string folderName, ScriptObjectType expected)
     {

@@ -18,6 +18,8 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 public class FixtureSetup
 {
     private string _integrationMainDb = "";
+    /// <summary>This run's main database, for tests that drive a whole deploy against it (the MySQL-family fixtures expose the same).</summary>
+    internal static string MainDb { get; private set; } = "";
     private string _integrationSecondaryDb = "";
     private string _connectionString;
 
@@ -36,6 +38,7 @@ public class FixtureSetup
 
         _integrationSecondaryDb = GenerateUniqueDBName("TestSecondary");
         _integrationMainDb = GenerateUniqueDBName("TestMain");
+        MainDb = _integrationMainDb;
 
         _targetConfig = new Dictionary<string, string>
         {

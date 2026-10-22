@@ -7,7 +7,7 @@ using Schema.Domain;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
-// Rule 20 parity for #375 (a MySQL-family bug): prove PostgreSQL stays idempotent when two tables declare an
+// Cross-engine parity for #375 (a MySQL-family bug): prove PostgreSQL stays idempotent when two tables declare an
 // empty OldName. PostgreSQL stores a blank OldName as '' (COALESCE(elem->>'OldName','')) and never keys a
 // rename on OldName IS NOT NULL, so it is clean by construction. This locks that in.
 [Category("PostgreSQL")]

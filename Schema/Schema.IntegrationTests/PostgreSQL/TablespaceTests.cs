@@ -237,6 +237,44 @@ public class TablespaceTests
         });
     }
 
+    // #545: an object on the database default records tablespace 0 whatever it was created with, so a declared
+    // pg_default was read as a move -- on the very deploy that created the table, and on every one after.
+    [Test]
+    public void ADeclaredPgDefault_DeploysAndRedeploys()
+    {
+        OnDb(cmd =>
+        {
+            Assert.DoesNotThrow(() => Deploy(cmd, Package("ts_pgdef", tableTablespace: "pg_default", indexTablespace: "pg_default")),
+                "pg_default is where the table is created, not a move");
+            Assert.DoesNotThrow(() => Deploy(cmd, Package("ts_pgdef", tableTablespace: "pg_default", indexTablespace: "pg_default")));
+            Assert.That(Placement(cmd, "ts_pgdef"), Is.Empty);
+        });
+    }
+
+    [Test]
+    public void AnExistingTableOnTheDefault_LaterDeclaredPgDefault_IsNotAMove()
+    {
+        OnDb(cmd =>
+        {
+            Deploy(cmd, Package("ts_pgdef_late"));
+            Assert.DoesNotThrow(() => Deploy(cmd, Package("ts_pgdef_late", tableTablespace: "pg_default", indexTablespace: "pg_default")));
+        });
+    }
+
+    [Test]
+    public void ATableElsewhere_DeclaredPgDefault_IsStillRefusedAsAMove()
+    {
+        OnDb(cmd =>
+        {
+            Deploy(cmd, Package("ts_pgdef_back", tableTablespace: TablespaceName));
+
+            var ex = Assert.Catch(() => Deploy(cmd, Package("ts_pgdef_back", tableTablespace: "pg_default")));
+
+            Assert.That(ex?.Message, Does.Contain("pg_default").And.Contain(TablespaceName), ex?.Message);
+            Assert.That(Placement(cmd, "ts_pgdef_back"), Is.EqualTo(TablespaceName), "and it is not moved");
+        });
+    }
+
     [Test]
     public void RedeployingAnUnchangedDeclaration_IsIdempotent()
     {

@@ -91,7 +91,7 @@ namespace Schema.UnitTests.Domain.PostgreSQL
         {
             var view = new PostgreSqlMaterializedView { Name = "mv_order_summary", Schema = "public" };
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 SchemaDefaultResolver.Resolve(view, isSchemaTemplate: true, Platform.PostgreSQL));
 
             Assert.That(ex.Message, Does.Contain("mv_order_summary"));

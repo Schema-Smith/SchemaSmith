@@ -572,4 +572,72 @@ public class ImportTableHelperTests
 
         Assert.That(JsonHelper.Serialize(reExtracted), Is.EqualTo(onDisk));
     }
+    [Test]
+    public void PreserveDataDeliveryAndCustomProperties_RetiresALegacyMsDescription_AndKeepsTheRestOfTheBag()
+    {
+        // Extraction used to leave MS_Description inside ExtendedProperties; it is Description now, read fresh
+        // from the database, so carrying the old copy forward would only make the two disagree.
+        var original = new SqlServerTable { Name = "Orders" };
+        original.Extensions = new JObject { ["ExtendedProperties"] = new JObject { ["MS_Description"] = "stale", ["OwningTeam"] = "Billing" } };
+        var originalCol = new SqlServerColumn { Name = "Id", DataType = "INT" };
+        originalCol.Extensions = new JObject { ["ExtendedProperties"] = new JObject { ["MS_Description"] = "stale" } };
+        original.Columns.Add(originalCol);
+        var originalFk = new ForeignKey { Name = "FK_Orders" };
+        originalFk.Extensions = new JObject { ["ExtendedProperties"] = new JObject { ["MS_Description"] = "kept: a foreign key has no Description of its own" } };
+        original.ForeignKeys.Add(originalFk);
+
+        var newTable = new SqlServerTable { Name = "Orders", Description = "fresh" };
+        newTable.Columns.Add(new SqlServerColumn { Name = "Id", DataType = "INT", Description = "fresh" });
+        newTable.ForeignKeys.Add(new ForeignKey { Name = "FK_Orders" });
+
+        ImportTableHelper.PreserveDataDeliveryAndCustomProperties(newTable, original, _ => true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(newTable.Extensions?["ExtendedProperties"]?["MS_Description"], Is.Null, "the stale table copy is retired");
+            Assert.That(newTable.Extensions?["ExtendedProperties"]?["OwningTeam"]?.ToString(), Is.EqualTo("Billing"), "everything else in the bag survives");
+            Assert.That(newTable.Columns[0].Extensions, Is.Null, "a bag that held nothing but the stale copy is dropped entirely");
+            Assert.That(newTable.ForeignKeys[0].Extensions?["ExtendedProperties"]?["MS_Description"]?.ToString(), Does.StartWith("kept"));
+            Assert.That(newTable.Description, Is.EqualTo("fresh"));
+        });
+    }
+
+    private static SqlServerTable XmlCompressionTable(bool compressed) => new()
+    {
+        Name = "Docs",
+        XmlCompression = compressed,
+        Indexes = [new SqlServerIndex { Name = "ix_docs", XmlCompression = compressed }],
+        XmlIndexes = [new XmlIndex { Name = "pxml_docs", IsPrimary = true, Column = "body", XmlCompression = compressed }]
+    };
+
+    [Test]
+    public void XmlCompression_IsCarriedForward_WhenTheSourceCannotReportIt()
+    {
+        var extracted = XmlCompressionTable(compressed: false);
+
+        ImportTableHelper.PreserveDataDeliveryAndCustomProperties(extracted, XmlCompressionTable(compressed: true), _ => true,
+            sourceCanReportXmlCompression: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(extracted.XmlCompression, Is.True, "the table");
+            Assert.That(((SqlServerIndex)extracted.Indexes[0]).XmlCompression, Is.True, "the index");
+            Assert.That(extracted.XmlIndexes[0].XmlCompression, Is.True, "the XML index");
+        });
+    }
+
+    [Test]
+    public void XmlCompression_FollowsTheServer_WhenTheSourceReportsIt()
+    {
+        var extracted = XmlCompressionTable(compressed: false);
+
+        ImportTableHelper.PreserveDataDeliveryAndCustomProperties(extracted, XmlCompressionTable(compressed: true), _ => true,
+            sourceCanReportXmlCompression: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(extracted.XmlCompression, Is.False, "turned off out of band shows as a change");
+            Assert.That(extracted.XmlIndexes[0].XmlCompression, Is.False);
+        });
+    }
 }

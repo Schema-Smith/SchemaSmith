@@ -80,6 +80,8 @@ public sealed class DuplicationCheck : ISchemaCheck
         {
             case SqlServerTable ssTable:
                 findings.AddRange(CheckNamedGroup(ssTable.XmlIndexes, x => x.Name, x => x.ShouldApplyExpression, x => x.VariantName, "XML index", location));
+                findings.AddRange(CheckNamedGroup(ssTable.SpatialIndexes, x => x.Name, x => x.ShouldApplyExpression, x => x.VariantName, "spatial index", location));
+                findings.AddRange(CheckNamedGroup(ssTable.JsonIndexes, x => x.Name, x => x.ShouldApplyExpression, x => x.VariantName, "JSON index", location));
                 findings.AddRange(CheckNamedGroup(ssTable.Statistics, s => s.Name, s => s.ShouldApplyExpression, s => s.VariantName, "statistic", location));
                 // SqlServer FullTextIndex has no Name property (hand-authored conditional config —
                 // see ImportTableHelper's own comment on the same limitation) — skipped, nothing to
@@ -105,6 +107,7 @@ public sealed class DuplicationCheck : ISchemaCheck
         return CheckNamedGroup(template.EnumTypes, e => Qualified(e.Schema, e.Name), e => e.ShouldApplyExpression, e => e.VariantName, "enum type", location)
             .Concat(CheckNamedGroup(template.DomainTypes, d => Qualified(d.Schema, d.Name), d => d.ShouldApplyExpression, d => d.VariantName, "domain type", location))
             .Concat(CheckNamedGroup(template.Sequences, s => Qualified(s.Schema, s.Name), s => s.ShouldApplyExpression, s => s.VariantName, "sequence", location))
+            .Concat(CheckNamedGroup(template.MariaDbSequences, s => s.Name, s => s.ShouldApplyExpression, s => s.VariantName, "sequence", location))
             .Concat(CheckNamedGroup(template.MaterializedViews, v => Qualified(v.Schema, v.Name), v => v.ShouldApplyExpression, v => v.VariantName, "materialized view", location))
             .Concat(CheckNamedGroup(template.IndexedViews, v => Qualified(v.Schema, v.Name), v => v.ShouldApplyExpression, v => v.VariantName, "indexed view", location))
             .Concat(CheckNamedGroup(template.Events, e => e.Name, e => e.ShouldApplyExpression, e => e.VariantName, "event", location));

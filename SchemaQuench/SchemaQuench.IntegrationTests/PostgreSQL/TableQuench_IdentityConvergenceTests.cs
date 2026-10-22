@@ -139,4 +139,126 @@ WHERE a.attrelid = '""{schema}"".""{tableName}""'::regclass AND a.attname = 'alb
         cmd.ExecuteNonQuery();
         conn.Close();
     }
+
+    // A declared identity's sequence options were used on create and stripped by the compare, so an edited option never
+    // deployed. Only the options a package writes are managed; a bare identity leaves the sequence alone.
+    [Test]
+    public void DeclaredIdentitySequenceOptions_AreApplied_AndABareIdentityLeavesTheSequenceAlone()
+    {
+        var table = $"idopt_{Guid.NewGuid():N}"[..16];
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        string Json(string generated) => $$"""
+            [{ "Schema": "public", "Name": "{{table}}",
+               "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false, "Generated": "{{generated}}" } ] }]
+            """;
+        string Sequence()
+        {
+            cmd.CommandText = $"SELECT s.seqstart || ' ' || s.seqincrement || ' ' || s.seqcache || ' ' || s.seqcycle FROM pg_sequence s WHERE s.seqrelid = pg_get_serial_sequence('public.{table}', 'id')::regclass";
+            return cmd.ExecuteScalar()?.ToString() ?? "";
+        }
+        int Modified()
+        {
+            cmd.CommandText = $"""SELECT COUNT(*) FROM "SchemaSmith"."ChangeAudit" WHERE "SessionId" = pg_backend_pid() AND "ObjectName" LIKE '%{table}.id' AND "ActionType" = 'modified'""";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+        void Deploy(string generated)
+        {
+            cmd.CommandText = """DELETE FROM "SchemaSmith"."ChangeAudit" WHERE "SessionId" = pg_backend_pid()""";
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, Json(generated));
+        }
+        try
+        {
+            Deploy("GENERATED ALWAYS AS IDENTITY(START WITH 1 INCREMENT BY 1)");
+            Assert.That(Sequence(), Is.EqualTo("1 1 1 false"), "precondition");
+
+            const string edited = "GENERATED ALWAYS AS IDENTITY(START WITH 1 INCREMENT BY 5 CACHE 10 CYCLE)";
+            Deploy(edited);
+            Assert.Multiple(() =>
+            {
+                Assert.That(Sequence(), Is.EqualTo("1 5 10 true"), "the edited options");
+                Assert.That(Modified(), Is.EqualTo(1));
+            });
+            Deploy(edited);
+            Assert.That(Modified(), Is.Zero, "then a redeploy is a no-op");
+
+            Deploy("GENERATED ALWAYS AS IDENTITY");
+            Assert.Multiple(() =>
+            {
+                Assert.That(Sequence(), Is.EqualTo("1 5 10 true"), "a bare identity does not reset the sequence");
+                Assert.That(Modified(), Is.Zero);
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS public.{table}";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // PG-042: a plain column declared identity, and an identity switched between ALWAYS and BY DEFAULT, compared as
+    // changed and wrote a 'modified' audit row on every deploy, but no ALTER ever applied them.
+    [Test]
+    public void AnIdentityKindAndAPlainColumnBecomingIdentity_AreApplied_ThenTheRedeployIsANoOp()
+    {
+        var table = $"idkind_{Guid.NewGuid():N}"[..16];
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        string Json(string generated) => $$"""
+            [{ "Schema": "public", "Name": "{{table}}",
+               "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false{{generated}} }, { "Name": "n", "DataType": "integer", "Nullable": true } ] }]
+            """;
+        string Kind()
+        {
+            cmd.CommandText = $"SELECT attidentity::text FROM pg_attribute WHERE attrelid = 'public.{table}'::regclass AND attname = 'id'";
+            return cmd.ExecuteScalar()?.ToString() ?? "";
+        }
+        int Modified()
+        {
+            cmd.CommandText = $"""SELECT COUNT(*) FROM "SchemaSmith"."ChangeAudit" WHERE "SessionId" = pg_backend_pid() AND "ObjectName" LIKE '%{table}.id' AND "ActionType" = 'modified'""";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+        void Deploy(string generated)
+        {
+            cmd.CommandText = """DELETE FROM "SchemaSmith"."ChangeAudit" WHERE "SessionId" = pg_backend_pid()""";
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, Json(generated));
+        }
+        try
+        {
+            Deploy("");
+            cmd.CommandText = $"INSERT INTO public.{table} (id, n) VALUES (7, 1)";
+            cmd.ExecuteNonQuery();
+
+            Deploy(""", "Generated": "GENERATED BY DEFAULT AS IDENTITY (START WITH 100)" """);
+            Assert.Multiple(() =>
+            {
+                Assert.That(Kind(), Is.EqualTo("d"), "the plain column became identity");
+                Assert.That(Modified(), Is.EqualTo(1));
+            });
+            cmd.CommandText = $"INSERT INTO public.{table} (n) VALUES (2) RETURNING id";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(100), "with the declared sequence options, the row kept");
+
+            Deploy(""", "Generated": "GENERATED ALWAYS AS IDENTITY" """);
+            Assert.Multiple(() =>
+            {
+                Assert.That(Kind(), Is.EqualTo("a"), "BY DEFAULT switched to ALWAYS");
+                Assert.That(Modified(), Is.EqualTo(1));
+            });
+            Deploy(""", "Generated": "GENERATED ALWAYS AS IDENTITY" """);
+            Assert.That(Modified(), Is.Zero, "then a redeploy reports no change");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS public.{table}";
+            cmd.ExecuteNonQuery();
+        }
+    }
 }

@@ -219,7 +219,65 @@ public abstract class EventQuench_DropByAbsenceSharedTests : BaseTableQuenchTest
         }
     }
 
+    // The schedule is read in the event's zone and the body runs under its mode, so a declared TimeZone / SqlMode
+    // is set on the session around the CREATE (and the session's own values restored), compared on the next
+    // deploy as the engine stores them, and re-applied when the package changes them.
+    [Test]
+    public void EventQuench_DeclaredTimeZoneSqlModeAndStarts_AreAppliedComparedAndReapplied()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"EvtZoneProduct_{uid}";
+        var evt = $"evt_zone_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = "SELECT CONCAT(@@SESSION.time_zone, '|', @@SESSION.sql_mode)";
+        var sessionBefore = cmd.ExecuteScalar()?.ToString();
+
+        try
+        {
+            RunEventQuench(cmd, ZonedEvent(evt, "+05:00"), product, dropRemoved: true);
+            cmd.CommandText = $"SELECT CONCAT(TIME_ZONE, '|', CAST(STARTS AS CHAR), '|', SQL_MODE) FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_SCHEMA = '{_mainDb}' AND EVENT_NAME = '{evt}'";
+            var deployed = cmd.ExecuteScalar()?.ToString();
+            Assert.That(deployed, Does.StartWith("+05:00|2030-01-01 00:00:00|"), "zone or STARTS lost: " + deployed);
+            Assert.That(deployed, Does.Contain("ANSI_QUOTES").And.Contains("PIPES_AS_CONCAT"), "the event lost its sql_mode: " + deployed);
+            cmd.CommandText = "SELECT CONCAT(@@SESSION.time_zone, '|', @@SESSION.sql_mode)";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo(sessionBefore), "the session's own zone and mode must be restored after the CREATE");
+
+            // The engine stores the mode in its own order; a package written in another order is the same event.
+            var second = RunEventQuench(cmd, ZonedEvent(evt, "+05:00"), product, dropRemoved: true);
+            Assert.That(second.Where(s => s.Contains("EVENT", StringComparison.OrdinalIgnoreCase) && !s.StartsWith("INSERT", StringComparison.OrdinalIgnoreCase)), Is.Empty,
+                "an unchanged zone, STARTS and mode must generate no event DDL: " + string.Join(" | ", second));
+
+            RunEventQuench(cmd, ZonedEvent(evt, "+03:00"), product, dropRemoved: true);
+            cmd.CommandText = $"SELECT TIME_ZONE FROM INFORMATION_SCHEMA.EVENTS WHERE EVENT_SCHEMA = '{_mainDb}' AND EVENT_NAME = '{evt}'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("+03:00"), "a changed zone must be re-applied");
+        }
+        finally
+        {
+            DropEvent(cmd, evt);
+            conn.Close();
+        }
+    }
+
     // ---- fixtures -------------------------------------------------------------
+
+    private static string ZonedEvent(string name, string zone) => $$"""
+[
+  {
+    "Name": "{{name}}",
+    "ScheduleType": "EVERY",
+    "Interval": "1 DAY",
+    "Starts": "2030-01-01 00:00:00",
+    "Status": "DISABLE",
+    "TimeZone": "{{zone}}",
+    "SqlMode": "ANSI_QUOTES,PIPES_AS_CONCAT,STRICT_TRANS_TABLES",
+    "Definition": "SET @ss_test = 1"
+  }
+]
+""";
 
     // Keys are the ones SchemaSmith_EventQuench actually reads (see its _SchemaSmith_Events INSERT):
     // Name, Definition, ScheduleType, Interval, ExecuteAt, Starts, Ends, Status, Preserve, Comment.

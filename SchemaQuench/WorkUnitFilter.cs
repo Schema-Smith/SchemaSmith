@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using Schema.Utility;
 
 namespace SchemaQuench;
 
@@ -20,7 +21,7 @@ namespace SchemaQuench;
 /// <para>
 /// Validation surfaces two errors:
 /// (1) any filter value not present in the discovered universe throws
-/// <see cref="InvalidOperationException"/> with a per-dimension available-options listing;
+/// <see cref="RunFailedException"/> with a per-dimension available-options listing;
 /// (2) a non-empty filter set that intersects to zero throws with the input filter diagnostic.
 /// </para>
 /// </summary>
@@ -67,7 +68,7 @@ internal sealed class WorkUnitFilter
             .ToList();
 
         if (filtered.Count == 0)
-            throw new InvalidOperationException(BuildZeroResultMessage());
+            throw new RunFailedException(BuildZeroResultMessage());
 
         return filtered;
     }
@@ -97,7 +98,7 @@ internal sealed class WorkUnitFilter
             AppendUnknownDetail(details, "Target.Schemas", _schemas, discoveredSchemas);
 
         if (details.Count > 0)
-            throw new InvalidOperationException(
+            throw new RunFailedException(
                 "One or more Target.* filter values do not match the discovered work-unit set. " +
                 string.Join(" ", details));
     }

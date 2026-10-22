@@ -84,7 +84,7 @@ namespace Schema.UnitTests.Domain.SqlServer
         {
             var table = new SqlServerTable { Name = "Customers", Schema = "dbo" };
 
-            var ex = Assert.Throws<InvalidOperationException>(() =>
+            var ex = Assert.Throws<PackageException>(() =>
                 SchemaDefaultResolver.Resolve(table, isSchemaTemplate: true, Platform.SqlServer));
 
             Assert.That(ex.Message, Does.Contain("Customers"));

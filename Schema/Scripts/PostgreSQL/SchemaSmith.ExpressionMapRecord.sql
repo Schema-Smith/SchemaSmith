@@ -24,7 +24,22 @@ DECLARE
   v_version TEXT := current_setting('server_version');
   v_rebaselined INTEGER := 0;
 BEGIN
-  IF p_WhatIf THEN RETURN; END IF;
+  IF p_WhatIf THEN
+    -- #508: a preview leaves the map as it found it, including what ExpressionMapAdopt verified for the preview.
+    IF to_regclass('pg_temp.temp_expression_map_adopt_undo') IS NOT NULL THEN
+      DELETE FROM "SchemaSmith"."ExpressionMap" m
+       USING temp_expression_map_adopt_undo u
+       WHERE u."ObjectSchema" = m."ObjectSchema" AND u."ObjectTable" = m."ObjectTable" AND u."ObjectKind" = m."ObjectKind"
+         AND u."ObjectName" = m."ObjectName" AND u."Slot" = m."Slot" AND NOT u."WasPresent";
+      UPDATE "SchemaSmith"."ExpressionMap" m
+         SET "AuthoredText" = u."AuthoredText", "CanonicalText" = u."CanonicalText", "EngineVersion" = u."EngineVersion", "UpdatedUtc" = u."UpdatedUtc"
+        FROM temp_expression_map_adopt_undo u
+       WHERE u."ObjectSchema" = m."ObjectSchema" AND u."ObjectTable" = m."ObjectTable" AND u."ObjectKind" = m."ObjectKind"
+         AND u."ObjectName" = m."ObjectName" AND u."Slot" = m."Slot" AND u."WasPresent";
+      TRUNCATE temp_expression_map_adopt_undo;
+    END IF;
+    RETURN;
+  END IF;
   -- Each source is guarded on its own: an index-only quench builds temp_indexes but no temp_columns or
   -- temp_checks, and a full quench may run with no indexes declared.
   IF to_regclass('pg_temp.temp_columns') IS NULL AND to_regclass('pg_temp.temp_indexes') IS NULL THEN RETURN; END IF;
@@ -40,20 +55,20 @@ BEGIN
   -- recognised by the CK_<table>_<column> name the create pass gives it.
   INSERT INTO temp_expression_map_declared
     SELECT c."TableSchema", c."TableName", 'CHECK', c."Name", 'expression', c."Expression",
-           "SchemaSmith"."StripParenWrapping"(SUBSTRING(pg_catalog.PG_GET_CONSTRAINTDEF(con.oid) FROM 6))
+           "SchemaSmith"."CheckPredicate"(con.oid)
       FROM temp_checks c
       JOIN pg_catalog.pg_constraint con
-        ON con.conrelid = to_regclass('"' || c."TableSchema" || '"."' || c."TableName" || '"')
+        ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
        AND con.conname = c."Name"
        AND con.contype = 'c'
      WHERE COALESCE(c."Expression", '') != '';
 
   INSERT INTO temp_expression_map_declared
     SELECT col."TableSchema", col."TableName", 'CHECK', con.conname, 'expression', col."CheckExpression",
-           "SchemaSmith"."StripParenWrapping"(SUBSTRING(pg_catalog.PG_GET_CONSTRAINTDEF(con.oid) FROM 6))
+           "SchemaSmith"."CheckPredicate"(con.oid)
       FROM temp_columns col
       JOIN pg_catalog.pg_constraint con
-        ON con.conrelid = to_regclass('"' || col."TableSchema" || '"."' || col."TableName" || '"')
+        ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(col."TableSchema") || '.' || "SchemaSmith"."QuoteName"(col."TableName"))
        AND con.conname = 'CK_' || col."TableName" || '_' || col."Name"
        AND con.contype = 'c'
      WHERE COALESCE(col."CheckExpression", '') != ''
@@ -86,7 +101,7 @@ BEGIN
       -- affect row a second time", after all the DDL had run; and where the declared index did not exist yet it
       -- recorded the FOREIGN index's predicate as this one's baseline. 'I' is a partitioned index.
       JOIN pg_catalog.pg_index idx
-        ON idx.indrelid = to_regclass('"' || i."TableSchema" || '"."' || i."TableName" || '"')
+        ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(i."TableSchema") || '.' || "SchemaSmith"."QuoteName"(i."TableName"))
       JOIN pg_catalog.pg_class ic
         ON ic.oid = idx.indexrelid AND ic.relname = i."Name" AND ic.relkind IN ('i', 'I')
      WHERE COALESCE(i."FilterExpression", '') != '';

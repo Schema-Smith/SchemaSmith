@@ -60,7 +60,8 @@ public class JsonSchemaCheckTests
         t == typeof(Column) ? typeof(SqlServerColumn)
         : t == typeof(Schema.Domain.Index) ? typeof(SqlServerIndex)
         : t == typeof(ForeignKey) ? typeof(SqlServerForeignKey)
-        : t; // CheckConstraint has no SqlServer subclass (PlatformDeserializer.GetCheckConstraintType)
+        : t == typeof(CheckConstraint) ? typeof(SqlServerCheckConstraint)
+        : t;
 
     // Platform-scoped, exactly as RepositoryHelper writes it: a committed schema is per-platform, so
     // a stand-in generated without one carries properties the real file does not and reads as stale.

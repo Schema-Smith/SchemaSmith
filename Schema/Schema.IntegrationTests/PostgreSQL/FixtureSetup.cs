@@ -109,7 +109,10 @@ public class FixtureSetup
             using var cmd = conn.CreateCommand();
             cmd.CommandTimeout = 120;
 
-            cmd.CommandText = "SELECT datname FROM pg_database WHERE datname ~ '^(schemainttest)_[0-9]{8}_'";
+            // Plus every per-class database the tool suites create, <prefix>_Test_<yyyyMMdd>_<HHmmss>_<8>: matched by shape, so a
+            // new test class's prefix is swept without being listed here.
+            cmd.CommandText = "SELECT datname FROM pg_database WHERE datname ~ '^(schemainttest)_[0-9]{8}_' " +
+                              "OR datname ~* '_test_[0-9]{8}_[0-9]{6}_[0-9a-f]{8}$'";
             var stale = new List<string>();
             using (var reader = cmd.ExecuteReader())
                 while (reader.Read())

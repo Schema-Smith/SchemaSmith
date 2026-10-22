@@ -513,9 +513,9 @@ SchemaSmith surfaces the database engine's informational output -- notices, prin
 
 | Code | Condition | Recommended action |
 |---|---|---|
-| `0` | Normal completion | None -- the operation succeeded. |
+| `0` | Normal completion. Also: run with no arguments on an install nobody has configured, the tool prints which settings file it read and the settings to fill in, and runs nothing. That run exits `0` on purpose: a package manager checks a new install by launching the tool bare, and a fresh install has a settings file with every setting blank. It also means a pipeline step whose settings never arrived passes without deploying anything -- give a pipeline its settings through `SmithySettings_` environment variables or `--ConfigFile`, either of which skips this screen, so a missing value fails the run instead. | None -- the operation succeeded. |
 | `1` | Finished, but did not produce everything asked: SchemaQuench downgraded a feature the target lacks, under `UnsupportedFeaturePolicy: warn` (listed in the deployment summary); DataTongs skipped a table (it does not exist in the source, has no key columns, or its `KeyColumns` are malformed), left out a column whose type cannot be delivered, did not write a merge script because the MySQL source is older than 8.0, or could not wire a script's data token (see [DataTongs -- Exit code](datatongs.md#exit-code)); SchemaTongs left an object out of the package (invalid or skipped script, encrypted module, empty definition) | The skipped tables or objects and the reason for each are in the progress log (and, for DataTongs, the error log). Fix the cause and re-run. |
-| `2` | Failed, for a reason you can fix: a command-line argument was not recognized, a required setting is missing (such as the platform), the package cannot be loaded, a validation script, product script or version check failed, a target was refused, or a `TemplateTargets` rule was broken. Also: SchemaQuench -- one or more database quenches failed; SchemaTongs -- one or more tables failed to extract; DataTongs -- one or more tables failed to extract; SchemaShears -- the patch request cannot be built (missing source or manifest, output already exists, unknown drop category) | Check the progress and error logs for what failed and why. Fix the cause and re-run. |
+| `2` | Failed, for a reason you can fix: a command-line argument was not recognized, a required setting is missing (such as the platform), the package cannot be loaded, a validation script, product script or version check failed, a target was refused, or a `TemplateTargets` rule was broken. Also: SchemaQuench -- one or more database quenches failed; SchemaTongs -- one or more tables failed to extract; DataTongs -- one or more tables failed to extract; SchemaShears -- the patch request cannot be built (missing source or manifest, output already exists, unknown drop category). And: run with no arguments, no `SmithySettings_` environment variables and no settings file in the current directory or the tool's folder, the tool names both places it looked and runs nothing | Check the progress and error logs for what failed and why. Fix the cause and re-run. |
 | `3` | Unhandled exception -- a defect in the tool | An unexpected error occurred. The exception is logged to both the progress and error logs before exit. Please report it with the log contents. |
 | `4` | Log backup failure | The tool completed its main work but couldn't back up the log files. Check directory permissions and disk space in the log directory. The base log files may still be readable even though the backup failed. |
 
@@ -579,14 +579,17 @@ views and functions into those folders automatically on extraction** — whether
 — so an extracted package is already shaped correctly the day you turn it on. A module left in the
 ordinary `Views/` or `Functions/` folder is recreated before the table work rather than after it.
 
-### Dropping discards permissions
+### Permissions come back with the module
 
-**A dropped view or function loses every `GRANT` on it, and SchemaSmith does not put them back.**
-SchemaSmith does not manage permissions on any object, so it has nothing to restore them from. Re-grant
-in the recreating script itself, or from whatever process you already use to manage permissions — if you
-grant on these objects at all, you almost certainly have one.
+A `DROP` takes the grants, an owner set on the module and its extended properties with it, and your script
+does not carry them. SchemaQuench captures them before the drop and puts them back once the after-tables
+pass has recreated the module (see [Preserved Permissions](schemaquench.md#preserved-permissions)).
 
 ### What it will not do
+
+A module **your package does not declare** is refused, by name and before anything is dropped. Nothing in
+the run could recreate it, so dropping it would lose it. Add its script to a schema-bound folder, or remove
+its `SCHEMABINDING`.
 
 An **encrypted** module (`WITH ENCRYPTION`) is refused even with the setting on, and refused *before*
 anything is dropped. `OBJECT_DEFINITION` returns `NULL` for one, so it cannot be scripted from the server
@@ -667,6 +670,10 @@ Two situations make a rebuild the better move:
   A rebuild collapses those into a single copy.
 - **Column order.** Reordering existing columns is not something any supported engine can do in place.
   A rebuild is the only mechanism that can make a deployed table match the order its package declares.
+  On SQL Server a column the deploy must replace rather than alter -- an identity removal, an encryption
+  change, a column-set or computed-column change, a column declared `AnsiPadding: false` -- comes back at
+  the end of the table, so with `OnOrderMismatch` that pending move counts as drift and the same deploy
+  rebuilds instead, keeping the column in place.
 
 | Scope | Where to set | Default |
 |---|---|---|
@@ -762,6 +769,128 @@ policy cannot be evaluated, so it is an error rather than a setting that quietly
 
 ---
 
+## OnlineApply
+
+Changing an index or a column on a table in use takes locks while the change runs, and on a large table that can be
+long enough to stall the application. Engines have lower-lock forms of many of these statements. `OnlineApply` lets a
+deploy use them, per environment, with a per-table override.
+
+| Scope | Where to set | Default |
+|---|---|---|
+| Environment | `OnlineApply` in `SchemaQuench.settings.json` (or the `SmithySettings_OnlineApply` environment variable, or `--OnlineApply=Prefer` on the command line) | `Off` |
+| Table | `OnlineApply` in the table's `.json` | inherits the environment |
+
+| Value | Effect |
+|---|---|
+| `Off` (default) | The plain statements, exactly as a deploy has always run them. |
+| `Prefer` | The online form wherever the engine's version and edition allow it, and the plain form otherwise. |
+| `Require` | The online form, or the deploy is refused, naming each statement that could not run online. On SQL Server and PostgreSQL the refusal comes before any existing index, key or column on the table changes (a column the deploy adds is added first); MySQL and MariaDB cannot take DDL back, so there it stops the deploy at that statement. |
+
+It is off by default because each online form costs something you did not ask for: an online index build takes about
+twice the space and the time, a resumable one leaves its progress behind if the deploy's session ends, a PostgreSQL
+`CONCURRENTLY` build that fails leaves an invalid index to clean up, and a MySQL instant change spends one of the
+table's row versions. Those are deployment-window decisions, so you opt in per environment.
+
+The [Deployment Summary](deployment-summary-report.md#details) says which form each change used: `mode` is `online`,
+`instant` (MySQL and MariaDB), `resumable` (SQL Server) or `unavailable` (the plain form, where the online one could not
+be used). A change has no `mode` when
+`OnlineApply` is `Off`, and the progress log says the same thing, with the reason for an offline one.
+
+A table this deploy creates is empty, so its indexes are built the plain way whatever `OnlineApply` says.
+
+### SQL Server
+
+Online operations need Enterprise, Developer or Evaluation edition, Azure SQL Database or Managed Instance, on SQL
+Server 2012 or later. Standard, Web and Express have none at any version: there `Prefer` deploys with the plain
+statements, and `Require` is refused at the start of the deploy, naming the tables that asked for it.
+
+| Change on an existing table | Under `Prefer` or `Require` |
+|---|---|
+| A new index, primary key or unique constraint, or one built again because it changed | `WITH (ONLINE = ON)` |
+| A compression or fill-factor rebuild | `ALTER INDEX … REBUILD WITH (…, ONLINE = ON)` |
+| A changed clustered index or primary key, dropped to be built again | dropped `WITH (ONLINE = ON)` |
+| A column whose type, length, nullability or collation changes (SQL Server 2016+) | `ALTER COLUMN … WITH (ONLINE = ON)` |
+| A columnstore, XML, spatial or JSON index | built the plain way: none has an online build here |
+
+A column change runs offline when SQL Server cannot make it online: a text, ntext, image, CLR or FILESTREAM column on
+either side of the change, an XML column bound to a schema collection, an Always Encrypted column, and a table that is
+system-versioned, memory-optimized, has change tracking or merge replication, or has a columnstore index.
+
+### OnlineApplyMaxDuration
+
+From SQL Server 2019, `OnlineApplyMaxDuration` (whole minutes, 1 to 10080) makes each new index a resumable build:
+`CREATE INDEX … WITH (ONLINE = ON, RESUMABLE = ON, MAX_DURATION = n MINUTES)`. A primary key or unique constraint, an
+index over a computed or `timestamp` key column, and an index on a table with a columnstore index are built online
+without it, because SQL Server refuses a resumable build there. Unset, nothing is resumable.
+
+When the time runs out SQL Server pauses the build and **ends the deploy's session**, so the deploy fails at that
+statement. A paused build blocks every other change to its table, so the next deploy deals with it first, whatever its
+own settings: it resumes the build when the package still declares the index, and abandons it when it does not.
+
+| Scope | Where to set | Default |
+|---|---|---|
+| Environment | `OnlineApplyMaxDuration` in `SchemaQuench.settings.json` (or `SmithySettings_OnlineApplyMaxDuration`, or `--OnlineApplyMaxDuration=60`) | _unset_ |
+
+### PostgreSQL
+
+Every supported version has these forms, and PostgreSQL has no editions. A `CONCURRENTLY` statement cannot run inside
+a transaction, and each step of a deploy is one, so SchemaQuench runs them as soon as the step that needs them has
+finished, each on its own. The progress log marks each one `(online, after this pass)`.
+
+| Change on an existing table | Under `Prefer` or `Require` |
+|---|---|
+| A new index, or one built again because it changed | `CREATE INDEX CONCURRENTLY` |
+| A new primary key or unique constraint | its unique index built `CONCURRENTLY`, then `ADD CONSTRAINT … USING INDEX` |
+| An index the package no longer declares | `DROP INDEX CONCURRENTLY` |
+| A new check constraint or foreign key | added `NOT VALID`, then `VALIDATE CONSTRAINT` on its own |
+| A constraint declared validated that is `NOT VALID` on the server | `VALIDATE CONSTRAINT` on its own |
+| An exclusion constraint, a `WITHOUT OVERLAPS` key, or any index on a partitioned table | built the plain way: PostgreSQL has no concurrent build for them |
+| A foreign key on a partitioned table, before PostgreSQL 18 | added the plain way: `NOT VALID` is refused there |
+
+A changed index is still dropped inside its step and built again after it, so the table is without that index between
+the two. A concurrent build that fails (a unique index over duplicate rows, a lock that timed out) leaves an invalid
+index behind: SchemaQuench drops it and builds once more, and a second failure fails the deploy with the invalid index
+removed. A validation the rows fail fails the deploy as a plain add would, and leaves the constraint `NOT VALID`; the
+next deploy validates it again. A `Require` refusal rolls back the step it stops. `OnlineApplyMaxDuration` does not
+apply to PostgreSQL.
+
+### MySQL and MariaDB
+
+SchemaQuench asks the engine for the lightest form and lets it decide. Each statement below is sent with
+`ALGORITHM=INSTANT` where that can apply (MySQL 8.0.12 and later, MariaDB 10.3 and later), then with
+`ALGORITHM=INPLACE, LOCK=NONE`, then on MariaDB 11.2 and later with `ALGORITHM=COPY, LOCK=NONE` (a copy that does not
+block writes), and a form the engine refuses moves on to the next. Under `Prefer` the last step is
+the statement as written, recorded as `unavailable` with the engine's reason; under `Require` the deploy stops at that
+statement, naming it.
+
+| Change on an existing table | Forms asked for |
+|---|---|
+| A column added | `INSTANT`, then `INPLACE, LOCK=NONE`; the column goes `AFTER` the declared column before it |
+| A column the package no longer declares | dropped `INSTANT`, then `INPLACE, LOCK=NONE` |
+| A column whose definition changes | `INSTANT`, then `INPLACE, LOCK=NONE` (a `VARCHAR` widened within its length class is instant on MariaDB; a type change needs the MariaDB 11.2 copy) |
+| A new index, or one built again because it changed, and an index dropped | `INPLACE, LOCK=NONE` |
+| A table whose `RebuildPolicy` sets `OnOrderMismatch`, rebuilt only because its columns are out of order | its columns are moved into order in one statement (`MODIFY COLUMN … AFTER`), instant on MariaDB 10.4 and later, instead of the rebuild. A table with a generated column, and a system-versioned table, is still rebuilt |
+
+The [Deployment Summary](deployment-summary-report.md#details) records `instant`, `online` (`INPLACE, LOCK=NONE`) or
+`unavailable`. Under `WhatIf` the preview shows each statement with its position and the forms it would ask for, and
+the preview's changes carry no `mode`: only the engine can say which form it accepts.
+
+Under `Off` a new column is added at the end of the table, as it always has been. Under `Prefer` or `Require` it goes
+where the package declares it, so the table needs no rebuild to put its columns in order. MySQL adds a column
+instantly anywhere from 8.0.29 (8.0.12 to 8.0.28 only at the end of the table), and MariaDB from 10.4 (10.3 only at the
+end); elsewhere the add runs `INPLACE, LOCK=NONE`.
+
+The engine refuses both forms for some changes, and they run as written under `Prefer`: a column added to a table
+that has a full-text index, for example.
+
+**Row versions (MySQL 8.0.29 and later).** Each statement that adds or drops columns instantly spends one of the
+table's row versions: 64 through MySQL 9.0, 255 from 9.1. Within 8 of the limit the progress log warns, naming the
+table and the count. At the limit the next change runs `INPLACE, LOCK=NONE`, which rebuilds the table and resets the
+count; the log says so.
+
+MySQL and MariaDB do not roll DDL back, so a `Require` refusal stops the deploy at that statement, with the changes
+before it in place. Full-text indexes, keys and foreign keys run as before. `OnlineApplyMaxDuration` does not apply.
+
 ## System-versioned tables (MariaDB)
 
 MariaDB can keep a table's own history: every update leaves the superseded row behind, queryable
@@ -817,6 +946,12 @@ for you.
 > section are table JSON, and this one is not. Since v2.6.0 the generated `.json-schemas` reject it as an
 > unexpected property, so putting it in a package fails `--Validate` with `SS-JSON-001` and exit `2`.
 
+**A unique key is refused the same way.** MariaDB will not add a `UNIQUE` index or unique constraint to a
+system-versioned table unless `KEEP` is set. A table created in the same deploy has no history to rewrite, so
+SchemaSmith sets `KEEP` around that table's index work and restores your session afterwards: a package with
+`IsSystemVersioned: true` and a unique key deploys fresh without the setting. Adding a unique key to a versioned
+table that already exists still needs it, and the deploy says so, naming the table.
+
 Leaving it unset costs nothing on a healthy deploy: the refusal only fires when a change genuinely
 requires rewriting history, never on a re-deploy where the table already matches its definition. If
 you do not want the history rewritten, the alternative is to drop system versioning, make the change,
@@ -849,6 +984,10 @@ application's to set.
 The `SYSTEM_TIME` period is not listed here. MariaDB reports it alongside application periods, but the
 table already declares that state through `IsSystemVersioned` — carrying it in both places would let a
 package contradict itself.
+
+A unique key or primary key can be declared over the period: name it last in `IndexColumns` and set
+`WithoutOverlaps: true` on the index (MariaDB 10.5.3+), and rows with the same values in the other key parts
+may not have overlapping periods. See [MySQL index extras](schema-packages.md#mysql-index-extras).
 
 #### DropPeriodsRemovedFromProduct
 
@@ -1043,7 +1182,9 @@ Controls whether SchemaQuench drops indexes on managed tables that aren't define
 
 A `false` at any tier is sticky — it locks the effective value to `false` for all lower tiers and cannot be re-enabled by a more-specific setting. Absent inherits from the tier above. A `true` at a lower tier overrides an inherited `true` (or default `false`) but never an ancestor's explicit `false`.
 
-On SQL Server, an index of a kind a package cannot declare (spatial, JSON, selective XML) is never dropped as unknown: nothing could put it back.
+On SQL Server, an index of a kind a package cannot declare (vector) is never dropped as unknown: nothing could put it back. A spatial index can be declared, in [`SpatialIndexes`](schema-packages.md#spatial-indexes-sql-server), a selective XML index in [`XmlIndexes`](schema-packages.md#selective-xml-indexes), and a JSON index in [`JsonIndexes`](schema-packages.md#json-indexes-sql-server), so one the package does not declare is unknown like any other index.
+
+A deploy never drops a foreign key it will not re-create to make way for an index change. An index a foreign key needs is kept as it is when the key is outside the package (a full deploy) or when the template is index-only (which never touches foreign keys). This applies to an unknown index, a removed one and a changed one. The kept index is reported as a warning naming the key that holds it, so a pipeline that treats a declared change the deploy did not apply as a failure can use `--ExitNonZeroOnWarning`. A later deploy drops or changes the index once no key needs it.
 
 The environment tier is new in this release. Previously `DropUnknownIndexes` was settable only in `Product.json` and `Template.json`. It can now be set or suppressed in `SchemaQuench.settings.json` (or via environment variable) as a deployment-wide guardrail.
 

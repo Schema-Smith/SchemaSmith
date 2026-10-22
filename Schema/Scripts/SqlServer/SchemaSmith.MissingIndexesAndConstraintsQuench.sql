@@ -6,11 +6,25 @@ IF OBJECT_ID('SchemaSmith.MissingIndexesAndConstraintsQuench', 'P') IS NOT NULL 
 GO
 CREATE PROCEDURE SchemaSmith.MissingIndexesAndConstraintsQuench
     @ProductName NVARCHAR(50),
-    @WhatIf BIT = 0
+    @WhatIf BIT = 0,
+    @OnlineApply VARCHAR(7) = 'OFF',
+    @OnlineApplyMaxDuration INT = NULL
 AS
 BEGIN TRY
   DECLARE @v_SQL NVARCHAR(MAX) = ''
   SET NOCOUNT ON
+
+  -- OnlineApply: how each index this pass creates is built (ModifiedTableQuench has already refused a REQUIRE it cannot
+  -- meet). OFF for a table this deploy created: it is empty.
+  IF OBJECT_ID('tempdb..#OnlineTables') IS NOT NULL DROP TABLE #OnlineTables
+  SELECT t.[Schema], t.[Name], [Mode] = CAST(CASE WHEN t.[NewTable] = 1 THEN 'OFF' ELSE COALESCE(t.[OnlineApply], @OnlineApply) END AS VARCHAR(7))
+    INTO #OnlineTables
+    FROM #Tables t WITH (NOLOCK)
+  IF OBJECT_ID('tempdb..#OnlineForms') IS NOT NULL DROP TABLE #OnlineForms
+  CREATE TABLE #OnlineForms ([Kind] VARCHAR(16) COLLATE DATABASE_DEFAULT, [Schema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
+                             [IndexName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [Mode] VARCHAR(7) COLLATE DATABASE_DEFAULT,
+                             [Form] VARCHAR(12) COLLATE DATABASE_DEFAULT, [Options] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Reason] NVARCHAR(400) COLLATE DATABASE_DEFAULT)
+  EXEC SchemaSmith.StageOnlineForms @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
 
   RAISERROR('Collect index level extended properties', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexProperties') IS NOT NULL DROP TABLE #IndexProperties
@@ -53,60 +67,11 @@ BEGIN TRY
         FROM #Columns c WITH (NOLOCK)
         WHERE c.NewColumn = 1 AND RTRIM(ISNULL(c.[ComputedExpression], '')) <> ''
 
-  -- Filegroup placement (#filegroups): a NEW index/constraint declaring a filegroup name that does not
-  -- exist on this target must fail loudly BEFORE any DDL runs, naming both the index and the filegroup --
-  -- same contract as the table-create check in MissingTableAndColumnQuench.sql. Only indexes not yet
-  -- present are checked; an already-existing index's declared vs. deployed filegroup is the "move"
-  -- question, handled in ModifiedTableQuench.
-  RAISERROR('Validate declared index filegroups exist', 10, 100) WITH NOWAIT
-  IF EXISTS (SELECT 1
-               FROM #Indexes i WITH (NOLOCK)
-               WHERE i.[FileGroup] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
-                 AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
-  BEGIN
-    DECLARE @v_IdxFGIndex NVARCHAR(1510), @v_IdxFGName NVARCHAR(500)
-    SELECT TOP 1 @v_IdxFGIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxFGName = i.[FileGroup]
-      FROM #Indexes i WITH (NOLOCK)
-      WHERE i.[FileGroup] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
-        AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
-    RAISERROR('Index %s declares filegroup %s, which does not exist on this database. SchemaSmith does not create filegroups -- create it on the target first, or correct the declared name.', 16, 1, @v_IdxFGIndex, @v_IdxFGName)
-  END
-
-  -- Partition placement (#partitioning, K1): the scheme must exist, same contract as the filegroup check
-  -- above -- SchemaSmith creates neither a filegroup nor a partition function/scheme.
-  RAISERROR('Validate declared index partition schemes exist', 10, 100) WITH NOWAIT
-  IF EXISTS (SELECT 1
-               FROM #Indexes i WITH (NOLOCK)
-               WHERE i.[PartitionScheme] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme])))
-  BEGIN
-    DECLARE @v_IdxPsIndex NVARCHAR(1510), @v_IdxPsName NVARCHAR(500)
-    SELECT TOP 1 @v_IdxPsIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxPsName = i.[PartitionScheme]
-      FROM #Indexes i WITH (NOLOCK)
-      WHERE i.[PartitionScheme] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]))
-    RAISERROR('Index %s declares partition scheme %s, which does not exist on this database. SchemaSmith does not create partition functions or schemes -- create them on the target first, or correct the declared name.', 16, 1, @v_IdxPsIndex, @v_IdxPsName)
-  END
-
-  -- Both or neither, the index twin of the table-level pair check in MissingTableAndColumnQuench: ON
-  -- <scheme> with no column is a syntax error naming nothing useful.
-  IF EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
-              WHERE (i.[PartitionScheme] IS NOT NULL AND i.[PartitionColumn] IS NULL)
-                 OR (i.[PartitionScheme] IS NULL AND i.[PartitionColumn] IS NOT NULL))
-  BEGIN
-    DECLARE @v_IdxPsHalf NVARCHAR(1510), @v_IdxPsHalfMissing NVARCHAR(30)
-    SELECT TOP 1 @v_IdxPsHalf = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName],
-                 @v_IdxPsHalfMissing = CASE WHEN i.[PartitionColumn] IS NULL THEN 'PartitionColumn' ELSE 'PartitionScheme' END
-      FROM #Indexes i WITH (NOLOCK)
-      WHERE (i.[PartitionScheme] IS NOT NULL AND i.[PartitionColumn] IS NULL)
-         OR (i.[PartitionScheme] IS NULL AND i.[PartitionColumn] IS NOT NULL)
-    RAISERROR('Index %s declares one half of a partition placement but not the other -- %s is missing. PartitionScheme and PartitionColumn are declared together or not at all.', 16, 1, @v_IdxPsHalf, @v_IdxPsHalfMissing)
-  END
+  -- Before the indexes, so an index may name a period column: the pair and PERIOD FOR SYSTEM_TIME exist from here on.
+  EXEC SchemaSmith.PeriodColumnQuench @WhatIf
 
   RAISERROR('Add Missing Indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Creating ' + CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + CASE WHEN RTRIM(ISNULL(i.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(i.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Creating ' + CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + CASE WHEN RTRIM(ISNULL(i.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(i.[VariantName]), '''', '''''') + ')' ELSE '' END + CASE WHEN ol.[Form] = 'online' THEN ' (online)' WHEN ol.[Form] = 'resumable' THEN ' (online, resumable)' WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1
                                        THEN 'ALTER TABLE ' + i.[Schema] + '.' + i.[TableName] + ' ADD CONSTRAINT ' + i.[IndexName] +
                                             CASE WHEN i.PrimaryKey = 1 THEN ' PRIMARY KEY ' WHEN i.UniqueConstraint = 1 THEN ' UNIQUE ' END +
@@ -127,7 +92,9 @@ BEGIN TRY
                                                       -- parse, so DATA_COMPRESSION always leads. Gated on 2022 by VALUE; only the
                                                       -- catalog READ needs kindle-time composition, because that names a column.
                                                       CASE WHEN i.[XmlCompression] = 1 AND SchemaSmith.fn_ServerMajorVersion() >= 16 THEN ', XML_COMPRESSION=ON' ELSE '' END +
+                                                      CASE WHEN ol.[Options] <> '' THEN ', ' + ol.[Options] ELSE '' END +
 							                          ')'
+                                                 WHEN ol.[Options] <> '' THEN ' WITH (' + ol.[Options] + ')'
                                                  ELSE '' END +
                                             -- Filegroup placement (#filegroups): ON comes AFTER the WITH
                                             -- clause for ADD CONSTRAINT, per its own grammar (unlike CREATE
@@ -143,6 +110,7 @@ BEGIN TRY
                                             CASE WHEN i.[ColumnStore] = 0 THEN ' (' + i.[IndexColumns] + ')' + CASE WHEN RTRIM(ISNULL(i.[IncludeColumns], '')) <> '' THEN ' INCLUDE (' + i.[IncludeColumns] + ')' ELSE '' END
                                             WHEN i.[ColumnStore] = 1 AND i.[Clustered] = 0 THEN ' (' + i.[IncludeColumns] + ')'
                                             ELSE '' END +
+                                            CASE WHEN i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[Order], '')) <> '' THEN ' ORDER (' + i.[Order] + ')' ELSE '' END +
                                             CASE WHEN RTRIM(ISNULL(i.[FilterExpression], '')) <> '' THEN ' WHERE ' + i.[FilterExpression] ELSE '' END +
 					                        CASE WHEN (i.[ColumnStore] = 0 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('NONE', 'ROW', 'PAGE'))
                                                    OR (i.[ColumnStore] = 1 AND RTRIM(ISNULL(i.[CompressionType], '')) IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
@@ -165,15 +133,19 @@ BEGIN TRY
                                                       -- parse, so DATA_COMPRESSION always leads. Gated on 2022 by VALUE; only the
                                                       -- catalog READ needs kindle-time composition, because that names a column.
                                                       CASE WHEN i.[XmlCompression] = 1 AND SchemaSmith.fn_ServerMajorVersion() >= 16 THEN ', XML_COMPRESSION=ON' ELSE '' END +
+                                                      CASE WHEN ol.[Options] <> '' THEN ', ' + ol.[Options] ELSE '' END +
 							                          ')'
+                                                 WHEN ol.[Options] <> '' THEN ' WITH (' + ol.[Options] + ')'
                                                  ELSE '' END +
                                             -- Filegroup placement (#filegroups): ON comes AFTER the WITH
                                             -- clause for CREATE INDEX too. Existence validated above.
                                             CASE WHEN i.[PartitionScheme] IS NOT NULL THEN ' ON ' + i.[PartitionScheme] + '(' + i.[PartitionColumn] + ')'
                                                  WHEN i.[FileGroup] IS NOT NULL THEN ' ON ' + i.[FileGroup] ELSE '' END
                                        END + ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ''', ''created'');'
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ''', ''created'', ' + CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');'
     FROM #Indexes i WITH (NOLOCK)
+    LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'index' AND ol.[Schema] = i.[Schema] AND ol.[TableName] = i.[TableName]
+                                           AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
     WHERE NOT EXISTS (SELECT *
                         FROM sys.indexes si
                         WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
@@ -188,9 +160,11 @@ BEGIN TRY
 
   -- #363: WhatIf twin of the embedded 'index'/'constraint' 'created' audit above; same predicate.
   IF @WhatIf = 1
-    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-      SELECT @@SPID, CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END, i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], 'wouldCreate'
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
+      SELECT @@SPID, CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END, i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], 'wouldCreate', ol.[Form]
         FROM #Indexes i WITH (NOLOCK)
+        LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'index' AND ol.[Schema] = i.[Schema] AND ol.[TableName] = i.[TableName]
+                                           AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
         WHERE NOT EXISTS (SELECT * FROM sys.indexes si
                             WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                               AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
@@ -200,13 +174,15 @@ BEGIN TRY
                                                       AND a.ObjectName = i.[Schema] + '.' + i.[TableName] + '.' + SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
 
   RAISERROR('Add Missing Xml Indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Creating index ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + CASE WHEN RTRIM(ISNULL(i.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(i.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'CREATE ' + CASE WHEN i.IsPrimary = 1 THEN 'PRIMARY ' ELSE '' END + 
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Creating index ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + CASE WHEN RTRIM(ISNULL(i.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(i.[VariantName]), '''', '''''') + ')' ELSE '' END + CASE WHEN ol.[Form] = 'online' THEN ' (online)' WHEN ol.[Form] = 'resumable' THEN ' (online, resumable)' WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'CREATE ' + i.[KindPrefix] + 
                                   'XML INDEX ' + i.[IndexName] COLLATE DATABASE_DEFAULT + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' +
-                                  CASE WHEN i.IsPrimary = 0 THEN ' USING XML INDEX ' + i.PrimaryIndex + ' FOR ' + i.SecondaryIndexType ELSE '' END +
+                                  i.[KindSuffix] + CASE WHEN i.[XmlCompression] = 1 AND SchemaSmith.fn_ServerMajorVersion() >= 16 THEN ' WITH (XML_COMPRESSION = ON)' ELSE '' END +
                                   ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''xmlIndex'', ''' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ''', ''created'');'
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''xmlIndex'', ''' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ''', ''created'', ' + CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');'
     FROM #XmlIndexes i WITH (NOLOCK)
+    LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'xmlIndex' AND ol.[Schema] = i.[Schema] AND ol.[TableName] = i.[TableName]
+                                           AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
     WHERE NOT EXISTS (SELECT *
                         FROM sys.xml_indexes si
                         WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
@@ -217,9 +193,11 @@ BEGIN TRY
 
   -- #363: WhatIf twin of the embedded 'xmlIndex'/'created' audit above; same predicate.
   IF @WhatIf = 1
-    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-      SELECT @@SPID, 'xmlIndex', i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], 'wouldCreate'
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
+      SELECT @@SPID, 'xmlIndex', i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], 'wouldCreate', ol.[Form]
         FROM #XmlIndexes i WITH (NOLOCK)
+        LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'xmlIndex' AND ol.[Schema] = i.[Schema] AND ol.[TableName] = i.[TableName]
+                                           AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
         WHERE NOT EXISTS (SELECT * FROM sys.xml_indexes si
                             WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                               AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
@@ -227,6 +205,37 @@ BEGIN TRY
   -- Versioning suspended by ModifiedTableQuench while a primary key was rebuilt comes back on here, now that the key
   -- exists again, with the history table recorded when it was suspended and the data checked against it. The tables this
   -- covers are excluded from the step after, which would otherwise add a second pair of period columns.
+  RAISERROR('Add Missing Spatial Indexes', 10, 100) WITH NOWAIT
+  -- One CREATE SPATIAL INDEX per declared index the table does not have (a changed one was dropped by
+  -- ModifiedTableQuench). Every option is written only when declared, so the engine's default stands otherwise.
+  -- Doubles go through STR so a bounding box is written exactly, whatever the session's float formatting.
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Creating spatial index ' + s.[Schema] + '.' + s.[TableName] + '.' + s.[IndexName] +
+                                  CASE WHEN RTRIM(ISNULL(s.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(s.[VariantName]), '''', '''''') + ')' ELSE '' END + CASE WHEN ol.[Form] = 'online' THEN ' (online)' WHEN ol.[Form] = 'resumable' THEN ' (online, resumable)' WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'CREATE SPATIAL INDEX ' + s.[IndexName] + ' ON ' + s.[Schema] + '.' + s.[TableName] + ' (' + s.[Column] + ')' +
+                                  CASE WHEN s.[Tessellation] IS NOT NULL THEN ' USING ' + s.[Tessellation] ELSE '' END +
+                                  CASE WHEN o.[Options] <> '' THEN ' WITH (' + STUFF(o.[Options], 1, 2, '') + ')' ELSE '' END + ';' + CHAR(13) + CHAR(10) +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''index'', ''' + REPLACE(s.[Schema] + '.' + s.[TableName] + '.' + s.[IndexName], '''', '''''') + ''', ''created'', ' + CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');' AS NVARCHAR(MAX))
+    FROM #SpatialIndexes s WITH (NOLOCK)
+    LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'spatialIndex' AND ol.[Schema] = s.[Schema] AND ol.[TableName] = s.[TableName]
+                                           AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(s.[IndexName])
+    CROSS APPLY (SELECT [Options] =
+                   CASE WHEN s.[XMin] IS NOT NULL
+                        THEN ', BOUNDING_BOX = (' + LTRIM(STR(s.[XMin], 38, 10)) + ', ' + LTRIM(STR(s.[YMin], 38, 10)) + ', ' + LTRIM(STR(s.[XMax], 38, 10)) + ', ' + LTRIM(STR(s.[YMax], 38, 10)) + ')' ELSE '' END +
+                   CASE WHEN COALESCE(s.[Level1], s.[Level2], s.[Level3], s.[Level4]) IS NOT NULL
+                        THEN ', GRIDS = (' + STUFF(ISNULL(', LEVEL_1 = ' + s.[Level1], '') + ISNULL(', LEVEL_2 = ' + s.[Level2], '') +
+                                                   ISNULL(', LEVEL_3 = ' + s.[Level3], '') + ISNULL(', LEVEL_4 = ' + s.[Level4], ''), 1, 2, '') + ')' ELSE '' END +
+                   CASE WHEN s.[CellsPerObject] IS NOT NULL THEN ', CELLS_PER_OBJECT = ' + CONVERT(NVARCHAR(10), s.[CellsPerObject]) ELSE '' END +
+                   CASE WHEN s.[FillFactor] IS NOT NULL THEN ', FILLFACTOR = ' + CONVERT(NVARCHAR(10), s.[FillFactor]) ELSE '' END +
+                   CASE WHEN s.[CompressionType] IS NOT NULL THEN ', DATA_COMPRESSION = ' + s.[CompressionType] ELSE '' END) o
+    WHERE OBJECT_ID(s.[Schema] + '.' + s.[TableName]) IS NOT NULL
+      AND INDEXPROPERTY(OBJECT_ID(s.[Schema] + '.' + s.[TableName]), SchemaSmith.fn_StripBracketWrapping(s.[IndexName]), 'IndexID') IS NULL
+    ORDER BY s.[Schema], s.[TableName], s.[IndexName]
+    FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
+
+  -- One CREATE JSON INDEX per declared index the table does not have (a changed one was dropped by ModifiedTableQuench).
+{{CreateMissingJsonIndexes}}  IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
+
   RAISERROR('Resume System Versioning Suspended For A Primary Key Rebuild', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Resuming system versioning on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' + CAST(ep.[value] AS NVARCHAR(600)) + ', DATA_CONSISTENCY_CHECK = ON));' + CHAR(13) + CHAR(10) +
@@ -246,9 +255,7 @@ BEGIN TRY
   -- ALTER as before this change. HistoryRetentionPeriod arrives already normalized to a canonical
   -- plural-unit form from the parse step (fn_NormalizeTemporalRetentionPeriod), so it is used as-is.
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Turn ON Temporal Tracking for ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' ADD [ValidFrom] DATETIME2(7) GENERATED ALWAYS AS ROW START NOT NULL DEFAULT ''0001-01-01 00:00:00.0000000'', ' +
-                                                                                      '[ValidTo] DATETIME2(7) GENERATED ALWAYS AS ROW END NOT NULL DEFAULT ''9999-12-31 23:59:59.9999999'', ' +
-                                                                                      'PERIOD FOR SYSTEM_TIME (ValidFrom, ValidTo);' + CHAR(13) + CHAR(10) +
+
                                   'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' +
                                        ISNULL(t.[HistoryTableSchema], t.[Schema]) + '.' + QUOTENAME(ISNULL(SchemaSmith.fn_StripBracketWrapping(t.[HistoryTableName]), SchemaSmith.fn_StripBracketWrapping(t.[Name]) + '_Hist')) +
                                        CASE WHEN RTRIM(ISNULL(t.[HistoryRetentionPeriod], '')) <> '' THEN ', HISTORY_RETENTION_PERIOD = ' + t.[HistoryRetentionPeriod] ELSE '' END +
@@ -357,16 +364,22 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
-  RAISERROR('Add missing ProductName extended property to xml indexes', 10, 100) WITH NOWAIT
+  RAISERROR('Add missing ProductName extended property to xml, spatial and JSON indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +
                                                               '@level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ' +
                                                               '@level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', ' +
                                                               '@level2type = N''Index'', @level2name = ''' + SchemaSmith.fn_StripBracketWrapping(i.IndexName) + ''';' AS NVARCHAR(MAX))
-                           FROM #XmlIndexes i WITH (NOLOCK)
+                           FROM (SELECT [Schema], [TableName], [IndexName] FROM #XmlIndexes WITH (NOLOCK)
+                                 UNION ALL
+                                 SELECT [Schema], [TableName], [IndexName] FROM #SpatialIndexes WITH (NOLOCK)
+                                 UNION ALL
+                                 SELECT [Schema], [TableName], [IndexName] FROM #JsonIndexes WITH (NOLOCK)) i
                            JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = i.[Schema] AND t.[Name] = i.[TableName]
                            WHERE INDEXPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name]), SchemaSmith.fn_StripBracketWrapping(i.IndexName), 'IndexID') IS NOT NULL
                              AND t.[MemoryOptimized] = 0  -- memory-optimized indexes are inline and reject extended properties; they live and die with the table
-                             AND NOT EXISTS (SELECT * FROM #IndexProperties ip WITH (NOLOCK) WHERE i.[Schema] = ip.[Schema] AND i.TableName = ip.TableName AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = ip.IndexName AND ip.PropertyName = 'ProductName')
+                             -- Read live, not from the snapshot: a re-created index gets back the properties its drop captured, so the
+                             -- snapshot taken before it was re-created no longer says whether it has one.
+                             AND NOT EXISTS (SELECT * FROM fn_listextendedproperty(N'ProductName', 'Schema', SchemaSmith.fn_StripBracketWrapping(t.[Schema]), 'Table', SchemaSmith.fn_StripBracketWrapping(t.[Name]), 'Index', SchemaSmith.fn_StripBracketWrapping(i.IndexName)))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
   
@@ -418,7 +431,8 @@ BEGIN TRY
 
   RAISERROR('Add Missing Check Constraints', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding check constraint ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName] + CASE WHEN RTRIM(ISNULL(cc.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(cc.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER TABLE ' + cc.[Schema] + '.' + cc.[TableName] + ' ADD CONSTRAINT ' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName])) + ' CHECK (' + cc.[Expression] + ');' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + cc.[Schema] + '.' + cc.[TableName] + CASE WHEN ISNULL(cc.[Validated], 1) = 0 THEN ' WITH NOCHECK' ELSE '' END + ' ADD CONSTRAINT ' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName])) +
+                                  ' CHECK ' + CASE WHEN ISNULL(cc.[NotForReplication], 0) = 1 THEN 'NOT FOR REPLICATION ' ELSE '' END + '(' + cc.[Expression] + ');' + CHAR(13) + CHAR(10) +
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', ''' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName] + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #CheckConstraints cc WITH (NOLOCK)
                            WHERE NOT EXISTS (SELECT *
@@ -442,10 +456,14 @@ BEGIN TRY
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', ''' + REPLACE(c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ' (check)', '''', '''''') + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #Columns c WITH (NOLOCK)
                            WHERE RTRIM(ISNULL(c.[CheckExpression], '')) <> ''
+                             -- A check the package declares by name on the same column is its own entry, not this one.
                              AND NOT EXISTS (SELECT *
                                                FROM sys.check_constraints sc
                                                WHERE sc.[parent_object_id] = OBJECT_ID(c.[Schema] + '.' + c.[TableName])
-                                                 AND COL_NAME(sc.parent_object_id, sc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]))
+                                                 AND COL_NAME(sc.parent_object_id, sc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
+                                                 AND NOT EXISTS (SELECT * FROM #CheckConstraints cc WITH (NOLOCK)
+                                                                  WHERE cc.[Schema] = c.[Schema] AND cc.[TableName] = c.[TableName]
+                                                                    AND SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName]) = sc.[name] COLLATE DATABASE_DEFAULT))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 BEGIN EXEC SchemaSmith.PrintWithNoWait @v_SQL; EXEC SchemaSmith.RecordWouldChanges @v_SQL END ELSE EXEC(@v_SQL)
   

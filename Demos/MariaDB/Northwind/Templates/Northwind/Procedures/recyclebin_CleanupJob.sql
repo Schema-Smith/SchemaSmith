@@ -1,16 +1,9 @@
--- Purges recycled tables whose retention window has expired. Ships as a procedure on all
--- three engines; scheduling is left to the operator (MySQL: a CREATE EVENT, e.g.
---   CREATE EVENT recyclebin_cleanup ON SCHEDULE EVERY 1 DAY
---     DO CALL recyclebin_CleanupJob();
--- with the event scheduler enabled, once the recyclebin framework is in place). Safe to run
--- by hand or on every quench. Call it with the recyclebin's database as the current schema.
 DROP PROCEDURE IF EXISTS `recyclebin_CleanupJob`;
+SET @ss_saved_sql_mode = @@SESSION.sql_mode;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION';
 DELIMITER //
 CREATE PROCEDURE `recyclebin_CleanupJob`()
-  LANGUAGE SQL
-  NOT DETERMINISTIC
-  MODIFIES SQL DATA
-  SQL SECURITY DEFINER
+    MODIFIES SQL DATA
 BEGIN
   DECLARE v_done     INT DEFAULT 0;
   DECLARE v_recycled VARCHAR(128);
@@ -47,3 +40,4 @@ BEGIN
   CLOSE purge_cur;
 END //
 DELIMITER ;
+SET SESSION sql_mode = @ss_saved_sql_mode;

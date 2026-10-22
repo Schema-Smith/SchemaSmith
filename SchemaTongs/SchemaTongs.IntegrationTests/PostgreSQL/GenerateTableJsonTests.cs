@@ -2,6 +2,7 @@
 
 using System.Data;
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using Schema.DataAccess;
 using Schema.Delivery;
@@ -72,6 +73,8 @@ ALTER TABLE public.""MyFKTable"" ADD CONSTRAINT ""FK_MyFKTable_Col2_MyFKReferenc
         Assert.That(fk1.RelatedColumns, Is.EqualTo("Id"));
         Assert.That(fk1.DeleteAction, Is.EqualTo("CASCADE"));
         Assert.That(fk1.UpdateAction, Is.EqualTo(""));
+        // A key with no SET NULL column list extracted as "SetNullColumns": "", which 2.7.x refuses to load.
+        Assert.That(Schema.Utility.JsonHelper.Serialize(result), Does.Not.Contain("SetNullColumns"));
 
         conn.Close();
     }
@@ -188,13 +191,119 @@ ALTER TABLE public.""TestIndexes"" CLUSTER ON ""CX_TestIndexes_MyBigInt""
         AssertIndexProperties(result.Indexes[0], "CX_TestIndexes_MyBigInt", true, false, false, false, "MyBigInt", null, 100, null);
         AssertIndexProperties(result.Indexes[1], "IX_TestIndexes_MyString", false, false, false, false, "MyString,MyBigInt", null, 90, "\"MyString\" IS NOT NULL");
         AssertIndexProperties(result.Indexes[2], "PK_TestIndexes", false, true, true, false, "MyInt", null, 80, null);
-        AssertIndexProperties(result.Indexes[3], "UQ_TestIndexes_MyString", false, true, false, true, "MyString", null, 90, null);
+        // Created with no WITH clause: the engine's default applies and nothing is declared, so nothing is extracted.
+        AssertIndexProperties(result.Indexes[3], "UQ_TestIndexes_MyString", false, true, false, true, "MyString", null, 0, null);
         AssertIndexProperties(result.Indexes[4], "UX_TestIndexes_MyInt", false, true, false, false, "MyInt", "MyString,MyBigInt", 100, null);
 
         conn.Close();
     }
 
-    private void AssertIndexProperties(Index index, string name, bool isCustered, bool isUnique, bool isPrimaryKey, bool isUniqueConstraint, string columns, string includeColumns, int fillFactor, string filterExpression)
+    [Test]
+    public void ShouldExtractFillFactor_OnlyWhenTheIndexDeclaresOne()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE public.""TestFillFactors"" (""MyInt"" INT NOT NULL, ""MyBigInt"" BIGINT NOT NULL, ""MyString"" VARCHAR(100) NULL, ""MyPoint"" POINT NULL);
+CREATE INDEX ""IX_FF_Btree"" ON public.""TestFillFactors"" (""MyInt"");
+CREATE INDEX ""IX_FF_Hash"" ON public.""TestFillFactors"" USING hash (""MyBigInt"");
+CREATE INDEX ""IX_FF_Declared"" ON public.""TestFillFactors"" (""MyString"") WITH (FILLFACTOR = 70);
+CREATE INDEX ""IX_FF_OtherOption"" ON public.""TestFillFactors"" USING gist (""MyPoint"") WITH (buffering = off);
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "public", "TestFillFactors");
+        int FillFactorOf(string name) => ((PostgreSqlIndex)result.Indexes.Single(i => i.Name == name)).FillFactor;
+        Assert.Multiple(() =>
+        {
+            Assert.That(FillFactorOf("IX_FF_Btree"), Is.Zero, "a btree with no WITH clause declares nothing; the engine's 90 is not an authored value");
+            Assert.That(FillFactorOf("IX_FF_Hash"), Is.Zero, "a hash index with no WITH clause does not inherit the btree default");
+            Assert.That(FillFactorOf("IX_FF_Declared"), Is.EqualTo(70), "a declared fill factor is extracted");
+            Assert.That(FillFactorOf("IX_FF_OtherOption"), Is.Zero, "a WITH clause without fillfactor declares none");
+        });
+        conn.Close();
+    }
+
+    [Test]
+    public void ShouldExtractIndexKeys_InTheEngineCanonicalForm()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT current_setting('server_version_num')::int / 10000";
+        var major = Convert.ToInt32(cmd.ExecuteScalar());
+        cmd.CommandText = @"
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE TABLE public.""TestKeys"" (""id"" INT NOT NULL, ""name"" TEXT NULL, ""body"" TEXT NULL);
+CREATE INDEX ""IX_Keys_Trgm"" ON public.""TestKeys"" USING gin (""name"" gin_trgm_ops);
+CREATE INDEX ""IX_Keys_Collate"" ON public.""TestKeys"" (""name"" COLLATE ""C"" DESC);
+CREATE INDEX ""IX_Keys_Default"" ON public.""TestKeys"" (""name"" text_ops, ""id"");
+CREATE INDEX ""IX_Keys_Expr"" ON public.""TestKeys"" (lower(""name"") COLLATE ""C"" text_pattern_ops);
+" + (major >= 13 ? @"CREATE INDEX ""IX_Keys_Params"" ON public.""TestKeys"" USING gist (""body"" gist_trgm_ops (siglen = 32));" : "");
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "public", "TestKeys");
+        string Keys(string name) => result.Indexes.Single(i => i.Name == name).IndexColumns;
+        Assert.Multiple(() =>
+        {
+            Assert.That(Keys("IX_Keys_Trgm"), Is.EqualTo("name gin_trgm_ops"), "a non-default operator class is in the key");
+            Assert.That(Keys("IX_Keys_Collate"), Is.EqualTo("name COLLATE \"C\" DESC"), "a collation that differs from the column's is in the key");
+            Assert.That(Keys("IX_Keys_Default"), Is.EqualTo("name,id"), "the default operator class is not written");
+            Assert.That(Keys("IX_Keys_Expr"), Is.EqualTo("lower(name) COLLATE \"C\" text_pattern_ops"));
+            if (major >= 13) Assert.That(Keys("IX_Keys_Params"), Is.EqualTo("body gist_trgm_ops (siglen=32)"), "operator-class parameters are in the key");
+        });
+        conn.Close();
+    }
+
+    [Test]
+    public void ShouldExtractExcludeConstraintIncludeAndStorageParameters()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE EXTENSION IF NOT EXISTS btree_gist;
+CREATE TABLE public.""TestExclExtras"" (""id"" INT NOT NULL, ""room"" INT NOT NULL, ""during"" TSRANGE NOT NULL, ""note"" TEXT NULL,
+    CONSTRAINT ""EX_Rooms"" EXCLUDE USING gist (""room"" WITH =, ""during"" WITH &&) INCLUDE (""note"") WITH (fillfactor = 70));
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "public", "TestExclExtras");
+        var excl = result.ExcludeConstraints.Single();
+        Assert.Multiple(() =>
+        {
+            Assert.That(excl.Name, Is.EqualTo("EX_Rooms"));
+            Assert.That(excl.ExcludeColumns.Select(c => c.Column + " WITH " + c.Operator).ToArray(), Is.EqualTo(new[] { "room WITH =", "during WITH &&" }));
+            Assert.That(excl.IncludeColumns, Is.EqualTo("note"));
+            Assert.That(excl.StorageParameters, Is.EqualTo(new Dictionary<string, string> { ["fillfactor"] = "70" }));
+            Assert.That(excl.Tablespace, Is.Null, "an exclusion on the default tablespace declares no placement");
+        });
+        conn.Close();
+    }
+
+    [Test]
+    public void ShouldExtractTheStatisticsTarget_OnlyWhenSet()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT current_setting('server_version_num')::int / 10000";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) < 13) Assert.Ignore("The statistics target is PostgreSQL 13.");
+        cmd.CommandText = @"
+CREATE TABLE public.""TestStatTarget"" (""a"" INT, ""b"" INT, ""c"" INT);
+CREATE STATISTICS public.""ST_Targeted"" (ndistinct) ON ""a"", ""b"" FROM public.""TestStatTarget"";
+ALTER STATISTICS public.""ST_Targeted"" SET STATISTICS 500;
+CREATE STATISTICS public.""ST_Plain"" (ndistinct) ON ""b"", ""c"" FROM public.""TestStatTarget"";
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "public", "TestStatTarget");
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Statistics.Single(s => s.Name == "ST_Targeted").StatisticsTarget, Is.EqualTo(500));
+            Assert.That(result.Statistics.Single(s => s.Name == "ST_Plain").StatisticsTarget, Is.Null, "the default target is not an authored value");
+        });
+        conn.Close();
+    }
+
+    private void AssertIndexProperties(Index index, string name, bool isCustered, bool isUnique, bool isPrimaryKey,bool isUniqueConstraint, string columns, string includeColumns, int fillFactor,string filterExpression)
     {
         var pgIndex = (PostgreSqlIndex)index;
         Assert.That(pgIndex.Name, Is.EqualTo($"{name}"), $"Name of {name}");
@@ -433,6 +542,47 @@ CREATE DOMAIN ""Test"".""Flag"" AS BOOLEAN NOT NULL;
         cmd.ExecuteNonQuery();
 
         conn.Close();
+    }
+
+    // PG-043: an identity's sequence options were not extracted (BY DEFAULT got none, ALWAYS only its start and increment),
+    // so a re-deploy built the default sequence. The extracted text is applied to a copy, which must carry the same one.
+    [Test]
+    public void ShouldExtractIdentitySequenceOptions_ThatRebuildTheSameSequence()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = """
+            CREATE TABLE public.idd (id INT GENERATED BY DEFAULT AS IDENTITY (START WITH 10 INCREMENT BY 2 MINVALUE 5 MAXVALUE 1000 CACHE 20 CYCLE) NOT NULL,
+                                     plain_by_default INT GENERATED BY DEFAULT AS IDENTITY NOT NULL,
+                                     plain_always BIGINT GENERATED ALWAYS AS IDENTITY NOT NULL);
+            """;
+        cmd.ExecuteNonQuery();
+        try
+        {
+            var columns = GenerateTable(cmd, "public", "idd").Columns;
+            string Generated(string name) => ((PostgreSqlColumn)columns.Single(c => c.Name == name)).Generated;
+            Assert.Multiple(() =>
+            {
+                Assert.That(Generated("id"), Is.EqualTo("GENERATED BY DEFAULT AS IDENTITY(START WITH 10 INCREMENT BY 2 MINVALUE 5 MAXVALUE 1000 CACHE 20 CYCLE)"));
+                Assert.That(Generated("plain_by_default"), Is.EqualTo("GENERATED BY DEFAULT AS IDENTITY"), "a default sequence writes no options");
+                Assert.That(Generated("plain_always"), Is.EqualTo("GENERATED ALWAYS AS IDENTITY(START WITH 1 INCREMENT BY 1)"), "ALWAYS keeps the form it has always had");
+            });
+
+            cmd.CommandText = $"CREATE TABLE public.idd_copy (id INT {Generated("id")} NOT NULL)";
+            cmd.ExecuteNonQuery();
+            string Sequence(string table) {
+                cmd.CommandText = $"SELECT s.seqstart || ' ' || s.seqincrement || ' ' || s.seqmin || ' ' || s.seqmax || ' ' || s.seqcache || ' ' || s.seqcycle FROM pg_sequence s WHERE s.seqrelid = pg_get_serial_sequence('public.{table}', 'id')::regclass";
+                return cmd.ExecuteScalar()?.ToString() ?? "";
+            }
+            Assert.That(Sequence("idd_copy"), Is.EqualTo(Sequence("idd")).And.EqualTo("10 2 5 1000 20 true"));
+        }
+        finally
+        {
+            cmd.CommandText = "DROP TABLE IF EXISTS public.idd; DROP TABLE IF EXISTS public.idd_copy";
+            cmd.ExecuteNonQuery();
+            conn.Close();
+        }
     }
 
     private static string GenerateUniqueDBName(string dbName)

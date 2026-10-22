@@ -101,7 +101,7 @@ FLOORS=(
 
 cleanup() {
   [ "$KEEP" = "1" ] && { echo "KEEP_CONTAINERS=1 -- leaving floor containers up"; return; }
-  for f in "${FLOORS[@]}"; do docker rm -f "${f%%:*}" >/dev/null 2>&1; done
+  for f in "${FLOORS[@]}"; do docker rm -fv "${f%%:*}" >/dev/null 2>&1; done
 }
 trap cleanup EXIT
 
@@ -152,14 +152,14 @@ for f in "${FLOORS[@]}"; do
   fi
   echo ""
   echo "--- $image:$tag  (port $port, category $category) ---"
-  docker rm -f "$name" >/dev/null 2>&1
+  docker rm -fv "$name" >/dev/null 2>&1
 
   if [ "$image" = "postgres" ]; then
-    docker run -d --name "$name" \
+    docker run -d --name "$name" --memory 2g --memory-swap 2g \
       -e POSTGRES_USER="$TEST_USER" -e POSTGRES_PASSWORD="$TEST_PASSWORD" -e POSTGRES_DB=TestMain \
       -p "$port:5432" "$image:$tag" >/dev/null
   else
-    docker run -d --name "$name" \
+    docker run -d --name "$name" --memory 2g --memory-swap 2g \
       -e MYSQL_ROOT_PASSWORD="$TEST_PASSWORD" -e MYSQL_USER="$TEST_USER" \
       -e MYSQL_PASSWORD="$TEST_PASSWORD" -e MYSQL_DATABASE=TestMain \
       -p "$port:3306" "$image:$tag" >/dev/null
@@ -224,7 +224,7 @@ for f in "${FLOORS[@]}"; do
   # Release the band before starting the next one. The cleanup trap still catches everything on exit;
   # this is about not holding sixteen engines resident at once.
   if [ "$KEEP" != "1" ]; then
-    docker rm -f "$name" >/dev/null 2>&1
+    docker rm -fv "$name" >/dev/null 2>&1
   fi
 done
 

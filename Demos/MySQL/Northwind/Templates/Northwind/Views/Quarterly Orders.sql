@@ -1,3 +1,1 @@
-DROP VIEW IF EXISTS `Quarterly Orders`;
-CREATE VIEW `Quarterly Orders` AS
-select distinct `northwind`.`Customers`.`CustomerID` AS `CustomerID`,`northwind`.`Customers`.`CompanyName` AS `CompanyName`,`northwind`.`Customers`.`City` AS `City`,`northwind`.`Customers`.`Country` AS `Country` from (`northwind`.`Orders` left join `northwind`.`Customers` on((`northwind`.`Customers`.`CustomerID` = `northwind`.`Orders`.`CustomerID`))) where (`northwind`.`Orders`.`OrderDate` between '1997-01-01' and '1997-12-31')
+CREATE OR REPLACE ALGORITHM=UNDEFINED SQL SECURITY DEFINER VIEW `Quarterly Orders` AS select distinct `Customers`.`CustomerID` AS `CustomerID`,`Customers`.`CompanyName` AS `CompanyName`,`Customers`.`City` AS `City`,`Customers`.`Country` AS `Country` from (`Orders` left join `Customers` on((`Customers`.`CustomerID` = `Orders`.`CustomerID`))) where (`Orders`.`OrderDate` between '1997-01-01' and '1997-12-31');

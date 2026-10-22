@@ -20,7 +20,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// missing: a column declared <c>TIMESTAMP WITH TIME ZONE</c> compared against <c>timestamptz</c> and was
 /// re-altered on EVERY quench.</para>
 ///
-/// <para><b>Asserted at the outcome, per Rule 32.</b> Not "the mapping returns X for Y" — declare the column
+/// <para><b>Asserted at the outcome.</b> Not "the mapping returns X for Y" — declare the column
 /// with the spelling, deploy twice, and require the second pass to classify nothing as modified.</para>
 /// </summary>
 [Category("PostgreSQL")]

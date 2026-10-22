@@ -20,10 +20,10 @@ CREATE OR REPLACE FUNCTION "SchemaSmith"."NormalizeStatisticsColumnList"(p_List 
     IMMUTABLE
 AS $$
   SELECT COALESCE(ARRAY_TO_STRING(
-           ARRAY(SELECT TRIM(BOTH '"' FROM TRIM(x))
+           ARRAY(SELECT "SchemaSmith"."BareName"(x)
                    FROM UNNEST("SchemaSmith"."SplitTopLevelList"(p_List)) AS x
                   WHERE TRIM(x) <> '' AND TRIM(x) NOT LIKE '%(%'
-                  ORDER BY TRIM(BOTH '"' FROM TRIM(x)) COLLATE "C")
+                  ORDER BY "SchemaSmith"."BareName"(x) COLLATE "C")
            || ARRAY(SELECT "SchemaSmith"."StripParenWrapping"(TRIM(x))
                       FROM UNNEST("SchemaSmith"."SplitTopLevelList"(p_List)) WITH ORDINALITY AS u(x, ord)
                      WHERE TRIM(x) LIKE '%(%'

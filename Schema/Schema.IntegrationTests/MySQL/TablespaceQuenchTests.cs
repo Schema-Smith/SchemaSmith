@@ -140,11 +140,12 @@ public class TablespaceQuenchTests
         + $"WHERE it.NAME = '{_testDb}/{TableName}' AND ts.SPACE_TYPE = 'General'");
 
     // InnoDB stores `ts-probe` as `ts@002dprobe`. Matching the raw name missed it, so the placement read back as none:
-    // extraction dropped it, and a redeploy declaring it was refused as a move.
-    [Test]
-    public void ATableWhoseNameInnoDbEncodes_RoundTripsItsTablespace()
+    // extraction dropped it, and a redeploy declaring it was refused as a move. A non-ASCII letter may take one of
+    // MySQL's short codes instead (`é` is `@0p`), which no SQL function on MySQL reproduces.
+    [TestCase("ts-probe")]
+    [TestCase("ts-épreuve")]
+    public void ATableWhoseNameInnoDbEncodes_RoundTripsItsTablespace(string table)
     {
-        const string table = "ts-probe";
         try
         {
             Deploy($", \"Tablespace\": \"{Tablespace1}\"", table: table);

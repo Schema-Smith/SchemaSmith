@@ -21,6 +21,10 @@ public static class ChangeAuditReader
     public static IReadOnlyList<ChangeAuditRow> ReadAndDrain(Platform platform, IDbCommand command) =>
         SessionSql(platform) is { } sql ? ReadRows(command, sql.Select, sql.Delete) : null;
 
+    /// <summary>This session's rows so far, left in place for the drain at the end of the work unit.</summary>
+    public static IReadOnlyList<ChangeAuditRow> Peek(Platform platform, IDbCommand command) =>
+        SessionSql(platform) is { } sql ? ReadRows(command, sql.Select, null) : null;
+
     /// <summary>
     /// Discards rows already carrying this connection's session id before the work unit writes any. They belong to an
     /// earlier session that ended without draining -- a deploy that died part-way -- and the engine has since given its
@@ -50,13 +54,13 @@ public static class ChangeAuditReader
         platform.GetBasePlatform() switch
         {
             Platform.SqlServer => (
-                "SELECT ObjectType, ObjectName, ActionType FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID ORDER BY Id",
+                "SELECT ObjectType, ObjectName, ActionType, Mode FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID ORDER BY Id",
                 "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID"),
             Platform.PostgreSQL => (
-                "SELECT \"ObjectType\", \"ObjectName\", \"ActionType\" FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() ORDER BY \"Id\"",
+                "SELECT \"ObjectType\", \"ObjectName\", \"ActionType\", \"Mode\" FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() ORDER BY \"Id\"",
                 "DELETE FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid()"),
             Platform.MySQL => (
-                "SELECT ObjectType, ObjectName, ActionType FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() ORDER BY Id",
+                "SELECT ObjectType, ObjectName, ActionType, Mode FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() ORDER BY Id",
                 "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()"),
             _ => null
         };
@@ -71,11 +75,15 @@ public static class ChangeAuditReader
             using (var reader = command.ExecuteReader())
             {
                 while (reader.Read())
-                    rows.Add(new ChangeAuditRow(reader.GetString(0), reader.GetString(1), reader.GetString(2)));
+                    rows.Add(new ChangeAuditRow(reader.GetString(0), reader.GetString(1), reader.GetString(2),
+                        reader.IsDBNull(3) ? null : reader.GetString(3)));
             }
 
-            command.CommandText = deleteSql;
-            command.ExecuteNonQuery();
+            if (deleteSql != null)
+            {
+                command.CommandText = deleteSql;
+                command.ExecuteNonQuery();
+            }
             return rows;
         }
         catch (DbException)

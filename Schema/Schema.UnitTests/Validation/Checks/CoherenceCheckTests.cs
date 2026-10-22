@@ -59,6 +59,640 @@ public class CoherenceCheckTests
         return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
     }
 
+    private static Finding[] RunOnMaria(Schema.Domain.MariaDb.MariaDbTable table)
+    {
+        var template = new Template { Name = "T" };
+        template.Tables.Add(table);
+        var product = new Product { Name = "Acme", Platform = Platform.MariaDb, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    private static Finding[] RunOnPgTable(Schema.Domain.PostgreSQL.PostgreSqlTable table)
+    {
+        var template = new Template { Name = "T" };
+        template.Tables.Add(table);
+        var product = new Product { Name = "Acme", Platform = Platform.PostgreSQL, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    // ---- PostgreSQL names compare exactly ----
+    //
+    // SchemaSmith deploys every PostgreSQL name quoted, so a key to `Customer` where the table is `customer` fails the
+    // deploy with 42P01. The other engines compare names without case.
+
+    private static Finding[] RunPgOrderAndCustomer(string relatedTable, string relatedColumns, string localColumns = "customer_id",
+        string keyColumns = "id")
+    {
+        var order = new Schema.Domain.PostgreSQL.PostgreSqlTable
+        {
+            Name = "order",
+            Schema = "public",
+            Columns = { new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "customer_id", DataType = "integer" } },
+            Indexes = { new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "ix_order_customer", IndexColumns = localColumns } },
+            ForeignKeys =
+            {
+                new Schema.Domain.PostgreSQL.PostgreSqlForeignKey
+                {
+                    Name = "fk_order_customer", Columns = localColumns, RelatedTableSchema = "public", RelatedTable = relatedTable,
+                    RelatedColumns = relatedColumns
+                }
+            }
+        };
+        var customer = new Schema.Domain.PostgreSQL.PostgreSqlTable
+        {
+            Name = "customer",
+            Schema = "public",
+            Columns = { new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" } },
+            Indexes = { new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "pk_customer", IndexColumns = keyColumns, PrimaryKey = true } }
+        };
+        var template = new Template { Name = "T" };
+        template.Tables.Add(order);
+        template.Tables.Add(customer);
+        var product = new Product { Name = "Acme", Platform = Platform.PostgreSQL, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    [Test]
+    public void PostgreSqlKey_ToTheSameSpelling_IsClean()
+    {
+        Assert.That(RunPgOrderAndCustomer("customer", "id"), Is.Empty);
+        Assert.That(RunPgOrderAndCustomer("\"customer\"", "\"id\""), Is.Empty, "a quoted name is the same name");
+    }
+
+    [Test]
+    public void PostgreSqlKey_ToADifferentCase_DoesNotResolve()
+    {
+        var findings = RunPgOrderAndCustomer("Customer", "id");
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-FK-002" }),
+            string.Join("; ", findings.Select(f => f.Code + " " + f.Message)));
+    }
+
+    [Test]
+    public void PostgreSqlKey_ToARelatedColumnOfADifferentCase_IsError()
+    {
+        Assert.That(RunPgOrderAndCustomer("customer", "Id").Select(f => f.Code), Is.EqualTo(new[] { "SS-FK-004" }));
+    }
+
+    [Test]
+    public void PostgreSqlKey_AndIndex_OnALocalColumnOfADifferentCase_AreErrors()
+    {
+        Assert.That(RunPgOrderAndCustomer("customer", "id", localColumns: "Customer_Id").Select(f => f.Code).OrderBy(c => c).ToArray(),
+            Is.EqualTo(new[] { "SS-FK-001", "SS-IDX-001" }));
+    }
+
+    [Test]
+    public void SqlServerKey_ToADifferentCase_Resolves()
+    {
+        var order = new SqlServerTable
+        {
+            Name = "Order",
+            Schema = "dbo",
+            Columns = { new SqlServerColumn { Name = "CustomerId", DataType = "int" } },
+            ForeignKeys = { new SqlServerForeignKey { Name = "FK_Order_Customer", Columns = "customerid", RelatedTable = "CUSTOMER", RelatedTableSchema = "DBO", RelatedColumns = "ID" } }
+        };
+        Assert.That(new CoherenceCheck().Run(Context(TemplateWithTables("Main", order, Customer()))), Is.Empty);
+    }
+
+    // ---- A foreign key resolves within its own template (SS-FK-010) ----
+    //
+    // Each template deploys to the databases its DatabaseIdentificationScript names, so a table declared only in
+    // another template is on this one's target only when both scripts name the same databases.
+
+    private static Finding[] RunOrderAndCustomerInTwoTemplates(string orderDatabases, string customerDatabases)
+    {
+        var order = new SqlServerTable
+        {
+            Name = "Order",
+            Schema = "dbo",
+            Columns = { new SqlServerColumn { Name = "CustomerId", DataType = "int" } },
+            ForeignKeys = { new SqlServerForeignKey { Name = "FK_Order_Customer", Columns = "CustomerId", RelatedTable = "Customer", RelatedTableSchema = "dbo", RelatedColumns = "Id" } }
+        };
+        var sales = TemplateWithTables("Sales", order);
+        sales.DatabaseIdentificationScript = orderDatabases;
+        var crm = TemplateWithTables("Crm", Customer());
+        crm.DatabaseIdentificationScript = customerDatabases;
+        return new CoherenceCheck().Run(Context(crm, sales)).ToArray();
+    }
+
+    [Test]
+    public void ForeignKey_ToATableInATemplateOnOtherDatabases_WarnsNamingThatTemplate()
+    {
+        var findings = RunOrderAndCustomerInTwoTemplates("SELECT 'Sales'", "SELECT 'Crm'");
+        Assert.That(findings.Select(f => (f.Code, f.Severity)), Is.EqualTo(new[] { ("SS-FK-010", Severity.Warning) }),
+            string.Join("; ", findings.Select(f => f.Code + " " + f.Message)));
+        Assert.That(findings[0].Message, Does.Contain("template 'Crm'").And.Contain("'Sales'"));
+        Assert.That(findings[0].Location, Is.EqualTo("Template 'Sales' / Table 'Order' / FK 'FK_Order_Customer'"));
+    }
+
+    [Test]
+    public void ForeignKey_ToATableInATemplateOnTheSameDatabases_Resolves()
+    {
+        Assert.That(RunOrderAndCustomerInTwoTemplates("SELECT 'Shop'", " SELECT 'Shop' "), Is.Empty);
+    }
+
+    // ---- Temporal keys (SS-IDX-002 / SS-IDX-003) ----
+
+    private static Schema.Domain.MariaDb.MariaDbTable MariaRates(string keyColumns, bool withoutOverlaps, bool unique = true, bool withPeriod = true)
+    {
+        var table = new Schema.Domain.MariaDb.MariaDbTable
+        {
+            Name = "`rates`",
+            Columns =
+            {
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "`id`", DataType = "INT" },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "`s`", DataType = "DATE" },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "`e`", DataType = "DATE" }
+            },
+            Indexes = { new Schema.Domain.MariaDb.MariaDbIndex { Name = "`uk_rates`", IndexColumns = keyColumns, Unique = unique, WithoutOverlaps = withoutOverlaps } }
+        };
+        if (withPeriod) table.Periods.Add(new Schema.Domain.MariaDb.TablePeriod { Name = "`p`", StartColumn = "`s`", EndColumn = "`e`" });
+        return table;
+    }
+
+    [Test]
+    public void MariaDbTemporalKey_PeriodNamedLast_IsNotAMissingColumn()
+    {
+        Assert.That(RunOnMaria(MariaRates("`id`,`p`", withoutOverlaps: true)).Where(f => f.Code.StartsWith("SS-IDX")), Is.Empty);
+    }
+
+    [Test]
+    public void MariaDbKey_NamingAPeriod_WithoutTheFlag_IsAMissingColumn()
+    {
+        Assert.That(RunOnMaria(MariaRates("`id`,`p`", withoutOverlaps: false)).Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-001" }));
+    }
+
+    [Test]
+    public void MariaDbTemporalKey_WhoseLastPartIsNotAPeriod_IsError()
+    {
+        var findings = RunOnMaria(MariaRates("`id`,`s`", withoutOverlaps: true));
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-003" }));
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+    }
+
+    [Test]
+    public void MariaDbTemporalKey_OnATableWithNoPeriods_SaysSo()
+    {
+        var findings = RunOnMaria(MariaRates("`id`,`p`", withoutOverlaps: true, withPeriod: false));
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-003", "SS-IDX-001" }));
+        Assert.That(findings[0].Message, Does.Contain("declares none"));
+    }
+
+    [Test]
+    public void MariaDbTemporalKey_ThatIsNotUnique_IsError()
+    {
+        Assert.That(RunOnMaria(MariaRates("`id`,`p`", withoutOverlaps: true, unique: false)).Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-002" }));
+    }
+
+    // ---- ON DELETE SET NULL (columns) (SS-FK-007) ----
+
+    private static Schema.Domain.PostgreSQL.PostgreSqlTable PgChild(string setNullColumns, string deleteAction = "SET NULL") => new()
+    {
+        Name = "child",
+        Schema = "public",
+        Columns =
+        {
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" },
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "parent_id", DataType = "integer" },
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "parent_code", DataType = "integer" }
+        },
+        ForeignKeys =
+        {
+            new Schema.Domain.PostgreSQL.PostgreSqlForeignKey
+            {
+                Name = "fk_child_parent", Columns = "parent_id,parent_code", RelatedTableSchema = "public", RelatedTable = "parent",
+                RelatedColumns = "id,code", DeleteAction = deleteAction, SetNullColumns = setNullColumns
+            }
+        }
+    };
+
+    [Test]
+    public void SetNullColumns_OverASubsetOfTheKey_WithSetNull_IsClean()
+    {
+        Assert.That(RunOnPgTable(PgChild("parent_id")).Where(f => f.Code == "SS-FK-007"), Is.Empty);
+    }
+
+    // Extraction reads the subset for either action, so a SET DEFAULT (col) key it writes must validate.
+    [Test]
+    public void SetNullColumns_OverASubsetOfTheKey_WithSetDefault_IsClean()
+    {
+        Assert.That(RunOnPgTable(PgChild("parent_id", deleteAction: "SET DEFAULT")).Where(f => f.Code == "SS-FK-007"), Is.Empty);
+    }
+
+    [Test]
+    public void SetNullColumns_WithoutSetNull_IsError()
+    {
+        var findings = RunOnPgTable(PgChild("parent_id", deleteAction: "CASCADE")).Where(f => f.Code == "SS-FK-007").ToList();
+        Assert.That(findings, Has.Exactly(1).Items);
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+        Assert.That(findings[0].Message, Does.Contain("CASCADE"));
+    }
+
+    [Test]
+    public void SetNullColumns_NamingAColumnOutsideTheKey_IsError()
+    {
+        var findings = RunOnPgTable(PgChild("parent_id,id")).Where(f => f.Code == "SS-FK-007").ToList();
+        Assert.That(findings, Has.Exactly(1).Items);
+        Assert.That(findings[0].Message, Does.Contain("'id'"));
+    }
+
+    [Test]
+    public void PostgreSqlTemporalKey_OnAUniqueIndexThatIsNotAConstraint_IsError()
+    {
+        var table = new Schema.Domain.PostgreSQL.PostgreSqlTable
+        {
+            Name = "rates",
+            Schema = "public",
+            Columns =
+            {
+                new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" },
+                new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "valid", DataType = "daterange" }
+            },
+            Indexes = { new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "uq_rates", IndexColumns = "id,valid", Unique = true, WithoutOverlaps = true } }
+        };
+        Assert.That(RunOnPgTable(table).Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-002" }));
+
+        table.Indexes[0].UniqueConstraint = true;
+        Assert.That(RunOnPgTable(table), Is.Empty);
+    }
+
+    // ---- Spatial indexes (SS-SPX-001 .. SS-SPX-004) ----
+    //
+    // A spatial index is on one geometry or geography column, with a tessellation of the same family; a geometry index
+    // needs a bounding box and a geography one cannot have one; grid densities belong to the GRID schemes only. The engine
+    // refuses every other shape, so the package is stopped first.
+
+    private static SqlServerTable Places(params SpatialIndex[] indexes)
+    {
+        var table = new SqlServerTable
+        {
+            Name = "Places", Schema = "dbo",
+            Columns =
+            {
+                new SqlServerColumn { Name = "Id", DataType = "int" },
+                new SqlServerColumn { Name = "Shape", DataType = "geometry" },
+                new SqlServerColumn { Name = "Location", DataType = "GEOGRAPHY" },
+                new SqlServerColumn { Name = "Label", DataType = "nvarchar(50)" }
+            }
+        };
+        table.SpatialIndexes.AddRange(indexes);
+        return table;
+    }
+
+    private static readonly SpatialBoundingBox Box = new() { XMin = 0, YMin = 0, XMax = 100, YMax = 100 };
+
+    private static string[] SpatialCodes(SqlServerTable table) => RunOn(table).Where(f => f.Code.StartsWith("SS-SPX")).Select(f => f.Code).ToArray();
+
+    [Test]
+    public void SpatialIndexes_OfEveryWellFormedShape_AreClean()
+    {
+        Assert.That(SpatialCodes(Places(
+            new SpatialIndex { Name = "SX_Shape", Column = "[Shape]", Tessellation = "GEOMETRY_GRID", BoundingBox = Box, Grids = new SpatialGrids { Level1 = "LOW" } },
+            new SpatialIndex { Name = "SX_Shape_Auto", Column = "Shape", Tessellation = "GEOMETRY_AUTO_GRID", BoundingBox = Box },
+            new SpatialIndex { Name = "SX_Location", Column = "Location" },
+            new SpatialIndex { Name = "SX_Location_Grid", Column = "Location", Tessellation = "GEOGRAPHY_GRID", CellsPerObject = 32 })), Is.Empty);
+    }
+
+    [Test]
+    public void ASpatialIndexOnAMissingOrNonSpatialColumn_IsAnError()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Gone", Column = "Gone" })), Is.EqualTo(new[] { "SS-SPX-001" }));
+            Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Label", Column = "Label" })), Is.EqualTo(new[] { "SS-SPX-001" }));
+        });
+    }
+
+    [Test]
+    public void ATessellationOfTheWrongFamily_IsAnError()
+    {
+        Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Location", Column = "Location", Tessellation = "GEOMETRY_GRID", BoundingBox = Box })),
+            Is.EqualTo(new[] { "SS-SPX-002" }));
+    }
+
+    [Test]
+    public void TheBoundingBox_IsRequiredOnGeometry_ForbiddenOnGeography_AndMustBeAnArea()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Shape", Column = "Shape" })), Is.EqualTo(new[] { "SS-SPX-003" }), "geometry without one");
+            Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Location", Column = "Location", BoundingBox = Box })), Is.EqualTo(new[] { "SS-SPX-003" }), "geography with one");
+            Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Shape", Column = "Shape", BoundingBox = new SpatialBoundingBox { XMin = 5, YMin = 0, XMax = 5, YMax = 10 } })),
+                Is.EqualTo(new[] { "SS-SPX-003" }), "an empty box");
+        });
+    }
+
+    [Test]
+    public void GridsOnAnAutoGridTessellation_AreAnError()
+    {
+        Assert.That(SpatialCodes(Places(new SpatialIndex { Name = "SX_Location", Column = "Location", Tessellation = "GEOGRAPHY_AUTO_GRID", Grids = new SpatialGrids { Level1 = "HIGH" } })),
+            Is.EqualTo(new[] { "SS-SPX-004" }));
+    }
+
+    // ---- MariaDB vector indexes (SS-IDX-005, SS-IDX-006) ----
+    //
+    // A VECTOR index covers exactly one NOT NULL VECTOR column, and a table takes one.
+
+    private static Schema.Domain.MariaDb.MariaDbTable Embeddings(params Schema.Domain.MariaDb.MariaDbIndex[] indexes)
+    {
+        var table = new Schema.Domain.MariaDb.MariaDbTable
+        {
+            Name = "Embeddings",
+            Columns =
+            {
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "id", DataType = "int" },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "v", DataType = "vector(3)" },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "w", DataType = "VECTOR(3)" },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "maybe", DataType = "vector(3)", Nullable = true },
+                new Schema.Domain.MariaDb.MariaDbColumn { Name = "label", DataType = "varchar(10)" }
+            }
+        };
+        table.Indexes.AddRange(indexes);
+        return table;
+    }
+
+    private static Schema.Domain.MariaDb.MariaDbIndex Vector(string name, string columns) =>
+        new() { Name = name, IndexType = "VECTOR", IndexColumns = columns, M = 8, Distance = "cosine" };
+
+    private static string[] VectorCodes(Schema.Domain.MariaDb.MariaDbTable table) =>
+        RunOnMaria(table).Where(f => f.Code is "SS-IDX-005" or "SS-IDX-006").Select(f => f.Code).ToArray();
+
+    [Test]
+    public void AVectorIndexOverOneNotNullVectorColumn_IsClean()
+    {
+        Assert.That(VectorCodes(Embeddings(Vector("`vx`", "`v`"))), Is.Empty);
+    }
+
+    [Test]
+    public void AVectorIndexOverANullableNonVectorOrSeveralColumns_IsAnError()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(VectorCodes(Embeddings(Vector("`vx`", "`maybe`"))), Is.EqualTo(new[] { "SS-IDX-005" }), "nullable");
+            Assert.That(VectorCodes(Embeddings(Vector("`vx`", "`label`"))), Is.EqualTo(new[] { "SS-IDX-005" }), "not a vector");
+            Assert.That(VectorCodes(Embeddings(Vector("`vx`", "`v`,`w`"))), Is.EqualTo(new[] { "SS-IDX-005" }), "two columns");
+        });
+    }
+
+    [Test]
+    public void ASecondVectorIndexOnATable_IsAnError()
+    {
+        Assert.That(VectorCodes(Embeddings(Vector("`vx`", "`v`"), Vector("`wx`", "`w`"))), Is.EqualTo(new[] { "SS-IDX-006" }));
+    }
+
+    // ---- JSON indexes (SS-JSX-001 .. SS-JSX-004) ----
+    //
+    // A JSON index is on one json column, one per column, on a table with a clustered primary key; its paths start at $,
+    // have no wildcard, and do not contain one another. The engine refuses every other shape.
+
+    private static SqlServerTable Documents(bool clusteredKey, params JsonIndex[] indexes)
+    {
+        var table = new SqlServerTable
+        {
+            Name = "Documents", Schema = "dbo",
+            Columns =
+            {
+                new SqlServerColumn { Name = "Id", DataType = "int" },
+                new SqlServerColumn { Name = "Doc", DataType = "json" },
+                new SqlServerColumn { Name = "Meta", DataType = "[JSON]" },
+                new SqlServerColumn { Name = "Label", DataType = "nvarchar(max)" }
+            },
+            Indexes = { new SqlServerIndex { Name = "PK_Documents", PrimaryKey = true, Unique = true, Clustered = clusteredKey, IndexColumns = "Id" } }
+        };
+        table.JsonIndexes.AddRange(indexes);
+        return table;
+    }
+
+    private static string[] JsonIndexCodes(SqlServerTable table) => RunOn(table).Where(f => f.Code.StartsWith("SS-JSX")).Select(f => f.Code).ToArray();
+
+    [Test]
+    public void JsonIndexes_OfEveryWellFormedShape_AreClean()
+    {
+        Assert.That(JsonIndexCodes(Documents(true,
+            new JsonIndex { Name = "JX_Doc", Column = "[Doc]", Paths = ["$.a", "$.ab", "$.b[0]", "$.\"a.c\""], OptimizeForArraySearch = true, FillFactor = 80 },
+            new JsonIndex { Name = "JX_Meta", Column = "Meta" })), Is.Empty);
+    }
+
+    [Test]
+    public void AJsonIndexOnAMissingOrNonJsonColumn_IsAnError()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX_Gone", Column = "Gone" })), Is.EqualTo(new[] { "SS-JSX-001" }));
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX_Label", Column = "Label" })), Is.EqualTo(new[] { "SS-JSX-001" }));
+        });
+    }
+
+    [Test]
+    public void TwoJsonIndexesOnOneColumn_AreAnError()
+    {
+        Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX_A", Column = "Doc", Paths = ["$.a"] }, new JsonIndex { Name = "JX_B", Column = "[doc]", Paths = ["$.b"] })),
+            Is.EqualTo(new[] { "SS-JSX-002" }));
+    }
+
+    [Test]
+    public void AJsonIndexPath_StartsAtTheRoot_HasNoWildcard_AndContainsNoOther()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["a.b"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "not from $");
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["$.a[*]"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "a wildcard");
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["$.a", "$.a.b"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "a member of another");
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["$.a[1]", "$.a"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "an element of another");
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["$", "$.a"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "the whole document and a part");
+            Assert.That(JsonIndexCodes(Documents(true, new JsonIndex { Name = "JX", Column = "Doc", Paths = ["$.a", "$.a"] })), Is.EqualTo(new[] { "SS-JSX-003" }), "the same path twice");
+        });
+    }
+
+    [Test]
+    public void AJsonIndex_OnATableWithoutAClusteredPrimaryKey_IsAnError()
+    {
+        Assert.That(JsonIndexCodes(Documents(false, new JsonIndex { Name = "JX", Column = "Doc" })), Is.EqualTo(new[] { "SS-JSX-004" }));
+    }
+
+    // ---- Period columns (SS-TMP-001 .. SS-TMP-004) ----
+    //
+    // A temporal table's period columns are declared as a pair: one RowStart and one RowEnd, both DATETIME2, on a table
+    // that is system-versioned. Anything else cannot be created, so the package is stopped before a deploy is.
+
+    private static SqlServerTable Temporal(bool isTemporal, params SqlServerColumn[] periodColumns)
+    {
+        var table = new SqlServerTable { Name = "Booking", Schema = "dbo", IsTemporal = isTemporal, Columns = { new SqlServerColumn { Name = "Id", DataType = "int" } } };
+        foreach (var c in periodColumns) table.Columns.Add(c);
+        return table;
+    }
+
+    private static SqlServerColumn Period(string name, string role, string dataType = "DATETIME2(2)") =>
+        new() { Name = name, DataType = dataType, GeneratedAlways = role, Hidden = true };
+
+    [Test]
+    public void PeriodColumns_DeclaredAsAPairOnATemporalTable_AreClean()
+    {
+        Assert.That(RunOn(Temporal(true, Period("SysStart", "RowStart"), Period("SysEnd", "RowEnd"))).Where(f => f.Code.StartsWith("SS-TMP")), Is.Empty);
+    }
+
+    [Test]
+    public void APeriodColumnWithoutItsPartner_IsAnError()
+    {
+        var findings = RunOn(Temporal(true, Period("SysStart", "RowStart"))).Where(f => f.Code.StartsWith("SS-TMP")).ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-TMP-001" }));
+            Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+            Assert.That(findings[0].Message, Does.Contain("RowEnd"));
+        });
+    }
+
+    [Test]
+    public void ARoleDeclaredTwice_IsAnError()
+    {
+        var findings = RunOn(Temporal(true, Period("SysStart", "RowStart"), Period("Other", "RowStart"), Period("SysEnd", "RowEnd")));
+        Assert.That(findings.Where(f => f.Code.StartsWith("SS-TMP")).Select(f => f.Code), Is.EqualTo(new[] { "SS-TMP-002" }));
+    }
+
+    [Test]
+    public void PeriodColumnsOnATableThatIsNotTemporal_AreAnError()
+    {
+        var findings = RunOn(Temporal(false, Period("SysStart", "RowStart"), Period("SysEnd", "RowEnd")));
+        Assert.That(findings.Where(f => f.Code.StartsWith("SS-TMP")).Select(f => f.Code), Is.EqualTo(new[] { "SS-TMP-003" }));
+    }
+
+    [Test]
+    public void APeriodColumnThatIsNotDatetime2_IsAnError()
+    {
+        var findings = RunOn(Temporal(true, Period("SysStart", "RowStart", "DATETIME"), Period("SysEnd", "RowEnd")));
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Where(f => f.Code.StartsWith("SS-TMP")).Select(f => f.Code), Is.EqualTo(new[] { "SS-TMP-004" }));
+            Assert.That(findings.Single(f => f.Code == "SS-TMP-004").Message, Does.Contain("SysStart"));
+        });
+    }
+
+    // ---- Ledger generated columns and view (SS-LDG-001 .. SS-LDG-005) ----
+    //
+    // A ledger table's generated columns and view exist only on a ledger table; an append-only one has no End columns;
+    // each role is one BIGINT column. Every other shape fails CREATE TABLE.
+
+    private static SqlServerTable LedgerTable(string ledger, params SqlServerColumn[] columns)
+    {
+        var table = new SqlServerTable { Name = "Audit", Schema = "dbo", Ledger = ledger, Columns = { new SqlServerColumn { Name = "Id", DataType = "int" } } };
+        foreach (var c in columns) table.Columns.Add(c);
+        return table;
+    }
+
+    private static SqlServerColumn LedgerColumn(string name, string role, string dataType = "BIGINT") => new() { Name = name, DataType = dataType, GeneratedAlways = role };
+
+    private static string[] LedgerCodes(SqlServerTable table) => RunOn(table).Where(f => f.Code.StartsWith("SS-LDG") || f.Code.StartsWith("SS-TMP")).Select(f => f.Code).ToArray();
+
+    [Test]
+    public void DeclaredLedgerColumnsAndView_OnALedgerTable_AreClean_AndAreNotReadAsPeriodColumns()
+    {
+        var table = LedgerTable("Updatable", LedgerColumn("TxStart", "TransactionIdStart"), LedgerColumn("TxEnd", "TransactionIdEnd"),
+                                LedgerColumn("SeqStart", "SequenceNumberStart"), LedgerColumn("SeqEnd", "sequencenumberend"));
+        table.LedgerView = new SqlServerLedgerView { Name = "AuditView" };
+        Assert.That(LedgerCodes(table), Is.Empty, "no SS-TMP finding either: the period pair rule is for RowStart and RowEnd");
+    }
+
+    [TestCase(null)]
+    [TestCase("Off")]
+    public void ALedgerColumnOnATableThatIsNotALedger_IsAnError(string ledger)
+    {
+        Assert.That(LedgerCodes(LedgerTable(ledger, LedgerColumn("TxStart", "TransactionIdStart"))), Is.EqualTo(new[] { "SS-LDG-001" }));
+    }
+
+    [Test]
+    public void AnEndColumnOnAnAppendOnlyTable_IsAnError()
+    {
+        Assert.That(LedgerCodes(LedgerTable("AppendOnly", LedgerColumn("TxStart", "TransactionIdStart"), LedgerColumn("TxEnd", "TransactionIdEnd"))),
+            Is.EqualTo(new[] { "SS-LDG-002" }));
+    }
+
+    [Test]
+    public void ALedgerRoleDeclaredTwice_IsAnError()
+    {
+        Assert.That(LedgerCodes(LedgerTable("Updatable", LedgerColumn("A", "TransactionIdStart"), LedgerColumn("B", "transactionidstart"))),
+            Is.EqualTo(new[] { "SS-LDG-003" }));
+    }
+
+    [Test]
+    public void ALedgerViewOnATableThatIsNotALedger_IsAnError()
+    {
+        var table = LedgerTable(null);
+        table.LedgerView = new SqlServerLedgerView { Name = "AuditView" };
+        Assert.That(LedgerCodes(table), Is.EqualTo(new[] { "SS-LDG-004" }));
+    }
+
+    [Test]
+    public void ALedgerColumnThatIsNotBigint_IsAnError()
+    {
+        var findings = RunOn(LedgerTable("Updatable", LedgerColumn("TxStart", "TransactionIdStart", "INT")));
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Where(f => f.Code.StartsWith("SS-LDG")).Select(f => f.Code), Is.EqualTo(new[] { "SS-LDG-005" }));
+            Assert.That(findings.Single(f => f.Code == "SS-LDG-005").Message, Does.Contain("TxStart").And.Contain("BIGINT"));
+        });
+    }
+
+    // ---- MariaDB explicit system-time columns (SS-TMP-001 .. SS-TMP-004) ----
+
+    private static Schema.Domain.MariaDb.MariaDbTable Versioned(bool versioned, params Schema.Domain.MariaDb.MariaDbColumn[] columns)
+    {
+        var table = new Schema.Domain.MariaDb.MariaDbTable { Name = "Booking", IsSystemVersioned = versioned, Columns = { new Schema.Domain.MariaDb.MariaDbColumn { Name = "Id", DataType = "int" } } };
+        foreach (var c in columns) table.Columns.Add(c);
+        return table;
+    }
+
+    private static Schema.Domain.MariaDb.MariaDbColumn RowTime(string name, string role, string dataType = "TIMESTAMP(6)") => new() { Name = name, DataType = dataType, GeneratedAlways = role };
+
+    private static string[] MariaTmpCodes(Schema.Domain.MariaDb.MariaDbTable table) => RunOnMaria(table).Where(f => f.Code.StartsWith("SS-TMP")).Select(f => f.Code).ToArray();
+
+    [TestCase("TIMESTAMP(6)")]
+    [TestCase("bigint unsigned")]
+    [TestCase("BIGINT(20) UNSIGNED")]
+    public void AnExplicitSystemTimePair_OnAVersionedMariaDbTable_IsClean(string dataType)
+    {
+        Assert.That(MariaTmpCodes(Versioned(true, RowTime("rs", "RowStart", dataType), RowTime("re", "rowend", dataType))), Is.Empty);
+    }
+
+    [Test]
+    public void AnIncompleteRepeatedOrUnversionedOrMistypedMariaDbPair_IsAnError()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(MariaTmpCodes(Versioned(true, RowTime("rs", "RowStart"))), Is.EqualTo(new[] { "SS-TMP-001" }));
+            Assert.That(MariaTmpCodes(Versioned(true, RowTime("a", "RowStart"), RowTime("b", "RowStart"), RowTime("re", "RowEnd"))), Is.EqualTo(new[] { "SS-TMP-002" }));
+            Assert.That(MariaTmpCodes(Versioned(false, RowTime("rs", "RowStart"), RowTime("re", "RowEnd"))), Is.EqualTo(new[] { "SS-TMP-003" }));
+            Assert.That(MariaTmpCodes(Versioned(true, RowTime("rs", "RowStart", "DATETIME(6)"), RowTime("re", "RowEnd"))), Is.EqualTo(new[] { "SS-TMP-004" }));
+        });
+    }
+
+    // ---- NullsNotDistinct on a primary key (SS-IDX-004) ----
+    //
+    // A primary key's columns cannot be NULL, so the clause has nothing to decide and the engine never records it on
+    // one; the deploy leaves it off the key rather than re-creating the key on every run, and the package is told.
+
+    [Test]
+    public void PostgreSqlNullsNotDistinct_OnAPrimaryKey_IsAWarning()
+    {
+        var table = new Schema.Domain.PostgreSQL.PostgreSqlTable
+        {
+            Name = "t",
+            Schema = "public",
+            Columns = { new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" } },
+            Indexes = { new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "pk_t", IndexColumns = "id", PrimaryKey = true, NullsNotDistinct = true } }
+        };
+        var findings = RunOnPgTable(table);
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-IDX-004" }));
+            Assert.That(findings[0].Severity, Is.EqualTo(Severity.Warning));
+            Assert.That(findings[0].Message, Does.Contain("pk_t").And.Contain("primary key"));
+        });
+
+        table.Indexes[0].PrimaryKey = false;
+        table.Indexes[0].UniqueConstraint = true;
+        Assert.That(RunOnPgTable(table), Is.Empty, "on a unique constraint the clause is meaningful");
+    }
+
     // ---- Product MinimumVersion the engine cannot resolve (SS-VER-001) ----
     //
     // A declared MinimumVersion the deploy cannot parse aborts the run before any object is touched --
@@ -307,6 +941,124 @@ public class CoherenceCheckTests
         Assert.That(RunOn(table).Any(f => f.Code == "SS-XTP-001"), Is.False);
     }
 
+    private static Finding[] RunMyFamily(Platform platform, string relatedColumns, string parentIndexColumns, bool parentIndexUnique,
+        string deleteAction = null, bool declareParent = true)
+    {
+        MySqlTable Make() => platform == Platform.MariaDb ? new MariaDbTable() : new MySqlTable();
+        var parent = Make();
+        parent.Name = "Parent";
+        parent.Columns.Add(new MySqlColumn { Name = "Id", DataType = "int" });
+        parent.Columns.Add(new MySqlColumn { Name = "Code", DataType = "varchar(20)" });
+        parent.Indexes.Add(new MySqlIndex { Name = "PRIMARY", PrimaryKey = true, Unique = true, IndexColumns = "Id" });
+        parent.Indexes.Add(new MySqlIndex { Name = "ix_code", Unique = parentIndexUnique, IndexColumns = parentIndexColumns });
+        var child = Make();
+        child.Name = "Child";
+        child.Columns.Add(new MySqlColumn { Name = "Id", DataType = "int" });
+        child.Columns.Add(new MySqlColumn { Name = "ParentCode", DataType = "varchar(20)" });
+        child.ForeignKeys.Add(new MySqlForeignKey { Name = "fk_child", Columns = "ParentCode", RelatedTable = "Parent", RelatedColumns = relatedColumns, DeleteAction = deleteAction });
+        var template = new Template { Name = "T" };
+        if (declareParent) template.Tables.Add(parent);
+        template.Tables.Add(child);
+        var product = new Product { Name = "Acme", Platform = platform, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    // MY-F1: MySQL 8.4 refuses a foreign key to columns that are not a whole primary or unique key.
+    [TestCase("Code", "Code", true, false, TestName = "AWholeUniqueKey_IsClean")]
+    [TestCase("`Code`", "Code DESC", true, false, TestName = "AWholeUniqueKey_QuotedAndOrdered_IsClean")]
+    [TestCase("Id", "Code", false, false, TestName = "ThePrimaryKey_IsClean")]
+    [TestCase("Code", "Code", false, true, TestName = "ANonUniqueIndex_IsAWarning")]
+    [TestCase("Code", "Code(10)", true, true, TestName = "APrefixUniqueKey_IsAWarning")]
+    public void MySqlForeignKeyTarget_MustBeAWholeKey(string relatedColumns, string indexColumns, bool unique, bool expectWarning)
+    {
+        var findings = RunMyFamily(Platform.MySQL, relatedColumns, indexColumns, unique).Where(f => f.Code == "SS-FK-008").ToArray();
+        Assert.That(findings.Select(f => f.Severity), expectWarning ? Is.EqualTo(new[] { Severity.Warning }) : Is.Empty);
+    }
+
+    [Test]
+    public void ANonStandardKeyTarget_IsNotFlagged_OnMariaDb_OrWhenTheParentIsNotInThePackage()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunMyFamily(Platform.MariaDb, "Code", "Code", false).Where(f => f.Code == "SS-FK-008"), Is.Empty);
+            Assert.That(RunMyFamily(Platform.MySQL, "Code", "Code", false, declareParent: false).Where(f => f.Code == "SS-FK-008"), Is.Empty);
+        });
+    }
+
+    // MY-080 / MA-062: SET DEFAULT is stored by the MySQL family and then acts as RESTRICT.
+    [TestCase(Platform.MySQL)]
+    [TestCase(Platform.MariaDb)]
+    public void SetDefaultAction_IsAWarning_OnTheMySqlFamily(Platform platform)
+    {
+        var findings = RunMyFamily(platform, "Id", "Code", true, deleteAction: "set  default").Where(f => f.Code == "SS-FK-009").ToArray();
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Select(f => f.Severity), Is.EqualTo(new[] { Severity.Warning }));
+            Assert.That(findings.Single().Message, Does.Contain("ON DELETE SET DEFAULT").And.Contain("RESTRICT"));
+            Assert.That(RunMyFamily(platform, "Id", "Code", true, deleteAction: "CASCADE").Where(f => f.Code == "SS-FK-009"), Is.Empty);
+        });
+    }
+
+    private static Finding[] RunMyColumn(Platform platform, string dataType, string generation = null, string check = null)
+    {
+        MySqlTable table = platform == Platform.MariaDb ? new MariaDbTable() : new MySqlTable();
+        table.Name = "T1";
+        table.Columns.Add(new MySqlColumn { Name = "c", DataType = dataType, GenerationExpression = generation });
+        if (check != null) table.CheckConstraints.Add(new CheckConstraint { Name = "ck", Expression = check });
+        var template = new Template { Name = "T" };
+        template.Tables.Add(table);
+        var product = new Product { Name = "Acme", Platform = platform, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    // MY-#2: MySQL 9.6 removed MD5(), SHA1() and SHA().
+    [TestCase("varchar(32)", "md5(`c`)", null, true)]
+    [TestCase("varchar(40)", null, "SHA1 (c) <> ''", true)]
+    [TestCase("varchar(64)", "sha2(`c`, 256)", null, false)]
+    public void ARemovedHashFunctionInAnExpression_IsAWarning_OnMySql(string type, string generation, string check, bool expected)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunMyColumn(Platform.MySQL, type, generation, check).Count(f => f.Code == "SS-COL-004"), Is.EqualTo(expected ? 1 : 0));
+            Assert.That(RunMyColumn(Platform.MariaDb, type, generation, check).Count(f => f.Code == "SS-COL-004"), Is.Zero, "MariaDB keeps them");
+        });
+    }
+
+    [Test]
+    public void ARemovedHashFunctionInAPartitionExpression_IsAWarning_OnMySql()
+    {
+        var table = new MySqlTable
+        {
+            Name = "T1",
+            Partitioning = new MySqlPartitioning { Method = "KEY", Expression = "crc32(md5(`c`))" },
+            Columns = { new MySqlColumn { Name = "c", DataType = "varchar(10)" } }
+        };
+        Assert.That(RunOnMy(table).Where(f => f.Code == "SS-COL-004").Select(f => f.Location), Has.One.EndsWith("/ Partitioning"));
+    }
+
+    // MY-076: NVARCHAR creates a utf8mb3 column.
+    [TestCase(Platform.MySQL, "NVARCHAR(10)", true)]
+    [TestCase(Platform.MariaDb, "national varchar(10)", true)]
+    [TestCase(Platform.MySQL, "varchar(10)", false)]
+    public void ANationalCharacterType_IsAWarning(Platform platform, string type, bool expected) =>
+        Assert.That(RunMyColumn(platform, type).Count(f => f.Code == "SS-COL-005"), Is.EqualTo(expected ? 1 : 0));
+
+    // MY-063: forms MySQL 8.0.17 deprecated.
+    [TestCase("float(7,2)", true)]
+    [TestCase("decimal(10,2) unsigned", true)]
+    [TestCase("int(5) zerofill", true)]
+    [TestCase("int unsigned", false)]
+    [TestCase("decimal(10,2)", false)]
+    [TestCase("float", false)]
+    public void ADeprecatedNumericForm_IsAWarning_OnMySql(string type, bool expected)
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunMyColumn(Platform.MySQL, type).Count(f => f.Code == "SS-COL-006"), Is.EqualTo(expected ? 1 : 0));
+            Assert.That(RunMyColumn(Platform.MariaDb, type).Count(f => f.Code == "SS-COL-006"), Is.Zero);
+        });
+    }
+
     [Test]
     public void RangePartitioningWithNoPartitions_IsError()
     {
@@ -335,6 +1087,136 @@ public class CoherenceCheckTests
             Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "Id", DataType = "int" } }
         };
         Assert.That(RunOnMy(table).Single(f => f.Code == "SS-PART-004").Severity, Is.EqualTo(Severity.Error));
+    }
+
+    // SS-PART-005: every primary and unique key holds each partitioning column whole, or the engine refuses the table
+    // with 1503 (MySQL 8.0.46 and 8.4.11, MariaDB 11.8.9: the same four shapes).
+    [TestCase("KEY", "", "`a`(10)", true, TestName = "KeyOverAPrefixedPrimaryKey")]
+    [TestCase("KEY", "`b`", "`a`(10),`b`", false, TestName = "KeyOnAWholeKeyColumn")]
+    [TestCase("KEY", "`a`", "`a`(10),`b`", true, TestName = "KeyOnAColumnTheKeyHoldsAsAPrefix")]
+    [TestCase("RANGE COLUMNS", "`b`", "`a`", true, TestName = "RangeColumnsOnAColumnOutsideTheKey")]
+    [TestCase("LINEAR KEY", "a, b", "a,b", false, TestName = "LinearKeyOnTheWholeKey")]
+    public void PartitioningAColumnAKeyDoesNotHoldWhole_IsError(string method, string expression, string keyColumns, bool expected)
+    {
+        var table = new Schema.Domain.MySQL.MySqlTable
+        {
+            Name = "Parts",
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning
+            {
+                Method = method, Expression = expression, PartitionCount = method.EndsWith("KEY") ? 2 : null,
+                Partitions = method.EndsWith("KEY") ? [] : [new Schema.Domain.MySQL.MySqlPartition { Name = "p0", Values = "MAXVALUE" }]
+            },
+            Columns =
+            {
+                new Schema.Domain.MySQL.MySqlColumn { Name = "a", DataType = "varchar(100)" },
+                new Schema.Domain.MySQL.MySqlColumn { Name = "b", DataType = "int" }
+            },
+            Indexes = { new Schema.Domain.MySQL.MySqlIndex { Name = "PRIMARY", PrimaryKey = true, Unique = true, IndexColumns = keyColumns } }
+        };
+        var findings = RunOnMy(table).Where(f => f.Code == "SS-PART-005").ToList();
+        Assert.That(findings, expected ? Has.Count.GreaterThan(0) : Is.Empty, string.Join("; ", findings.Select(f => f.Message)));
+    }
+
+    // SS-PART-006 / SS-PART-007: SYSTEM_TIME partitions a versioned MariaDB table's history and takes no Expression;
+    // every other method needs one.
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    public void SystemTimePartitioning_NeedsAVersionedTable(bool versioned, bool expected)
+    {
+        var table = new Schema.Domain.MariaDb.MariaDbTable
+        {
+            Name = "History", IsSystemVersioned = versioned,
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = "SYSTEM_TIME", SystemTime = new Schema.Domain.MySQL.MariaDbSystemTimePartitioning { Interval = "1 MONTH" } },
+            Columns = { new Schema.Domain.MariaDb.MariaDbColumn { Name = "Id", DataType = "int" } }
+        };
+        var codes = RunOnMaria(table).Select(f => f.Code).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(codes.Contains("SS-PART-006"), Is.EqualTo(expected), string.Join(",", codes));
+            Assert.That(codes, Has.No.Member("SS-PART-007"), "SYSTEM_TIME takes no Expression");
+        });
+    }
+
+    [Test]
+    public void SystemTimePartitioning_OnMySql_IsError()
+    {
+        var table = new Schema.Domain.MySQL.MySqlTable
+        {
+            Name = "History",
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = "SYSTEM_TIME" },
+            Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "Id", DataType = "int" } }
+        };
+        Assert.That(RunOnMy(table).Select(f => f.Code), Has.Member("SS-PART-006"));
+    }
+
+    [TestCase("", true)]
+    [TestCase("Id", false)]
+    public void APartitioningWithoutAnExpression_IsError(string expression, bool expected)
+    {
+        var table = new Schema.Domain.MySQL.MySqlTable
+        {
+            Name = "Spread",
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = "HASH", Expression = expression, PartitionCount = 2 },
+            Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "Id", DataType = "int" } }
+        };
+        Assert.That(RunOnMy(table).Any(f => f.Code == "SS-PART-007"), Is.EqualTo(expected));
+    }
+
+    // SS-PART-008 / 009 / 010 (probed on MySQL 8.0.46 and MariaDB 11.4.13).
+    private static Schema.Domain.MySQL.MySqlTable PartTable(string name, string method = "HASH", int? count = 2) => new()
+    {
+        Name = name,
+        Partitioning = method == null ? null : new Schema.Domain.MySQL.MySqlPartitioning { Method = method, Expression = "id", PartitionCount = count },
+        Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "id", DataType = "int" }, new Schema.Domain.MySQL.MySqlColumn { Name = "pid", DataType = "int" } },
+        Indexes = { new Schema.Domain.MySQL.MySqlIndex { Name = "PRIMARY", PrimaryKey = true, Unique = true, IndexColumns = "id" } }
+    };
+
+    private static Finding[] RunMyTables(Platform platform, string minimumVersion, params Schema.Domain.MySQL.MySqlTable[] tables)
+    {
+        var template = new Template { Name = "T" };
+        foreach (var table in tables) template.Tables.Add(table);
+        var product = new Product { Name = "Acme", Platform = platform, MinimumVersion = minimumVersion, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
+    }
+
+    [Test]
+    public void AForeignKeyOnOrToAPartitionedTable_IsError()
+    {
+        var parent = PartTable("parent", method: null);
+        var partitionedChild = PartTable("child");
+        partitionedChild.ForeignKeys.Add(new Schema.Domain.MySQL.MySqlForeignKey { Name = "fk_child", Columns = "pid", RelatedTable = "parent", RelatedColumns = "id" });
+        var partitionedParent = PartTable("pparent");
+        var plainChild = PartTable("child2", method: null);
+        plainChild.ForeignKeys.Add(new Schema.Domain.MySQL.MySqlForeignKey { Name = "fk_child2", Columns = "pid", RelatedTable = "pparent", RelatedColumns = "id" });
+        var plainChild3 = PartTable("child3", method: null);
+        plainChild3.ForeignKeys.Add(new Schema.Domain.MySQL.MySqlForeignKey { Name = "fk_child3", Columns = "pid", RelatedTable = "parent", RelatedColumns = "id" });
+
+        var findings = RunMyTables(Platform.MariaDb, null, parent, partitionedChild, partitionedParent, plainChild, plainChild3)
+            .Where(f => f.Code == "SS-PART-008").Select(f => f.Location).ToList();
+        Assert.That(findings, Is.EquivalentTo(new[] { "Template 'T' / Table 'child' / FK 'fk_child'", "Template 'T' / Table 'child2' / FK 'fk_child2'" }));
+    }
+
+    [TestCase(Platform.MySQL, null, "id", Severity.Error)]
+    [TestCase(Platform.MySQL, "5.7", "id", Severity.Warning)]
+    [TestCase(Platform.MySQL, null, "other", null)]
+    [TestCase(Platform.MariaDb, null, "id", null)]
+    public void RenamingAPartitioningColumn_IsReportedOnMySql(Platform platform, string minimumVersion, string oldName, Severity? expected)
+    {
+        var table = PartTable("t");
+        table.Columns[0].Name = "new_id";
+        table.Columns[0].OldName = oldName;
+        var finding = RunMyTables(platform, minimumVersion, table).SingleOrDefault(f => f.Code == "SS-PART-009");
+        Assert.That(finding?.Severity, Is.EqualTo(expected));
+    }
+
+    [TestCase(2, false)]
+    [TestCase(3, true)]
+    public void APartitionCountDisagreeingWithTheNamedPartitions_IsError(int count, bool expected)
+    {
+        var table = PartTable("t", count: count);
+        table.Partitioning.Partitions.Add(new Schema.Domain.MySQL.MySqlPartition { Name = "a" });
+        table.Partitioning.Partitions.Add(new Schema.Domain.MySQL.MySqlPartition { Name = "b" });
+        Assert.That(RunMyTables(Platform.MySQL, null, table).Any(f => f.Code == "SS-PART-010"), Is.EqualTo(expected));
     }
 
     [Test]
@@ -918,6 +1800,62 @@ public class CoherenceCheckTests
         Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
         Assert.That(findings[0].Code, Is.EqualTo("SS-FK-004"));
         Assert.That(findings[0].Category, Is.EqualTo("Coherence"));
+    }
+
+    private static SqlServerTable EdgeWithConstraint(string graphType, string fromTable = "[dbo].[Person]", string toTable = "City") => new()
+    {
+        Name = "Knows",
+        Schema = "dbo",
+        GraphType = graphType,
+        Columns = { new SqlServerColumn { Name = "Since", DataType = "date" } },
+        EdgeConstraints = { new EdgeConstraint { Name = "EC_Knows", Clauses = { new EdgeConstraintClause { FromTable = fromTable, ToTable = toTable } } } }
+    };
+
+    private static SqlServerTable NodeTable(string name) => new()
+    {
+        Name = name, Schema = "dbo", GraphType = "Node", Columns = { new SqlServerColumn { Name = "Id", DataType = "int" } }
+    };
+
+    [Test]
+    public void AnEdgeConstraint_OnAnEdgeTable_ConnectingDeclaredNodes_IsClean()
+    {
+        var findings = new CoherenceCheck().Run(Context(TemplateWithTables("T", NodeTable("Person"), NodeTable("City"), EdgeWithConstraint("Edge"))));
+        Assert.That(findings.Where(f => f.Code.StartsWith("SS-TBL")), Is.Empty);
+    }
+
+    [Test]
+    public void AnEdgeConstraint_OnANodeTable_IsError()
+    {
+        var findings = new CoherenceCheck().Run(Context(TemplateWithTables("T", NodeTable("Person"), NodeTable("City"), EdgeWithConstraint("Node")))).ToList();
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-TBL-003" }));
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Error));
+    }
+
+    [Test]
+    public void AnEdgeConstraint_NamingATableThatIsNotADeclaredNode_IsWarning()
+    {
+        var findings = new CoherenceCheck().Run(Context(TemplateWithTables("T", NodeTable("Person"), EdgeWithConstraint("Edge", toTable: "Country")))).ToList();
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-TBL-004" }));
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Warning));
+        Assert.That(findings[0].Message, Does.Contain("'Country'").And.Contain("dbo.Country"));
+    }
+
+    [Test]
+    public void GraphPseudoColumns_AreKeyParts_OnTheTableKindThatHasThem()
+    {
+        var edge = new SqlServerTable
+        {
+            Name = "Knows",
+            Schema = "dbo",
+            GraphType = "Edge",
+            Columns = { new SqlServerColumn { Name = "Since", DataType = "date" } },
+            Indexes = { new SqlServerIndex { Name = "IX_Knows_From", IndexColumns = "$from_id,$to_id" } }
+        };
+        Assert.That(new CoherenceCheck().Run(Context(TemplateWithTables("T", edge))).Where(f => f.Code == "SS-IDX-001"), Is.Empty);
+
+        edge.GraphType = "Node";
+        Assert.That(new CoherenceCheck().Run(Context(TemplateWithTables("T", edge))).Count(f => f.Code == "SS-IDX-001"), Is.EqualTo(2),
+            "a node table has $node_id, not $from_id or $to_id");
     }
 
     [Test]
@@ -1719,6 +2657,38 @@ public class CoherenceCheckTests
         Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code.StartsWith("SS-CDC-")), Is.Empty);
     }
 
+    [TestCase("[UX_Missing]", "which is not one of its declared indexes")]
+    [TestCase("[IX_Plain]", "which is not unique")]
+    [TestCase("[UX_Note]", "which has more than one key column")]
+    [TestCase("[UX_NoteOnly]", "which has a nullable key column")]
+    [TestCase("[UX_Filtered]", "which has a filter")]
+    public void FullTextKeyIndex_ThatSqlServerWouldRefuse_IsAnError(string keyIndex, string problem)
+    {
+        var table = CdcIndexTable(enableCdc: null, cdcIndexName: null);
+        table.Indexes.Add(new SqlServerIndex { Name = "[UX_NoteOnly]", Unique = true, IndexColumns = "[Note]" });
+        table.Indexes.Add(new SqlServerIndex { Name = "[UX_Filtered]", Unique = true, IndexColumns = "[Code]", FilterExpression = "[Code] > 0" });
+        table.FullTextIndex.Add(new Schema.Domain.SqlServer.FullTextIndex { FullTextCatalog = "[cat]", KeyIndex = keyIndex, Columns = "[Code]" });
+
+        var finding = RunFor(table, Platform.SqlServer).Single(f => f.Code == "SS-FT-001");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Error));
+            Assert.That(finding.Message, Does.Contain("Orders").And.Contain(keyIndex).And.Contain(problem));
+        });
+    }
+
+    [TestCase("[UX_Code]")]
+    [TestCase("ux_code")]
+    [TestCase("[PK_Orders]")]
+    public void FullTextKeyIndex_NamingADeclaredUniqueSingleNotNullColumnIndex_IsSilent(string keyIndex)
+    {
+        var table = CdcIndexTable(enableCdc: null, cdcIndexName: null);
+        table.FullTextIndex.Add(new Schema.Domain.SqlServer.FullTextIndex { FullTextCatalog = "[cat]", KeyIndex = keyIndex, Columns = "[Code]" });
+
+        Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-FT-001"), Is.Empty);
+    }
+
     private static SqlServerTable CdcIndexTable(bool? enableCdc, string cdcIndexName)
     {
         var table = new SqlServerTable { Schema = "dbo", Name = "Orders", EnableCDC = enableCdc, CdcIndexName = cdcIndexName };
@@ -1781,6 +2751,34 @@ public class CoherenceCheckTests
             .Where(f => f.Code == "SS-COL-002"), Is.Empty);
     }
 
+    // utf8 is utf8mb3 under its older name, and the deploy writes both in the server's own form before comparing.
+    [TestCase("utf8", "utf8mb3_general_ci")]
+    [TestCase("utf8mb3", "utf8_general_ci")]
+    public void AColumnInTheTablesCharsetUnderItsOtherName_IsSilent(string charset, string tableCollation)
+    {
+        Assert.That(RunFor(CharsetTable(charset, null, tableCollation), Platform.MySQL)
+            .Where(f => f.Code == "SS-COL-002"), Is.Empty);
+    }
+
+    // MariaDB 11.4's short collation names (uca1400_ai_ci) name no character set: they take the table's.
+    [Test]
+    public void AShortTableCollation_BelongsToTheTablesCharset()
+    {
+        var sameSet = CharsetTable("utf8mb4", null, "uca1400_ai_ci", maria: true);
+        sameSet.CharacterSet = "utf8mb4";
+        var otherSet = CharsetTable("latin1", null, "uca1400_ai_ci", maria: true);
+        otherSet.CharacterSet = "utf8mb4";
+        var tableSetUnknown = CharsetTable("latin1", null, "uca1400_ai_ci", maria: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunFor(sameSet, Platform.MariaDb).Where(f => f.Code == "SS-COL-002"), Is.Empty, "the table's own set");
+            Assert.That(RunFor(otherSet, Platform.MariaDb).Count(f => f.Code == "SS-COL-002"), Is.EqualTo(1), "another set");
+            Assert.That(RunFor(tableSetUnknown, Platform.MariaDb).Where(f => f.Code == "SS-COL-002"), Is.Empty,
+                "with no table character set the database default decides, which validation cannot see");
+        });
+    }
+
     // ---- SS-IDENT-002: a PostgreSQL name longer than 63 bytes is stored truncated ----
 
     [Test]
@@ -1824,7 +2822,11 @@ public class CoherenceCheckTests
         Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-002"), Is.Empty);
     }
 
-    // ---- SS-IDENT-001: a " in a PostgreSQL name is refused, because no stored form of it deploys ----
+    // ---- SS-IDENT-002's POPULATION: one case per PostgreSQL name kind that reaches DDL ----
+    //
+    // A case per kind, deliberately, because the population is a hand-written helper and a kind dropped
+    // from it fails silently -- the check still passes, on a smaller set. Each name here is 64 bytes, one
+    // over PostgreSQL's limit, which truncates it.
 
     private static PostgreSqlTable QTable(string tableName = "invoice", string columnName = "id",
                                           string tableOldName = null, string columnOldName = null) =>
@@ -1836,61 +2838,9 @@ public class CoherenceCheckTests
             Columns = { new PostgreSqlColumn { Name = columnName, DataType = "integer", OldName = columnOldName } }
         };
 
-    [TestCase("in\"voice", "id", null, null, TestName = "quote in the table name")]
-    [TestCase("invoice", "a\"b", null, null, TestName = "quote in a column name")]
-    [TestCase("invoice", "id", "ol\"d", null, TestName = "quote in the table OldName")]
-    [TestCase("invoice", "id", null, "ol\"d", TestName = "quote in a column OldName")]
-    public void AQuoteInAPostgreSqlName_IsRefused(string t, string c, string tOld, string cOld)
-    {
-        // Every one of these reaches PostgreSQL DDL as a wrapped identifier, and the wrap does not escape,
-        // so the deploy emits invalid SQL. The OldName cases matter most: there the failure is SILENT --
-        // the rename matches nothing, the new object is created, and the old one is orphaned for a later
-        // drop-by-absence to remove with its rows.
-        var finding = RunPg(QTable(t, c, tOld, cOld)).Single(f => f.Code == "SS-IDENT-001");
+    private const string Overlong = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
-        Assert.Multiple(() =>
-        {
-            Assert.That(finding.Severity, Is.EqualTo(Severity.Error), "invalid DDL is not a warning");
-            Assert.That(finding.Message, Does.Contain("double-quote"), finding.Message);
-            Assert.That(finding.Message, Does.Contain("Rename"), "the message has to say what to do");
-        });
-    }
-
-    [Test]
-    public void OrdinaryPostgreSqlNames_AreNotRefused()
-    {
-        // The control that matters: 114 shipped Demos/PostgreSQL files carry ordinary quoted-lowercase
-        // names, and a check that fired on those would fail --Validate across the whole demo catalogue.
-        Assert.That(RunPg(QTable()).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
-    }
-
-    [Test]
-    public void AQuoteInANonPostgreSqlName_IsNotRefusedHere()
-    {
-        // SQL Server and the MySQL family escape at their own wrap sites, so this limit is PostgreSQL's
-        // alone -- scoping it by platform is what keeps it from becoming a cross-engine false error.
-        var sql = new SqlServerTable
-        {
-            Name = "in\"voice", Schema = "dbo",
-            Columns = { new SqlServerColumn { Name = "id", DataType = "int" } }
-        };
-        Assert.That(RunFor(sql, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
-    }
-
-    // ---- SS-IDENT-001's POPULATION: one case per name kind that reaches the unescaped re-wrap ----
-    //
-    // A case per kind, deliberately, because the population is a hand-written helper and a kind dropped
-    // from it fails silently -- the check still passes, on a smaller set. Three of the original kinds
-    // (Schema, Index, Foreign key) shipped with no test at all and were only ever exercised by an
-    // out-of-band probe, which is exactly how that happens.
-    //
-    // Every kind below was read at its emission site in the shipped PostgreSQL quench scripts and
-    // confirmed to concatenate the stored value between bare double quotes with no doubling. Names that
-    // go through QUOTE_IDENT are NOT here and must not be added: a policy name (MissingIndexesAnd
-    // ConstraintsQuench:321/375/410) escapes correctly, so refusing a quote in one would be a restriction
-    // the engine does not impose.
-
-    private static System.Collections.Generic.IEnumerable<TestCaseData> QuotedTableNameKinds()
+    private static System.Collections.Generic.IEnumerable<TestCaseData> OverlongTableNameKinds()
     {
         PostgreSqlTable Base() => new()
         {
@@ -1906,68 +2856,67 @@ public class CoherenceCheckTests
             return t;
         }
 
-        yield return new TestCaseData(With(t => t.Name = "in\"voice"), "Table").SetName("table name");
-        yield return new TestCaseData(With(t => t.Schema = "pub\"lic"), "Schema").SetName("schema name");
-        yield return new TestCaseData(With(t => t.OldName = "ol\"d"), "Table OldName").SetName("table OldName");
-        yield return new TestCaseData(With(t => t.Columns[0].Name = "a\"b"), "Column").SetName("column name");
-        yield return new TestCaseData(With(t => t.Columns[0].OldName = "ol\"d"), "Column OldName").SetName("column OldName");
+        yield return new TestCaseData(With(t => t.Name = Overlong), "Table").SetName("table name");
+        yield return new TestCaseData(With(t => t.Schema = Overlong), "Schema").SetName("schema name");
+        yield return new TestCaseData(With(t => t.OldName = Overlong), "Table OldName").SetName("table OldName");
+        yield return new TestCaseData(With(t => t.Columns[0].Name = Overlong), "Column").SetName("column name");
+        yield return new TestCaseData(With(t => t.Columns[0].OldName = Overlong), "Column OldName").SetName("column OldName");
         yield return new TestCaseData(
-            With(t => t.Indexes.Add(new PostgreSqlIndex { Name = "ix\"1", IndexColumns = "id" })),
+            With(t => t.Indexes.Add(new PostgreSqlIndex { Name = Overlong, IndexColumns = "id" })),
             "Index").SetName("index name");
         yield return new TestCaseData(
             With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
-                { Name = "fk\"1", Columns = "id", RelatedTable = "customer", RelatedColumns = "id" })),
+                { Name = Overlong, Columns = "id", RelatedTable = "customer", RelatedColumns = "id" })),
             "Foreign key").SetName("foreign key name");
 
-        // The four table-tier kinds the original population missed.
         yield return new TestCaseData(
             With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
             {
-                Name = "fk_1", Columns = "id", RelatedTable = "cus\"tomer", RelatedColumns = "id"
+                Name = "fk_1", Columns = "id", RelatedTable = Overlong, RelatedColumns = "id"
             })),
             "Foreign key RelatedTable").SetName("FK RelatedTable");
         yield return new TestCaseData(
             With(t => t.ForeignKeys.Add(new PostgreSqlForeignKey
             {
                 Name = "fk_1", Columns = "id", RelatedTable = "customer", RelatedColumns = "id",
-                RelatedTableSchema = "ot\"her"
+                RelatedTableSchema = Overlong
             })),
             "Foreign key RelatedTableSchema").SetName("FK RelatedTableSchema");
         yield return new TestCaseData(
-            With(t => t.CheckConstraints.Add(new PostgreSqlCheckConstraint { Name = "ck\"1", Expression = "id > 0" })),
+            With(t => t.CheckConstraints.Add(new PostgreSqlCheckConstraint { Name = Overlong, Expression = "id > 0" })),
             "Check constraint").SetName("check constraint name");
         yield return new TestCaseData(
-            With(t => t.ExcludeConstraints.Add(new ExcludeConstraint { Name = "ex\"1" })),
+            With(t => t.ExcludeConstraints.Add(new ExcludeConstraint { Name = Overlong })),
             "Exclude constraint").SetName("exclude constraint name");
         yield return new TestCaseData(
-            With(t => t.Statistics.Add(new Schema.Domain.PostgreSQL.Statistic { Name = "st\"1", StatisticsColumns = "id" })),
+            With(t => t.Statistics.Add(new Schema.Domain.PostgreSQL.Statistic { Name = Overlong, StatisticsColumns = "id" })),
             "Statistics").SetName("statistics name");
 
-        // ReplicaIdentityIndex is a POINTER at an index, and the realistic shape is a quote in the pointer
-        // while the index it names is clean -- which is also the only shape that isolates this kind from
+        // ReplicaIdentityIndex is a POINTER at an index, and the realistic shape is an overlong pointer
+        // while the index it names is short -- which is also the only shape that isolates this kind from
         // the Index kind above.
         yield return new TestCaseData(
             With(t =>
             {
                 t.Indexes.Add(new PostgreSqlIndex { Name = "uq_invoice", IndexColumns = "id", Unique = true });
                 t.ReplicaIdentity = "INDEX";
-                t.ReplicaIdentityIndex = "uq\"invoice";
+                t.ReplicaIdentityIndex = Overlong;
             }),
             "ReplicaIdentityIndex").SetName("ReplicaIdentityIndex pointer");
     }
 
-    [TestCaseSource(nameof(QuotedTableNameKinds))]
-    public void EveryTableTierNameKind_WithAQuote_IsRefused(PostgreSqlTable table, string expectedKind)
+    [TestCaseSource(nameof(OverlongTableNameKinds))]
+    public void EveryTableTierNameKind_Overlong_IsRefused(PostgreSqlTable table, string expectedKind)
     {
-        var findings = RunPg(table).Where(f => f.Code == "SS-IDENT-001").ToList();
+        var findings = RunPg(table).Where(f => f.Code == "SS-IDENT-002").ToList();
 
         Assert.That(findings.Select(f => f.Message).ToList(),
             Has.Some.StartsWith($"{expectedKind} '"),
-            $"no SS-IDENT-001 names the '{expectedKind}' kind — the population helper has dropped it");
-        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "invalid DDL is not a warning");
+            $"no SS-IDENT-002 names the '{expectedKind}' kind — the population helper has dropped it");
+        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "a truncated name is not a warning");
     }
 
-    private static System.Collections.Generic.IEnumerable<TestCaseData> QuotedModeledObjectKinds()
+    private static System.Collections.Generic.IEnumerable<TestCaseData> OverlongModeledObjectKinds()
     {
         Template With(System.Action<Template> mutate)
         {
@@ -1978,50 +2927,50 @@ public class CoherenceCheckTests
 
         yield return new TestCaseData(
             With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
-                { Name = "mv\"1", Schema = "public", Definition = "SELECT 1" })),
+                { Name = Overlong, Schema = "public", Definition = "SELECT 1" })),
             "Materialized view").SetName("materialized view name");
         yield return new TestCaseData(
             With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
-                { Name = "mv_1", Schema = "pub\"lic", Definition = "SELECT 1" })),
+                { Name = "mv_1", Schema = Overlong, Definition = "SELECT 1" })),
             "Materialized view schema").SetName("materialized view schema");
         yield return new TestCaseData(
             With(t => t.MaterializedViews.Add(new PostgreSqlMaterializedView
             {
                 Name = "mv_1", Schema = "public", Definition = "SELECT 1",
-                Indexes = { new PostgreSqlIndex { Name = "ix\"1", IndexColumns = "id" } }
+                Indexes = { new PostgreSqlIndex { Name = Overlong, IndexColumns = "id" } }
             })),
             "Materialized view index").SetName("materialized view index name");
         yield return new TestCaseData(
-            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = "st\"atus", Schema = "public" })),
+            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = Overlong, Schema = "public" })),
             "Enum type").SetName("enum type name");
         yield return new TestCaseData(
-            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = "status", Schema = "pub\"lic" })),
+            With(t => t.EnumTypes.Add(new PostgreSqlEnumType { Name = "status", Schema = Overlong })),
             "Enum type schema").SetName("enum type schema");
         yield return new TestCaseData(
-            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = "sq\"1", Schema = "public" })),
+            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = Overlong, Schema = "public" })),
             "Sequence").SetName("sequence name");
         yield return new TestCaseData(
-            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = "sq_1", Schema = "pub\"lic" })),
+            With(t => t.Sequences.Add(new PostgreSqlSequence { Name = "sq_1", Schema = Overlong })),
             "Sequence schema").SetName("sequence schema");
         yield return new TestCaseData(
             With(t => t.DomainTypes.Add(new PostgreSqlDomainType
-                { Name = "em\"ail", Schema = "public", DataType = "text" })),
+                { Name = Overlong, Schema = "public", DataType = "text" })),
             "Domain type").SetName("domain type name");
         yield return new TestCaseData(
             With(t => t.DomainTypes.Add(new PostgreSqlDomainType
-                { Name = "email", Schema = "pub\"lic", DataType = "text" })),
+                { Name = "email", Schema = Overlong, DataType = "text" })),
             "Domain type schema").SetName("domain type schema");
         yield return new TestCaseData(
             With(t => t.DomainTypes.Add(new PostgreSqlDomainType
             {
                 Name = "email", Schema = "public", DataType = "text",
-                CheckConstraints = { new PostgreSqlDomainConstraint { Name = "ck\"1", Expression = "VALUE <> ''" } }
+                CheckConstraints = { new PostgreSqlDomainConstraint { Name = Overlong, Expression = "VALUE <> ''" } }
             })),
             "Domain type check constraint").SetName("domain type check constraint name");
     }
 
-    [TestCaseSource(nameof(QuotedModeledObjectKinds))]
-    public void EveryModeledObjectNameKind_WithAQuote_IsRefused(Template template, string expectedKind)
+    [TestCaseSource(nameof(OverlongModeledObjectKinds))]
+    public void EveryModeledObjectNameKind_Overlong_IsRefused(Template template, string expectedKind)
     {
         var product = new Product
         {
@@ -2030,16 +2979,16 @@ public class CoherenceCheckTests
             TemplateOrder = new System.Collections.Generic.List<string>()
         };
         var findings = new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg"))
-            .Where(f => f.Code == "SS-IDENT-001").ToList();
+            .Where(f => f.Code == "SS-IDENT-002").ToList();
 
         Assert.That(findings.Select(f => f.Message).ToList(),
             Has.Some.StartsWith($"{expectedKind} '"),
-            $"no SS-IDENT-001 names the '{expectedKind}' kind — the population helper has dropped it");
-        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "invalid DDL is not a warning");
+            $"no SS-IDENT-002 names the '{expectedKind}' kind — the population helper has dropped it");
+        Assert.That(findings.All(f => f.Severity == Severity.Error), Is.True, "a truncated name is not a warning");
     }
 
     [Test]
-    public void ACleanlyNamedModeledObjectPackage_IsNotRefused()
+    public void AShortNamedModeledObjectPackage_IsNotRefused()
     {
         // The control for the widened half. Every shipped PostgreSQL demo carries ordinary lowercase names
         // for these objects, so a check that fired on them would redden --Validate across the catalogue.
@@ -2065,26 +3014,7 @@ public class CoherenceCheckTests
         };
 
         Assert.That(new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg"))
-            .Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
-    }
-
-    [Test]
-    public void APolicyNameWithAQuote_IsNotRefused()
-    {
-        // Not an oversight -- CREATE/ALTER/DROP POLICY all wrap the name with QUOTE_IDENT, which doubles an
-        // embedded quote correctly, so the DDL is valid and there is nothing to refuse. Pinned because the
-        // obvious next move on this check is "add every remaining name", and this is the one that must not
-        // be added.
-        var table = new PostgreSqlTable
-        {
-            Name = "invoice",
-            Schema = "public",
-            Columns = { new PostgreSqlColumn { Name = "id", DataType = "integer" } },
-            RowLevelSecurity = true,
-            Policies = { new PostgreSqlPolicy { Name = "ten\"ant_read", UsingExpression = "true" } }
-        };
-
-        Assert.That(RunPg(table).Where(f => f.Code == "SS-IDENT-001"), Is.Empty);
+            .Where(f => f.Code == "SS-IDENT-002"), Is.Empty);
     }
 
     // ---- A foreign-key name reused across tables (SS-FK-006) ----

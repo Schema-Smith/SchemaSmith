@@ -36,6 +36,7 @@ BEGIN
 
     -- Declarations no degrade can rescue are refused before anything is created.
     CALL SchemaSmith_RefuseUnsupportedIndexes();
+    CALL SchemaSmith_DegradeVectorIndexes();
 
     -- Ensure _SchemaSmith_FullTextIndexes exists (ParseTableJson may not create it if there are no fulltext indexes).
     -- Keep this fallback schema in lockstep with ParseTableJson's primary definition (see
@@ -118,6 +119,24 @@ BEGIN
         END IF;
     END IF;
 
+    -- A key declared WITHOUT OVERLAPS where the engine has no such clause (MariaDB below 10.5.3; MySQL, which has no
+    -- periods) is created over the period's end and start columns instead -- the same columns the engine would list
+    -- for it -- and the downgrade is recorded. Under the fail policy SchemaSmith_RefuseUnsupportedIndexes stopped
+    -- the run before this.
+    IF SchemaSmith_SupportsWithoutOverlaps() = 0
+       AND EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i WHERE i.WithoutOverlaps = 1) THEN
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  Key created over the period''s columns, without WITHOUT OVERLAPS (requires MariaDB 10.5.3, MySQL unsupported - downgraded): ',
+               SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName))
+        FROM _SchemaSmith_Indexes i
+        WHERE i.WithoutOverlaps = 1;
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)',
+               CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)), 'downgraded'
+        FROM _SchemaSmith_Indexes i
+        WHERE i.WithoutOverlaps = 1;
+    END IF;
+
     -- =========================================================================
     -- Detection snapshot: the live index picture read ONCE here so STEP 1 (rename) and STEP 2
     -- (modified) join it instead of re-reading INFORMATION_SCHEMA.STATISTICS per declared index.
@@ -136,10 +155,9 @@ BEGIN
         -- MySQL's index comment ceiling is 1024 characters; MAX() alongside the other per-index
         -- aggregates below since INDEX_COMMENT is constant across a composite index's key parts.
         IndexComment VARCHAR(1024),
+        WithoutOverlaps TINYINT NOT NULL DEFAULT 0,
         TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         IndexKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
-        LeadColumn VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
-        FkBacked TINYINT NOT NULL DEFAULT 0,
         PRIMARY KEY (TableName, IndexName),
         KEY ix_idxsnap_key (TableKey, IndexKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -156,7 +174,7 @@ BEGIN
     -- only executes at 8.0.13+ and never on 5.7/MariaDB; see GenerateTableJson.sql for the full
     -- explanation) or the compare below never converges.
     IF SchemaSmith_SupportsFunctionalIndex() = 1 THEN
-        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment, LeadColumn)
+        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4),
                CONVERT(s.INDEX_NAME USING utf8mb4),
                MAX(s.NON_UNIQUE),
@@ -177,13 +195,12 @@ BEGIN
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
-               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4),
-               CONVERT(MAX(CASE WHEN s.SEQ_IN_INDEX = 1 THEN s.COLUMN_NAME END) USING utf8mb4)
+               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
          WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
-         GROUP BY s.TABLE_NAME, s.INDEX_NAME;
+         GROUP BY CAST(s.TABLE_NAME AS BINARY), CAST(s.INDEX_NAME AS BINARY), s.TABLE_NAME, s.INDEX_NAME;
     ELSE
-        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment, LeadColumn)
+        INSERT INTO _SchemaSmith_IdxDetectSnap (TableName, IndexName, NonUnique, IndexType, NormColumns, IndexComment)
         SELECT CONVERT(s.TABLE_NAME USING utf8mb4),
                CONVERT(s.INDEX_NAME USING utf8mb4),
                MAX(s.NON_UNIQUE),
@@ -195,11 +212,10 @@ BEGIN
                    ORDER BY s.SEQ_IN_INDEX
                    SEPARATOR ','
                ),
-               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4),
-               CONVERT(MAX(CASE WHEN s.SEQ_IN_INDEX = 1 THEN s.COLUMN_NAME END) USING utf8mb4)
+               CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
           FROM INFORMATION_SCHEMA.STATISTICS s
          WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
-         GROUP BY s.TABLE_NAME, s.INDEX_NAME;
+         GROUP BY CAST(s.TABLE_NAME AS BINARY), CAST(s.INDEX_NAME AS BINARY), s.TABLE_NAME, s.INDEX_NAME;
     END IF;
 
     -- Names-only copy: STEP 1 references the snapshot twice in one statement (main join + the
@@ -208,34 +224,15 @@ BEGIN
     UPDATE _SchemaSmith_IdxDetectSnap
        SET TableKey = SchemaSmith_IdentifierKey(TableName),
            IndexKey = SchemaSmith_NameKeyCI(IndexName);
-
-    -- MariaDB converges a case-only index spelling by drop and re-create, which the engine refuses (1553) for an
-    -- index a foreign key depends on. Mark every index that leads with a foreign key's leading column, on either
-    -- side of the key, so that step leaves its spelling alone rather than abort the deploy over a cosmetic
-    -- difference. MySQL renames instead, so it skips the catalog read.
-    IF VERSION() LIKE '%MariaDB%' THEN
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
-        CREATE TEMPORARY TABLE _SchemaSmith_FkLeadColumns (
-            TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
-            ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
-            PRIMARY KEY (TableKey, ColumnKey)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
-        SELECT SchemaSmith_IdentifierKey(k.TABLE_NAME), SchemaSmith_NameKeyCI(k.COLUMN_NAME)
-          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
-         WHERE k.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.TABLE_SCHEMA) = v_DbKey
-           AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
-        INSERT IGNORE INTO _SchemaSmith_FkLeadColumns (TableKey, ColumnKey)
-        SELECT SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_NAME), SchemaSmith_NameKeyCI(k.REFERENCED_COLUMN_NAME)
-          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
-         WHERE k.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_SCHEMA) = v_DbKey
-           AND k.REFERENCED_TABLE_NAME IS NOT NULL AND k.ORDINAL_POSITION = 1;
-        UPDATE _SchemaSmith_IdxDetectSnap snap
-          JOIN _SchemaSmith_FkLeadColumns f
-            ON f.TableKey = snap.TableKey AND f.ColumnKey = SchemaSmith_NameKeyCI(snap.LeadColumn)
-           SET snap.FkBacked = 1;
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkLeadColumns;
+    -- Whether a unique key is WITHOUT OVERLAPS is in the catalog from MariaDB 11.4 (KEY_PERIOD_USAGE); below it the
+    -- flag stays 0 and the compare does not read it, so a declared temporal key is compared by its columns alone.
+    IF VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1104 THEN
+        UPDATE _SchemaSmith_IdxDetectSnap
+           SET WithoutOverlaps = 1
+         WHERE NonUnique = 0
+           AND SchemaSmith_IndexPeriodJson(p_DatabaseName, TableName, IndexName) IS NOT NULL;
     END IF;
+
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDetectNames;
     CREATE TEMPORARY TABLE _SchemaSmith_IdxDetectNames (
@@ -294,8 +291,9 @@ BEGIN
             AND s2.IndexKey = i.IndexKey
       )
       -- Old index exists with same columns (compare normalized column list)
-      AND CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) = CAST(snap.NormColumns AS BINARY)
+      AND CAST(SchemaSmith_NormalizeIndexColumns(i.CompareColumns) AS BINARY) = CAST(snap.NormColumns AS BINARY)
       -- Same uniqueness
+      AND NOT (VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1104 AND SchemaSmith_SupportsWithoutOverlaps() = 1 AND (snap.WithoutOverlaps = 1) <> (i.WithoutOverlaps = 1))
       AND i.IsUnique = (snap.NonUnique = 0);
 
     -- Handle renames
@@ -398,6 +396,34 @@ BEGIN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCaseRenames;
     END IF;
 
+    -- On the MariaDB patches SchemaSmith_CaseRespellKeepsOldSpelling names, an index a foreign key needs cannot be
+    -- respelled by case: the one-statement swap below keeps the old name, so retrying it would rebuild the table on every
+    -- deploy. Such an index keeps its spelling, with a warning. Keyed on its leading column, which is what a key uses;
+    -- the catalog is read here, out of the set-based statements.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FkKeyedColumns;
+    CREATE TEMPORARY TABLE _SchemaSmith_FkKeyedColumns (TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+                                                       ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+                                                       PRIMARY KEY (TableKey, ColumnKey)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+    IF SchemaSmith_CaseRespellKeepsOldSpelling() = 1 THEN
+        INSERT IGNORE INTO _SchemaSmith_FkKeyedColumns (TableKey, ColumnKey)
+        SELECT SchemaSmith_IdentifierKey(TABLE_NAME), SchemaSmith_NameKeyCI(COLUMN_NAME)
+          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+         WHERE TABLE_SCHEMA = v_DbCi AND REFERENCED_TABLE_NAME IS NOT NULL;
+        INSERT IGNORE INTO _SchemaSmith_FkKeyedColumns (TableKey, ColumnKey)
+        SELECT SchemaSmith_IdentifierKey(REFERENCED_TABLE_NAME), SchemaSmith_NameKeyCI(REFERENCED_COLUMN_NAME)
+          FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+         WHERE REFERENCED_TABLE_SCHEMA = v_DbCi;
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  WARNING: index ', SchemaSmith_StripBacktickWrapping(i.TableName), '.', snap.IndexName,
+                      ' keeps its spelling, not ', SchemaSmith_StripBacktickWrapping(i.IndexName),
+                      ': a foreign key needs it, and this MariaDB version cannot respell such an index by case (fixed in 10.6.26, 10.11.17 and 11.4.11).')
+          FROM _SchemaSmith_Indexes i
+          JOIN _SchemaSmith_IdxDetectSnap snap ON snap.TableKey = i.TableKey AND snap.IndexKey = i.IndexKey
+          JOIN _SchemaSmith_FkKeyedColumns f ON f.TableKey = i.TableKey AND f.ColumnKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(SUBSTRING_INDEX(i.IndexColumns, ',', 1)), ' ', 1), '(', 1)))
+         WHERE i.IsPrimaryKey = 0
+           AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY);
+    END IF;
+
     -- =========================================================================
     -- STEP 2: Detect modified indexes (same name, different definition)
     -- =========================================================================
@@ -434,12 +460,15 @@ BEGIN
       AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1
       -- Check if definition differs (columns, uniqueness, or index type)
       AND (
-          -- Spelled differently only in case, on MariaDB (see the case-only spelling step above)
-          (VERSION() LIKE '%MariaDB%' AND snap.FkBacked = 0 AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY))
+          -- Spelled differently only in case, on MariaDB, which converges it by drop and re-create. One a foreign key needs is
+          -- respelled by the one-statement swap below (1553 sends it there).
+          (VERSION() LIKE '%MariaDB%' AND CAST(snap.IndexName AS BINARY) <> CAST(SchemaSmith_StripBacktickWrapping(i.IndexName) AS BINARY)
+           AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_FkKeyedColumns f WHERE f.TableKey = i.TableKey AND f.ColumnKey = SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(SUBSTRING_INDEX(SUBSTRING_INDEX(TRIM(SUBSTRING_INDEX(i.IndexColumns, ',', 1)), ' ', 1), '(', 1)))))
           -- Or columns differ
-          OR CAST(SchemaSmith_NormalizeIndexColumns(i.IndexColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
+          OR CAST(SchemaSmith_NormalizeIndexColumns(i.CompareColumns) AS BINARY) != CAST(snap.NormColumns AS BINARY)
           -- Or uniqueness differs
           OR i.IsUnique != (snap.NonUnique = 0)
+          OR (VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1104 AND SchemaSmith_SupportsWithoutOverlaps() = 1 AND (snap.WithoutOverlaps = 1) <> (i.WithoutOverlaps = 1))
           -- Or the kind differs, by the rule ModifiedTableQuench uses too
           OR SchemaSmith_IndexTypesMatch(i.IndexType, snap.IndexType, p_DatabaseName, i.TableName) = 0
           -- Or visibility differs (FULLTEXT indexes don't support INVISIBLE, skip them). Below the
@@ -457,33 +486,67 @@ BEGIN
           OR (CAST(COALESCE(snap.IndexComment, '') AS BINARY) != CAST(COALESCE(i.Comment, '') AS BINARY))
       );
 
-    -- Drop modified indexes (they'll be recreated later)
+    -- Drop modified indexes (they'll be recreated later). One a foreign key needs cannot be dropped on its own (1553), so
+    -- it is listed instead and STEP 4 replaces it in one ALTER, which the engine checks against the key only once both
+    -- the drop and the add are done -- the same as ModifiedTableQuench.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DeferredIndexSwaps;
+    CREATE TEMPORARY TABLE _SchemaSmith_DeferredIndexSwaps (
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        IndexName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableName, IndexName)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop and recreate modified indexes');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
         FROM _SchemaSmith_ModifiedIndexes;
+
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'index', CONCAT(TableName, '.', IndexName), 'wouldDrop'
+        FROM _SchemaSmith_ModifiedIndexes;
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop and recreate modified indexes');
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Drop and recreate index: ', TableName, '.', IndexName)
-        FROM _SchemaSmith_ModifiedIndexes;
 
-        -- Fold each table's modified-index drops into one multi-clause ALTER, materialize, execute.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexModStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_IndexModStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        -- OnlineApply: each table's mode; a drop runs through the online forms, which MariaDB takes only on an ALTER TABLE.
+        CALL SchemaSmith_StageOnlineApply();
+        CREATE TEMPORARY TABLE _SchemaSmith_IndexModStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT,
+                                                           TableName VARCHAR(128) COLLATE utf8mb4_bin, IndexName VARCHAR(128) COLLATE utf8mb4_bin,
+                                                           AlterStmt TEXT, OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF')
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_IndexModStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                      GROUP_CONCAT(CONCAT('DROP INDEX `', IndexName, '`') ORDER BY IndexName SEPARATOR ', '))
-        FROM _SchemaSmith_ModifiedIndexes
-        GROUP BY TableName;
+        INSERT INTO _SchemaSmith_IndexModStmts (LogMsg, Stmt, AuditName, TableName, IndexName, AlterStmt)
+        SELECT CONCAT('  Drop and recreate index: ', TableName, '.', IndexName),
+               CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
+               CONCAT(TableName, '.', IndexName), TableName, IndexName,
+               CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP INDEX `', IndexName, '`')
+        FROM _SchemaSmith_ModifiedIndexes;
+        UPDATE _SchemaSmith_IndexModStmts s
+          JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
+           SET s.OnlineMode = t.OnlineMode;
 
         SET @v_indexmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexModStmts);
         WHILE @v_indexmod_id IS NOT NULL DO
-            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_IndexModStmts WHERE RowId = @v_indexmod_id;
+            SELECT LogMsg, Stmt, AuditName, TableName, IndexName, AlterStmt, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_tbl, @ss_idx, @ss_online_sql_alter, @ss_online_mode
+              FROM _SchemaSmith_IndexModStmts WHERE RowId = @v_indexmod_id;
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
             PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
+            SET @ss_fk_needs_index := 0;
+            SET @ss_online_form := NULL;
+            BEGIN
+                DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                IF @ss_online_mode = 'OFF' THEN
+                    EXECUTE stmt;
+                ELSE
+                    CALL SchemaSmith_ExecuteOnline(@ss_online_sql_alter, @ss_online_mode, 0, 0, p_DatabaseName, @ss_tbl, @ss_online_form);
+                END IF;
+            END;
+            IF @ss_fk_needs_index = 1 THEN
+                INSERT INTO _SchemaSmith_DeferredIndexSwaps (TableName, IndexName) VALUES (@ss_tbl, @ss_idx);
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('    A foreign key needs ', @ss_auditname, ': it is replaced in one statement when it is recreated'));
+            ELSE
+                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped', @ss_online_form);
+            END IF;
             DEALLOCATE PREPARE stmt;
             SET @v_indexmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexModStmts WHERE RowId > @v_indexmod_id);
         END WHILE;
@@ -542,15 +605,15 @@ BEGIN
             SUBSTRING_INDEX(po.ObjectName, '.', -1)
         FROM SchemaSmith_ProductOwnership po
         INNER JOIN _SchemaSmith_Tables t
-            ON CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
+            ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
         LEFT JOIN _SchemaSmith_WouldDropDefIdx di
-            ON CONVERT(di.TableName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-            AND CONVERT(di.IndexName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
+            ON SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+            AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
         LEFT JOIN _SchemaSmith_WouldDropIdxCat ei
-            ON CONVERT(ei.TableName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-            AND CONVERT(ei.IndexName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
+            ON SchemaSmith_IdentifierKey(ei.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+            AND SchemaSmith_NameKeyCI(ei.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
         WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-          AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+          AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
           AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci
           -- Per-table tightening (the env/product gate is removed for capture)
           AND COALESCE(t.DropIndexesRemovedFromProduct, 1) = 1
@@ -561,8 +624,8 @@ BEGIN
           -- Not a renamed index
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE r.TableName = SUBSTRING_INDEX(po.ObjectName, '.', 1)
-                AND r.OldIndexName = SUBSTRING_INDEX(po.ObjectName, '.', -1)
+              WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+                AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
           )
           -- Verify index actually exists (snapshot bridge)
           AND ei.IndexName IS NOT NULL;
@@ -572,25 +635,31 @@ BEGIN
         SELECT CONVERT(ei.TableName USING utf8mb4), CONVERT(ei.IndexName USING utf8mb4)
         FROM _SchemaSmith_WouldDropIdxCat ei
         INNER JOIN _SchemaSmith_Tables t
-            ON CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
+            ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(ei.TableName)
         WHERE UPPER(ei.IndexName COLLATE utf8mb4_unicode_ci) != 'PRIMARY' COLLATE utf8mb4_unicode_ci
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_WouldDropDefIdx di
-              WHERE CONVERT(di.TableName USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
-                AND CONVERT(di.IndexName USING utf8mb4) = CONVERT(ei.IndexName USING utf8mb4)
+              WHERE SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
           )
           AND NOT EXISTS (
               SELECT 1 FROM SchemaSmith_ProductOwnership po
               WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-                AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
                 AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci
-                AND po.ObjectName COLLATE utf8mb4_unicode_ci = CONCAT(ei.TableName, '.', ei.IndexName) COLLATE utf8mb4_unicode_ci
+                AND SchemaSmith_OwnedNameMatches(po.ObjectName, ei.TableName, ei.IndexName) = 1
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE CONVERT(r.TableName USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
-                AND CONVERT(r.OldIndexName USING utf8mb4) = CONVERT(ei.IndexName USING utf8mb4)
+              WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
           );
+
+        -- A declared FULLTEXT index is in the definition: it is parsed into _SchemaSmith_FullTextIndexes, which the passes
+        -- above do not read, so it was dropped as removed from the product and re-created on every deploy (#530).
+        DELETE d FROM _SchemaSmith_WouldDropIndexes d
+          JOIN _SchemaSmith_FullTextIndexes ft
+            ON ft.TableKey = SchemaSmith_IdentifierKey(d.TableName) AND ft.IndexKey = SchemaSmith_NameKeyCI(d.IndexName);
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT CONNECTION_ID(), 'index', CONCAT(TableName, '.', IndexName), 'dropSuppressed'
@@ -621,34 +690,6 @@ BEGIN
         FROM INFORMATION_SCHEMA.STATISTICS s
         WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
           AND s.SEQ_IN_INDEX = 1;
-
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyKCU;
-        CREATE TEMPORARY TABLE _SchemaSmith_IdxOnlyKCU (
-            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
-            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-            ReferencedTableName VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
-            KEY ix_iokcu (ReferencedTableName)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_IdxOnlyKCU (TableName, ConstraintName, ReferencedTableName)
-        SELECT CONVERT(kcu.TABLE_NAME USING utf8mb4), CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4), CONVERT(kcu.REFERENCED_TABLE_NAME USING utf8mb4)
-        FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-        WHERE kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
-          AND kcu.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA) = v_DbKey
-          AND kcu.REFERENCED_TABLE_NAME IS NOT NULL;
-
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyTC;
-        CREATE TEMPORARY TABLE _SchemaSmith_IdxOnlyTC (
-            RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
-            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-            KEY ix_iotc (TableName, ConstraintName)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_IdxOnlyTC (TableName, ConstraintName)
-        SELECT CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4)
-        FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-        WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
-          AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexesToDrop;
         CREATE TEMPORARY TABLE _SchemaSmith_IndexesToDrop (
@@ -687,15 +728,15 @@ BEGIN
                 COALESCE(ei.NonUnique = 0, 0) AS IsUnique
             FROM SchemaSmith_ProductOwnership po
             INNER JOIN _SchemaSmith_Tables t
-                ON CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
+                ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
             LEFT JOIN _SchemaSmith_DefinedIndexes di
-                ON CONVERT(di.TableName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-                AND CONVERT(di.IndexName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
+                ON SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+                AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
             LEFT JOIN _SchemaSmith_IdxOnlyIdx ei
-                ON CONVERT(ei.TableName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', 1) USING utf8mb4)
-                AND CONVERT(ei.IndexName USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
+                ON SchemaSmith_IdentifierKey(ei.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+                AND SchemaSmith_NameKeyCI(ei.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
             WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-              AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+              AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
               AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci
               -- Per-table tightening (the env/product gate is the enclosing IF)
               AND COALESCE(t.DropIndexesRemovedFromProduct, 1) = 1
@@ -706,8 +747,8 @@ BEGIN
               -- Not a renamed index
               AND NOT EXISTS (
                   SELECT 1 FROM _SchemaSmith_IndexRenames r
-                  WHERE r.TableName = SUBSTRING_INDEX(po.ObjectName, '.', 1)
-                    AND r.OldIndexName = SUBSTRING_INDEX(po.ObjectName, '.', -1)
+                  WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+                    AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
               )
               -- Verify index actually exists (snapshot bridge)
               AND ei.IndexName IS NOT NULL;
@@ -722,108 +763,90 @@ BEGIN
             SELECT CONVERT(ei.TableName USING utf8mb4), CONVERT(ei.IndexName USING utf8mb4), COALESCE(ei.NonUnique = 0, 0)
             FROM _SchemaSmith_IdxOnlyIdx ei
             INNER JOIN _SchemaSmith_Tables t
-                ON CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
+                ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(ei.TableName)
             WHERE UPPER(ei.IndexName COLLATE utf8mb4_unicode_ci) != 'PRIMARY' COLLATE utf8mb4_unicode_ci
               AND NOT EXISTS (
                   SELECT 1 FROM _SchemaSmith_DefinedIndexes di
-                  WHERE CONVERT(di.TableName USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
-                    AND CONVERT(di.IndexName USING utf8mb4) = CONVERT(ei.IndexName USING utf8mb4)
+                  WHERE SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                    AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
               )
               AND NOT EXISTS (
                   SELECT 1 FROM SchemaSmith_ProductOwnership po
                   WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-                    AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                    AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
                     AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci
-                    AND po.ObjectName COLLATE utf8mb4_unicode_ci = CONCAT(ei.TableName, '.', ei.IndexName) COLLATE utf8mb4_unicode_ci
+                    AND SchemaSmith_OwnedNameMatches(po.ObjectName, ei.TableName, ei.IndexName) = 1
               )
               AND NOT EXISTS (
                   SELECT 1 FROM _SchemaSmith_IndexRenames r
-                  WHERE CONVERT(r.TableName USING utf8mb4) = CONVERT(ei.TableName USING utf8mb4)
-                    AND CONVERT(r.OldIndexName USING utf8mb4) = CONVERT(ei.IndexName USING utf8mb4)
+                  WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                    AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
               );
         END IF;
 
         -- Cleanup helper temp table
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DefinedIndexes;
 
+        -- A declared FULLTEXT index is in the definition: it is parsed into _SchemaSmith_FullTextIndexes, which the passes
+        -- above do not read, so it was dropped as removed from the product and re-created on every deploy (#530).
+        DELETE d FROM _SchemaSmith_IndexesToDrop d
+          JOIN _SchemaSmith_FullTextIndexes ft
+            ON ft.TableKey = SchemaSmith_IdentifierKey(d.TableName) AND ft.IndexKey = SchemaSmith_NameKeyCI(d.IndexName);
+
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown indexes');
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
             SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
             FROM _SchemaSmith_IndexesToDrop;
-        ELSE
-            -- First, drop any foreign keys that reference unique indexes we're about to drop.
-            -- Snapshot the referencing FKs into a temp table (grouped by table) so the drop-FK
-            -- and drop-index phases each fold into one ALTER per table instead of per-row PREPAREs.
-            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKsForIndexDrop;
-            CREATE TEMPORARY TABLE _SchemaSmith_FKsForIndexDrop (
-                TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-                ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-                PRIMARY KEY (TableName, ConstraintName)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-            -- DISTINCT: a composite FK produces one KEY_COLUMN_USAGE row per column, which would
-            -- otherwise duplicate the (table, constraint) pair and fold into an invalid
-            -- "DROP FOREIGN KEY x, DROP FOREIGN KEY x" clause.
-            -- Reads the STEP 3 snapshots (IdxOnlyKCU / IdxOnlyTC), not live INFORMATION_SCHEMA.
-            -- itd.IsUnique already carries the unique-index flag, so no STATISTICS re-check is needed.
-            INSERT INTO _SchemaSmith_FKsForIndexDrop (TableName, ConstraintName)
-            SELECT DISTINCT
-                CONVERT(kcu.TableName USING utf8mb4) COLLATE utf8mb4_unicode_ci,
-                CONVERT(tc.ConstraintName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-            FROM _SchemaSmith_IndexesToDrop itd
-            JOIN _SchemaSmith_IdxOnlyKCU kcu
-                ON CONVERT(kcu.ReferencedTableName USING utf8mb4) = CONVERT(itd.TableName USING utf8mb4)
-            JOIN _SchemaSmith_IdxOnlyTC tc
-                ON CONVERT(tc.TableName USING utf8mb4) = CONVERT(kcu.TableName USING utf8mb4)
-                AND CONVERT(tc.ConstraintName USING utf8mb4) = CONVERT(kcu.ConstraintName USING utf8mb4)
-            WHERE itd.IsUnique = 1;
-
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Drop FK for index: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName,
-                          '` DROP FOREIGN KEY `', ConstraintName, '`')
-            FROM _SchemaSmith_FKsForIndexDrop;
-
-            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKForIndexDropStmts;
-            CREATE TEMPORARY TABLE _SchemaSmith_FKForIndexDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
-                ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-            INSERT INTO _SchemaSmith_FKForIndexDropStmts (Stmt)
-            SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                          GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', ConstraintName, '`') ORDER BY ConstraintName SEPARATOR ', '))
-            FROM _SchemaSmith_FKsForIndexDrop
-            GROUP BY TableName;
-
-            SET @v_fkforindex_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKForIndexDropStmts);
-            WHILE @v_fkforindex_id IS NOT NULL DO
-                SELECT Stmt INTO @exec_sql FROM _SchemaSmith_FKForIndexDropStmts WHERE RowId = @v_fkforindex_id;
-                PREPARE stmt FROM @exec_sql;
-                EXECUTE stmt;
-                DEALLOCATE PREPARE stmt;
-                SET @v_fkforindex_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKForIndexDropStmts WHERE RowId > @v_fkforindex_id);
-            END WHILE;
-            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKForIndexDropStmts;
-            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKsForIndexDrop;
-
-            -- Now drop the unknown indexes
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown indexes');
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Drop unknown index: ', TableName, '.', IndexName)
+            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+            SELECT CONNECTION_ID(), 'index', CONCAT(TableName, '.', IndexName), 'wouldDrop'
             FROM _SchemaSmith_IndexesToDrop;
+        ELSE
+            -- An index-only deploy never touches a foreign key. An index one still needs -- on its own table, or a unique
+            -- index another table's key references -- cannot be dropped (1553), so it is kept, with its ownership; a later
+            -- deploy drops it once no key needs it.
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown indexes');
 
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexDropStmts;
-            CREATE TEMPORARY TABLE _SchemaSmith_IndexDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+            CALL SchemaSmith_StageOnlineApply();
+            CREATE TEMPORARY TABLE _SchemaSmith_IndexDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT,
+                                                            TableName VARCHAR(128) COLLATE utf8mb4_bin, AlterStmt TEXT, OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF')
                 ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-            INSERT INTO _SchemaSmith_IndexDropStmts (Stmt)
-            SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                          GROUP_CONCAT(CONCAT('DROP INDEX `', IndexName, '`') ORDER BY IndexName SEPARATOR ', '))
-            FROM _SchemaSmith_IndexesToDrop
-            GROUP BY TableName;
+            INSERT INTO _SchemaSmith_IndexDropStmts (LogMsg, Stmt, AuditName, TableName, AlterStmt)
+            SELECT CONCAT('  Drop unknown index: ', TableName, '.', IndexName),
+                   CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
+                   CONCAT(TableName, '.', IndexName), TableName,
+                   CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP INDEX `', IndexName, '`')
+            FROM _SchemaSmith_IndexesToDrop;
+            UPDATE _SchemaSmith_IndexDropStmts s
+              JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
+               SET s.OnlineMode = t.OnlineMode;
 
             SET @v_indexdrop_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexDropStmts);
             WHILE @v_indexdrop_id IS NOT NULL DO
-                SELECT Stmt INTO @exec_sql FROM _SchemaSmith_IndexDropStmts WHERE RowId = @v_indexdrop_id;
+                SELECT LogMsg, Stmt, AuditName, TableName, AlterStmt, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_tbl, @ss_online_sql_alter, @ss_online_mode
+                  FROM _SchemaSmith_IndexDropStmts WHERE RowId = @v_indexdrop_id;
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
                 PREPARE stmt FROM @exec_sql;
-                EXECUTE stmt;
+                SET @ss_fk_needs_index := 0;
+                SET @ss_online_form := NULL;
+                BEGIN
+                    DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                    IF @ss_online_mode = 'OFF' THEN
+                        EXECUTE stmt;
+                    ELSE
+                        CALL SchemaSmith_ExecuteOnline(@ss_online_sql_alter, @ss_online_mode, 0, 0, p_DatabaseName, @ss_tbl, @ss_online_form);
+                    END IF;
+                END;
+                IF @ss_fk_needs_index = 1 THEN
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_auditname, ': a foreign key needs it'));
+                    DELETE FROM _SchemaSmith_IndexesToDrop
+                     WHERE CONCAT(TableName, '.', IndexName) = CONVERT(@ss_auditname USING utf8mb4) COLLATE utf8mb4_bin;
+                ELSE
+                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped', @ss_online_form);
+                END IF;
                 DEALLOCATE PREPARE stmt;
                 SET @v_indexdrop_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexDropStmts WHERE RowId > @v_indexdrop_id);
             END WHILE;
@@ -832,16 +855,14 @@ BEGIN
             -- Remove dropped indexes from ProductOwnership
             DELETE po FROM SchemaSmith_ProductOwnership po
             INNER JOIN _SchemaSmith_IndexesToDrop itd
-                ON po.ObjectName COLLATE utf8mb4_unicode_ci = CONCAT(itd.TableName, '.', itd.IndexName) COLLATE utf8mb4_unicode_ci
+                ON SchemaSmith_OwnedNameMatches(po.ObjectName, itd.TableName, itd.IndexName) = 1
             WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
-              AND po.ObjectSchema COLLATE utf8mb4_unicode_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+              AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
               AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci;
         END IF;
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexesToDrop;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyIdx;
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyKCU;
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxOnlyTC;
     END IF;
 
     -- =========================================================================
@@ -850,20 +871,30 @@ BEGIN
     -- Post-drop index-existence snapshot: after STEP 2's modified-index drops and STEP 3's unknown-index
     -- drops, so a just-dropped index is seen as MISSING here and recreated (WhatIf: catalog unchanged).
     CALL SchemaSmith_SnapshotIndexExistence(p_DatabaseName);
+    -- A modified index a foreign key needs is still there and is replaced below in one ALTER, so it counts as missing;
+    -- under WhatIf no modified index was really dropped, but the real run re-creates each one.
     IF p_WhatIf = 1 THEN
+        INSERT IGNORE INTO _SchemaSmith_DeferredIndexSwaps (TableName, IndexName) SELECT TableName, IndexName FROM _SchemaSmith_ModifiedIndexes;
+    END IF;
+    DELETE s FROM _SchemaSmith_IdxExist s
+      JOIN _SchemaSmith_DeferredIndexSwaps d ON s.TableKey = SchemaSmith_IdentifierKey(d.TableName) AND s.IndexKey = SchemaSmith_NameKeyCI(d.IndexName);
+    IF p_WhatIf = 1 THEN
+        DELETE FROM _SchemaSmith_DeferredIndexSwaps;
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing indexes');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT(
                       'CREATE ',
                       CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL '
+                           WHEN UPPER(i.IndexType) = 'VECTOR' THEN 'VECTOR '
                            WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE '
                            ELSE '' END,
                       'INDEX ', i.IndexName,
                       ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
-                      ' (', i.IndexColumns, ')',
+                      ' (', i.EmitColumns, ')',
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
+                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
                       CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
                            THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
                            ELSE '' END,
@@ -882,6 +913,14 @@ BEGIN
           )
           -- A declared functional index below the floor (see the STEP 0.6 degrade guard above) is
           -- never created -- it is a hard syntax error, not a clause that can be suppressed.
+          AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
+
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'index', CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)), 'wouldCreate'
+        FROM _SchemaSmith_Indexes i
+        WHERE i.IsPrimaryKey = 0
+          AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_IndexRenames r WHERE r.TableKey = i.TableKey AND r.NewIndexKey = i.IndexKey)
+          AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_IdxExist s WHERE s.TableKey = i.TableKey AND s.IndexKey = i.IndexKey)
           AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing indexes');
@@ -902,29 +941,37 @@ BEGIN
           )
           AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1;
 
-        -- Fold each table's missing-index creates into one multi-clause ALTER, materialize, execute.
+        -- One statement per index: a swap's own 1553 is caught and every create is audited.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCreateStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_IndexCreateStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        CALL SchemaSmith_StageOnlineApply();
+        CREATE TEMPORARY TABLE _SchemaSmith_IndexCreateStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT, AuditName TEXT, IsSwap TINYINT,
+                                                              TableKey VARCHAR(260) COLLATE utf8mb4_bin, OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF')
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_IndexCreateStmts (Stmt)
+        INSERT INTO _SchemaSmith_IndexCreateStmts (Stmt, AuditName, IsSwap, TableKey)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName, ' ',
-                      GROUP_CONCAT(
-                          CONCAT(
-                              'ADD ',
-                              CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL INDEX '
-                                   WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE INDEX '
-                                   ELSE 'INDEX ' END,
-                              i.IndexName,
-                              ' (', i.IndexColumns, ')',
-                              CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
-                                   WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
-                                   ELSE '' END,
-                              CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
-                                   THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
-                                   ELSE '' END,
-                              CASE WHEN i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1 THEN SchemaSmith_IndexInvisibleClause() ELSE '' END)
-                          ORDER BY i.IndexName SEPARATOR ', '))
+                      CASE WHEN d.IndexName IS NOT NULL THEN CONCAT('DROP INDEX ', i.IndexName, ', ') ELSE '' END,
+                      'ADD ',
+                      CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL INDEX '
+                           WHEN UPPER(i.IndexType) = 'VECTOR' THEN 'VECTOR INDEX '
+                           WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE INDEX '
+                           ELSE 'INDEX ' END,
+                      i.IndexName,
+                      ' (', i.EmitColumns, ')',
+                      CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
+                           WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
+                           ELSE '' END,
+                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
+                      CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
+                           THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
+                           ELSE '' END,
+                      CASE WHEN i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1 THEN SchemaSmith_IndexInvisibleClause() ELSE '' END),
+               CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)),
+               d.IndexName IS NOT NULL,
+               i.TableKey
         FROM _SchemaSmith_Indexes i
+        LEFT JOIN _SchemaSmith_DeferredIndexSwaps d
+               ON d.TableName = CONVERT(SchemaSmith_StripBacktickWrapping(i.TableName) USING utf8mb4) COLLATE utf8mb4_bin
+              AND d.IndexName = CONVERT(SchemaSmith_StripBacktickWrapping(i.IndexName) USING utf8mb4) COLLATE utf8mb4_bin
         WHERE i.IsPrimaryKey = 0
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
@@ -937,18 +984,40 @@ BEGIN
                 AND s.IndexKey = i.IndexKey
           )
           AND NOT SchemaSmith_IndexKeyPartsUnsupported(i.IndexColumns) = 1
-        GROUP BY i.TableName;
+        ORDER BY i.TableName, i.IndexName;
+        UPDATE _SchemaSmith_IndexCreateStmts s
+          JOIN _SchemaSmith_Tables t ON t.TableKey = s.TableKey
+           SET s.OnlineMode = t.OnlineMode;
 
         SET @v_indexcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCreateStmts);
         WHILE @v_indexcreate_id IS NOT NULL DO
-            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_IndexCreateStmts WHERE RowId = @v_indexcreate_id;
+            SELECT Stmt, AuditName, IsSwap, OnlineMode INTO @exec_sql, @ss_auditname, @ss_swap, @ss_online_mode FROM _SchemaSmith_IndexCreateStmts WHERE RowId = @v_indexcreate_id;
             PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
+            SET @ss_fk_needs_index := 0;
+            SET @ss_online_form := NULL;
+            BEGIN
+                -- Only a swap can raise this: its new definition no longer serves the key. The index is kept as it is,
+                -- and a later deploy changes it once the key no longer needs it.
+                DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 0, 0, p_DatabaseName, SUBSTRING_INDEX(@ss_auditname, '.', 1), @ss_online_form);
+            END;
+            IF @ss_fk_needs_index = 1 THEN
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_auditname, ' unchanged: a foreign key needs its current columns'));
+            ELSE
+                IF @ss_swap = 1 THEN
+                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped', @ss_online_form);
+                END IF;
+                INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created', @ss_online_form);
+            END IF;
             DEALLOCATE PREPARE stmt;
             SET @v_indexcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCreateStmts WHERE RowId > @v_indexcreate_id);
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCreateStmts;
     END IF;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DeferredIndexSwaps;
+    -- An existing table's declared primary key, added or replaced now that the secondary indexes exist.
+    CALL SchemaSmith_ConvergePrimaryKeys(p_DatabaseName, p_WhatIf);
 
     -- =========================================================================
     -- STEP 5: Update ProductOwnership for managed indexes
@@ -1045,106 +1114,10 @@ BEGIN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FTIndexesToDrop;
     END IF;
 
-    -- Create missing fulltext indexes
-    -- Post-ftdrop existence snapshot: after the fulltext drops just above, so a just-dropped fulltext
-    -- index is seen as MISSING by the create pass (WhatIf: no drops ran, reflects the unchanged catalog).
-    CALL SchemaSmith_SnapshotIndexExistence(p_DatabaseName);
-    IF p_WhatIf = 1 THEN
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing fulltext indexes');
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT(
-                      'CREATE FULLTEXT INDEX ', ft.IndexName,
-                      ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', ft.TableName,
-                      ' (', ft.Columns, ')',
-                      CASE WHEN ft.Comment IS NOT NULL AND ft.Comment != ''
-                           THEN CONCAT(' COMMENT ''', REPLACE(ft.Comment, '''', ''''''), '''')
-                           ELSE '' END,
-                      CASE WHEN ft.Parser IS NOT NULL AND ft.Parser != ''
-                           THEN CONCAT(' WITH PARSER ', ft.Parser)
-                           ELSE '' END)
-        FROM _SchemaSmith_FullTextIndexes ft
-        WHERE NOT EXISTS (
-            SELECT 1 FROM _SchemaSmith_IdxExist s
-            WHERE s.TableKey = ft.TableKey
-              AND s.IndexKey = ft.IndexKey
-              AND s.IndexType = 'FULLTEXT'
-        );
-
-        -- #363: WhatIf twin of the ELSE-branch 'fullTextIndex'/'created' audit; same predicate.
-        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT CONNECTION_ID(), 'fullTextIndex',
-               CONCAT(SchemaSmith_StripBacktickWrapping(ft.TableName), '.', SchemaSmith_StripBacktickWrapping(ft.IndexName)), 'wouldCreate'
-        FROM _SchemaSmith_FullTextIndexes ft
-        WHERE NOT EXISTS (
-            SELECT 1 FROM _SchemaSmith_IdxExist s
-            WHERE s.TableKey = ft.TableKey
-              AND s.IndexKey = ft.IndexKey
-              AND s.IndexType = 'FULLTEXT'
-        );
-    ELSE
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing fulltext indexes');
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Create fulltext index: ', ft.TableName, '.', ft.IndexName,
-            CASE WHEN COALESCE(ft.VariantName, '') <> '' THEN CONCAT(' (variant: ', ft.VariantName, ')') ELSE '' END)
-        FROM _SchemaSmith_FullTextIndexes ft
-        WHERE NOT EXISTS (
-            SELECT 1 FROM _SchemaSmith_IdxExist s
-            WHERE s.TableKey = ft.TableKey
-              AND s.IndexKey = ft.IndexKey
-              AND s.IndexType = 'FULLTEXT'
-        );
-
-        -- NOTE: InnoDB only supports adding one FULLTEXT index per ALTER TABLE statement, so unlike
-        -- the other loops in this file these do NOT fold multiple rows into one multi-clause ALTER —
-        -- each row materializes as its own standalone ALTER TABLE ... ADD FULLTEXT INDEX statement.
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FTCreateStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_FTCreateStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT, AuditName VARCHAR(257))
-            ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_FTCreateStmts (Stmt, AuditName)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', ft.TableName,
-                      ' ADD FULLTEXT INDEX ', ft.IndexName,
-                      ' (', ft.Columns, ')',
-                      CASE WHEN ft.Comment IS NOT NULL AND ft.Comment != ''
-                           THEN CONCAT(' COMMENT ''', REPLACE(ft.Comment, '''', ''''''), '''')
-                           ELSE '' END,
-                      CASE WHEN ft.Parser IS NOT NULL AND ft.Parser != ''
-                           THEN CONCAT(' WITH PARSER ', ft.Parser)
-                           ELSE '' END),
-               CONCAT(SchemaSmith_StripBacktickWrapping(ft.TableName), '.', SchemaSmith_StripBacktickWrapping(ft.IndexName))
-        FROM _SchemaSmith_FullTextIndexes ft
-        WHERE NOT EXISTS (
-            SELECT 1 FROM _SchemaSmith_IdxExist s
-            WHERE s.TableKey = ft.TableKey
-              AND s.IndexKey = ft.IndexKey
-              AND s.IndexType = 'FULLTEXT'
-        )
-        ORDER BY ft.RowId;
-
-        SET @v_ftcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_FTCreateStmts);
-        WHILE @v_ftcreate_id IS NOT NULL DO
-            SELECT Stmt, AuditName INTO @exec_sql, @ss_auditname FROM _SchemaSmith_FTCreateStmts WHERE RowId = @v_ftcreate_id;
-            PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
-            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'fullTextIndex', @ss_auditname, 'created');
-            DEALLOCATE PREPARE stmt;
-            SET @v_ftcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_FTCreateStmts WHERE RowId > @v_ftcreate_id);
-        END WHILE;
-        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FTCreateStmts;
-
-        -- Track fulltext indexes in ProductOwnership. Rebuild the existence snapshot to the post-ftcreate
-        -- state so ownership is written only for fulltext indexes that now exist.
-        CALL SchemaSmith_SnapshotIndexExistence(p_DatabaseName);
-        INSERT IGNORE INTO SchemaSmith_ProductOwnership (ProductName, TemplateName, ObjectSchema, ObjectType, ObjectName)
-        SELECT p_ProductName, '', p_DatabaseName, 'INDEX',
-               CONCAT(SchemaSmith_StripBacktickWrapping(ft.TableName), '.', SchemaSmith_StripBacktickWrapping(ft.IndexName))
-        FROM _SchemaSmith_FullTextIndexes ft
-        WHERE EXISTS (
-            SELECT 1 FROM _SchemaSmith_IdxExist s
-            WHERE s.TableKey = ft.TableKey
-              AND s.IndexKey = ft.IndexKey
-        );
-    END IF;
+    -- A FULLTEXT index whose columns or comment changed is dropped here and re-created below.
+    CALL SchemaSmith_DropModifiedFullTextIndexes(p_DatabaseName, p_WhatIf);
+    -- Shared with MissingIndexesAndConstraintsQuench, so the full table quench creates them the same way.
+    CALL SchemaSmith_CreateMissingFullTextIndexes(p_ProductName, p_DatabaseName, p_WhatIf);
 
     -- Cleanup temporary tables
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexRenames;

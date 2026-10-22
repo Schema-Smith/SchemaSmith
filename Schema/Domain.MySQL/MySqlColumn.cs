@@ -25,6 +25,8 @@ namespace Schema.Domain.MySQL
         [JsonProperty(Order = 104)]
         public string Collation { get; set; }
 
+        // TRANSITIONAL (Comment is the pre-2.8 spelling of Description on MySQL and MariaDB; roadmap WS-13 tracks its removal)
+        [SchemaProperty(Deprecated = true, Description = "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002).")]
         [JsonProperty(Order = 105)]
         public string Comment { get; set; }
 

@@ -26,7 +26,8 @@ BEGIN
                  q.seqcache AS "Cache",
                  q.seqcycle AS "Cycle",
                  -- Only an unlogged sequence says so; a logged one extracts exactly as it always did.
-                 CASE WHEN c.relpersistence = 'u' THEN 'Unlogged' END AS "PersistenceType"
+                 CASE WHEN c.relpersistence = 'u' THEN 'Unlogged' END AS "PersistenceType",
+                 OBJ_DESCRIPTION(c.oid, 'pg_class') AS "Description"
             FROM pg_sequence q
             JOIN pg_class c ON c.oid = q.seqrelid
             JOIN pg_namespace n ON n.oid = c.relnamespace

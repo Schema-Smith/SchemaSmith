@@ -1,11 +1,9 @@
 DROP FUNCTION IF EXISTS `inventory_in_stock`;
+SET @ss_saved_sql_mode = @@SESSION.sql_mode;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION';
 DELIMITER //
-CREATE FUNCTION `inventory_in_stock` (p_inventory_id int)
-  RETURNS tinyint(1)
-  LANGUAGE SQL
-  NOT DETERMINISTIC
-  READS SQL DATA
-  SQL SECURITY DEFINER
+CREATE FUNCTION `inventory_in_stock`(p_inventory_id int) RETURNS tinyint(1)
+    READS SQL DATA
 BEGIN
     DECLARE v_rentals INT;
     DECLARE v_out     INT;
@@ -33,3 +31,4 @@ BEGIN
     END IF;
 END //
 DELIMITER ;
+SET SESSION sql_mode = @ss_saved_sql_mode;

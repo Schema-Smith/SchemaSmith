@@ -353,6 +353,7 @@ public static class RepositoryHelper
         // every shared shape but would hand MariaDB the MySQL table schema and lose the MariaDB-only
         // properties MariaDbTable exists to carry.
         if (objectPart == "tables" && platform == Platform.MariaDb) return typeof(MariaDbTable);
+        if (objectPart == "sequences" && platform == Platform.MariaDb) return typeof(MariaDbSequence);
 
         return (objectPart, platform.GetBasePlatform()) switch
         {
@@ -394,7 +395,8 @@ public static class RepositoryHelper
             files.Add($"domaintypes.{platformName}.schema");
         if (platform == Platform.PostgreSQL)
             files.Add($"enumtypes.{platformName}.schema");
-        if (platform == Platform.PostgreSQL)
+        // Sequences: PostgreSQL, and MariaDB (10.3+); MySQL has none at any version.
+        if (platform == Platform.PostgreSQL || platform == Platform.MariaDb)
             files.Add($"sequences.{platformName}.schema");
         return files.ToArray();
     }
@@ -716,5 +718,17 @@ public static class RepositoryHelper
     /// beyond appending the result.
     /// </summary>
     private static void AddDefaultScriptFolders(Template template, Platform platform, bool isSchemaTemplate)
-        => template.ScriptFolders.AddRange(Template.GetDefaultTemplateFolders(platform, isSchemaTemplate));
+        => template.ScriptFolders.AddRange(Template.GetDefaultTemplateFolders(platform, isSchemaTemplate)
+            .Where(f => !FoldersWrittenOnUse.Contains(f.ObjectType)));
+
+    /// <summary>
+    /// Folder types a written template declares only once something is extracted into them. Their ObjectType is newer
+    /// than releases still deploying packages, which refuse a Template.json naming a type they do not know, so a package
+    /// that uses none of them stays loadable there.
+    /// </summary>
+    public static readonly IReadOnlySet<ScriptObjectType> FoldersWrittenOnUse = new HashSet<ScriptObjectType>
+    {
+        ScriptObjectType.SecurityPolicies, ScriptObjectType.RangeTypes, ScriptObjectType.TextSearchConfigurations,
+        ScriptObjectType.Operators, ScriptObjectType.Casts, ScriptObjectType.EventTriggers, ScriptObjectType.Packages
+    };
 }

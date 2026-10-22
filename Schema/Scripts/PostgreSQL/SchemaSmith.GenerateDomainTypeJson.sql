@@ -41,11 +41,13 @@ BEGIN
                                                              -- the package carries the predicate alone, so the
                                                              -- wrapper is stripped back off here.
                                                              'Expression', "SchemaSmith"."StripParenWrapping"(
-                                                                 REGEXP_REPLACE(PG_GET_CONSTRAINTDEF(c.oid), '^CHECK\s*', '')))
+                                                                 REGEXP_REPLACE(REGEXP_REPLACE(PG_GET_CONSTRAINTDEF(c.oid), '^CHECK\s*', ''), '\s+NOT VALID\s*$', '', 'i')),
+                                                             'Validated', c.convalidated)
                                            ORDER BY c.conname)
                              FROM pg_constraint c
                             WHERE c.contypid = ty.oid
-                              AND c.contype = 'c'), '[]'::JSON) AS "CheckConstraints"
+                              AND c.contype = 'c'), '[]'::JSON) AS "CheckConstraints",
+                 OBJ_DESCRIPTION(ty.oid, 'pg_type') AS "Description"
             FROM pg_type ty
             JOIN pg_namespace n ON n.oid = ty.typnamespace
            WHERE ty.typtype = 'd'

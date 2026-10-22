@@ -330,7 +330,25 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith.DegradeUnsupportedFullText (STATISTICAL_SEMANTICS without a registered semantic
         //   database; called after the full-text parse on both the table and --IndexOnly paths).
         // +1 = SchemaSmith.RecordWouldChanges (WhatIf writes the change rows a quench script carries, as previews).
-        Assert.That(sqlServer.Length, Is.EqualTo(49));
+                // + Kindling_ScriptStamp_Table (the unchanged-module stamp: the script text hash and the engine rendering hash
+        //   recorded after a successful object script, read before the next run of the same script).
+        // +2 on every platform = CapturePermissions + ReapplyPermissions (what a drop or a swap takes off an object and
+        //   the package does not carry -- grants, owner, comments, extended properties -- captured before and put back after).
+        // +2 on SQL Server = CaptureSignatures + ReapplySignatures (a changed module's signatures, captured before the
+        //   ALTER that strips them and applied again after it).
+        // +1 on SQL Server = ConstraintStateQuench (a foreign key's and check constraint's Enforced / Validated state).
+        // +1 on SQL Server = StageGraphKeyParts (the graph columns behind a $from_id / $to_id key part, for every renderer).
+        // +1 on SQL Server = EdgeConstraintQuench (an edge table's CONNECTION constraints, 2019).
+        // +1 on SQL Server = IndexStateQuench (a declared index's Disabled state, converged once the index exists).
+        // +2 on SQL Server = LiftPeriodColumns (declared period columns off #Columns, for both parse tiers) +
+        //   PeriodColumnQuench (a temporal table's period columns: added before the index pass, renamed and re-hidden in place).
+        // +1 on SQL Server = DegradeUnsupportedSpatialIndexes (below 2012 an AUTO_GRID spatial index is created as GRID).
+        // +2 on SQL Server = LiftLedgerColumns (a ledger table's declared generated columns, for both parse tiers) +
+        //   LedgerQuench (an existing ledger table's column and view names converged).
+        // +1 on SQL Server = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
+        // +1 on SQL Server = DegradeUnsupportedSelectiveXmlIndexes (below 2012 SP1 a selective XML index is skipped).
+        // +1 on SQL Server = DegradeUnsupportedJsonIndexes (below 2025 a JSON index is skipped).
+        Assert.That(sqlServer.Length, Is.EqualTo(74));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -366,7 +384,23 @@ public class ForgeKindlerTests
         // + QuoteName (the identifier delimiter new PostgreSQL emission uses).
         // + ColumnDataType (one column-type and collation rendering for extraction and the drift compare).
         // + RecordWouldChanges (WhatIf writes the change rows a quench script carries, as previews).
-        Assert.That(postgres.Length, Is.EqualTo(53));
+                // + Kindling_ScriptStamp_Table (the unchanged-module stamp: the script text hash and the engine rendering hash
+        //   recorded after a successful object script, read before the next run of the same script).
+        // +3 on PostgreSQL = ConstraintEnforced (PG18-adaptive conenforced read) + CheckPredicate (one read of a live check's
+        //   predicate for extraction, compare and the expression map) + ConstraintStateQuench (Enforced / Validated state).
+        // +1 on PostgreSQL = ConstraintWithoutOverlaps (PG18-adaptive conperiod read for temporal keys).
+        // +1 on PostgreSQL = ForeignKeySetNullColumns (PG15-adaptive confdelsetcols read).
+        // +2 on PostgreSQL = IndexFillFactorDefault (the engine's fill factor per access method, so an undeclared one
+        //   compares against what the engine actually uses) + IndexWithClause (one rendering of an index's WITH clause,
+        //   fillfactor only when declared, shared by every create arm).
+        // +1 on PostgreSQL = IndexKeyForms (one tokenizer for an index key's expression, COLLATE, operator class and
+        //   parameters, behind the normaliser, the quoter and the live rendering, so an opclass or collation in a key
+        //   compares in the engine's own form).
+        // +1 on PostgreSQL = StatisticsTargetQuench (a declared extended-statistics target, 13+, converged in place after
+        //   the create pass; policy-routed below 13).
+        // +1 = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
+        // +1 = IdentityOptionChanges (an identity column's declared sequence options, compared and applied).
+        Assert.That(postgres.Length, Is.EqualTo(71));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
@@ -492,7 +526,26 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_StripFullLengthPrefixes (a key-part prefix as long as its column is the whole column).
         // +1 = SchemaSmith_TrimEnumMembers (ENUM/SET members lose trailing spaces when the column is created).
         // +1 = SchemaSmith_IndexKeyPartsUnsupported (a functional or multi-valued key part the target cannot build).
-        Assert.That(mysql.Length, Is.EqualTo(76));
+        // +1 = SchemaSmith_RespellIndexColumns (a key part naming its column in another case).
+                // + Kindling_ScriptStamp_Table (the unchanged-module stamp: the script text hash and the engine rendering hash
+        //   recorded after a successful object script, read before the next run of the same script).
+        // +1 on the MySQL family = SequenceQuench (declared MariaDB sequences; the MySQL file only refuses).
+        // +1 on the MySQL family = ColumnLevelCheck (NULL on MySQL; MariaDb override reads the column-level check).
+        // +2 on the MySQL family = JsonAliasCheck + IsJsonAliasColumn (MariaDB's rendering of a JSON column).
+        // +2 on the MySQL family = SupportsWithoutOverlaps + IndexPeriodJson (temporal keys; MariaDb override reads the catalog).
+        // +1 on the MySQL family = KeepHistoryForNewVersionedTable (KEEP around a new versioned table's index work; MySQL no-op).
+        // +2 = SystemTimePeriodRole (an explicit period column's role) + SupportsExplicitSystemTimeConversion (MariaDB 11.7).
+        // +1 = SchemaSmith_ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
+        // +1 = SchemaSmith_GeneratedKindChanged (MY-022: a VIRTUAL <-> STORED switch joins the generated-status drop and re-add).
+        // +2 = SchemaSmith_DropModifiedFullTextIndexes + SchemaSmith_CreateMissingFullTextIndexes (#530: both index paths).
+        // +1 = SchemaSmith_ColumnTypeDiffers (MA-054: a type change takes down the foreign keys on its column first).
+        // +1 = SchemaSmith_CaseRespellKeepsOldSpelling (a case-only respelling a foreign key blocks, on old MariaDB patches).
+        // +3 = SupportsSystemTimePartitionCount + SupportsSystemTimeAutoPartitions + SystemTimePartitionable (D8 SYSTEM_TIME).
+        // +1 = SchemaSmith_IsGeneratedInvisiblePrimaryKey (MySQL 8.0.30+'s my_row_id: neither extracted nor dropped).
+        // +1 = SchemaSmith_ConvergePrimaryKeys (an existing table's declared primary key, added or replaced).
+        // +2 = SchemaSmith_SupportsVectorIndex + SchemaSmith_DegradeVectorIndexes (MariaDB 11.7's VECTOR index).
+        // +1 = SchemaSmith_CleanCheckClause (a check's introducers removed without cutting names that end in one).
+        Assert.That(mysql.Length, Is.EqualTo(108));
     }
 
     [Test]
@@ -529,6 +582,26 @@ public class ForgeKindlerTests
             // The two stamps differ, so switching a database's encoding always re-kindles.
             Assert.That(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, IngestEncoding.Xml),
                 Is.Not.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.SqlServer, IngestEncoding.Json)));
+        });
+    }
+
+    // The ordered-columnstore read and the degrade that clears a declared ORDER resolve from one value: a version-less
+    // kindle (0) must neither name column_store_order_ordinal, which an older server cannot bind, nor keep an ORDER the
+    // read would then never see, which would re-create the index on every deploy.
+    [TestCase(0, false)]
+    [TestCase(15, false)]
+    [TestCase(16, true)]
+    public void ResolveKindleScript_ColumnStoreOrderTokens_ResolveTogether(int major, bool readable)
+    {
+        string Resolve(string file) => ForgeKindler.ResolveKindleScript(file, Platform.SqlServer, replaceParseJson: false, replaceTableDef: false,
+            IngestEncoding.Json, serverMajorVersion: major);
+        var scan = Resolve("SchemaSmith.ModifiedTableQuench.sql");
+        var degrade = Resolve("SchemaSmith.DegradeUnsupportedColumnStore.sql");
+        Assert.Multiple(() =>
+        {
+            Assert.That(scan.Contains("column_store_order_ordinal"), Is.EqualTo(readable), "the live read");
+            Assert.That(scan, Does.Not.Contain("{{ColumnStoreOrderList}}"));
+            Assert.That(degrade, Does.Contain(readable ? "OR 1 = 0)" : "OR 0 = 0)"), "the degrade clears ORDER wherever the read cannot see it");
         });
     }
 
@@ -834,6 +907,21 @@ public class ForgeKindlerTests
     }
 
     [Test]
+    public void TheParseScriptsSchemaQuenchInlines_CarryNoUnresolvedSelectiveXmlToken()
+    {
+        // SchemaQuench pastes these into its own batches, never through the kindle chain, so a token the
+        // loader leaves in is a syntax error on every SQL Server deploy.
+        var (createTables, fillTables) = ForgeKindler.GetParseTableJsonPhases(Platform.SqlServer);
+        foreach (var (name, script) in new[] { ("json", ForgeKindler.GetParseTableJsonScript(Platform.SqlServer)),
+                                               ("xml", ForgeKindler.GetParseTableXmlScript(Platform.SqlServer)),
+                                               ("json phases", createTables + fillTables) })
+        {
+            Assert.That(script, Does.Not.Contain("{{ParseSelectiveXmlIndexes"), name);
+            Assert.That(script, Does.Contain("#XmlIndexPaths"), $"{name}: the selective XML parse is inlined in its place");
+        }
+    }
+
+    [Test]
     public void GetParseTableJsonPhases_SplitsCreationFromFill_AndLosesNothingButTheMarker()
     {
         var whole = ForgeKindler.GetParseTableJsonScript(Platform.SqlServer);
@@ -1031,7 +1119,7 @@ public class ForgeKindlerTests
 
         ForgeKindler.DropSupersededPostgreSqlOverloads(mockCmd);
 
-        Assert.That(executed, Has.Count.EqualTo(7));
+        Assert.That(executed, Has.Count.EqualTo(13));
         Assert.That(executed, Has.All.StartsWith("DROP PROCEDURE IF EXISTS"));
         Assert.That(executed.Any(s => s.Contains("\"ValidateTableOwnership\"(varchar, boolean)")));
         Assert.That(executed.Any(s => s.Contains("\"FixupTableOwnership\"(varchar)")));
@@ -1044,6 +1132,17 @@ public class ForgeKindlerTests
             "The 10-boolean ModifiedTableQuench must be dropped, or the 13-argument replacement is ambiguous with it.");
         Assert.That(executed.Any(s => s.Contains("\"TableQuench\"(varchar, text, boolean, boolean, boolean, boolean)")),
             "The 6-argument TableQuench must be dropped, or the 9-argument replacement is ambiguous with it.");
+        // The pre-OnlineApply arities, each of which gained a defaulted p_OnlineApply.
+        foreach (var signature in new[]
+                 {
+                     "\"ModifiedTableQuench\"(boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, boolean, text, integer, boolean)",
+                     "\"TableQuench\"(varchar, text, boolean, boolean, boolean, boolean, text, integer, boolean)",
+                     "\"IndexOnlyQuench\"(varchar, text, boolean, boolean, boolean, boolean, boolean)",
+                     "\"MissingIndexesAndConstraintsQuench\"(boolean)",
+                     "\"ForeignKeyQuench\"(boolean)",
+                     "\"ConstraintStateQuench\"(boolean)",
+                 })
+            Assert.That(executed.Any(s => s.EndsWith(signature)), $"{signature} must be dropped, or its OnlineApply replacement is ambiguous with it.");
     }
 
     [Test]

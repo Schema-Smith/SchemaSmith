@@ -35,9 +35,14 @@ namespace Schema.UnitTests.Capabilities
             ["SchemaSmith_SupportsDefaultExpression.sql"] = "default-expression",
             ["SchemaSmith_SupportsInvisibleColumn.sql"] = "invisible-column",
             ["SchemaSmith_SupportsApplicationTimePeriods.sql"] = "application-time-period",
+            ["SchemaSmith_SupportsWithoutOverlaps.sql"] = "temporal-key",
+            ["SchemaSmith_SupportsExplicitSystemTimeConversion.sql"] = "explicit-system-time-columns",
             ["SchemaSmith_SupportsColumnSrid.sql"] = "column-srid",
             ["SchemaSmith_SupportsFunctionalIndex.sql"] = "functional-index",
             ["SchemaSmith_SupportsSystemVersioning.sql"] = "column-history-exclusion",
+            ["SchemaSmith_SupportsSystemTimePartitionCount.sql"] = "system-time-partition-count",
+            ["SchemaSmith_SupportsSystemTimeAutoPartitions.sql"] = "system-time-auto-partitions",
+            ["SchemaSmith_SupportsVectorIndex.sql"] = "vector-index",
         };
 
         // Gates whose predicate is real but deliberately carries NO registry row. CapabilityRegistry's own

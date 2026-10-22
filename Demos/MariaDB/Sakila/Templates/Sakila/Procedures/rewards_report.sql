@@ -1,10 +1,9 @@
 DROP PROCEDURE IF EXISTS `rewards_report`;
+SET @ss_saved_sql_mode = @@SESSION.sql_mode;
+SET SESSION sql_mode = 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION';
 DELIMITER //
-CREATE PROCEDURE `rewards_report` (IN min_monthly_purchases tinyint unsigned,IN min_dollar_amount_purchased decimal(10,2) unsigned,OUT count_rewardees int)
-  LANGUAGE SQL
-  NOT DETERMINISTIC
-  READS SQL DATA
-  SQL SECURITY DEFINER
+CREATE PROCEDURE `rewards_report`(IN min_monthly_purchases tinyint unsigned,IN min_dollar_amount_purchased decimal(10,2) unsigned,OUT count_rewardees int)
+    READS SQL DATA
 proc: BEGIN
 
     DECLARE last_month_start DATE;
@@ -49,3 +48,4 @@ proc: BEGIN
     DROP TABLE tmpCustomer;
 END //
 DELIMITER ;
+SET SESSION sql_mode = @ss_saved_sql_mode;

@@ -31,6 +31,10 @@ namespace Schema.Domain.SqlServer
         [JsonProperty(Order = 4)]
         public string ShouldApplyExpression { get; set; }
 
+        [SchemaProperty(Description = "Optional. Stored as the MS_Description extended property. An omitted value leaves an existing description alone; \"\" removes it.")]
+        [JsonProperty(Order = 6, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
         // Labels a conditional variant: the intent behind its ShouldApplyExpression,
         // echoed in quench log messages when the variant applies.
         [SchemaProperty(MaxLength = 128, Description = "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied.")]

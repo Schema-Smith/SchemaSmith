@@ -12,6 +12,8 @@ namespace Schema.Domain
     {
         Applied,
         Skipped,
-        Failed
+        Failed,
+        /// <summary>Not re-run: the script text and the module the server renders are both as last applied.</summary>
+        Unchanged
     }
 }

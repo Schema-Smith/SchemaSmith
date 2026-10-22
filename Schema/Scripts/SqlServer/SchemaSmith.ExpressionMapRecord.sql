@@ -24,7 +24,25 @@ CREATE PROCEDURE SchemaSmith.ExpressionMapRecord
 AS
 BEGIN TRY
   SET NOCOUNT ON
-  IF @WhatIf = 1 RETURN
+  IF @WhatIf = 1
+  BEGIN
+    -- #508: a preview leaves the map as it found it, including what ExpressionMapAdopt verified for the preview.
+    IF OBJECT_ID('tempdb..#ExpressionMapAdoptUndo') IS NOT NULL
+    BEGIN
+      DELETE m FROM SchemaSmith.ExpressionMap m
+        JOIN #ExpressionMapAdoptUndo u ON u.ObjectSchema = m.[ObjectSchema] AND u.ObjectTable = m.[ObjectTable]
+         AND u.ObjectKind = m.[ObjectKind] AND u.ObjectName = m.[ObjectName] AND u.Slot = m.[Slot]
+       WHERE u.WasPresent = 0
+      UPDATE m SET [AuthoredText] = u.AuthoredText, [CanonicalText] = u.CanonicalText, [PlatformName] = u.PlatformName,
+                   [EngineVersion] = u.EngineVersion, [CompatLevel] = u.CompatLevel, [UpdatedUtc] = u.UpdatedUtc
+        FROM SchemaSmith.ExpressionMap m
+        JOIN #ExpressionMapAdoptUndo u ON u.ObjectSchema = m.[ObjectSchema] AND u.ObjectTable = m.[ObjectTable]
+         AND u.ObjectKind = m.[ObjectKind] AND u.ObjectName = m.[ObjectName] AND u.Slot = m.[Slot]
+       WHERE u.WasPresent = 1
+      DELETE #ExpressionMapAdoptUndo
+    END
+    RETURN
+  END
 
   -- The parse-produced temp tables are not always in scope: an index-only quench and a template with no tables
   -- never build them. Each read below is guarded, because a statement SQL Server never executes is never bound
@@ -70,7 +88,7 @@ BEGIN TRY
        AND COL_NAME(ck.parent_object_id, ck.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
      WHERE RTRIM(ISNULL(c.[CheckExpression], '')) <> ''
        AND NOT EXISTS (SELECT 1 FROM #ExpressionMapDeclared d
-                        WHERE d.ObjectName = ck.[name]
+                        WHERE d.ObjectName = ck.[name] COLLATE DATABASE_DEFAULT
                           AND d.ObjectTable = SchemaSmith.fn_StripBracketWrapping(c.[TableName]))
 
   -- Computed columns.

@@ -40,7 +40,8 @@ BEGIN
   SELECT COALESCE(elem ->> 'Schema', 'public') AS "Schema",
          elem ->> 'Name' AS "Name",
          COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
-         ARRAY(SELECT JSON_ARRAY_ELEMENTS_TEXT(elem -> 'Values')) AS "Values"
+         ARRAY(SELECT JSON_ARRAY_ELEMENTS_TEXT(elem -> 'Values')) AS "Values",
+         elem ->> 'Description' AS "Description"
     FROM src, JSON_ARRAY_ELEMENTS(arr) AS elem;
 
   -- Evaluate ShouldApplyExpression: drop enum types whose condition is false so a conditional variant is
@@ -55,7 +56,7 @@ BEGIN
   -- Create the ones that do not exist yet, values and order intact.
   RAISE NOTICE 'Add Missing Enum Types';
   SELECT STRING_AGG('RAISE NOTICE ''  Create enum type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
-                    'CREATE TYPE "' || t."Schema" || '"."' || t."Name" || '" AS ENUM (' ||
+                    'CREATE TYPE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' AS ENUM (' ||
                     (SELECT STRING_AGG('''' || REPLACE(v, '''', '''''') || '''', ', ')
                        FROM UNNEST(t."Values") WITH ORDINALITY AS u(v, ord)) || ');' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
@@ -73,7 +74,7 @@ BEGIN
   -- a value the package puts in the middle would give the type a different meaning from the one declared.
   RAISE NOTICE 'Add Missing Enum Values';
   SELECT STRING_AGG('RAISE NOTICE ''  Add enum value ' || REPLACE(m.val, '''', '''''') || ' to ' || m."Schema" || '.' || m."Name" || ''';' || CHR(10) ||
-                    'ALTER TYPE "' || m."Schema" || '"."' || m."Name" || '" ADD VALUE IF NOT EXISTS ''' ||
+                    'ALTER TYPE ' || "SchemaSmith"."QuoteName"(m."Schema") || '.' || "SchemaSmith"."QuoteName"(m."Name") || ' ADD VALUE IF NOT EXISTS ''' ||
                     REPLACE(m.val, '''', '''''') || '''' ||
                     CASE WHEN m.next_existing IS NOT NULL
                          THEN ' BEFORE ''' || REPLACE(m.next_existing, '''', '''''') || ''''
@@ -150,4 +151,21 @@ BEGIN
     INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
       VALUES (pg_backend_pid(), 'enum type', bad."Schema" || '.' || bad."Name", 'wouldModify');
   END LOOP;
+
+  -- The declared description, once the object exists. '' removes the comment; an omitted one leaves whatever is there.
+  RAISE NOTICE 'Fixup Enum Type Descriptions';
+  SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of enum type ' ||
+                    REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+                    'COMMENT ON TYPE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' IS ' ||
+                    CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
+                    'VALUES (pg_backend_pid(), ''enum type'', ''' || REPLACE(t."Schema" || '.' || t."Name", '''', '''''') || ''', ''modified'');', CHR(10))
+    INTO sql_script
+    FROM temp_enum_types t
+    JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'e'
+    JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
+   WHERE t."Description" IS NOT NULL
+     AND COALESCE(OBJ_DESCRIPTION(ty.oid, 'pg_type'), '') IS DISTINCT FROM t."Description";
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 END $$;

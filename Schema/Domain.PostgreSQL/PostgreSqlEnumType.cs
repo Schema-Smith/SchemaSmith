@@ -46,6 +46,10 @@ namespace Schema.Domain.PostgreSQL
         [JsonProperty(Order = 3)]
         public List<string> Values { get; set; } = [];
 
+        [SchemaProperty(Description = "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it.")]
+        [JsonProperty(Order = 6, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
         [JsonProperty(Order = 4, NullValueHandling = NullValueHandling.Ignore)]
         public string ShouldApplyExpression { get; set; }
 

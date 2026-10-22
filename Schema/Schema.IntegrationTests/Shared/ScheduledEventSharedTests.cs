@@ -239,6 +239,45 @@ public abstract class ScheduledEventSharedTests
             "an unchanged event must not be dropped and recreated");
     }
 
+    // The event was dropped before its zone was set, so a zone the server refuses left the event gone.
+    [Test]
+    public void AChangedEventWithAZoneTheServerRefuses_FailsTheDeploy_AndTheEventIsStillThere()
+    {
+        Deploy(EventJson(interval: "1 DAY"));
+        Assert.That(EventCount(), Is.EqualTo(1), "precondition");
+
+        var changed = EventJson(interval: "6 HOUR").Replace(" }]", ", \"TimeZone\": \"Mars/Olympus\" }]");
+        Assert.Catch(() => Deploy(changed));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(EventCount(), Is.EqualTo(1), "the refused zone fails the deploy before the event is dropped");
+            Assert.That(EventField("INTERVAL_FIELD"), Is.EqualTo("DAY"));
+        });
+    }
+
+    // The server stores a combination mode as the flags it stands for, so an event declared TRADITIONAL or ANSI never
+    // matched and was dropped and re-created, its schedule reset, on every deploy.
+    [TestCase("TRADITIONAL")]
+    [TestCase("ANSI")]
+    public void AnEventDeclaredWithACombinationSqlMode_RedeploysAsUnchanged(string mode)
+    {
+        var json = EventJson().Replace(" }]", $", \"SqlMode\": \"{mode}\" }}]");
+        Deploy(json);
+        Assert.That(EventCount(), Is.EqualTo(1), "precondition");
+        var created = EventField("CREATED");
+        Exec("DELETE FROM SchemaSmith_ChangeAudit WHERE ObjectName LIKE '%" + EventName + "%'");
+
+        System.Threading.Thread.Sleep(1100);
+        Deploy(json);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(EventField("CREATED"), Is.EqualTo(created), "the event was not re-created");
+            Assert.That(AuditCount("modified") + AuditCount("created"), Is.Zero);
+        });
+    }
+
     [Test]
     public void ChangingTheInterval_Converges()
     {

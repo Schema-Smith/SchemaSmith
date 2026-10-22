@@ -677,6 +677,49 @@ CREATE TABLE `{_integrationDb}`.`TestOrderChild` (
         conn.Close();
     }
 
+    [Test]
+    public void ShouldClassifyADefaultByTheCatalog_NotByItsText()
+    {
+        // #520. MySQL flags an expression default with EXTRA = DEFAULT_GENERATED and renders a literal unquoted; MariaDB
+        // quotes a literal and writes an expression bare, lower-cased, with LOWER renamed to lcase. Classifying by text
+        // shape wrote a MariaDB function default as an upper-cased string and a MySQL expression default of a literal as
+        // a quoted string, and neither package meant what the table meant.
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT SchemaSmith_SupportsDefaultExpression()";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) == 0) Assert.Ignore("Expression defaults need MySQL 8.0.13; skipped below it.");
+        cmd.CommandText = $@"
+CREATE TABLE `{_integrationDb}`.`DefaultKinds` (
+    `Id` INT NOT NULL,
+    `EConcat` VARCHAR(40) NULL DEFAULT (CONCAT('A','B')),
+    `ELower` VARCHAR(40) NULL DEFAULT (LOWER('ABC')),
+    `EArith` INT NULL DEFAULT (1 + 1),
+    `ELit` VARCHAR(40) NULL DEFAULT ('abc'),
+    `SParen` VARCHAR(40) NULL DEFAULT 'n/a (unknown)',
+    `SQuote` VARCHAR(40) NULL DEFAULT 'it''s',
+    `TStamp` DATETIME NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (`Id`)
+)";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, _integrationDb, "DefaultKinds");
+        var mariaDb = Platform == Platform.MariaDb;
+        Assert.Multiple(() =>
+        {
+            // an expression, written wrapped as the engine reports it: MySQL's client-charset introducers and escapes
+            // undone, MariaDB's lower-cased spelling kept (the expression map, not a text fold, equates lcase to LOWER)
+            AssertColumnProperties(ColumnNamed(result, "EConcat"), "EConcat", "varchar(40)", true, "(concat('A','B'))");
+            AssertColumnProperties(ColumnNamed(result, "ELower"), "ELower", "varchar(40)", true, mariaDb ? "(lcase('ABC'))" : "(lower('ABC'))");
+            AssertColumnProperties(ColumnNamed(result, "EArith"), "EArith", ExpectedIntegerType("int"), true, "(1 + 1)");
+            // MySQL can tell an expression default of a literal from the literal; MariaDB cannot, and the literal is right
+            AssertColumnProperties(ColumnNamed(result, "ELit"), "ELit", "varchar(40)", true, mariaDb ? "'abc'" : "('abc')");
+            // a literal is a literal whatever it contains
+            AssertColumnProperties(ColumnNamed(result, "SParen"), "SParen", "varchar(40)", true, "'n/a (unknown)'");
+            AssertColumnProperties(ColumnNamed(result, "SQuote"), "SQuote", "varchar(40)", true, "'it''s'");
+            AssertColumnProperties(ColumnNamed(result, "TStamp"), "TStamp", "datetime", true, "CURRENT_TIMESTAMP");
+        });
+    }
+
     private MySqlTable GenerateTable(IDbCommand cmd, string schema, string table)
     {
         return (MySqlTable)PlatformDeserializer.DeserializeTable(GenerateTableJson(cmd, schema, table), Platform);

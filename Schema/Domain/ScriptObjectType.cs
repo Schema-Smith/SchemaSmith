@@ -40,6 +40,16 @@ namespace Schema.Domain
         Collations,
         Publications,
         // MySQL
-        Events
+        Events,
+        // SQL Server, after the rest so no existing value moves.
+        SecurityPolicies,
+        // PostgreSQL, likewise.
+        RangeTypes,
+        TextSearchConfigurations,
+        Operators,
+        Casts,
+        EventTriggers,
+        // MariaDB, likewise.
+        Packages
     }
 }

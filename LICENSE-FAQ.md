@@ -1,6 +1,6 @@
 # SchemaSmith License FAQ
 
-SchemaSmith Community is free to use — including for commercial and internal use at any scale — under the SchemaSmith Community License (SSCL) v2.0. This page answers the questions security, procurement, and legal teams most often ask when evaluating it.
+SchemaSmith is free to use — including for commercial and internal use at any scale — under the SchemaSmith Community License (SSCL) v2.0. This page answers the questions security, procurement, and legal teams most often ask when evaluating it.
 
 It is a plain-language summary provided for convenience, not legal advice. The [SSCL v2.0 license text](LICENSE) is authoritative and governs wherever the two differ. Section references below (§) point into that text.
 

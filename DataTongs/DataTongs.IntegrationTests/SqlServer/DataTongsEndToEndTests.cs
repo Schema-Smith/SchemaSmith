@@ -218,6 +218,53 @@ INSERT INTO [dbo].[{tableName}] VALUES (1, '11111111-2222-3333-4444-555555555555
         }
     }
 
+    // A VECTOR column (SQL Server 2025) travels as its text form, which on SQL Server is exact: 0.123456789 is a float32
+    // a six-digit form would change. Delivered twice, so the second run compares the vector with the one already there.
+    [TestCase("Json", TestName = "EndToEnd_RoundTrip_VectorIsExact_Json")]
+    [TestCase("Xml", TestName = "EndToEnd_RoundTrip_VectorIsExact_Xml")]
+    public void EndToEnd_RoundTrip_VectorIsExact(string encoding)
+    {
+        using var command = _connection.CreateCommand();
+        var source = $"E2EVecS_{Guid.NewGuid():N}".Substring(0, 28);
+        var target = $"E2EVecT_{Guid.NewGuid():N}".Substring(0, 28);
+        try
+        {
+            try
+            {
+                command.CommandText = $"CREATE TABLE [dbo].[{source}] ([Id] INT NOT NULL PRIMARY KEY, [E] VECTOR(3) NULL)";
+                command.ExecuteNonQuery();
+            }
+            catch (Microsoft.Data.SqlClient.SqlException)
+            {
+                Assert.Ignore("VECTOR arrived in SQL Server 2025.");
+            }
+            command.CommandText = $@"
+CREATE TABLE [dbo].[{target}] ([Id] INT NOT NULL PRIMARY KEY, [E] VECTOR(3) NULL);
+INSERT INTO [dbo].[{source}] VALUES (1, CAST('[0.123456789, 16777216, -1.5]' AS VECTOR(3))), (2, NULL);";
+            command.ExecuteNonQuery();
+
+            var payload = encoding == "Xml"
+                ? _dataTongs.GetTableDataXmlSqlServer(command, "dbo", source, "[Id]", null)
+                : _dataTongs.GetTableDataJson(command, _dataTongs.GetSelectColumns(command, "dbo", source), "dbo", source, "[Id]", null);
+            for (var run = 0; run < 2; run++)
+            {
+                command.CommandText = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, "dbo", target, payload, "[Id]",
+                    mergeUpdate: true, mergeDelete: true, disableTriggers: false, tokenizeScripts: false, mergeFilter: null,
+                    contentEncoding: encoding);
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $@"SELECT COUNT(*) FROM [dbo].[{source}] s LEFT JOIN [dbo].[{target}] d ON d.[Id] = s.[Id]
+                WHERE d.[Id] IS NULL OR ISNULL(CAST(d.[E] AS NVARCHAR(MAX)), N'-') <> ISNULL(CAST(s.[E] AS NVARCHAR(MAX)), N'-')";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.Zero, "every vector arrives as it was. Extracted: " + payload);
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [dbo].[{source}]; DROP TABLE IF EXISTS [dbo].[{target}]";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void EndToEnd_RoundTrip_HandlesNullValues()
     {

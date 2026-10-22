@@ -26,9 +26,16 @@ GO
 -- REPLACE has no length ceiling. Agreement with QUOTENAME on real identifiers is asserted by
 -- SafeBracketWrapMatchesQuoteName, which uses the engine as the oracle rather than trusting a round trip --
 -- strip(wrap(x)) == x passes whenever both halves are consistently wrong.
+--
+-- A graph pseudo-column ($node_id, $edge_id, $from_id, $to_id) is left bare: it is the one spelling CREATE INDEX
+-- accepts for a key part on a node or edge table -- [$from_id] is "Column name '$from_id' does not exist" (1911) --
+-- and no regular identifier can start with $, so the four names mean nothing else.
 CREATE FUNCTION [SchemaSmith].[fn_SafeBracketWrap](@p_Input NVARCHAR(MAX))
   RETURNS NVARCHAR(MAX)
 AS
 BEGIN
-  RETURN '[' + REPLACE(SchemaSmith.fn_StripBracketWrapping(LTRIM(RTRIM(@p_Input))), ']', ']]') + ']'
+  DECLARE @v_Bare NVARCHAR(MAX) = SchemaSmith.fn_StripBracketWrapping(LTRIM(RTRIM(@p_Input)))
+  IF LOWER(@v_Bare) IN ('$node_id', '$edge_id', '$from_id', '$to_id')
+    RETURN @v_Bare
+  RETURN '[' + REPLACE(@v_Bare, ']', ']]') + ']'
 END

@@ -219,4 +219,39 @@ SELECT 1;";
         Assert.That(result[0], Does.Contain("-- pre-statement comment with ; embedded"));
         Assert.That(result[0], Does.Contain("SELECT 1"));
     }
+
+    // A semicolon ends a statement only where PostgreSQL would end one. Each case below was split mid-statement, so the
+    // script failed with "syntax error at end of input".
+    [TestCase("INSERT INTO t VALUES ('a;b');SELECT 1;", "INSERT INTO t VALUES ('a;b');", TestName = "Split_SemicolonInAStringLiteral")]
+    [TestCase("INSERT INTO t VALUES ('it''s;');SELECT 1;", "INSERT INTO t VALUES ('it''s;');", TestName = "Split_SemicolonAfterADoubledQuote")]
+    [TestCase(@"INSERT INTO t VALUES (E'a\';b');SELECT 1;", @"INSERT INTO t VALUES (E'a\';b');", TestName = "Split_SemicolonInAnEscapeString")]
+    [TestCase("SELECT 1 AS \"x;y\";SELECT 1;", "SELECT 1 AS \"x;y\";", TestName = "Split_SemicolonInAQuotedIdentifier")]
+    [TestCase("SELECT /* a; /* nested; */ b; */ 1;SELECT 1;", "SELECT /* a; /* nested; */ b; */ 1;", TestName = "Split_SemicolonInANestedBlockComment")]
+    public void Split_KeepsAStatementWhoseSemicolonIsQuotedOrCommented(string script, string first)
+    {
+        var result = PostgreSqlStatementSplitter.Split(script);
+        Assert.That(result, Is.EqualTo(new[] { first, "SELECT 1;" }));
+    }
+
+    // SQL-standard routine bodies (PostgreSQL 14): the body's statements end in semicolons, and a CASE inside it closes with
+    // END too, so the routine ends at the END that closes BEGIN ATOMIC.
+    [Test]
+    public void Split_KeepsABeginAtomicRoutineWhole_IncludingItsCaseExpressions()
+    {
+        var routine = """
+            CREATE OR REPLACE FUNCTION public.f() RETURNS bigint LANGUAGE sql BEGIN ATOMIC
+              SELECT CASE WHEN count(*) > 0 THEN sum(a) ELSE 0 END FROM public.t;
+              SELECT 1;
+            END;
+            """.Replace("\r\n", "\n");
+        var result = PostgreSqlStatementSplitter.Split(routine + "\nSELECT 2;");
+        Assert.That(result, Is.EqualTo(new[] { routine.Trim(), "SELECT 2;" }));
+    }
+
+    [Test]
+    public void Split_TreatsAPositionalParameterAsNoDollarQuote()
+    {
+        var result = PostgreSqlStatementSplitter.Split("PREPARE p AS SELECT $1;EXECUTE p(1);");
+        Assert.That(result, Is.EqualTo(new[] { "PREPARE p AS SELECT $1;", "EXECUTE p(1);" }));
+    }
 }

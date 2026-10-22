@@ -177,6 +177,73 @@ public class TableQuench_AnsiPaddingTests : BaseTableQuenchTests
         }, table);
     }
 
+    [Test]
+    public void UnpaddedColumnChangedWithoutOnOrderMismatch_IsSwappedToTheEnd()
+    {
+        // The documented shape: the swap that keeps the column unpadded can only append it. This is the
+        // control for the test below, which proves the policy is what keeps the column in place.
+        var table = Unique("PadSwap");
+        WithConnection(cmd =>
+        {
+            Exec(cmd, $"EXEC('SET ANSI_PADDING OFF; CREATE TABLE dbo.[{table}] (Id INT NOT NULL, Val VARCHAR(10) NULL, Tail INT NULL)')");
+            Exec(cmd, $"INSERT dbo.[{table}] (Id, Val, Tail) VALUES (1, 'keep', 7)");
+
+            RunTableQuenchProc(cmd, Table(table, Col("Id", "INT", nullable: false), Col("Val", "VARCHAR(20)", padding: false), Col("Tail", "INT")));
+
+            Assert.That(Rebuilds(cmd, table), Is.Zero, "no policy asked for a rebuild");
+            Assert.That(ColumnOrder(cmd, table), Is.EqualTo("Id,Tail,Val"));
+            Assert.That(IsPadded(cmd, table, "Val"), Is.False);
+            Assert.That(Scalar(cmd, $"SELECT Val FROM dbo.[{table}] WHERE Id = 1"), Is.EqualTo("keep"));
+        }, table);
+    }
+
+    [Test]
+    public void UnpaddedColumnChangedUnderOnOrderMismatch_IsRebuiltInPlace_NotSwappedToTheEnd()
+    {
+        // A pending swap would append Val behind Tail, which is exactly the drift OnOrderMismatch asks to
+        // have rebuilt away -- so the same deploy rebuilds, instead of swapping now and rebuilding next time.
+        var table = Unique("PadOrder");
+        WithConnection(cmd =>
+        {
+            Exec(cmd, $"EXEC('SET ANSI_PADDING OFF; CREATE TABLE dbo.[{table}] (Id INT NOT NULL, Val VARCHAR(10) NULL, Tail INT NULL)')");
+            Exec(cmd, $"INSERT dbo.[{table}] (Id, Val, Tail) VALUES (1, 'keep', 7)");
+
+            RunTableQuenchProc(cmd, Table(table,
+                [Col("Id", "INT", nullable: false), Col("Val", "VARCHAR(20)", padding: false), Col("Tail", "INT")],
+                indexes: null, rebuildPolicy: """{ "OnOrderMismatch": true }"""));
+
+            Assert.That(Rebuilds(cmd, table), Is.EqualTo(1), "the pending swap would append Val, which is the drift OnOrderMismatch rebuilds away");
+            Assert.That(ColumnOrder(cmd, table), Is.EqualTo("Id,Val,Tail"), "the rebuild keeps the column where the package declares it");
+            Assert.That(IsPadded(cmd, table, "Val"), Is.False, "the replacement keeps the column unpadded");
+            Assert.That(Scalar(cmd, $"SELECT max_length FROM sys.columns WHERE object_id = OBJECT_ID('dbo.[{table}]') AND name = 'Val'"), Is.EqualTo((short)20));
+            Assert.That(Scalar(cmd, $"SELECT Val FROM dbo.[{table}] WHERE Id = 1"), Is.EqualTo("keep"));
+            Assert.That(Scalar(cmd, $"SELECT Tail FROM dbo.[{table}] WHERE Id = 1"), Is.EqualTo(7));
+        }, table);
+    }
+
+    [Test]
+    public void Rebuild_KeepsEachColumnsDeclaredPadding()
+    {
+        // ALTER COLUMN pads, and so does a CREATE TABLE run with ANSI_PADDING ON, so a rebuilt table has to
+        // be created the way a new one is: under ANSI_PADDING OFF, with the padded columns padded again.
+        var table = Unique("PadRebuild");
+        WithConnection(cmd =>
+        {
+            Exec(cmd, $"EXEC('SET ANSI_PADDING OFF; CREATE TABLE dbo.[{table}] (Id INT NOT NULL, Val VARCHAR(10) NULL, Other VARCHAR(10) NULL)')");
+            Exec(cmd, $"INSERT dbo.[{table}] (Id, Val, Other) VALUES (1, 'keep', 'x')");
+
+            RunTableQuenchProc(cmd, Table(table,
+                [Col("Id", "INT", nullable: false), Col("Val", "VARCHAR(20)", padding: false), Col("Other", "VARCHAR(10)", padding: true)],
+                indexes: null, rebuildPolicy: """{ "Mode": "ALWAYS" }"""));
+
+            Assert.That(Rebuilds(cmd, table), Is.EqualTo(1));
+            Assert.That(IsPadded(cmd, table, "Val"), Is.False, "a column declared unpadded is created unpadded in the replacement");
+            Assert.That(IsPadded(cmd, table, "Other"), Is.True, "a padded column created alongside it is padded again");
+            Assert.That(Scalar(cmd, $"SELECT Val FROM dbo.[{table}] WHERE Id = 1"), Is.EqualTo("keep"));
+            Assert.That(Scalar(cmd, $"SELECT Other FROM dbo.[{table}] WHERE Id = 1"), Is.EqualTo("x"));
+        }, table);
+    }
+
     private static string Unique(string prefix) => $"{prefix}_{Guid.NewGuid().ToString("N")[..8]}";
 
     private static string Col(string name, string type, bool? padding = null, bool nullable = true, string @default = null) =>
@@ -186,9 +253,10 @@ public class TableQuench_AnsiPaddingTests : BaseTableQuenchTests
 
     private static string Table(string table, params string[] columns) => Table(table, columns, indexes: null);
 
-    private static string Table(string table, string[] columns, string indexes) =>
+    private static string Table(string table, string[] columns, string indexes, string rebuildPolicy = null) =>
         $"[ {{ \"Schema\": \"[dbo]\", \"Name\": \"[{table}]\", \"Columns\": [ {string.Join(", ", columns)} ]" +
-        (indexes != null ? $", \"Indexes\": [ {indexes} ]" : "") + " } ]";
+        (indexes != null ? $", \"Indexes\": [ {indexes} ]" : "") +
+        (rebuildPolicy != null ? $", \"RebuildPolicy\": {rebuildPolicy}" : "") + " } ]";
 
     private void RunTableQuenchProc(IDbCommand cmd, string json) => base.RunTableQuenchProc(cmd, json, productName: "AnsiPaddingTests");
 
@@ -223,6 +291,12 @@ public class TableQuench_AnsiPaddingTests : BaseTableQuenchTests
         Exec(cmd, $"DELETE dbo.[{table}]; INSERT dbo.[{table}] ([{column}]) VALUES ({literal})");
         return Convert.ToInt32(Scalar(cmd, $"SELECT DATALENGTH([{column}]) FROM dbo.[{table}]"));
     }
+
+    private static int Rebuilds(IDbCommand cmd, string table) =>
+        Convert.ToInt32(Scalar(cmd, $"SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE ObjectName = '[dbo].[{table}]' AND ActionType = 'rebuilt'"));
+
+    private static string ColumnOrder(IDbCommand cmd, string table) =>
+        (string)Scalar(cmd, $"SELECT STRING_AGG(COLUMN_NAME, ',') WITHIN GROUP (ORDER BY ORDINAL_POSITION) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = '{table}'");
 
     private static void ClearChangeAudit(IDbCommand cmd) => Exec(cmd, "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID");
 

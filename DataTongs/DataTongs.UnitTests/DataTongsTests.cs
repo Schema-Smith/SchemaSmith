@@ -300,19 +300,19 @@ public class DataTongsTests
         cmd.ExecuteScalar().Returns(1L);
 
         dt.TableExists(cmd, "`testdb`", "`users`");
-        Assert.That(cmd.CommandText, Does.Contain("'testdb'"));
-        Assert.That(cmd.CommandText, Does.Contain("'users'"));
+        Assert.That(cmd.CommandText, Does.Contain(MySqlNameMatch.Literal("testdb")));
+        Assert.That(cmd.CommandText, Does.Contain(MySqlNameMatch.Literal("users")));
     }
 
     [Test]
-    public void TableExists_MySQL_EscapesSingleQuotes()
+    public void TableExists_MySQL_PassesAnApostropheUnaltered()
     {
         var dt = new global::DataTongs.DataTongs(Platform.MySQL);
         var cmd = Substitute.For<IDbCommand>();
         cmd.ExecuteScalar().Returns(1L);
 
         dt.TableExists(cmd, "testdb", "user's_table");
-        Assert.That(cmd.CommandText, Does.Contain("user''s_table"));
+        Assert.That(cmd.CommandText, Does.Contain(MySqlNameMatch.Literal("user's_table")));
     }
 
     #endregion
@@ -472,14 +472,29 @@ public class DataTongsTests
     }
 
     [Test]
-    public void GetTableDataJson_MySQL_UsesJsonArrayAgg()
+    // The rows are read one at a time, in key order, and joined the way each engine's JSON_ARRAYAGG prints an array.
+    // Aggregated on the server, an array longer than max_allowed_packet came back NULL and was written as no rows.
+    [TestCase("8.0.36", "[{\"id\": 1}, {\"id\": 2}]")]
+    [TestCase("11.4.2-MariaDB", "[{\"id\": 1},{\"id\": 2}]")]
+    public void GetTableDataJson_MySQL_ReadsTheRowsInKeyOrder_AndJoinsThemAsTheEnginePrintsAnArray(string version, string expected)
     {
         var dt = new global::DataTongs.DataTongs(Platform.MySQL);
         var cmd = Substitute.For<IDbCommand>();
-        cmd.ExecuteScalar().Returns("[{\"id\":1}]");
+        cmd.ExecuteScalar().Returns(version);
+        var rows = new System.Data.DataTable();
+        rows.Columns.Add("row_json");
+        rows.Rows.Add("{\"id\": 1}");
+        rows.Rows.Add("{\"id\": 2}");
+        cmd.ExecuteReader().Returns(_ => cmd.CommandText.Contains("JSON_OBJECT") ? rows.CreateDataReader() : new System.Data.DataTable().CreateDataReader());
 
-        dt.GetTableDataJson(cmd, "`id`", "testdb", "users", "`id`", null);
-        Assert.That(cmd.CommandText, Does.Contain("JSON_ARRAYAGG"));
+        var json = dt.GetTableDataJson(cmd, "`id`", "testdb", "users", "`id`", null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(json, Is.EqualTo(expected));
+            Assert.That(cmd.CommandText, Does.Match(@"ORDER BY `id`;\s*$"), "in key order");
+            Assert.That(cmd.CommandText, Does.Not.Contain("GROUP_CONCAT").And.Not.Contain("JSON_ARRAYAGG"), "no aggregate the packet size can cut short");
+        });
     }
 
     [Test]
@@ -1214,6 +1229,13 @@ public class DataTongsTests
         // The table's real columns, which a configured SelectColumns narrows; 'secret' is not selected.
         command.ExecuteReader().Returns(_ =>
         {
+            if (command.CommandText?.Contains("JSON_OBJECT") == true)
+            {
+                var rows = new System.Data.DataTable();
+                rows.Columns.Add("row_json");
+                rows.Rows.Add("{\"id\": 1, \"name\": \"Test\", \"email\": \"t@t.com\"}");
+                return rows.CreateDataReader();
+            }
             var columns = new System.Data.DataTable();
             columns.Columns.Add("COLUMN_NAME"); columns.Columns.Add("DATA_TYPE");
             columns.Columns.Add("IsZeroFill", typeof(int)); columns.Columns.Add("DtPrecision", typeof(int));
@@ -1232,11 +1254,11 @@ public class DataTongsTests
             // both via SELECT VERSION() — return a modern MySQL version so the JSON_ARRAYAGG path is taken.
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
             if (command.CommandText?.Contains("@@SESSION.time_zone") == true) return "SYSTEM";
+            if (command.CommandText?.Contains("@@SESSION.sql_mode") == true) return "STRICT_TRANS_TABLES";
             callCount++;
             return callCount switch
             {
                 1 => (object)1L, // TableExists (MySQL)
-                2 => "[{\"id\":1,\"name\":\"Test\",\"email\":\"t@t.com\"}]", // GetTableDataJsonMySql
                 _ => null
             };
         });
@@ -1253,7 +1275,6 @@ public class DataTongsTests
             dt.CastData();
 
             // The configured columns, with their real types, and nothing that was not selected
-            Assert.That(command.CommandText, Does.Contain("JSON_ARRAYAGG"));
             Assert.That(command.CommandText, Does.Contain("JSON_OBJECT"));
             Assert.That(command.CommandText, Does.Contain("`id`"));
             Assert.That(command.CommandText, Does.Contain("`name`"));
@@ -1637,6 +1658,7 @@ public class DataTongsTests
             // Data delivery detects the server version and probes JSON_ARRAYAGG support, both via SELECT VERSION().
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
             if (command.CommandText?.Contains("@@SESSION.time_zone") == true) return "SYSTEM";
+            if (command.CommandText?.Contains("@@SESSION.sql_mode") == true) return "STRICT_TRANS_TABLES";
             callCount++;
             return callCount switch
             {

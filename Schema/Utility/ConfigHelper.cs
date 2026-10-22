@@ -65,7 +65,9 @@ public static class ConfigHelper
     public static void CheckStartupSettings(IConfigurationRoot config, Action<string> warn)
     {
         if (config != null && MissingSettingsFiles.TryGetValue(config, out var missing))
-            throw new RunFailedException($"Settings file not found: {missing}. Nothing was run. A --ConfigFile path is read relative to the current directory.");
+            throw new RunFailedException(missing.Length == 0
+                ? "--ConfigFile was given no file path. Nothing was run. Name a settings file, as in --ConfigFile:production.settings.json."
+                : $"Settings file not found: {missing}. Nothing was run. A --ConfigFile path is read relative to the current directory.");
 
         foreach (var problem in LogHygieneOptions.Problems(config))
             warn?.Invoke(problem);
@@ -83,22 +85,26 @@ public static class ConfigHelper
             // GetCurrentDirectory() would break ConfigurationBuilder.SetBasePath here.
             var basePath = Directory.GetCurrentDirectory();
             var explicitFile = CommandLineParser.ValueOfSwitch("ConfigFile", null);
-            var settingsFile = explicitFile ?? $"{app}.settings.json";
+            // A bare --ConfigFile: names no file. It is reported at the startup check like a missing one; the default
+            // file is not read in its place.
+            var noPathGiven = explicitFile != null && string.IsNullOrWhiteSpace(explicitFile);
+            var settingsFile = noPathGiven || explicitFile == null ? $"{app}.settings.json" : explicitFile;
             var builder = new ConfigurationBuilder()
                 .SetBasePath(basePath);
 
             // The default file falls back to the tool's own folder (test runners may not set CWD to the output
             // directory). A file named with --ConfigFile never does: reading a same-named file from somewhere else
             // would run with settings nobody asked for.
-            string missingFile = null;
-            if (!File.Exists(Path.GetFullPath(settingsFile, basePath)))
+            string missingFile = noPathGiven ? "" : null;
+            if (!noPathGiven && !File.Exists(Path.GetFullPath(settingsFile, basePath)))
             {
                 var appBasePath = AppContext.BaseDirectory;
                 if (explicitFile != null) missingFile = Path.GetFullPath(settingsFile, basePath);
                 else if (File.Exists(Path.Join(appBasePath, settingsFile))) builder.SetBasePath(appBasePath);
             }
 
-            builder.AddJsonFile(settingsFile, optional: true)
+            if (!noPathGiven) builder.AddJsonFile(settingsFile, optional: true);
+            builder
 #if DEBUG
                 .AddUserSecrets(Assembly.GetCallingAssembly(), optional: true)
 #endif

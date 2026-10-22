@@ -152,4 +152,12 @@ public class MySqlReservedWordsTests
     {
         Assert.That(MySqlReservedWords.QuoteIfNeeded(""), Is.EqualTo(""));
     }
+
+    // MySQL allows spaces at either end of an identifier; only the backtick wrapper is syntax.
+    [TestCase(" x", " x")]
+    [TestCase("x ", "x ")]
+    [TestCase("` x`", " x")]
+    [TestCase("  ` x `  ", " x ")]
+    public void Unquote_KeepsTheNamesOwnSpaces(string identifier, string expected) =>
+        Assert.That(MySqlReservedWords.Unquote(identifier), Is.EqualTo(expected));
 }

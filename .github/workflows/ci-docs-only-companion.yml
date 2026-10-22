@@ -1,10 +1,10 @@
 name: CI (docs-only companion)
 
-# Companion to continuous-integration.yml. That workflow's `pull_request` trigger carries a `paths-ignore`
-# for docs/demos, so a docs-only PR never starts it — and the eight required status checks it would produce
+# Companion to continuous-integration.yml. That workflow runs only for a change to a path CI tests (its `paths`, a
+# copy of .github/ci-tested-paths.txt), so a PR that touches none of them never starts it — and the eight required status checks it would produce
 # stay stuck on "Expected — Waiting for status to be reported", blocking the PR from merging forever. That
 # only bites contributors WITHOUT admin bypass (an external drive-by fixing a typo); maintainers never see
-# it because the Rule 6 doc/demo carve-out pushes such content straight to `main`.
+# it because the doc/demo exemption from pull requests pushes such content straight to `main`.
 #
 # This companion fires on EXACTLY those excluded paths and reports the SAME check contexts as success,
 # with no build and no containers.
@@ -39,35 +39,21 @@ name: CI (docs-only companion)
 # forever, which is this file's own failure mode from the other direction.
 
 on:
+  # Every pull request: whether CI runs is decided by the gate below, from the same list CI's trigger copies, so the
+  # two cannot disagree about a path neither was written to know.
   pull_request:
     branches: [main]
-    paths:
-      - 'docs/**'
-      - '*.md'
-      - '**/*.md'
-      - 'LICENSE'
-      - '.gitignore'
-      - 'Demos/**/*.ps1'
-      - 'Demos/**/*.sh'
-      - 'Demos/**/*.sql'
 
 permissions:
   contents: read
 
 jobs:
-  # WHY A GATE AND NOT JUST `paths`. On a pull_request, GitHub evaluates paths/paths-ignore against the
-  # WHOLE PR DIFF, not the pushed commit -- so a PR touching docs AND code matches this workflow's
-  # `paths` and continuous-integration.yml's `paths-ignore` at the same time, and BOTH run. Every
-  # context below then gets reported twice: once by a real leg, once by a stub that always succeeds in
-  # about three seconds. Observed on PR #419 -- all eight integration contexts had two check runs.
-  #
-  # In practice the stub lands first and the real result overwrites it, which is why the gate held. That
-  # is timing, not a guarantee, and a merge gate should not rest on which job finished first.
-  #
-  # So the stubs only report when nothing else will. The three cases:
-  #   docs-only PR  -> no code changed -> stubs RUN and satisfy the checks (this file's whole purpose)
-  #   mixed PR      -> code changed    -> stubs SKIP, and the real legs report the same contexts
-  #   code-only PR  -> this workflow never triggers at all
+  # WHY A GATE. This workflow starts on every pull request, and the stubs below report the same contexts the real
+  # legs do. They may only report when the real legs will not run, or every context gets two check runs and the
+  # merge gate rests on which finished first (observed on PR #419). So the gate asks the question CI's trigger asks,
+  # from the same list:
+  #   no file CI tests changed -> the real workflow does not start -> stubs RUN and satisfy the checks
+  #   a file CI tests changed  -> the real workflow runs            -> stubs SKIP, the real legs report
   # A skipped stub therefore only ever happens when a REAL check run of the same name exists, so however
   # the ruleset treats `skipped`, the authoritative result is present either way.
   gate:
@@ -76,24 +62,22 @@ jobs:
     outputs:
       docs_only: ${{ steps.check.outputs.docs_only }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: |
+            .github/ci-tested-paths.txt
+            scripts/ci_path_filter.py
+          sparse-checkout-cone-mode: false
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Same patterns as continuous-integration.yml's paths-ignore. A file matching NONE of them is
-          # a file that triggers the real workflow.
+          # A file CI tests is a file that starts the real workflow; the list and the matcher are the ones CI's
+          # trigger was copied from.
           files=$(gh api --paginate "repos/${{ github.repository }}/pulls/${{ github.event.number }}/files" --jq '.[].filename')
-          code=0
-          while IFS= read -r f; do
-            [ -z "$f" ] && continue
-            case "$f" in
-              docs/*|*.md|LICENSE|.gitignore|Demos/*.ps1|Demos/*.sh|Demos/*.sql) ;;
-              *) echo "triggers real CI: $f"; code=1 ;;
-            esac
-          done <<< "$files"
-          if [ "$code" = "1" ]; then
+          if printf '%s\n' "$files" | python3 scripts/ci_path_filter.py .github/ci-tested-paths.txt; then
             echo 'docs_only=false' >> "$GITHUB_OUTPUT"
-            echo '::notice::Code files changed, so continuous-integration.yml is running the real legs. Stubs skipped.'
+            echo '::notice::Files CI tests changed, so continuous-integration.yml is running the real legs. Stubs skipped.'
           else
             echo 'docs_only=true' >> "$GITHUB_OUTPUT"
           fi
@@ -174,9 +158,9 @@ jobs:
       - run: echo "docs-only change — no integration run required."
 
   # Never stubbed before 2026-09-20, and latent rather than harmless: sweep-record lives in
-  # continuous-integration.yml, which carries paths-ignore for docs -- so if this context is required, an
+  # continuous-integration.yml, which runs only for a path it tests -- so if this context is required, an
   # external contributor's docs-only PR waits on it forever. Maintainers would never hit it, because the
-  # Rule 6 carve-out pushes docs straight to main. Stubbed here so it is safe whether the ruleset requires
+  # The doc/demo exemption from pull requests pushes docs straight to main. Stubbed here so it is safe whether the ruleset requires
   # it or not; a stub for a non-required context costs nothing.
   sweep-record:
     name: Genuine Sweep Record

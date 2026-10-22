@@ -2,7 +2,9 @@
 
 using System;
 using System.Data;
+using System.Linq;
 using MySqlConnector;
+using Newtonsoft.Json.Linq;
 using Schema.DataAccess;
 using Schema.Domain;
 
@@ -85,6 +87,49 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
                     "PartitionCount is the whole declaration for HASH; getting it wrong changes how rows "
                     + "are distributed with nothing to report it");
             });
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    // The count methods. LINEAR HASH and LINEAR KEY fell into the RANGE/LIST branch of the create emit, which writes a
+    // partition list, so the CREATE carried an empty one and failed; and MariaDB extracted every count as a string, which
+    // the package's schema refuses as an integer.
+    [TestCase("HASH")]
+    [TestCase("KEY")]
+    [TestCase("LINEAR HASH")]
+    [TestCase("LINEAR KEY")]
+    public void TableQuench_CountPartitioning_IsCreatedWithItsCount_RedeploysAsANoOp_AndExtractsAsDeclared(string method)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartLinearProduct_{uid}";
+        var table = $"PartLinearTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithHashPartitioning(table, 3, method), productName: product);
+            Assert.Multiple(() =>
+            {
+                Assert.That(LiveMethod(cmd, table), Is.EqualTo(method));
+                Assert.That(LivePartitionCount(cmd, table), Is.EqualTo(3));
+            });
+
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithHashPartitioning(table, 3, method), productName: product),
+                "an unchanged LINEAR table redeploys cleanly");
+            Assert.That(LivePartitionCount(cmd, table), Is.EqualTo(3), "and is untouched");
+
+            cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
+            var json = cmd.ExecuteScalar()?.ToString() ?? "";
+            var partitioning = json.Contains("Partitioning") ? json[json.IndexOf("\"Partitioning\"", StringComparison.Ordinal)..] : json;
+            Assert.That(partitioning, Does.Contain($"\"Method\": \"{method}\"").And.Contain("\"PartitionCount\": 3"), partitioning);
         }
         finally
         {
@@ -609,6 +654,233 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // ---- subpartitions, named HASH/KEY partitions, comments, KEY ALGORITHM (D8 slice 2) ----------
+
+    // A subpartitioned table has one catalog row per subpartition. Extraction wrote each as a partition of its own, with
+    // repeated names and no SUBPARTITION BY, so the package could not be deployed.
+    [Test]
+    public void TableQuench_SubpartitionedTable_IsCreated_RedeploysAsANoOp_AndExtractsAsACount()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartSubProduct_{uid}";
+        var table = $"PartSubTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithSubpartitions(table, 2), productName: product);
+            Assert.That(LiveSubpartitionNames(cmd, table), Is.EqualTo("p0sp0,p0sp1,pmaxsp0,pmaxsp1"));
+
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithSubpartitions(table, 2), productName: product),
+                "an unchanged subpartitioned table redeploys");
+
+            var partitioning = ExtractPartitioning(cmd, table);
+            Assert.Multiple(() =>
+            {
+                Assert.That((string)partitioning["Subpartitioning"]?["Method"], Is.EqualTo("HASH"), partitioning.ToString());
+                Assert.That((int?)partitioning["Subpartitioning"]?["Count"], Is.EqualTo(2), partitioning.ToString());
+                Assert.That(((JArray)partitioning["Partitions"]).Count, Is.EqualTo(2), "one entry per partition, not per subpartition");
+            });
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    [Test]
+    public void TableQuench_AChangedSubpartitionCount_IsRefused()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartSubCountProduct_{uid}";
+        var table = $"PartSubCountTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithSubpartitions(table, 2), productName: product);
+            Assert.Throws<MySqlException>(() => RunTableQuenchProc(cmd, WithSubpartitions(table, 3), productName: product),
+                "changing the subpartition count rewrites every row");
+            Assert.That(LiveSubpartitionNames(cmd, table), Is.EqualTo("p0sp0,p0sp1,pmaxsp0,pmaxsp1"), "and nothing changed");
+        }
+        finally
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    // HASH and KEY partitions may carry names and comments of their own. Extraction wrote a count, so the names and the
+    // comments were lost; and once named, adding one is not an append: every row's partition depends on the count.
+    [Test]
+    public void TableQuench_NamedHashPartitions_KeepTheirNamesAndComments_AndAddingOneIsRefused()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartNamedProduct_{uid}";
+        var table = $"PartNamedTable_{uid}";
+        const string two = """[ { "Name": "alpha", "Comment": "it's first" }, { "Name": "beta" } ]""";
+        const string three = """[ { "Name": "alpha", "Comment": "it's first" }, { "Name": "beta" }, { "Name": "gamma" } ]""";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithNamedHashPartitions(table, two), productName: product);
+            Assert.Multiple(() =>
+            {
+                Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("alpha,beta"));
+                Assert.That(LivePartitionComment(cmd, table, "alpha"), Is.EqualTo("it's first"));
+            });
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithNamedHashPartitions(table, two), productName: product));
+
+            var partitioning = ExtractPartitioning(cmd, table);
+            Assert.Multiple(() =>
+            {
+                Assert.That(partitioning["PartitionCount"], Is.Null, partitioning.ToString());
+                Assert.That(partitioning["Partitions"]?.Select(x => (string)x["Name"]), Is.EqualTo(new[] { "alpha", "beta" }));
+                Assert.That((string)partitioning["Partitions"]?[0]?["Comment"], Is.EqualTo("it's first"));
+                Assert.That(partitioning["Partitions"]?[0]?["Values"], Is.Null, "a HASH partition has no boundary");
+            });
+
+            var refused = Assert.Throws<MySqlException>(() => RunTableQuenchProc(cmd, WithNamedHashPartitions(table, three), productName: product));
+            Assert.That(refused!.Message, Does.Contain("Repartitioning rewrites every row and is refused"), "refused, not failed on a bad ALTER");
+            cmd.CommandText = "SELECT GROUP_CONCAT(Message) FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%rehashes them all%'";
+            Assert.That(cmd.ExecuteScalar() as string, Does.Contain(table), "the run log names the table and why");
+            Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("alpha,beta"), "and nothing was added");
+        }
+        finally
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    // The engine changes a partition's comment only by reorganizing the partition, which rewrites its rows.
+    [Test]
+    public void TableQuench_AChangedPartitionComment_IsReportedNotApplied()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartCommentProduct_{uid}";
+        var table = $"PartCommentTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithRangePartitions(table, """[ { "Name": "p0", "Values": "100", "Comment": "old" }, { "Name": "pmax", "Values": "MAXVALUE" } ]"""), productName: product);
+            Assert.That(LivePartitionComment(cmd, table, "p0"), Is.EqualTo("old"));
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithRangePartitions(table, """[ { "Name": "p0", "Values": "100", "Comment": "new" }, { "Name": "pmax", "Values": "MAXVALUE" } ]"""), productName: product));
+
+            cmd.CommandText = "SELECT GROUP_CONCAT(Message) FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%reported, not applied%'";
+            var report = cmd.ExecuteScalar() as string;
+            Assert.Multiple(() =>
+            {
+                Assert.That(report, Is.Not.Null, "the difference is reported");
+                Assert.That(report, Does.StartWith("  WARNING:").And.Contain("'new'").And.Contain("'old'"));
+                Assert.That(LivePartitionComment(cmd, table, "p0"), Is.EqualTo("old"), "and not applied");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    [Test]
+    public void TableQuench_KeyAlgorithmOne_IsCreatedWithIt()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartAlgoProduct_{uid}";
+        var table = $"PartAlgoTable_{uid}";
+        var package = WithHashPartitioning(table, 2, "KEY").Replace("\"PartitionCount\": 2", "\"PartitionCount\": 2, \"KeyAlgorithm\": 1");
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            Assert.That(package, Does.Contain("KeyAlgorithm"));
+            RunTableQuenchProc(cmd, package, productName: product);
+            cmd.CommandText = $"SHOW CREATE TABLE `{_mainDb}`.`{table}`";
+            using var reader = cmd.ExecuteReader();
+            Assert.That(reader.Read(), Is.True);
+            Assert.That(Schema.Utility.MySqlKeyAlgorithm.Read(reader.GetString(1)), Is.EqualTo(1), reader.GetString(1));
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    // An appended LIST partition was added with VALUES LESS THAN, which a LIST table refuses.
+    [Test]
+    public void TableQuench_ADeclaredListPartitionAppended_IsAdded()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartListAddProduct_{uid}";
+        var table = $"PartListAddTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'east'"), productName: product);
+            var withNorth = WithListColumnsPartitions(table, "'east'").Replace(
+                "{ \"Name\": \"p_west\", \"Values\": \"'west'\" }",
+                "{ \"Name\": \"p_west\", \"Values\": \"'west'\" }, { \"Name\": \"p_north\", \"Values\": \"'north'\", \"Comment\": \"added\" }");
+            Assert.That(withNorth, Does.Contain("p_north"));
+            RunTableQuenchProc(cmd, withNorth, productName: product);
+            Assert.Multiple(() =>
+            {
+                Assert.That(LivePartitionNames(cmd, table), Is.EqualTo("p_east,p_west,p_north"));
+                Assert.That(LivePartitionComment(cmd, table, "p_north"), Is.EqualTo("added"));
+            });
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    private JObject ExtractPartitioning(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
+        var json = cmd.ExecuteScalar()?.ToString() ?? "";
+        return (JObject)JObject.Parse(json)["Partitioning"] ?? throw new AssertionException("no Partitioning in\n" + json);
+    }
+
     // ---- package builders -----------------------------------------------------
 
     private static string WithPlainTable(string table) => $$"""
@@ -647,7 +919,7 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
 ]
 """;
 
-    private static string WithHashPartitioning(string table, int count) => $$"""
+    private static string WithHashPartitioning(string table, int count, string method = "HASH") => $$"""
 [
   {
     "Name": "{{table}}",
@@ -656,7 +928,82 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
       { "Name": "`Val`", "DataType": "varchar(50)", "Nullable": true }
     ],
     "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`" } ],
-    "Partitioning": { "Method": "HASH", "Expression": "Id", "PartitionCount": {{count}} }
+    "Partitioning": { "Method": "{{method}}", "Expression": "Id", "PartitionCount": {{count}} }
+  }
+]
+""";
+
+    // LIST COLUMNS values are strings, and 'east' and 'EAST' route different rows. The values were compared upper-cased,
+    // so a value changed only in case passed as unchanged and the package silently disagreed with the table.
+    [Test]
+    public void TableQuench_AListValueChangedOnlyInCase_IsRefusedByName()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartListProduct_{uid}";
+        var table = $"PartListTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'east'"), productName: product);
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'east'"), productName: product),
+                "an unchanged list redeploys");
+
+            Assert.Throws<MySqlException>(() => RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'EAST'"), productName: product));
+        }
+        finally
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    // The engine reports the keyword in capitals; a package spelling it in lowercase declares the same partition.
+    [Test]
+    public void TableQuench_ALowercaseMaxValue_RedeploysUnchanged()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartMaxProduct_{uid}";
+        var table = $"PartMaxTable_{uid}";
+        var partitions = """[ { "Name": "p0", "Values": "100" }, { "Name": "pmax", "Values": "maxvalue" } ]""";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithRangePartitions(table, partitions), productName: product);
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithRangePartitions(table, partitions), productName: product));
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    private static string WithListColumnsPartitions(string table, string eastValue) => $$"""
+[
+  {
+    "Name": "{{table}}",
+    "Columns": [
+      { "Name": "`Id`",  "DataType": "int", "Nullable": false },
+      { "Name": "`Region`", "DataType": "varchar(10)", "Nullable": false }
+    ],
+    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`,`Region`" } ],
+    "Partitioning": {
+      "Method": "LIST COLUMNS",
+      "Expression": "Region",
+      "Partitions": [ { "Name": "p_east", "Values": "{{eastValue}}" }, { "Name": "p_west", "Values": "'west'" } ]
+    }
   }
 ]
 """;
@@ -678,6 +1025,37 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
       "Expression": "Id",
       "Partitions": {{partitionsJson}}
     }
+  }
+]
+""";
+
+    // The key holds both columns: MySQL requires every unique key to include every partitioning column.
+    private static string WithSubpartitions(string table, int count) => $$"""
+[
+  {
+    "Name": "{{table}}",
+    "Columns": [
+      { "Name": "`Id`",  "DataType": "int", "Nullable": false },
+      { "Name": "`Yr`",  "DataType": "int", "Nullable": false }
+    ],
+    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`,`Yr`" } ],
+    "Partitioning": {
+      "Method": "RANGE",
+      "Expression": "Yr",
+      "Subpartitioning": { "Method": "HASH", "Expression": "Id", "Count": {{count}} },
+      "Partitions": [ { "Name": "p0", "Values": "2000" }, { "Name": "pmax", "Values": "MAXVALUE" } ]
+    }
+  }
+]
+""";
+
+    private static string WithNamedHashPartitions(string table, string partitionsJson) => $$"""
+[
+  {
+    "Name": "{{table}}",
+    "Columns": [ { "Name": "`Id`",  "DataType": "int", "Nullable": false } ],
+    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`" } ],
+    "Partitioning": { "Method": "HASH", "Expression": "Id", "Partitions": {{partitionsJson}} }
   }
 ]
 """;
@@ -708,6 +1086,23 @@ SELECT PARTITION_METHOD FROM INFORMATION_SCHEMA.PARTITIONS
 SELECT GROUP_CONCAT(PARTITION_NAME ORDER BY PARTITION_ORDINAL_POSITION)
   FROM INFORMATION_SCHEMA.PARTITIONS
  WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND PARTITION_NAME IS NOT NULL";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    private string LiveSubpartitionNames(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"
+SELECT GROUP_CONCAT(SUBPARTITION_NAME ORDER BY PARTITION_ORDINAL_POSITION, SUBPARTITION_ORDINAL_POSITION)
+  FROM INFORMATION_SCHEMA.PARTITIONS
+ WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND SUBPARTITION_NAME IS NOT NULL";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    private string LivePartitionComment(IDbCommand cmd, string table, string partition)
+    {
+        cmd.CommandText = $@"
+SELECT MAX(PARTITION_COMMENT) FROM INFORMATION_SCHEMA.PARTITIONS
+ WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND PARTITION_NAME = '{partition}'";
         return cmd.ExecuteScalar() as string;
     }
 

@@ -87,6 +87,90 @@ public abstract class ParseAlteringSqlModeSharedTests
         }
     }
 
+    // Three flags change what a package means rather than how it is quoted: HIGH_NOT_PRECEDENCE reads
+    // NOT a BETWEEN b AND c as (NOT a) BETWEEN b AND c, REAL_AS_FLOAT makes REAL a FLOAT, and PAD_CHAR_TO_FULL_LENGTH
+    // reads CHAR values back padded. A routine kindled under one carried it into every deploy.
+    [TestCase("HIGH_NOT_PRECEDENCE")]
+    [TestCase("REAL_AS_FLOAT")]
+    [TestCase("PAD_CHAR_TO_FULL_LENGTH")]
+    public void Deploy_UnderAMeaningChangingMode_DeploysThePackageAsWritten_AndRedeploysWithoutChange(string flag)
+    {
+        Exec($"SET SESSION sql_mode = CONCAT(@@GLOBAL.sql_mode, ',{flag}')");
+        ForgeKindler.KindleTheForge(Command(), Platform, forceReKindle: true);
+        const string deploy = """
+             CALL SchemaSmith_TableQuench('MeaningModeProduct', DATABASE(),
+               '[{ "Name": "`meaning_t`", "Columns": [ { "Name": "`id`", "DataType": "INT", "Nullable": false },
+                   { "Name": "`r`", "DataType": "REAL", "Nullable": true },
+                   { "Name": "`c`", "DataType": "CHAR(5)", "Nullable": true, "Default": "''ab''" } ],
+                   "CheckConstraints": [ { "Name": "`ck_meaning`", "Expression": "NOT `id` BETWEEN 5 AND 9" } ],
+                   "Indexes": [ { "Name": "`PRIMARY`", "PrimaryKey": true, "Unique": true, "IndexColumns": "`id`" } ] }]', 0, 0, 0)
+             """;
+        // A downgrade is reported on every run (below MySQL 8.0.16 the check is one), so it is not a change.
+        const string changes = "SELECT COUNT(*) FROM SchemaSmith_ChangeAudit WHERE ActionType <> 'downgraded'";
+        Exec(deploy);
+        var afterFirst = Count(changes);
+        Exec(deploy);
+        // MySQL keeps check constraints from 8.0.16; below it the clause is parsed and dropped, and there is no view to read.
+        var keepsChecks = Count("SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'information_schema' AND TABLE_NAME = 'CHECK_CONSTRAINTS'") > 0;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Scalar($"SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = 'meaning_t' AND COLUMN_NAME = 'r'"),
+                Is.EqualTo("double"), "REAL is a DOUBLE in the default reading");
+            if (keepsChecks)
+                Assert.That(Scalar($"SELECT CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '{_testDb}' AND CONSTRAINT_NAME = 'ck_meaning'"),
+                    Does.Contain("not between").IgnoreCase, "the constraint keeps NOT applied to the BETWEEN");
+            Assert.That(Count(changes), Is.EqualTo(afterFirst),
+                "an unchanged redeploy changes nothing: " + Scalar("SELECT GROUP_CONCAT(CONCAT(ObjectType, ' ', ObjectName, ' ', ActionType) SEPARATOR '; ') FROM SchemaSmith_ChangeAudit"));
+        });
+    }
+
+    // MySQL 9.5's INTERPRET_UTF8_AS_UTF8MB4 makes a declared utf8 mean utf8mb4, so a column declared utf8 was created
+    // as utf8mb4 and read back as different from the package on every deploy.
+    [Test]
+    public void Deploy_UnderInterpretUtf8AsUtf8mb4_CreatesTheDeclaredCharacterSet_AndRedeploysWithoutChange()
+    {
+        try
+        {
+            Exec("SET SESSION sql_mode = CONCAT(@@GLOBAL.sql_mode, ',INTERPRET_UTF8_AS_UTF8MB4')");
+        }
+        catch (MySqlConnector.MySqlException ex) when (ex.Number == 1231)
+        {
+            Assert.Ignore("INTERPRET_UTF8_AS_UTF8MB4 is a MySQL 9.5+ sql_mode flag.");
+        }
+        ForgeKindler.KindleTheForge(Command(), Platform, forceReKindle: true);
+        const string deploy = """
+             CALL SchemaSmith_TableQuench('Utf8ModeProduct', DATABASE(),
+               '[{ "Name": "`utf8_t`", "Columns": [ { "Name": "`id`", "DataType": "INT", "Nullable": false },
+                   { "Name": "`s`", "DataType": "VARCHAR(20)", "Nullable": true, "CharacterSet": "utf8", "Collation": "utf8_general_ci" } ],
+                   "Indexes": [ { "Name": "`PRIMARY`", "PrimaryKey": true, "Unique": true, "IndexColumns": "`id`" } ] }]', 0, 0, 0)
+             """;
+        Exec(deploy);
+        var afterFirst = Count("SELECT COUNT(*) FROM SchemaSmith_ChangeAudit");
+        Exec(deploy);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Scalar($"SELECT CHARACTER_SET_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = 'utf8_t' AND COLUMN_NAME = 's'"),
+                Is.EqualTo("utf8mb3"), "the declared character set");
+            Assert.That(Count("SELECT COUNT(*) FROM SchemaSmith_ChangeAudit"), Is.EqualTo(afterFirst), "an unchanged redeploy changes nothing");
+        });
+    }
+
+    // DataTongs reads table data under this pin. PAD_CHAR_TO_FULL_LENGTH returns CHAR values padded, so 'ab' in a
+    // CHAR(5) was extracted as "ab   "; on a NO PAD collation (MySQL 8's utf8mb4_0900_*) that never matches the stored
+    // value again, and every delivery rewrites the row.
+    [Test]
+    public void AParseNeutralSession_ReadsCharValuesAsStored()
+    {
+        Exec("CREATE TABLE char_read (id INT PRIMARY KEY, c CHAR(5))");
+        Exec("INSERT INTO char_read VALUES (1, 'ab')");
+        Exec("SET SESSION sql_mode = CONCAT(@@GLOBAL.sql_mode, ',PAD_CHAR_TO_FULL_LENGTH')");
+
+        using (MySqlSessionSettings.UseParseNeutralSqlMode(Command()))
+            Assert.That(Scalar("SELECT JSON_EXTRACT(JSON_OBJECT('c', c), '$.c') FROM char_read"), Is.EqualTo("\"ab\""));
+    }
+
     private void KindleAndDeployUnder(string mode)
     {
         Exec($"SET SESSION sql_mode = '{mode}'");
