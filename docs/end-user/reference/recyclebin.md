@@ -52,7 +52,7 @@ The hooks honor `WhatIfONLY`. In WhatIf mode, the `EXEC` / `CALL` line for each 
 
 ### Invocation points
 
-- **Drop path:** the `ModifiedTableQuench` pass that handles tables removed from the product. When a `CustomTableDrop` hook is detected, SchemaSmith also skips its own temporal-history-table drop pass — the hook owns table removal entirely.
+- **Drop path:** the `ModifiedTableQuench` pass that handles tables removed from the product. When a `CustomTableDrop` hook is detected, SchemaSmith also skips its own temporal-history-table drop pass — the hook owns table removal entirely. On SQL Server, a table the hook moves to another schema or name is no longer the product's: SchemaSmith removes its `ProductName` property, so later deploys leave the recycled copy where the hook put it.
 - **Restore path:** the `MissingTableAndColumnQuench` pass, ahead of table creation. When a table that was previously recycled reappears in the product, the restore hook runs before SchemaSmith would create the table fresh.
 
 > **Note:** The engine clears inbound foreign keys before calling the drop hook. The hook implementation also drops inbound foreign keys itself. Both orders are safe; the belt-and-suspenders approach ensures constraint removal succeeds regardless of which side acts first.

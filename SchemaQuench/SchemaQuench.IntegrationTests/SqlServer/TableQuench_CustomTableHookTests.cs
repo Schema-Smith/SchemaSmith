@@ -58,6 +58,72 @@ END");
         conn.Close();
     }
 
+    // #549: the reference recyclebin hook moves the table with ALTER SCHEMA TRANSFER, which keeps its ProductName property,
+    // so every later deploy found the recycled copy, "dropped" it again and recycled it under a new name -- the registry
+    // row then pointed at nothing, and a restore could not bring the data back.
+    [Test]
+    public void ATableTheDropHookMoved_IsNoLongerTheProducts_SoItIsRecycledOnce()
+    {
+        var db = UniqueDb("hookonce");
+        using var conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            CreateAndKindle(conn, cmd, db);
+
+            Exec(cmd, "CREATE TABLE dbo.HookLog (Action VARCHAR(20), ObjName SYSNAME)");
+            Exec(cmd, "CREATE SCHEMA recyclebin");
+            Exec(cmd, @"
+CREATE PROCEDURE SchemaSmith.CustomTableDrop @SchemaName SYSNAME, @TableName SYSNAME AS
+BEGIN
+  INSERT INTO dbo.HookLog VALUES ('DROP', @TableName);
+  EXEC('ALTER SCHEMA recyclebin TRANSFER [' + @SchemaName + '].[' + @TableName + ']');
+END");
+
+            const string gadget = "[{\"Schema\":\"[dbo]\",\"Name\":\"[Gadget]\",\"Columns\":[{\"Name\":\"[Id]\",\"DataType\":\"INT\",\"Nullable\":false}],\"Indexes\":[{\"Name\":\"[PK_Gadget]\",\"PrimaryKey\":true,\"Unique\":true,\"Clustered\":true,\"IndexColumns\":\"[Id]\"}]}]";
+            // The recyclebin framework's own table is part of the package, as in the reference hooks, so the recyclebin
+            // schema is one the deploy reads -- which is where it found the recycled copy.
+            const string keeper = "[{\"Schema\":\"[dbo]\",\"Name\":\"[Keeper]\",\"Columns\":[{\"Name\":\"[Id]\",\"DataType\":\"INT\",\"Nullable\":false}],\"Indexes\":[{\"Name\":\"[PK_Keeper]\",\"PrimaryKey\":true,\"Unique\":true,\"Clustered\":true,\"IndexColumns\":\"[Id]\"}]},"
+                                  + "{\"Schema\":\"[recyclebin]\",\"Name\":\"[Registry]\",\"Columns\":[{\"Name\":\"[RecycledName]\",\"DataType\":\"SYSNAME\",\"Nullable\":false}]}]";
+            Quench(cmd, db, gadget, false);
+            Exec(cmd, "INSERT INTO dbo.Gadget (Id) VALUES (7)");
+            Quench(cmd, db, keeper, true);
+            Quench(cmd, db, keeper, true);
+            Quench(cmd, db, keeper, true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ScalarInt(cmd, "SELECT COUNT(*) FROM dbo.HookLog WHERE Action='DROP'"), Is.EqualTo(1),
+                    "the hook recycles the table once; the recycled copy is not the product's any more");
+                Assert.That(ScalarInt(cmd, "SELECT COUNT(*) FROM recyclebin.Gadget WHERE Id = 7"), Is.EqualTo(1),
+                    "the recycled copy keeps its name and its rows, so a restore can find it");
+            });
+
+            // Declared again, the table comes back through the restore hook with its rows, and is the product's again.
+            Exec(cmd, @"
+CREATE PROCEDURE SchemaSmith.CustomTableRestore @SchemaName SYSNAME, @TableName SYSNAME AS
+BEGIN
+  IF OBJECT_ID('recyclebin.' + QUOTENAME(@TableName)) IS NOT NULL
+    EXEC('ALTER SCHEMA [' + @SchemaName + '] TRANSFER recyclebin.[' + @TableName + ']');
+END");
+            Quench(cmd, db, gadget.TrimEnd(']') + "," + keeper.TrimStart('['), true);
+            Assert.Multiple(() =>
+            {
+                Assert.That(ScalarInt(cmd, "SELECT COUNT(*) FROM dbo.Gadget WHERE Id = 7"), Is.EqualTo(1), "restored with its rows");
+                Assert.That(ScalarInt(cmd, "SELECT COUNT(*) FROM sys.extended_properties WHERE class = 1 AND minor_id = 0 "
+                                           + "AND major_id = OBJECT_ID('dbo.Gadget') AND name = 'ProductName'"), Is.EqualTo(1),
+                    "the restored table is the product's again");
+            });
+        }
+        finally
+        {
+            DropDb(conn, cmd, db);
+        }
+        conn.Close();
+    }
+
     [Test]
     public void MissingTableAndColumnQuench_RestoresThroughCustomTableRestoreHookAndDoesNotRecreate()
     {

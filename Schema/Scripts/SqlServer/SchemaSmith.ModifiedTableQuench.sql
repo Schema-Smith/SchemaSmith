@@ -323,6 +323,16 @@ BEGIN TRY
             FROM #TablesRemovedFromProduct t WITH (NOLOCK)
             JOIN sys.foreign_keys fk ON fk.referenced_object_id = OBJECT_ID(t.[Schema] + '.' + QUOTENAME(t.[TableName]) + '')
 
+      -- #549: a hook that moves the table (ALTER SCHEMA TRANSFER, sp_rename) keeps its ProductName property, so the next
+      -- deploy found the moved copy, routed it through the hook again and recycled the recycled table under a new name.
+      -- Each table's object_id is taken before the hook runs; one still there after it, under another name, was moved,
+      -- and is no longer the product's.
+      IF OBJECT_ID('tempdb..#TablesHandedToHook') IS NOT NULL DROP TABLE #TablesHandedToHook
+      SELECT t.[Schema], t.[TableName], [ObjectId] = OBJECT_ID(t.[Schema] + '.' + QUOTENAME(t.[TableName]))
+        INTO #TablesHandedToHook
+        FROM #TablesRemovedFromProduct t WITH (NOLOCK)
+        WHERE OBJECT_ID('SchemaSmith.CustomTableDrop') IS NOT NULL
+
       RAISERROR('Drop tables removed from the product', 10, 100) WITH NOWAIT
       SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping table ' + t.[Schema] + '.' + t.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                       CASE WHEN OBJECT_ID('SchemaSmith.CustomTableDrop') IS NOT NULL
@@ -339,6 +349,20 @@ BEGIN TRY
         INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
           SELECT @@SPID, 'table', t.[Schema] + '.' + QUOTENAME(t.[TableName]) + '', 'wouldDrop'
             FROM #TablesRemovedFromProduct t WITH (NOLOCK)
+
+      IF @WhatIf = 0
+      BEGIN
+        SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sys.sp_dropextendedproperty @name = N''ProductName'', @level0type = N''SCHEMA'', @level0name = N'
+                                        + QUOTENAME(OBJECT_SCHEMA_NAME(h.[ObjectId]), '''') + ', @level1type = N''TABLE'', @level1name = N'
+                                        + QUOTENAME(OBJECT_NAME(h.[ObjectId]), '''') + ';' AS NVARCHAR(MAX))
+                                 FROM #TablesHandedToHook h WITH (NOLOCK)
+                                 WHERE h.[ObjectId] IS NOT NULL AND OBJECT_NAME(h.[ObjectId]) IS NOT NULL
+                                   AND ISNULL(OBJECT_ID(h.[Schema] + '.' + QUOTENAME(h.[TableName])), 0) <> h.[ObjectId]
+                                   AND EXISTS (SELECT 1 FROM sys.extended_properties ep
+                                                WHERE ep.class = 1 AND ep.major_id = h.[ObjectId] AND ep.minor_id = 0 AND ep.[name] = 'ProductName')
+                                 FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+        IF @v_SQL IS NOT NULL EXEC(@v_SQL)
+      END
 
       -- Drop the now-orphaned history tables of removed temporal tables (versioning was turned off
       -- above). Skipped when a CustomTableDrop hook is installed -- that hook owns table removal,
