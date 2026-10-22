@@ -129,7 +129,7 @@ public sealed class JsonSchemaCheck : ISchemaCheck
 
         foreach (var jsonFile in jsonFiles)
         {
-            var typeName = MapFileToType(jsonFile);
+            var typeName = MapFileToType(ctx.PackagePath, jsonFile);
             if (typeName == null) continue;
             if (!schemaByType.TryGetValue(typeName, out var schema)) continue;
 
@@ -286,16 +286,23 @@ public sealed class JsonSchemaCheck : ISchemaCheck
     // classified by that folder even if it happens to be named Product.json/Template.json (e.g.
     // MySQL's schema-less <table>.json layout can produce Tables/Product.json for a table
     // literally named "Product") — otherwise it would be misread as the manifest.
-    private static string MapFileToType(string jsonFilePath)
+    // The NEAREST component folder between the package root and the file decides, so a subfolder that organises tables
+    // (Tables/Core/product.json) is still read as tables (#563). Folders above the package root never count.
+    private static readonly (string Folder, string Type)[] ComponentFolders =
+    [
+        ("Tables", "tables"), ("Indexed Views", "indexedviews"), ("Materialized Views", "materializedviews"),
+        ("Events", "events"), ("Domain Types", "domaintypes"), ("Enum Types", "enumtypes"), ("Sequences", "sequences"),
+    ];
+
+    internal static string MapFileToType(string packagePath, string jsonFilePath)
     {
-        var parent = Path.GetFileName(Path.GetDirectoryName(jsonFilePath) ?? "");
-        if (parent.Equals("Tables", StringComparison.OrdinalIgnoreCase)) return "tables";
-        if (parent.Equals("Indexed Views", StringComparison.OrdinalIgnoreCase)) return "indexedviews";
-        if (parent.Equals("Materialized Views", StringComparison.OrdinalIgnoreCase)) return "materializedviews";
-        if (parent.Equals("Events", StringComparison.OrdinalIgnoreCase)) return "events";
-        if (parent.Equals("Domain Types", StringComparison.OrdinalIgnoreCase)) return "domaintypes";
-        if (parent.Equals("Enum Types", StringComparison.OrdinalIgnoreCase)) return "enumtypes";
-        if (parent.Equals("Sequences", StringComparison.OrdinalIgnoreCase)) return "sequences";
+        var folders = Path.GetRelativePath(packagePath, Path.GetDirectoryName(jsonFilePath) ?? "")
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        foreach (var folder in folders.Reverse())
+        {
+            var match = ComponentFolders.FirstOrDefault(c => c.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase));
+            if (match.Type != null) return match.Type;
+        }
 
         var fileName = Path.GetFileName(jsonFilePath);
         if (fileName.Equals("Product.json", StringComparison.OrdinalIgnoreCase)) return "products";

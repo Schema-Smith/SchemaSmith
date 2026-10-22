@@ -339,6 +339,35 @@ public class JsonSchemaCheckTests
         Assert.That(findings, Is.Empty);
     }
 
+    // #563: a subfolder under Tables organises tables; a table file there named product.json or template.json was
+    // validated as the manifest, with an error for every table property. The nearest component folder decides.
+    [Test]
+    public void TableFileInASubfolderOfTables_NamedProduct_ClassifiesAsTable()
+    {
+        CommitTablesSchema(FreshTablesSchema());
+        CommitProductsSchema(FreshProductsSchema());
+        var tableFile = TableFilePath(Path.Join("Core", "product.json"));
+        JsonFiles(tableFile);
+        FileContent(tableFile, @"{ ""Name"": ""product"", ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"" } ] }");
+
+        var findings = new JsonSchemaCheck().Run(Context()).ToList();
+
+        Assert.That(findings, Is.Empty);
+    }
+
+    // Only folders inside the package count: a package kept under a folder that happens to be called Tables still has a
+    // manifest, not a table.
+    [Test]
+    public void ComponentFolder_IsLookedForInsideThePackageOnly()
+    {
+        var package = Path.Join("C:", "Tables", "pkg");
+
+        Assert.That(JsonSchemaCheck.MapFileToType(package, Path.Join(package, "Product.json")), Is.EqualTo("products"));
+        Assert.That(JsonSchemaCheck.MapFileToType(package, Path.Join(package, "Templates", "Main", "Template.json")), Is.EqualTo("templates"));
+        Assert.That(JsonSchemaCheck.MapFileToType(package, Path.Join(package, "Templates", "Main", "Tables", "a", "b", "product.json")), Is.EqualTo("tables"));
+        Assert.That(JsonSchemaCheck.MapFileToType(package, Path.Join(package, "Templates", "Main", "Sequences", "x", "Template.json")), Is.EqualTo("sequences"));
+    }
+
     [Test]
     public void RealRootProductJson_StillClassifiesAsProductManifest()
     {
