@@ -121,6 +121,27 @@ public class LogBackupTests
     }
 
     [Test]
+    public void BackupLogsAndExit_SaysWhyItExitsOne()
+    {
+        _mockEnvironment.CommandLine.Returns("app.exe --ExitNonZeroOnWarning");
+        FactoryContainer.Register<Microsoft.Extensions.Configuration.IConfigurationRoot>(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
+        _mockDirectory.GetFiles(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<SearchOption>()).Returns(Array.Empty<string>());
+        var progressLog = Substitute.For<log4net.ILog>();
+        LogFactory.Register("ProgressLog", progressLog);
+        lock (FactoryContainer.SharedLockObject)
+        {
+            WarningCounter.Reset();
+            try
+            {
+                LogBackup.BackupLogsAndExit("TestApp", 0, unloggedWarnings: 2);
+
+                progressLog.Received(1).Info("Exit code 1: 2 warning(s) and ExitNonZeroOnWarning is on.");
+            }
+            finally { WarningCounter.Reset(); }
+        }
+    }
+
+    [Test]
     public void BackupLogsAndExit_ExitNonZeroOnWarning_AsABareSwitch()
     {
         _mockEnvironment.CommandLine.Returns("app.exe --ExitNonZeroOnWarning");

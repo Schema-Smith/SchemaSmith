@@ -165,10 +165,12 @@ BEGIN
       -- so this pass only considers tables owned by the current (template, schema)
       -- iteration. No additional restriction needed here; the predicate already excludes
       -- other templates' tables AND other tenants' tables of the same template.
-      SELECT STRING_AGG('RAISE NOTICE ''  Table ' || tp."Schema" || '.' || tp."TableName" || ' no longer in product'';' || CHR(10) ||
-                        CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'CustomTableDrop' AND n.nspname = 'SchemaSmith' )
-                             THEN 'CALL "SchemaSmith"."CustomTableDrop"(''' || tp."Schema" || ''', ''' || tp."TableName" || ''');'
-                             ELSE 'DROP TABLE IF EXISTS ' || "SchemaSmith"."QuoteName"(tp."Schema") || '.' || "SchemaSmith"."QuoteName"(tp."TableName") || ';'
+      -- A plain drop says so, as SQL Server's and MySQL's do; a hooked one keeps saying only that the table left the product.
+      SELECT STRING_AGG(CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'CustomTableDrop' AND n.nspname = 'SchemaSmith' )
+                             THEN 'RAISE NOTICE ''  Table ' || tp."Schema" || '.' || tp."TableName" || ' no longer in product'';' || CHR(10) ||
+                                  'CALL "SchemaSmith"."CustomTableDrop"(''' || tp."Schema" || ''', ''' || tp."TableName" || ''');'
+                             ELSE 'RAISE NOTICE ''  Dropping table ' || tp."Schema" || '.' || tp."TableName" || ' (no longer in product)'';' || CHR(10) ||
+                                  'DROP TABLE IF EXISTS ' || "SchemaSmith"."QuoteName"(tp."Schema") || '.' || "SchemaSmith"."QuoteName"(tp."TableName") || ';'
                              END || CHR(10) ||
                         'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''table'', ''' || tp."Schema" || '.' || tp."TableName" || ''', ''dropped'');', CHR(10))
         INTO sql_script

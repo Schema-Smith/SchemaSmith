@@ -38,7 +38,7 @@ public static class ConfigurationLogger
                 indents++;
                 key = TryIndexToItemName(key.Substring(key.IndexOf(":", StringComparison.Ordinal) + 1), entries, entry, arrayNameKeys);
             }
-            var value = ShouldMask(entry.Key, key, hygiene)
+            var value = ShouldMask(entry.Key, key, hygiene, entry.Value)
                 ? LogScrubber.Mask
                 : LogScrubber.ScrubConnectionStringSubfields(entry.Value ?? ""); // strip any embedded connection-string password
             logLine?.Invoke($"{new string(' ', indents * 2)}{key}: {value}");
@@ -75,9 +75,11 @@ public static class ConfigurationLogger
     // entry's own name is just its index, "password:0"), and, with LogTokens off, when it is a script token. Objects
     // are still judged leaf by leaf: masking everything under a sensitive ancestor would hide every ScriptTokens
     // value, since "Token" is one of the sensitive patterns.
-    private static bool ShouldMask(string fullKey, string displayName, LogHygieneOptions hygiene)
+    private static bool ShouldMask(string fullKey, string displayName, LogHygieneOptions hygiene, string value)
     {
         if (IsLogHygieneSetting(fullKey)) return false;
+        // A section line has no value and a true/false reveals no secret; masking them hid only what was set.
+        if (string.IsNullOrEmpty(value) || bool.TryParse(value, out _)) return false;
 
         if (LogScrubber.ShouldScrubName(displayName, hygiene)) return true;
 

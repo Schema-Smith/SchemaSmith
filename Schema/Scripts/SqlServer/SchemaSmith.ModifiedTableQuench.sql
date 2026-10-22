@@ -703,7 +703,7 @@ BEGIN TRY
   -- columns and exclude them from the dependent-cleanup passes below, which otherwise clear the way for
   -- a column drop that never happens. Genuinely-modified columns (DropOnly = 0) are never listed here,
   -- so their transient drop-and-recreate cleanup is untouched.
-  RAISERROR('Identify suppressed column drops whose dependents must be retained (#358)', 10, 100) WITH NOWAIT
+  RAISERROR('Identify suppressed column drops whose dependents must be retained', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#SuppressedColumnDrops') IS NOT NULL DROP TABLE #SuppressedColumnDrops
   SELECT cc.[Schema], cc.[TableName], cc.[ColumnName]
     INTO #SuppressedColumnDrops
@@ -2825,7 +2825,7 @@ BEGIN TRY
   -- With versioning suspended, a column change reaches the current table only, and versioning cannot come back on until
   -- the history table matches it by name, type, collation and nullability (probed: nullability is checked too). Make it
   -- match: drop what the current table no longer has, add what it gained, and restate what differs.
-  RAISERROR('Mirror Column Changes Onto The History Tables Of Suspended Temporal Tables', 10, 100) WITH NOWAIT
+  RAISERROR('Mirror column changes onto the history tables of suspended temporal tables', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#SuspendedTemporal') IS NOT NULL DROP TABLE #SuspendedTemporal
   SELECT [CurrentId] = ep.major_id, [HistoryName] = CAST(ep.[value] AS NVARCHAR(600)),
          [HistoryId] = OBJECT_ID(CAST(ep.[value] AS NVARCHAR(600)))
