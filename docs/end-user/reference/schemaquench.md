@@ -215,6 +215,8 @@ Boolean. Default `false`. Controls what happens when an entry in `Databases` or 
 
 When `true`, SchemaQuench issues idempotent per-engine DDL (`CREATE SCHEMA IF NOT EXISTS` on PostgreSQL, the `sys.schemas`-guarded `EXEC('CREATE SCHEMA …')` pattern on SQL Server, `CREATE DATABASE IF NOT EXISTS` on MySQL) before deploying into the new target. Database provisioning runs against the engine's admin database (`master` / `postgres` / `information_schema`) by re-targeting the connection -- the credential the user supplied to SchemaQuench must carry `CREATE DATABASE` privilege there. When `false` and a target is missing, the engine emits an info log naming the skipped target and continues with the rest of the override list; no work units run for the missing target, no error.
 
+Under WhatIf nothing is created: a missing database is reported as one it would create, and its units as deploying every object the template declares into the new, empty database. Nothing connects to it, and the run succeeds as the real one would. A schema template that discovers its schemas there reports that they are discovered once the database exists.
+
 > **Warning:** Provisioning requires elevated privileges. `CreateIfMissing: true` on the database axis needs `CREATE DATABASE` on the engine's admin database; on the schema axis it needs `CREATE SCHEMA` on the target database. A permission denial surfaces an actionable diagnostic naming the missing privilege, but the deployment fails fast at that target. If your deployment account is intentionally low-privilege, leave `CreateIfMissing: false` and provision externally; SchemaQuench will pick the targets up as soon as they exist.
 
 ### Validation

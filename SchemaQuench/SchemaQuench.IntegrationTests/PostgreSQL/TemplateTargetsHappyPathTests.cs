@@ -210,6 +210,92 @@ public class TemplateTargetsHappyPathTests
         }
     }
 
+    // #550: WhatIf reported the database it would create, then tried to open it and failed the unit, so a preview of
+    // onboarding a new database always exited 2 though the real run succeeds. The unit now previews the deploy into the
+    // new, empty database without connecting to it.
+    [Test]
+    public void DatabaseOverrideWithCreateIfMissing_UnderWhatIf_PreviewsTheNewDatabase_AndSucceeds()
+    {
+        var transientDb = MakeTransientDbName("ttdb_whatif");
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetupSharedMocks();
+            ClearCheckpointsForProduct();
+            DropTransientDb(transientDb);
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            config["SchemaPackagePath"] = TestHelper.GetTestProductPath("PostgreSQL", ProductName);
+            ClearTargetFilters(config);
+            ClearTemplateTargets(config);
+
+            config["Target:Templates:0"] = "Shared";
+            config["Target:TemplateTargets:Shared:Databases:0"] = transientDb;
+            config["Target:TemplateTargets:Shared:CreateIfMissing"] = "true";
+            config["WhatIfONLY"] = "true";
+
+            try
+            {
+                RunSchemaQuenchWithKindling();
+                _progressLog.DidNotReceive().Error(Arg.Any<string>());
+                _environment.DidNotReceive().Exit(Arg.Is<int>(code => code != 0));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Would create database") && s.Contains(transientDb)));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(transientDb) && s.Contains("new, empty database")));
+                Assert.That(DatabaseExists(transientDb), Is.False, "WhatIf creates nothing");
+            }
+            finally
+            {
+                config["WhatIfONLY"] = null;
+                ClearTemplateTargets(config);
+                ClearTargetFilters(config);
+                DropTransientDb(transientDb);
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+            }
+        }
+    }
+
+    // #550, a schema template: its schemas are discovered in the database, which WhatIf has not created.
+    [Test]
+    public void SchemaTemplate_UnderWhatIf_ForANewDatabase_DoesNotDiscoverSchemasInIt()
+    {
+        var transientDb = MakeTransientDbName("ttdb_whatifs");
+
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetupSharedMocks();
+            ClearCheckpointsForProduct();
+            DropTransientDb(transientDb);
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            config["SchemaPackagePath"] = TestHelper.GetTestProductPath("PostgreSQL", ProductName);
+            ClearTargetFilters(config);
+            ClearTemplateTargets(config);
+
+            config["Target:Templates:0"] = "TenantBody";
+            config["Target:TemplateTargets:TenantBody:Databases:0"] = transientDb;
+            config["Target:TemplateTargets:TenantBody:CreateIfMissing"] = "true";
+            config["WhatIfONLY"] = "true";
+
+            try
+            {
+                RunSchemaQuenchWithKindling();
+                _progressLog.DidNotReceive().Error(Arg.Any<string>());
+                _environment.DidNotReceive().Exit(Arg.Is<int>(code => code != 0));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Would create database") && s.Contains(transientDb)));
+                _progressLog.Received().Info(Arg.Is<string>(s => s.Contains(transientDb) && s.Contains("Schemas are discovered once the database exists")));
+                Assert.That(DatabaseExists(transientDb), Is.False, "WhatIf creates nothing");
+            }
+            finally
+            {
+                config["WhatIfONLY"] = null;
+                ClearTemplateTargets(config);
+                ClearTargetFilters(config);
+                DropTransientDb(transientDb);
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+            }
+        }
+    }
+
     [Test]
     public void DatabaseOverrideWithoutCreateIfMissing_SkipsMissingDbWithInfoLog()
     {

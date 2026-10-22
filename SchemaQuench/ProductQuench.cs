@@ -95,6 +95,7 @@ public class ProductQuench
 
     /// <summary>Snapshot of every work unit's captured outcome so far. Used by a later slice (E4d).</summary>
     internal IReadOnlyCollection<TargetResult> TargetResults => _targetResults.ToArray();
+    internal IReadOnlyCollection<FailureRecord> FailureRecords => _failureRecords.ToArray();
 
     internal MigrationScriptCapture MigrationScripts => _migrationScripts;
 
@@ -1634,7 +1635,19 @@ public class ProductQuench
                 wouldCreateThisDb = gate.WouldCreate;
             }
 
-            if (template.IsSchemaTemplate)
+            if (template.IsSchemaTemplate && wouldCreateThisDb && !schemasOverride && !previewOnly)
+            {
+                _progressLog.Info($"[{server}].[{db}] [WhatIf] Schemas are discovered once the database exists; template '{template.Name}' would deploy to each.");
+                workUnits.Add(new WorkUnit(server, db, template.Name, "")
+                {
+                    DatabaseSource = databaseSource,
+                    SchemaSource = "SchemaIdentificationScript",
+                    DatabaseFromOverride = databasesOverride,
+                    ProvisionDatabaseIfMissing = true,
+                    WouldCreateDatabase = true
+                });
+            }
+            else if (template.IsSchemaTemplate)
             {
                 List<string> schemas;
                 string schemaSource;
@@ -1752,6 +1765,7 @@ public class ProductQuench
             _errorLog.Error(
                 $"[{server}] Database existence check failed for '{databaseName}' (template '{template.Name}'):\r\n{e}");
             _updateFailed = true;
+            RecordDatabaseGateFailure(server, databaseName, template, "Database existence check failed", e.Message);
             return new DbAxisGate(false, false);
         }
 
@@ -1789,9 +1803,11 @@ public class ProductQuench
                 _errorLog.Error(
                     $"[{server}] Database provisioning failed for '{databaseName}' (template '{template.Name}'):\r\n{ex}");
                 _updateFailed = true;
+                RecordDatabaseGateFailure(server, databaseName, template, "Database provisioning failed", ex.Message);
                 return new DbAxisGate(false, false);
             }
-            return new DbAxisGate(true, false);
+            // #550: under WhatIf the database was only reported, so it does not exist for the unit to open.
+            return new DbAxisGate(true, IsWhatIfOnly);
         }
 
         // Skip-missing on the DB axis. Mirror the schema-axis log shape so a grep for
@@ -1806,6 +1822,17 @@ public class ProductQuench
             _targetResults.Add(new TargetResult($"[{server}].[{databaseName}]", server, databaseName, "", template.Name,
                 TargetOutcome.Skipped, 0, $"TemplateTargets:{template.Name}:Databases"));
         return new DbAxisGate(false, false);
+    }
+
+    // #562: a database that could not be checked or created has no work unit, so it reached neither the summary's targets
+    // and failures nor the console's failure manifest -- a PartialFailure with no failing target. Both are written here.
+    private void RecordDatabaseGateFailure(string server, string databaseName, Template template, string what, string error)
+    {
+        var scope = $"[{server}].[{databaseName}]";
+        _failureRecords.Add(new FailureRecord($"Template:{template.Name}", scope, error,
+            new[] { $"{what} for '{databaseName}' (template '{template.Name}')" }, null));
+        _targetResults.Add(new TargetResult(scope, server, databaseName, "", template.Name, TargetOutcome.Failed, 0,
+            $"TemplateTargets:{template.Name}:Databases"));
     }
 
     /// <summary>
@@ -2019,6 +2046,17 @@ public class ProductQuench
     /// </summary>
     private void RunOneWorkUnit(WorkUnit unit, Template template, bool suppressKindling)
     {
+        // #550: a database WhatIf would create does not exist, so there is nothing to open or compare. Every object in the
+        // template would be created in it, which is the preview; the unit succeeds, as the real run would.
+        if (IsWhatIfOnly && unit.WouldCreateDatabase)
+        {
+            var scope = string.IsNullOrEmpty(unit.SchemaName) ? $"[{unit.Server}].[{unit.DatabaseName}]" : $"[{unit.Server}].[{unit.DatabaseName}].[{unit.SchemaName}]";
+            _progressLog.Info($"{scope} [WhatIf] Would deploy template '{template.Name}' into the new, empty database '{unit.DatabaseName}': every object it declares would be created.");
+            _targetResults.Add(new TargetResult(scope, unit.Server, unit.DatabaseName, unit.SchemaName ?? "", unit.TemplateName,
+                TargetOutcome.Success, 0, unit.DatabaseSource, unit.SchemaSource));
+            return;
+        }
+
         var dropRemovedTables = FormatBooleanFlag(ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropTablesRemovedFromProduct), _product.DropTablesRemovedFromProduct,
             template.DropTablesRemovedFromProduct, defaultValue: true));

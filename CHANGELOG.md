@@ -80,6 +80,8 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Fixed
 
+- **A database `CreateIfMissing` could not create is in the deployment summary — #562.** The run ended `PartialFailure` with exit `2`, but `failures[]` was empty, `targets[]` left the database out, and the console's failure manifest did not name it. It is now a failed target and a failure carrying the provisioning message, as is a database whose existence check failed.
+- **WhatIf no longer fails a database `CreateIfMissing` would create (all engines) — #550.** It reported the creation, then tried to open the database that did not exist yet and failed the unit, so a preview of onboarding a new database always exited `2`. The unit now reports the deploy into the new, empty database and succeeds; a schema template that discovers its schemas there says they are discovered once the database exists.
 - **MariaDB: `--Validate` reports a period over a missing column, and a second period — #568.** Both passed and then failed the deploy mid-run; they are now `SS-PER-001` and `SS-PER-002`.
 - **MySQL and MariaDB: `--Validate` reports a partition `Values` that carries its own clause — #569.** `"LESS THAN (2025)"` or `"IN (1, 2)"` passed and then failed the deploy with a syntax error, because the deploy writes the clause around `Values` itself; it is now `SS-PART-011`.
 - **PostgreSQL: `--Validate` reports two same-named policies that both apply — #570.** The deploy failed with `42710: policy "…" already exists`. As for other same-named entries, more than one policy of a name needs a `ShouldApplyExpression` on every one (`SS-DUP-001`).
