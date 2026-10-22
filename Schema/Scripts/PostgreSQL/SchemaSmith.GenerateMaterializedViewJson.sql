@@ -42,7 +42,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(mv))
                                '' AS "ShouldApplyExpression",
                                -- Only a fill factor someone set is declared, as GenerateTableJson.
                                (REGEXP_MATCH(ARRAY_TO_STRING(i.reloptions, ','), 'fillfactor=(\d+)'))[1]::int AS "FillFactor",
-                               "SchemaSmith"."IndexNullsNotDistinct"(idx.indexrelid) AS "NullsNotDistinct"
+                               "SchemaSmith"."IndexNullsNotDistinct"(idx.indexrelid) AS "NullsNotDistinct",
+                               OBJ_DESCRIPTION(i.oid, 'pg_class') AS "Description"
                           FROM pg_index idx
                           JOIN pg_class i ON i.oid = idx.indexrelid
                           WHERE idx.indrelid = c.oid

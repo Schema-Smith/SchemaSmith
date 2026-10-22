@@ -1152,3 +1152,38 @@ EXEC sp_addextendedproperty 'MS_Description', 'kept column', 'SCHEMA', '{_schema
         EnsureViewDropped(cmd);
     }
 }
+
+    private static string ViewDefinitionWithIndexDescription(string description) =>
+        ViewDefinitionWithTwoIndexes().Replace("\"Name\":\"[IX_vTestSummary_Name]\",", "\"Name\":\"[IX_vTestSummary_Name]\",\"Description\":\"" + description + "\",");
+
+    private string IndexDescription(IDbCommand cmd)
+    {
+        cmd.CommandText = $"SELECT CONVERT(NVARCHAR(MAX), ep.value) FROM sys.extended_properties ep JOIN sys.indexes i ON i.[object_id] = ep.major_id AND i.index_id = ep.minor_id WHERE ep.class = 7 AND ep.name = 'MS_Description' AND ep.major_id = OBJECT_ID('[{_schema}].[vTestSummary]') AND i.name = 'IX_vTestSummary_Name'";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    // An index's Description was in the generated schema and passed --Validate, but nothing deployed or extracted it.
+    [Test]
+    public void AnIndexDescription_IsSet_ChangedInPlace_LeftAloneWhenOmitted_RemovedByAnEmptyString_AndExtracted()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithIndexDescription("by name"));
+        Assert.That(IndexDescription(cmd), Is.EqualTo("by name"), "set on create");
+        cmd.CommandText = $"SELECT [SchemaSmith].[GenerateIndexedViewJson]('{_schema}', 'vTestSummary')";
+        Assert.That(cmd.ExecuteScalar() as string, Does.Contain("\"Description\":\"by name\""), "and extracted");
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithIndexDescription("by customer name"));
+        Assert.That(IndexDescription(cmd), Is.EqualTo("by customer name"), "a change converges");
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
+        Assert.That(IndexDescription(cmd), Is.EqualTo("by customer name"), "omitted means the description is not managed, so the database's stays");
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithIndexDescription(""));
+        Assert.That(IndexDescription(cmd), Is.Null, "an empty string is the request to remove it");
+        EnsureViewDropped(cmd);
+    }

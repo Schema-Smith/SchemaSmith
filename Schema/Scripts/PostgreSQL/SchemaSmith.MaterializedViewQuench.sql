@@ -78,7 +78,8 @@ BEGIN
          COALESCE((SELECT STRING_AGG(sp.k || '=' || sp.v, ',' ORDER BY sp.k)
                      FROM JSON_EACH_TEXT(COALESCE(celem -> 'StorageParameters', '{}'::JSON)) AS sp(k, v)
                     WHERE sp.k <> 'fillfactor'), '') AS "StorageParameters",
-         COALESCE(celem ->> 'Tablespace', '') AS "Tablespace"
+         COALESCE(celem ->> 'Tablespace', '') AS "Tablespace",
+         celem ->> 'Description' AS "Description"
     FROM my_views, JSON_ARRAY_ELEMENTS(arr) AS elem
     CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS(COALESCE((elem ->> 'Indexes')::JSON, '[]'::JSON)) AS celem(value);
 
@@ -272,6 +273,24 @@ BEGIN
 
   -- Handle indexes
   CALL "SchemaSmith"."MissingMaterializedViewIndexesQuench"(p_WhatIf, p_UpdateFillFactor);
+
+  -- Each declared index's description, by the same rules, once the index exists.
+  RAISE NOTICE 'Fixup Materialized View Index Descriptions';
+  SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN i."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of index ' ||
+                    REPLACE(REPLACE(i."ViewSchema" || '.' || i."ViewName" || '.' || i."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+                    'COMMENT ON INDEX ' || "SchemaSmith"."QuoteName"(i."ViewSchema") || '.' || "SchemaSmith"."QuoteName"(i."Name") || ' IS ' ||
+                    CASE WHEN i."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(i."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
+                    'VALUES (pg_backend_pid(), ''index'', ''' || REPLACE(i."ViewSchema" || '.' || i."ViewName" || '.' || i."Name", '''', '''''') || ''', ''modified'');', CHR(10))
+    INTO sql_script
+    FROM temp_mv_indexes i
+    JOIN temp_materialized_views t ON t."Schema" = i."ViewSchema" AND t."Name" = i."ViewName"
+    JOIN pg_class c ON c.relname = i."Name" AND c.relkind = 'i'
+                   AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = i."ViewSchema")
+   WHERE i."Description" IS NOT NULL
+     AND COALESCE(OBJ_DESCRIPTION(c.oid, 'pg_class'), '') IS DISTINCT FROM i."Description";
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
   -- Fixup ownership
   CALL "SchemaSmith"."FixupMaterializedViewOwnership"(p_ProductName, p_WhatIf, p_TemplateName, p_SchemaName);
