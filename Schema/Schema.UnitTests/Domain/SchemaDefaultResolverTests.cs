@@ -47,6 +47,24 @@ namespace Schema.UnitTests.Domain
             Assert.That((fk.RelatedTableSchema, fk.RelatedTable), Is.EqualTo(("public", "orders")));
         }
 
+        // PostgreSQL schema names are case-sensitive, so Public.orders and RelatedTableSchema public name two schemas;
+        // one was dropped without a word. SQL Server compares them as its collation usually does.
+        [TestCase(Platform.PostgreSQL, "Public.orders", "public", true)]
+        [TestCase(Platform.PostgreSQL, "public.orders", "public", false)]
+        [TestCase(Platform.SqlServer, "Sales.Customer", "sales", false)]
+        public void Resolve_ForeignKey_APrefixDifferingFromRelatedTableSchemaOnlyInCase(Platform platform, string relatedTable,
+            string relatedSchema, bool refused)
+        {
+            Action resolve = platform == Platform.PostgreSQL
+                ? () => SchemaDefaultResolver.Resolve(new PostgreSqlForeignKey { Name = "fk_orders", RelatedTable = relatedTable, RelatedTableSchema = relatedSchema }, false, platform)
+                : () => SchemaDefaultResolver.Resolve(new SqlServerForeignKey { Name = "fk_orders", RelatedTable = relatedTable, RelatedTableSchema = relatedSchema }, false, platform);
+
+            if (refused)
+                Assert.That(() => resolve(), Throws.TypeOf<PackageException>().With.Message.Contain("fk_orders").And.Message.Contain("Public"));
+            else
+                Assert.DoesNotThrow(() => resolve());
+        }
+
         [Test]
         public void Resolve_ForeignKey_WhosePrefixContradictsRelatedTableSchema_IsRefusedByName()
         {
