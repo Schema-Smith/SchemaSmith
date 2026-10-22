@@ -41,7 +41,7 @@ public class ContainedDatabaseTests : BaseTableQuenchTests
         {
             conn.ChangeDatabase("master");
             Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
-            if (containmentWas == 0) Run(cmd, "EXEC sp_configure 'contained database authentication', 0; RECONFIGURE;");
+            // Left on: fixtures in other shard processes create contained databases too, and switching it off under them fails both.
         }
     }
 
@@ -105,7 +105,7 @@ public class ContainedDatabaseTests : BaseTableQuenchTests
         {
             conn.ChangeDatabase("master");
             Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
-            if (containmentWas == 0) Run(cmd, "EXEC sp_configure 'contained database authentication', 0; RECONFIGURE;");
+            // Left on: fixtures in other shard processes create contained databases too, and switching it off under them fails both.
         }
     }
 

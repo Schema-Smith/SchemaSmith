@@ -34,6 +34,12 @@ public class DatafixLeastPrivilegeTests : ObjectScriptDeployFixture
         Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
         Exec("DROP TABLE IF EXISTS [dbo].[df_price]");
         Exec($"IF SCHEMA_ID('df_lp') IS NOT NULL DROP SCHEMA [df_lp]");
+        // Clearing the pool closes the connections, but the server can still hold the session when the DROP LOGIN arrives.
+        Exec($"""
+            DECLARE @kill NVARCHAR(MAX) = N'';
+            SELECT @kill += N'KILL ' + CAST(session_id AS NVARCHAR(10)) + N';' FROM sys.dm_exec_sessions WHERE login_name = N'{Login}';
+            EXEC (@kill);
+            """);
         Exec($"IF USER_ID('{Login}') IS NOT NULL DROP USER [{Login}]");
         Exec($"IF SUSER_ID('{Login}') IS NOT NULL DROP LOGIN [{Login}]");
         Exec("DELETE FROM SchemaSmith.ProductOwnership WHERE ProductName = 'DatafixLeastPrivilege'");
