@@ -425,7 +425,7 @@ BEGIN
                             OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", ''))
                   -- Declared identity sequence options that differ from the live sequence (only the ones declared).
                   OR (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
-                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> ''))) AS "ModificationPasses",
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", c."TableSchema", c."TableName", c."Name") <> ''))) AS "ModificationPasses",
                      -- ALWAYS fires on ANY detected column change, which includes a column present live
                      -- but absent from the package -- a rebuild delivers that removal as part of building
                      -- the replacement from the declared definition.
@@ -1684,7 +1684,7 @@ BEGIN
         FROM temp_columns c
         JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema" AND ec."TableName" = c."TableName" AND ec."ColumnName" = c."Name"
        WHERE (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
-                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> '');
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", c."TableSchema", c."TableName", c."Name") <> '');
 
     -- PG-095. A column cannot become nullable while it is in the index the table uses as its replica identity, and the
     -- declared identity is applied later (ReplicaIdentityQuench), so a package that moves the identity off that index and
@@ -1731,7 +1731,7 @@ BEGIN
                   OR (COALESCE(ic."Compression", '') != '' AND COALESCE(ic."Compression", '') != COALESCE(iec."Compression", ''))
                   -- Declared identity sequence options that differ from the live sequence (only the ones declared).
                   OR (COALESCE(ic."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(iec."Generated", '') LIKE 'GENERATED%IDENTITY%'
-                      AND "SchemaSmith"."IdentityOptionChanges"(ic."Generated", pg_get_serial_sequence(QUOTE_IDENT(ic."TableSchema") || '.' || QUOTE_IDENT(ic."TableName"), ic."Name")::regclass) <> ''))) || ')'';' || CHR(10) ||
+                      AND "SchemaSmith"."IdentityOptionChanges"(ic."Generated", ic."TableSchema", ic."TableName", ic."Name") <> ''))) || ')'';' || CHR(10) ||
            -- A column converging to serial needs its sequence first: created and owned by the column here, made the
            -- default by the ALTER below. IF NOT EXISTS keeps an earlier half-applied run harmless.
            COALESCE((SELECT STRING_AGG('CREATE SEQUENCE IF NOT EXISTS ' || QUOTE_IDENT(sc."TableSchema") || '.' || QUOTE_IDENT(sc."TableName" || '_' || sc."Name" || '_seq') ||
@@ -1785,8 +1785,8 @@ BEGIN
                            ELSE '' END ||
                       -- The declared sequence options, in place (only those declared, and only where they differ).
                       CASE WHEN (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
-                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> '')
-                           THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) || ','
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", c."TableSchema", c."TableName", c."Name") <> '')
+                           THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || "SchemaSmith"."IdentityOptionChanges"(c."Generated", c."TableSchema", c."TableName", c."Name") || ','
                            ELSE '' END)), ''), ',' || CHR(10)) || ';' AS "code"
       FROM temp_columns c
       JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema"
@@ -1813,7 +1813,7 @@ BEGIN
           OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", ''))
                   -- Declared identity sequence options that differ from the live sequence (only the ones declared).
                   OR (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
-                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> ''))
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", c."TableSchema", c."TableName", c."Name") <> ''))
         AND NOT (-- PG < 17 generated-expression change on a generated column (status unchanged): handled SOLELY by the
                  -- drop-and-re-add pass above, which re-adds the FULL target definition. Exclude such columns from the
                  -- ALTER pass entirely — regardless of whether type/collation/nullability ALSO changed (the re-add carries

@@ -200,6 +200,60 @@ WHERE a.attrelid = '""{schema}"".""{tableName}""'::regclass AND a.attname = 'alb
         }
     }
 
+    // WhatIf creates and renames nothing, so the table or column a package adds or renames is not there under its declared
+    // name when the identity-options comparison runs. That comparison names only the declared column, so PostgreSQL may
+    // run it before the join with the live columns that would have skipped such a column, and it looked the sequence up
+    // by a name that does not exist.
+    [TestCase("newTable", "GENERATED ALWAYS AS IDENTITY")]
+    [TestCase("newTable", "GENERATED ALWAYS AS IDENTITY(START WITH 10 INCREMENT BY 2)")]
+    [TestCase("newColumn", "GENERATED ALWAYS AS IDENTITY(START WITH 10 INCREMENT BY 2)")]
+    [TestCase("renamedTable", "GENERATED ALWAYS AS IDENTITY(START WITH 10 INCREMENT BY 2)")]
+    public void WhatIf_OverAnIdentityColumnNotYetUnderItsDeclaredName_PreviewsAndChangesNothing(string scenario, string generated)
+    {
+        var table = $"idwi_{Guid.NewGuid():N}"[..16];
+        var old = $"{table}_old";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        string Scalar(string sql)
+        {
+            cmd.CommandText = sql;
+            return cmd.ExecuteScalar()?.ToString() ?? "";
+        }
+        cmd.CommandText = scenario switch
+        {
+            "newColumn" => $"CREATE TABLE public.{table} (n integer)",
+            "renamedTable" => $"CREATE TABLE public.{old} (id integer GENERATED ALWAYS AS IDENTITY, n integer)",
+            _ => "SELECT 1"
+        };
+        cmd.ExecuteNonQuery();
+        var oldName = scenario == "renamedTable" ? $"\"OldName\": \"{old}\", " : "";
+        var json = $$"""
+            [{ "Schema": "public", "Name": "{{table}}", {{oldName}}
+               "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false, "Generated": "{{generated}}" },
+                            { "Name": "n", "DataType": "integer", "Nullable": true } ] }]
+            """;
+        try
+        {
+            RunTableQuenchProc(cmd, json, whatIf: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar($"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '{table}' AND column_name = 'id'"),
+                    Is.EqualTo("0"), "WhatIf added no identity column under the declared name");
+                if (scenario == "renamedTable")
+                    Assert.That(Scalar($"SELECT to_regclass('public.{old}') IS NOT NULL"), Is.EqualTo("True"), "and renamed nothing");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS public.{table}; DROP TABLE IF EXISTS public.{old}";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     // PG-042: a plain column declared identity, and an identity switched between ALWAYS and BY DEFAULT, compared as
     // changed and wrote a 'modified' audit row on every deploy, but no ALTER ever applied them.
     [Test]
