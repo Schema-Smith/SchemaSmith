@@ -247,7 +247,7 @@ The exit code is what makes `--Validate` a real CI gate rather than just a log y
 | `0` | No findings, or warnings only. |
 | `2` | At least one Error-severity finding (including a load failure). |
 
-Warnings never fail the run on their own -- they're advisory (a missing `VariantName` label, an unused token). Only Error-severity findings, or a package that fails to load at all, trip the exit code CI cares about.
+Warnings do not fail the run on their own -- they're advisory (a missing `VariantName` label, an unused token). Only Error-severity findings, or a package that fails to load at all, trip the exit code CI cares about. To treat warnings as failures, pass `--ExitNonZeroOnWarning` (or set `ExitNonZeroOnWarning` to `true`): a board with warnings and no errors then exits `1`.
 
 ---
 

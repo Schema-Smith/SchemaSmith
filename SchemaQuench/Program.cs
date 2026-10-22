@@ -52,7 +52,8 @@ public static class Program
             var result = validator.Validate(config[SettingsKeys.SchemaPackagePath] ?? ".");
             foreach (var line in ValidationReporter.Render(result.Findings))
                 LogFactory.GetLogger("ProgressLog").Info(line);
-            LogBackup.BackupLogsAndExit("SchemaQuench", result.HasErrors ? 2 : 0);
+            LogBackup.BackupLogsAndExit("SchemaQuench", result.HasErrors ? 2 : 0,
+                System.Linq.Enumerable.Count(result.Findings, f => f.Severity == Schema.Validation.Severity.Warning));
             return;
         }
 

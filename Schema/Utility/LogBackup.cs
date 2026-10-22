@@ -10,9 +10,11 @@ namespace Schema.Utility;
 
 public static class LogBackup
 {
-    public static void BackupLogsAndExit(string appName, int exitCode = 0)
+    // unloggedWarnings: warnings the run reports without logging them at Warn -- --Validate's board prints its findings
+    // as plain lines, so its Warning findings would otherwise never count.
+    public static void BackupLogsAndExit(string appName, int exitCode = 0, int unloggedWarnings = 0)
     {
-        if (exitCode == 0 && WarningCounter.Count > 0 && ExitNonZeroOnWarning())
+        if (exitCode == 0 && WarningCounter.Count + unloggedWarnings > 0 && ExitNonZeroOnWarning())
             exitCode = 1;
         var backupDir = "UNKNOWN";
         try
