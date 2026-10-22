@@ -62,7 +62,7 @@ public static class ConfigurationLogger
         {
             foreach (var entry in switches)
             {
-                var value = LogScrubber.ScrubTokenValue(entry.Key, entry.Value ?? "", hygiene);
+                var value = IsLogHygieneSetting(entry.Key) ? entry.Value ?? "" : LogScrubber.ScrubTokenValue(entry.Key, entry.Value ?? "", hygiene);
                 logLine?.Invoke($"  {entry.Key}: {value}");
             }
         }
@@ -77,6 +77,8 @@ public static class ConfigurationLogger
     // value, since "Token" is one of the sensitive patterns.
     private static bool ShouldMask(string fullKey, string displayName, LogHygieneOptions hygiene)
     {
+        if (IsLogHygieneSetting(fullKey)) return false;
+
         if (LogScrubber.ShouldScrubName(displayName, hygiene)) return true;
 
         var segments = fullKey.Split(':');
@@ -87,6 +89,11 @@ public static class ConfigurationLogger
         while (owner >= 0 && int.TryParse(segments[owner], out _)) owner--;
         return owner < segments.Length - 1 && owner >= 0 && LogScrubber.ShouldScrubName(segments[owner], hygiene);
     }
+
+    // The LogHygiene block holds token names, patterns and a true/false, never a secret -- and printing them is how a log
+    // shows what it was asked to scrub (#577).
+    private static bool IsLogHygieneSetting(string key) =>
+        key.Split(':')[0].Split("__")[0].EqualsIgnoringCase(SettingsKeys.LogHygiene);
 
     private static string TryIndexToItemName(string key, Dictionary<string, string> entries, KeyValuePair<string, string> entry, HashSet<string> arrayNameKeys)
     {

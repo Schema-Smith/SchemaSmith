@@ -341,7 +341,7 @@ When a token name appears in both `AllowTokens` and a scrub rule, `AllowTokens` 
 
 The three lists must be lists, even with one entry (`"ScrubTokens": [ "DeployKey" ]`), and `LogTokens` must be `true` or `false`. A block the tools cannot read -- a single value where a list belongs, a key that is not one of these four, or another `LogTokens` value -- is reported as a warning naming the key, and that part of the block has no effect.
 
-The entries of a list whose name is sensitive are masked as well: `"password": [ "..." ]` logs `***` for each entry.
+The entries of a list whose name is sensitive are masked as well: `"password": [ "..." ]` logs `***` for each entry. The `LogHygiene` block itself is the exception, although `ScrubTokens` and `LogTokens` contain `Token`: its lists and `LogTokens` print as written, so the log shows which names it was asked to scrub.
 
 ---
 
