@@ -72,4 +72,16 @@ public class JsonTextTests
 
         Assert.That(xml, Does.Contain(DateLike));
     }
+
+    [Test]
+    public void Minify_DropsWhitespaceBetweenTokens_AndKeepsStringsAndNumbersAsWritten()
+    {
+        var json = "[\n  { \"a\" : 2.50 ,\t\"b\": \"x  \\\"y\\\" z\" },\r\n  [ 1E3, -0.0 ] ]";
+
+        Assert.That(JsonText.Minify(json), Is.EqualTo("[{\"a\":2.50,\"b\":\"x  \\\"y\\\" z\"},[1E3,-0.0]]"));
+    }
+
+    [TestCase(null)]
+    [TestCase("")]
+    public void Minify_LeavesNothingAlone(string json) => Assert.That(JsonText.Minify(json), Is.EqualTo(json));
 }

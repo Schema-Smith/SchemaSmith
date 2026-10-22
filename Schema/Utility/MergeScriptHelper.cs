@@ -190,7 +190,7 @@ public static class MergeScriptHelper
     public static string JsonPayloadToXml(string tableData)
     {
         if (string.IsNullOrWhiteSpace(tableData) || tableData == "null") return "";
-        var array = JsonText.ParseArray(QuoteRowNumbers(tableData));
+        var array = ParseKeepingDecimals(QuoteRowNumbers(tableData));
         if (array.Count == 0) return "";
 
         var rows = new System.Xml.Linq.XElement("rows");
@@ -202,12 +202,30 @@ public static class MergeScriptHelper
                 if (prop.Value.Type == JTokenType.Null) continue;
                 var text = prop.Value.Type == JTokenType.Boolean
                     ? (prop.Value.Value<bool>() ? "1" : "0")
-                    : prop.Value.ToString();
+                    : prop.Value.Type is JTokenType.Object or JTokenType.Array
+                        ? prop.Value.ToString(Newtonsoft.Json.Formatting.None)
+                        : prop.Value.ToString();
                 row.Add(new System.Xml.Linq.XElement("c", new System.Xml.Linq.XAttribute("n", prop.Name), text));
             }
             rows.Add(row);
         }
         return rows.ToString(System.Xml.Linq.SaveOptions.DisableFormatting);
+    }
+
+    // A number inside an object or array value is written back with the value's text (#567), so it is read as a decimal,
+    // which keeps the scale it was written with (2.50 stays 2.50); one too large for a decimal falls back to a double.
+    private static JArray ParseKeepingDecimals(string json)
+    {
+        try
+        {
+            using var reader = new Newtonsoft.Json.JsonTextReader(new System.IO.StringReader(json))
+                { DateParseHandling = Newtonsoft.Json.DateParseHandling.None, FloatParseHandling = Newtonsoft.Json.FloatParseHandling.Decimal };
+            return JToken.ReadFrom(reader) as JArray ?? JsonText.ParseArray(json);
+        }
+        catch (Newtonsoft.Json.JsonReaderException)
+        {
+            return JsonText.ParseArray(json);
+        }
     }
 
     // A column's number as its literal text: parsed, it went through double and a wide numeric lost digits. Only values
@@ -775,6 +793,9 @@ WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
         string contentEncoding = "Json", string contentFileToken = null)
     {
         var isXml = string.Equals(contentEncoding, "Xml", StringComparison.OrdinalIgnoreCase);
+        // An object or array value reaches a text column as its own text, so the whitespace between tokens is removed
+        // first, on every engine: the value arrives compact whatever the content file's layout (#567).
+        if (!isXml && !tokenizeScripts) tableData = JsonText.Minify(tableData);
 
         // B1/B3: XML delivery shreds the payload with .nodes()/.value() on SQL Server (every compat level)
         // and xmltable() on PostgreSQL (every version at/above the floor — no version gate needed). MySQL
@@ -1107,8 +1128,10 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
     {
         var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
-        const string aggExpr = @"CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
+        var aggExpr = $@"CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
                        THEN CASE WHEN c.DATA_TYPE = 'geography' THEN 'geography' ELSE 'geometry' END + '::STGeomFromText([' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '.STSrid]) AS [' + c.COLUMN_NAME + ']'
+                       WHEN c.DATA_TYPE IN {SqlServerCharacterTypeList}
+                       THEN 'COALESCE([' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '{AsJsonSuffix}]) AS [' + c.COLUMN_NAME + ']'
                        ELSE '[' + c.COLUMN_NAME + ']' END";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
@@ -1211,11 +1234,21 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
     // reachable for the same mechanism proven at the C# twin above (zeroing its DATETIME2 precision left
     // the full suite green) — this copy's DATETIME2 case was not itself mutated, but it is a cast target
     // read by the same OPENJSON/INSERT machinery, so the same "destination column governs" argument holds.
+    // #567: OPENJSON reads an object or array value as NULL into a plain column, so a character column has a second,
+    // AS JSON, reading under this suffix.
+    internal const string AsJsonSuffix = " (as JSON)";
+    private const string SqlServerCharacterTypeList = "('char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext')";
+
+    internal static bool IsSqlServerCharacterType(string dataType) =>
+        dataType?.ToLowerInvariant() is "char" or "varchar" or "nchar" or "nvarchar" or "text" or "ntext";
+
     private static string GetJsonColumnDefinitionsSqlServer(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys)
     {
         var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
-        const string aggExpr = @"'           [' + c.COLUMN_NAME + '] ' +
+        // A character column is read twice: plainly, which gives NULL for an object or array value, and AS JSON, which
+        // gives NULL for anything else. The select takes whichever is set (#567).
+        var aggExpr = $@"'           [' + c.COLUMN_NAME + '] ' +
                   CASE UPPER(USER_TYPE) WHEN 'HIERARCHYID' THEN 'NVARCHAR(4000)' WHEN 'GEOGRAPHY' THEN 'NVARCHAR(4000)'
                                         WHEN 'GEOMETRY' THEN 'NVARCHAR(4000)' WHEN 'DATETIMEOFFSET' THEN 'NVARCHAR(50)'
                                         WHEN 'NTEXT' THEN 'NVARCHAR(MAX)' WHEN 'TEXT' THEN 'VARCHAR(MAX)' WHEN 'IMAGE' THEN 'VARBINARY(MAX)'
@@ -1230,7 +1263,8 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
                                            WHEN UPPER(USER_TYPE) = 'XML' AND sc.xml_collection_id <> 0
                                            THEN '([' + SCHEMA_NAME(xc.[schema_id]) + '].[' + xc.[name] + '])'
                                            ELSE '' END +
-                      CASE WHEN UPPER(USER_TYPE) IN ('GEOGRAPHY', 'GEOMETRY') THEN ', [' + c.COLUMN_NAME + '.STSrid] INT' ELSE '' END";
+                      CASE WHEN UPPER(USER_TYPE) IN ('GEOGRAPHY', 'GEOMETRY') THEN ', [' + c.COLUMN_NAME + '.STSrid] INT' ELSE '' END +
+                      CASE WHEN c.DATA_TYPE IN {SqlServerCharacterTypeList} THEN ',' + CHAR(13) + CHAR(10) + '           [' + c.COLUMN_NAME + '{AsJsonSuffix}] NVARCHAR(MAX) ''$.""' + REPLACE(REPLACE(REPLACE(c.COLUMN_NAME, '\', '\\'), '""', '\""'), '''', '''''') + '""'' AS JSON' ELSE '' END";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
   JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
@@ -1947,7 +1981,8 @@ SELECT c.column_name, c.udt_name
         var columns = GetColumnInfoMySql(cmd, databaseName, tableName, excludeAutoIncrement: false, jsonKeys);
         mySqlServerVersionNum = RowSourceVersionNumMySql(cmd, mySqlServerVersionNum);
         var jsonSource = BuildJsonRowSourceMySql(columns, mySqlServerVersionNum);
-        tableData = DecodeSurrogateEscapesMySql(QuoteDecimalNumbersMySql(tableData, mySqlServerVersionNum, columns), mySqlServerVersionNum);
+        tableData = DecodeSurrogateEscapesMySql(QuoteDecimalNumbersMySql(StringifyStructuredTextValuesMySql(tableData, columns),
+            mySqlServerVersionNum, columns), mySqlServerVersionNum);
 
         if (string.IsNullOrEmpty(insertColumns))
             throw new InvalidOperationException($"No columns found for table `{databaseName}`.`{tableName}` (or all columns are auto-increment/generated).");
@@ -2283,6 +2318,92 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     // An even run of backslashes before \u leaves the \u an escape; an odd run makes it text.
     private static readonly Regex EscapedSurrogatePair = new(@"(?<!\\)((?:\\\\)*)\\u(d[89ab][0-9a-f]{2})\\u(d[c-f][0-9a-f]{2})",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    // An object or array value for a text column is written as a string holding its own text (#567): JSON_TABLE and the
+    // recursive-CTE shred read a structured value into a text column as NULL, and reading it as JSON and casting it back
+    // would re-normalise it (MySQL writes {"a": 1} and reads 2.50 as 2.5). Only values directly in a row are rewritten.
+    internal static string StringifyRowStructures(string json, ISet<string> keys)
+    {
+        if (json == null || keys.Count == 0) return json;
+        var sb = new StringBuilder(json.Length + 64);
+        var depth = 0;
+        var keyStart = -1;
+        string lastString = null, valueKey = null;
+        for (var i = 0; i < json.Length; i++)
+        {
+            var ch = json[i];
+            if (keyStart >= 0)
+            {
+                sb.Append(ch);
+                if (ch == '\\' && i + 1 < json.Length) sb.Append(json[++i]);
+                else if (ch == '"')
+                {
+                    lastString = json.Substring(keyStart, i - keyStart);
+                    keyStart = -1;
+                }
+                continue;
+            }
+            switch (ch)
+            {
+                case '"':
+                    keyStart = i + 1;
+                    valueKey = null;
+                    sb.Append(ch);
+                    continue;
+                case '{' or '[' when depth == 2 && valueKey != null && keys.Contains(valueKey):
+                    var end = EndOfStructure(json, i);
+                    sb.Append('"').Append(json.Substring(i, end - i).Replace("\\", "\\\\").Replace("\"", "\\\"")).Append('"');
+                    i = end - 1;
+                    valueKey = null;
+                    continue;
+                case '{' or '[':
+                    depth++;
+                    valueKey = null;
+                    break;
+                case '}' or ']':
+                    depth--;
+                    valueKey = null;
+                    break;
+                case ',':
+                    valueKey = null;
+                    break;
+                case ':':
+                    valueKey = depth == 2 ? lastString : null;
+                    break;
+            }
+            sb.Append(ch);
+        }
+        return sb.ToString();
+    }
+
+    // Just past the object or array that opens at start, skipping brackets inside strings.
+    private static int EndOfStructure(string json, int start)
+    {
+        var depth = 0;
+        var inString = false;
+        for (var i = start; i < json.Length; i++)
+        {
+            var ch = json[i];
+            if (inString)
+            {
+                if (ch == '\\') i++;
+                else if (ch == '"') inString = false;
+                continue;
+            }
+            if (ch == '"') inString = true;
+            else if (ch is '{' or '[') depth++;
+            else if (ch is '}' or ']' && --depth == 0) return i + 1;
+        }
+        return json.Length;
+    }
+
+    private static readonly HashSet<string> MySqlStringTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "char", "varchar", "tinytext", "text", "mediumtext", "longtext"
+    };
+
+    internal static string StringifyStructuredTextValuesMySql(string tableData, List<MySqlColumnInfo> columns) =>
+        StringifyRowStructures(tableData, columns.Where(c => !c.IsJson && MySqlStringTypes.Contains(c.DataType)).Select(c => c.Name).ToHashSet());
 
     internal static string QuoteDecimalNumbersMySql(string tableData, int versionNum, List<MySqlColumnInfo> columns)
     {

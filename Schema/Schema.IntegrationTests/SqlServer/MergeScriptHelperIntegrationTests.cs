@@ -611,4 +611,56 @@ CREATE TABLE [dbo].[{tableName}] (
     }
 
     #endregion
+
+    // #567: an object or array value read through OPENJSON into a plain column was NULL, at exit 0, and below level 130 the
+    // XML path wrote it indented. Both now deliver the value's compact JSON text; a string still arrives as the string.
+    [TestCase("Json")]
+    [TestCase("Xml")]
+    public void BuildMergeScript_AnObjectOrArrayValue_ArrivesAsCompactJsonText(string encoding)
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"_test_jsonval_{Guid.NewGuid():N}"[..40];
+        try
+        {
+            command.CommandText = $"CREATE TABLE [dbo].[{tableName}] ([Id] INT PRIMARY KEY, [Doc] NVARCHAR(MAX) NULL, [Note] VARCHAR(200) NULL)";
+            command.ExecuteNonQuery();
+
+            // Laid out the way a hand-written content file is, with whitespace between tokens and inside a string.
+            var payload = "[\n  { \"Id\": 1, \"Doc\": { \"a\": 1, \"b\": [ 1, 2.50 ] }, \"Note\": [ 1, 2 ] },\n"
+                          + "  { \"Id\": 2, \"Doc\": \"plain  text\", \"Note\": \"x\" },\n"
+                          + "  { \"Id\": 3, \"Doc\": null, \"Note\": null }\n]";
+            var tableData = encoding == "Xml" ? MergeScriptHelper.JsonPayloadToXml(payload) : payload;
+
+            // Twice: the second run goes through the update comparison with the rows already in place.
+            for (var run = 0; run < 2; run++)
+            {
+                command.CommandText = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, "dbo", tableName, tableData, "[Id]",
+                    mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null,
+                    contentEncoding: encoding);
+                command.ExecuteNonQuery();
+            }
+
+            string Read(int id, string column)
+            {
+                command.CommandText = $"SELECT [{column}] FROM [dbo].[{tableName}] WHERE [Id] = {id}";
+                var value = command.ExecuteScalar();
+                return value is DBNull or null ? null : value.ToString();
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Read(1, "Doc"), Is.EqualTo("{\"a\":1,\"b\":[1,2.50]}"), "an object, compact, its number as written");
+                Assert.That(Read(1, "Note"), Is.EqualTo("[1,2]"), "an array into a non-MAX column");
+                Assert.That(Read(2, "Doc"), Is.EqualTo("plain  text"), "a string arrives as the string, spaces kept");
+                Assert.That(Read(2, "Note"), Is.EqualTo("x"));
+                Assert.That(Read(3, "Doc"), Is.Null);
+                Assert.That(Read(3, "Note"), Is.Null);
+            });
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [dbo].[{tableName}]";
+            command.ExecuteNonQuery();
+        }
+    }
 }

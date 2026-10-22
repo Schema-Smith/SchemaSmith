@@ -1206,6 +1206,8 @@ Tables without a `DataDelivery` block are left alone. Tables that declare one ar
 | `ShouldApplyExpression` | string | `""` | Optional SQL predicate evaluated against the target at deploy time. Tokens are resolved before evaluation -- including [`{{ServerMajorVersion}}` and `{{CompatibilityLevel}}`](script-tokens.md#servermajorversion-and-compatibilitylevel), the same version tokens a folder or table gate can reference. Blank or absent always applies -- today's unchanged behavior. When `DataDelivery` is an array of two or more deliveries, every entry must set one. See [Multiple Deliveries](#multiple-deliveries) below. |
 | `VariantName` | string | `""` | Optional label naming the intent behind a delivery's `ShouldApplyExpression`. Appears in the deployment log when that delivery is skipped or when its gate errors. Max 128 characters. |
 
+A row value that is a JSON object or array, delivered into a text column, arrives as its compact JSON text (`{"a":1,"b":[1,2.50]}`, numbers exactly as written), on every engine and every SQL Server compatibility level; a JSON column receives it as a document. A string value arrives as the string.
+
 ### MergeType
 
 | Value | Behavior |

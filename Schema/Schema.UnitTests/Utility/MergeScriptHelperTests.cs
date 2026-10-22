@@ -93,9 +93,24 @@ public class MergeScriptHelperTests
             Assert.That(xml, Does.Contain("<c n=\"cents\">100.50</c>"));
             Assert.That(xml, Does.Contain("<c n=\"neg\">-1.5E-7</c>"));
             Assert.That(xml, Does.Contain("<c n=\"n\">42</c>"));
-            Assert.That(xml, Does.Contain("\"x\": 1.25").And.Contain("\"s\": \"7\""),
-                "a number inside a json column's value is part of that document and stays a number");
+            Assert.That(xml, Does.Contain("<c n=\"doc\">{\"x\":1.25,\"s\":\"7\"}</c>"),
+                "a number inside a json column's value is part of that document and stays a number, and the document is " +
+                "written compact, as the JSON path delivers it (#567)");
         });
+    }
+
+    // #567: on the MySQL family a row's object or array value for a text column is handed over as a string of its own text.
+    [Test]
+    public void StringifyRowStructures_RewritesOnlyTheNamedColumnsDirectlyInARow()
+    {
+        var json = "[{\"doc\":{\"a\":\"x]\\\"y\",\"doc\":[1,2.50]},\"keep\":{\"b\":1},\"n\":[1]},{\"doc\":\"plain\",\"n\":null}]";
+
+        var result = MergeScriptHelper.StringifyRowStructures(json, new HashSet<string> { "doc", "n" });
+
+        Assert.That(result, Is.EqualTo(
+            "[{\"doc\":\"{\\\"a\\\":\\\"x]\\\\\\\"y\\\",\\\"doc\\\":[1,2.50]}\",\"keep\":{\"b\":1},\"n\":\"[1]\"},{\"doc\":\"plain\",\"n\":null}]"));
+        Assert.That(JsonText.ParseArray(result)[0]["doc"]!.ToString(), Is.EqualTo("{\"a\":\"x]\\\"y\",\"doc\":[1,2.50]}"),
+            "the string holds the value's exact text, a bracket and an escaped quote inside a string included");
     }
 
     // Read with Newtonsoft's defaults, a date-like string became a DateTime and was written back in the host's culture
