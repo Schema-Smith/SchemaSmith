@@ -318,6 +318,118 @@ public class JsonSchemaCheckTests
         });
     }
 
+    // ---- #560: a schema a NEWER SchemaSmith wrote describes more than this version generates. Calling it stale, and
+    // advising a regen, would have this version rewrite it in the older shape and drop what the newer one enforces. ----
+
+    private static JObject NewerTablesSchema()
+    {
+        var schema = FreshTablesSchema();
+        ColumnItemsProperties(schema)["FutureOption"] = new JObject { ["type"] = "boolean", ["description"] = "Added later." };
+        // A newer release also rewords descriptions; that alone is not a difference worth reporting.
+        ((JObject)schema["properties"]!["Name"]!)["description"] = "Reworded by a newer release.";
+        return schema;
+    }
+
+    [Test]
+    public void ASchemaWrittenByANewerVersion_IsAWarning_NamingWhatThisVersionDoesNotKnow()
+    {
+        CommitTablesSchema(NewerTablesSchema());
+        var tableFile = TableFilePath();
+        JsonFiles(tableFile);
+        FileContent(tableFile, @"{ ""Name"": ""Customer"", ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"" } ] }");
+
+        var findings = new JsonSchemaCheck().Run(Context()).ToList();
+
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-STALE-003" }), string.Join("\n", findings.Select(f => f.Message)));
+        Assert.That(findings[0].Severity, Is.EqualTo(Severity.Warning));
+        Assert.That(findings[0].Message, Does.Contain("FutureOption"));
+        Assert.That(findings[0].Message, Does.Not.Contain("regenerate via --WriteSchemasOnly"));
+    }
+
+    [Test]
+    public void ASchemaWrittenByANewerVersion_StillValidatesWhatThisVersionCanDeploy()
+    {
+        // The property is in the committed file but not in this version's model, so this version's deploy would refuse it.
+        CommitTablesSchema(NewerTablesSchema());
+        var tableFile = TableFilePath();
+        JsonFiles(tableFile);
+        FileContent(tableFile, @"{ ""Name"": ""Customer"", ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"", ""FutureOption"": true } ] }");
+
+        var findings = new JsonSchemaCheck().Run(Context()).ToList();
+
+        Assert.That(findings.Any(f => f.Code == "SS-JSON-001" && f.Message.Contains("FutureOption")), Is.True,
+            string.Join("\n", findings.Select(f => f.Message)));
+    }
+
+    // The real shapes a release produces: an enum-like pattern gains a value (and may turn case-insensitive), and a
+    // oneOf member gains a property.
+    [Test]
+    public void ASchemaWithAWiderEnumPatternAndAWiderOneOfMember_IsANewerVersion()
+    {
+        var schema = FreshTablesSchema();
+        var pattern = schema.Descendants().OfType<JProperty>()
+            .First(p => p.Name == "pattern" && ((string)p.Value!).StartsWith("^(?:") && ((string)p.Value!).EndsWith(")$"));
+        var widened = ((string)pattern.Value!)[..^2] + "|FUTUREVALUE)$";
+        pattern.Value = widened;
+        var oneOf = schema.Descendants().OfType<JProperty>().First(p => p.Name == "oneOf" && p.Value is JArray a && a.OfType<JObject>().Any(o => o["properties"] is JObject));
+        var member = ((JArray)oneOf.Value).OfType<JObject>().First(o => o["properties"] is JObject);
+        ((JObject)member["properties"]!)["FutureMember"] = new JObject { ["type"] = "string" };
+        CommitTablesSchema(schema);
+        var tableFile = TableFilePath();
+        JsonFiles(tableFile);
+        FileContent(tableFile, @"{ ""Name"": ""Customer"", ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"" } ] }");
+
+        var findings = new JsonSchemaCheck().Run(Context()).ToList();
+
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-STALE-003" }), string.Join("\n", findings.Select(f => f.Message)));
+        Assert.That(findings[0].Message, Does.Contain("futurevalue").And.Contain("FutureMember"));
+    }
+
+    [Test]
+    public void ASchemaWithANarrowerEnumPattern_IsStillStale()
+    {
+        var schema = FreshTablesSchema();
+        var pattern = schema.Descendants().OfType<JProperty>()
+            .First(p => p.Name == "pattern" && ((string)p.Value!).StartsWith("^(?:") && ((string)p.Value!).Contains('|'));
+        var text = (string)pattern.Value!;
+        pattern.Value = "^(?:" + text[4..text.IndexOf('|')] + ")$";
+        CommitTablesSchema(schema);
+        var tableFile = TableFilePath();
+        JsonFiles(tableFile);
+        FileContent(tableFile, @"{ ""Name"": ""Customer"", ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"" } ] }");
+
+        Assert.That(new JsonSchemaCheck().Run(Context()).Select(f => f.Code), Is.EqualTo(new[] { "SS-STALE-001" }));
+    }
+
+    [Test]
+    public void ASchemaMissingWhatThisVersionGenerates_IsStillStale()
+    {
+        var schema = NewerTablesSchema();
+        ColumnItemsProperties(schema).Remove("DataType");
+        CommitTablesSchema(schema);
+        var tableFile = TableFilePath();
+        JsonFiles(tableFile);
+        FileContent(tableFile, @"{ ""Name"": ""Customer"", ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"" } ] }");
+
+        var findings = new JsonSchemaCheck().Run(Context()).ToList();
+
+        Assert.That(findings.Any(f => f.Code == "SS-STALE-001" && f.Severity == Severity.Error), Is.True);
+        Assert.That(findings.Any(f => f.Code == "SS-STALE-003"), Is.False);
+    }
+
+    [Test]
+    public void ASchemaDifferingOnlyInDescriptions_IsStillStale()
+    {
+        var schema = FreshTablesSchema();
+        ((JObject)schema["properties"]!["Name"]!)["description"] = "An older wording.";
+        CommitTablesSchema(schema);
+        var tableFile = TableFilePath();
+        JsonFiles(tableFile);
+        FileContent(tableFile, @"{ ""Name"": ""Customer"", ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""int"" } ] }");
+
+        Assert.That(new JsonSchemaCheck().Run(Context()).Select(f => f.Code), Is.EqualTo(new[] { "SS-STALE-001" }));
+    }
+
     // ---- Regression: #326 — a table named "Product" (MySQL-style file layout: no schema
     // prefix, so the table file is just Tables/Product.json) must classify as a TABLE, never
     // as the product manifest, purely on directory context. ----
