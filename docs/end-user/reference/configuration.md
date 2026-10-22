@@ -432,24 +432,41 @@ C:\Tools\
     SchemaQuench.0003\               (third run backup)
 ```
 
-### Failure artifacts
+### Debug SQL files
 
-When any script fails during a SchemaQuench deployment -- a user or migration script, a generated table-quench procedure, a product-level `Before`/`After` script, a validation script (`BaselineValidationScript`, `VersionStampScript`), or a data-delivery merge -- SchemaQuench writes the exact token-expanded SQL the server rejected to a re-runnable `.sql` artifact file. Every surface reports it the same way in the progress log:
+When a step fails -- a user or migration script, a generated quench procedure, a product-level `Before`/`After` script, a validation script (`BaselineValidationScript`, `VersionStampScript`), or a data-delivery merge -- the log says which step and why. With `WriteDebugSql` on, SchemaQuench also writes the exact token-expanded SQL of each step to a re-runnable `.sql` file, and the failure line points at it:
 
 ```
 Unable to quench 'Before/01-seed-config.sql': Invalid column name 'Region'.
     Resolved SQL written to: C:\deploy\SchemaQuench - Failed 01-seed-config prod-db.TargetDB.sql
 ```
 
-Every artifact is a `.sql` file with a comment header (server/database/schema, the failing script name, the error message), every batch the engine received, separated by `GO`, with the last-attempted batch marked `-- >>> FAILING BATCH (#N) >>>`. The failing-batch marker is a best-effort hint -- the engine marks the last batch it attempted, which is usually the one that caused the error.
+With it off, nothing is written, and that line reads `Rerun with --WriteDebugSql to write the resolved SQL of this step to <ArtifactPath>.` The failure roll-up's `Debug SQL:` line says the same.
 
-**Artifacts are raw by default** -- all token values are already expanded to their real values, so you can open the file, connect to the target, and reproduce the failure immediately without any further substitution.
+A failed script's file has every batch the engine received, separated by `GO`, with the last-attempted batch marked `-- >>> FAILING BATCH (#N) >>>` (a best-effort hint: usually, not always, the batch that caused the error). The generated steps are written as they run, one file each:
 
-> **Note:** Artifacts land in the `ArtifactPath` directory (default: current working directory), not the log directory. This is intentional: raw artifacts may contain expanded sensitive values and should not be automatically swept into log archives or CI artifacts.
+```
+SchemaQuench - Quench Missing Tables And Columns prod-db.NorthwindClone.sql
+SchemaQuench - Quench Modified Tables prod-db.NorthwindClone.sql
+SchemaQuench - Quench Indexes prod-db.NorthwindClone.sql
+SchemaQuench - Parse Table Json prod-db.NorthwindClone.sql
+```
+
+**The files hold the real values.** Every token is expanded, so you can open the file, connect to the target and reproduce the failure. They are for local debugging only: do not attach one to a support ticket or a CI artifact. Every file opens with two comment lines, one naming the product, server, database, schema and the run that wrote it, and one saying it holds real values.
+
+**Only the current failure's files are kept.** When a run starts on a target, it deletes the files an earlier run wrote for the same product, server, database and schema. When it finishes cleanly, it deletes its own. It reads the owner from the file's first line, so it never deletes a file it did not write: your own files, an older version's, another product's or another database's are left alone, even in a shared folder.
+
+#### `WriteDebugSql`
+
+Boolean, default `false`. Also the `--WriteDebugSql` switch.
+
+```json
+{ "WriteDebugSql": true }
+```
 
 #### `ArtifactPath`
 
-Directory where SchemaQuench writes resolved-SQL failure artifacts and generated-SQL debug files.
+Directory where `WriteDebugSql` writes the files.
 
 ```json
 { "ArtifactPath": "C:\\deploy\\debug" }
@@ -457,45 +474,14 @@ Directory where SchemaQuench writes resolved-SQL failure artifacts and generated
 
 | Default | Behavior |
 |---|---|
-| *(not set)* | Artifacts land in the current working directory (where SchemaQuench was launched). |
-| A directory path | Artifacts land in the specified directory. Relative paths are resolved from the current working directory. |
+| *(not set)* | The current working directory (where SchemaQuench was launched). |
+| A directory path | The specified directory. Relative paths are resolved from the current working directory. |
 
-Setting `ArtifactPath` is useful when you want artifacts in a consistent location regardless of where SchemaQuench is invoked -- a CI agent's workspace directory, for example, or a dedicated debug folder outside the log path. The directory is created automatically if it does not exist.
+The directory is created if it does not exist. The files never go to the log directory, so archiving logs never picks them up; `--LogPath` controls the progress and error logs only.
 
 #### `ScrubArtifacts`
 
-Controls whether sensitive values are redacted in failure artifacts before writing.
-
-```json
-{ "ScrubArtifacts": true }
-```
-
-| Value | Behavior |
-|---|---|
-| `false` (default) | Artifacts contain real expanded values. Re-runnable immediately -- open in a query tool and reproduce the failure without restoring secrets. |
-| `true` | Sensitive token values (names matching `*Password*`, `*Secret*`, `*ApiKey*`, `*Token*`, etc., per `LogHygiene` rules) and inline connection-string passwords are redacted to `***`. Safe to attach to a CI artifact or support ticket. To reproduce, restore the real values first. |
-
-Leave `ScrubArtifacts` off for local debugging -- raw artifacts are immediately re-runnable. Turn it on for CI environments or when attaching an artifact to a support ticket. The `LogHygiene` block governs which token names are considered sensitive; see [Sensitive value masking](#sensitive-value-masking) for the full set of rules.
-
-For a step-by-step walkthrough of working a failed deployment from artifact to fix, see [Troubleshooting -- My deployment failed](../guide/12-troubleshooting.md#my-deployment-failed).
-
-### Debug SQL files
-
-When SchemaQuench runs one of its generated procedures against your target database, it dumps the exact SQL it sent to a companion `.sql` file -- honoring `ScrubArtifacts` the same as any other failure artifact. If the procedure throws, the progress log surfaces the file path via the same `Resolved SQL written to:` line described in [Failure artifacts](#failure-artifacts) above. Open it in your query tool of choice, re-run the SQL by hand, and reproduce or narrow the problem without guessing what SchemaSmith actually executed.
-
-Generated procedures cover missing tables and columns, modified tables, indexes, foreign keys, materialized views, indexed views, and the table-JSON parse step. Debug files follow the pattern `SchemaQuench - <operation> <server>.<database>.sql`:
-
-```
-SchemaQuench - Quench Missing Tables And Columns prod-db.NorthwindClone.sql
-SchemaQuench - Quench Modified Tables prod-db.NorthwindClone.sql
-SchemaQuench - Quench Indexes prod-db.NorthwindClone.sql
-SchemaQuench - Quench Foreign Keys prod-db.NorthwindClone.sql
-SchemaQuench - Quench Materialized Views prod-db.NorthwindClone.sql
-SchemaQuench - Quench Indexed Views prod-db.NorthwindClone.sql
-SchemaQuench - Parse Table Json prod-db.NorthwindClone.sql
-```
-
-Each run overwrites the debug files for the operations it actually performed. Operations that don't apply to your platform (for example, `Indexed Views` on PostgreSQL or `Materialized Views` on MySQL) produce no file. Debug files land in the `ArtifactPath` directory (default: current working directory); `--LogPath` controls the progress and error logs, not artifact or debug SQL.
+Deprecated and ignored: a run that sets it logs a warning. It masked sensitive values inside the SQL, which either missed a value or left SQL that still ran and wrote the placeholder (`SET Email = '***'`). The debug files are never masked; share the progress log, which is.
 
 ### Engine notices
 

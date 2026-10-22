@@ -1170,6 +1170,13 @@ public class ProductQuench
     internal void QuenchProductScriptsWithCheckpoint(List<ProductFolder> folders, string msg, bool isBefore)
     {
         _updateFailed = false;
+        // #576: the previous run's debug files for the product's own scripts go, as each target's do in DatabaseQuench.
+        if (isBefore)
+        {
+            var initDb = GetInitDatabase(_product.Platform);
+            ResolvedSqlArtifactWriter.DeleteOwned(ResolveArtifactDirectory(), o =>
+                o.Product == _product.Name && o.Database == initDb && o.Schema == "" && o.Run != ResolvedSqlArtifactWriter.RunId);
+        }
 
         if (_product.Platform == Platform.SqlServer && _secondaryServers.Count > 0)
         {
@@ -2210,8 +2217,6 @@ public class ProductQuench
         if (scriptList.Any(x => !x.HasBeenQuenched))
         {
             var directory = ResolveArtifactDirectory();
-            var scrub = ScrubArtifactsEnabled;
-            var sensitiveValues = SensitiveTokenValues();
 
             foreach (var sqlScript in scriptList.Where(s => !s.HasBeenQuenched))
             {
@@ -2238,9 +2243,15 @@ public class ProductQuench
                     var header = $"Failed: {serverMsg}[{initDb}] [{sqlScript.LogPath}] — {sqlScript.Error?.Message}";
                     var fileName = GetProductDebugFileName($"Failed {Path.GetFileNameWithoutExtension(sqlScript.Name)}", server);
                     var failingBatchIndex = failingBatchIndexes.GetValueOrDefault(sqlScript, sqlScript.Batches.Count - 1);
-                    artifactPath = ResolvedSqlArtifactWriter.WriteFailureArtifact(directory, scrub, sensitiveValues,
-                        header, sqlScript.Batches, failingBatchIndex, fileName);
-                    _progressLog.Error($"{serverMsg}[{initDb}]    Resolved SQL written to: {artifactPath}");
+                    if (DebugSql.Enabled)
+                    {
+                        artifactPath = ResolvedSqlArtifactWriter.WriteFailureArtifact(directory,
+                            ResolvedSqlArtifactWriter.OwnerLine(_product.Name, server, initDb, ""), header, sqlScript.Batches,
+                            failingBatchIndex, fileName);
+                        _progressLog.Error($"{serverMsg}[{initDb}]    Resolved SQL written to: {artifactPath}");
+                    }
+                    else
+                        _progressLog.Error($"{serverMsg}[{initDb}]    {DebugSql.HowToGetIt(directory)}");
                 }
                 catch (Exception artifactEx)
                 {
@@ -2262,7 +2273,7 @@ public class ProductQuench
 
     /// <summary>
     /// Config resolution for the product-level resolved-SQL artifact surface (#327 S4.3), mirroring
-    /// <c>DatabaseQuench.ResolveArtifactDirectory</c> / <c>ScrubArtifactsEnabled</c> / <c>SensitiveTokenValues</c>.
+    /// <c>DatabaseQuench.ResolveArtifactDirectory</c>.
     /// ProductQuench cannot call those (internal to DatabaseQuench, a different class) so it resolves
     /// config itself. Product-scoped only: template tokens don't apply to product-level Before/After scripts.
     /// </summary>
@@ -2271,13 +2282,6 @@ public class ProductQuench
         var configured = _config[SettingsKeys.ArtifactPath];
         return string.IsNullOrWhiteSpace(configured) ? Directory.GetCurrentDirectory() : configured;
     }
-
-    private bool ScrubArtifactsEnabled => _config[SettingsKeys.ScrubArtifacts]?.ToLower() == "true";
-
-    private IReadOnlyList<KeyValuePair<string, string>> SensitiveTokenValues() =>
-        _product.ScriptTokens
-            .Where(kv => LogScrubber.ShouldScrubName(kv.Key, _logHygiene))
-            .ToList();
 
     /// <summary>
     /// Debug filename for a product-level script failure artifact. There is no database/schema scope

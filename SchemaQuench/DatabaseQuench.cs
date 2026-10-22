@@ -520,6 +520,10 @@ public class DatabaseQuench
     public void Execute()
     {
         SafeProgressLog("Begin Quench");
+        // #576: the previous run's debug files for this target go, so only the current failure's are there.
+        ResolvedSqlArtifactWriter.DeleteOwned(ResolveArtifactDirectory(), o =>
+            o.Product == _product.Name && o.Server == _server && o.Database == _databaseName
+            && o.Schema == (_schemaName ?? "") && o.Run != ResolvedSqlArtifactWriter.RunId);
 
         var checkpointSummary = _checkpointing?.GetDatabaseCheckpointSummary(DbScope) ?? DatabaseCheckpointSummary.Empty;
         if (checkpointSummary.HasAnyCompleted)
@@ -885,10 +889,15 @@ public class DatabaseQuench
                                 UnsupportedFeaturePolicy = _unsupportedFeaturePolicy,
                                 WriteResolvedSqlArtifact = (label, sql) =>
                                 {
+                                    if (!DebugSql.Enabled)
+                                    {
+                                        SafeProgressLogError($"    {DebugSql.HowToGetIt(ResolveArtifactDirectory())}");
+                                        return;
+                                    }
                                     try
                                     {
                                         var path = ResolvedSqlArtifactWriter.WriteFailureArtifact(
-                                            ResolveArtifactDirectory(), ScrubArtifactsEnabled, SensitiveTokenValues(),
+                                            ResolveArtifactDirectory(), DebugSqlOwner,
                                             $"Failed data delivery: {_server}.{_databaseName}" +
                                             $"{(string.IsNullOrEmpty(_schemaName) ? "" : $" [Schema: {_schemaName}]")} [{label}]",
                                             new List<string> { sql }, failingBatchIndex: 0, label,
@@ -1083,6 +1092,8 @@ public class DatabaseQuench
             SafeProgressLogError($"FAILED to quench:\r\n{e.Message}");
             if (!string.IsNullOrWhiteSpace(_debugFileLocation))
                 SafeProgressLogError($"Resolved SQL written to: {_debugFileLocation}");
+            else if (!DebugSql.Enabled && e is not ScriptQuenchException)
+                SafeProgressLogError(DebugSql.HowToGetIt(ResolveArtifactDirectory()));
 
             // #338 refinement: for a user-script failure, surface the specific per-script error +
             // artifact on the roll-up's Error:/Debug SQL: lines (parity with mechanical failures)
@@ -1596,21 +1607,11 @@ public class DatabaseQuench
 
     internal string ResolveArtifactDirectory()
     {
-        var configured = FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.ArtifactPath];
+        var configured = FactoryContainer.Resolve<IConfigurationRoot>()?[SettingsKeys.ArtifactPath];
         return string.IsNullOrWhiteSpace(configured) ? Directory.GetCurrentDirectory() : configured;
     }
 
-    internal bool ScrubArtifactsEnabled =>
-        FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.ScrubArtifacts]?.ToLower() == "true";
-
-    internal IReadOnlyList<KeyValuePair<string, string>> SensitiveTokenValues()
-    {
-        var options = LogHygieneOptions.FromConfiguration(FactoryContainer.ResolveOrCreate<IConfigurationRoot>());
-        return _product.ScriptTokens
-            .Concat(_template.ScriptTokens)
-            .Where(kv => LogScrubber.ShouldScrubName(kv.Key, options))
-            .ToList();
-    }
+    private string DebugSqlOwner => ResolvedSqlArtifactWriter.OwnerLine(_product.Name, _server, _databaseName, _schemaName);
 
     #endregion
 
@@ -2467,15 +2468,17 @@ SET NOCOUNT ON
         }
     }
 
+    // #576: only with WriteDebugSql. This ran before every generated step of every deploy, so every run left a file per
+    // step in ArtifactPath, the working folder by default.
     private string LogSqlScript(string name, string sql)
     {
+        if (!DebugSql.Enabled) return "";
         try
         {
             var dir = ResolveArtifactDirectory();
             DirectoryWrapper.GetFromFactory().CreateDirectory(dir);
             var path = Path.Combine(dir, name);
-            var toWrite = ScrubArtifactsEnabled ? ResolvedSqlArtifactWriter.Scrub(sql, SensitiveTokenValues()) : sql;
-            FileWrapper.GetFromFactory().WriteAllText(path, toWrite);
+            FileWrapper.GetFromFactory().WriteAllText(path, ResolvedSqlArtifactWriter.WithOwner(DebugSqlOwner, sql));
             return path;
         }
         catch (Exception ex)
@@ -3398,10 +3401,15 @@ SET NOCOUNT ON
                              $"{(string.IsNullOrEmpty(_schemaName) ? "" : $" [Schema: {_schemaName}]")}" +
                              $" [{sqlScript.LogPath}] — {sqlScript.Error?.Message}";
                 var fileName = GetDebugFileName($"Failed {Path.GetFileNameWithoutExtension(sqlScript.Name)}");
-                artifactPath = ResolvedSqlArtifactWriter.WriteFailureArtifact(directory, ScrubArtifactsEnabled,
-                    SensitiveTokenValues(), header, sqlScript.Batches, FailingBatchIndex(sqlScript), fileName);
-                SafeProgressLogError($"    Resolved SQL written to: {artifactPath}");
-                SafeErrorLogError($"Unable to quench '{sqlScript.LogPath}': {sqlScript.Error?.Message} — resolved SQL: {artifactPath}");
+                if (DebugSql.Enabled)
+                {
+                    artifactPath = ResolvedSqlArtifactWriter.WriteFailureArtifact(directory, DebugSqlOwner, header,
+                        sqlScript.Batches, FailingBatchIndex(sqlScript), fileName);
+                    SafeProgressLogError($"    Resolved SQL written to: {artifactPath}");
+                    SafeErrorLogError($"Unable to quench '{sqlScript.LogPath}': {sqlScript.Error?.Message} — resolved SQL: {artifactPath}");
+                }
+                else
+                    SafeProgressLogError($"    {DebugSql.HowToGetIt(directory)}");
             }
             catch (Exception artifactEx)
             {
@@ -3433,9 +3441,14 @@ SET NOCOUNT ON
             var header = $"Failed: {_server}.{_databaseName}" +
                          $"{(string.IsNullOrEmpty(_schemaName) ? "" : $" [Schema: {_schemaName}]")}" +
                          $" [{label}] — {error.Message}";
+            if (!DebugSql.Enabled)
+            {
+                SafeProgressLogError($"    {DebugSql.HowToGetIt(ResolveArtifactDirectory())}");
+                return;
+            }
             var fileName = GetDebugFileName($"Failed {label}");
-            var path = ResolvedSqlArtifactWriter.WriteFailureArtifact(ResolveArtifactDirectory(), ScrubArtifactsEnabled,
-                SensitiveTokenValues(), header, new[] { command.CommandText }, 0, fileName);
+            var path = ResolvedSqlArtifactWriter.WriteFailureArtifact(ResolveArtifactDirectory(), DebugSqlOwner, header,
+                new[] { command.CommandText }, 0, fileName);
             SafeProgressLogError($"    Resolved SQL written to: {path}");
         }
         catch (Exception artifactEx)

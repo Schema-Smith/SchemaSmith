@@ -2269,6 +2269,7 @@ public class DatabaseQuenchTests
     {
         var mockConfig = Substitute.For<IConfigurationRoot>();
         mockConfig["ArtifactPath"].Returns(@"C:\artifacts");
+        mockConfig["WriteDebugSql"].Returns("true");
         FactoryContainer.Register<IConfigurationRoot>(mockConfig);
 
         var quench = new DatabaseQuench("srv", new Product { Name = "P", Platform = Platform.SqlServer },
@@ -2276,25 +2277,6 @@ public class DatabaseQuenchTests
             false, "0", false, "0", "1", "1", "1", "1", "1", "1", false, false, false, null);
         Assert.That(quench.ResolveArtifactDirectory(), Is.EqualTo(@"C:\artifacts"));
     }
-
-    [Test]
-    public void SensitiveTokenValues_ReturnsOnlySensitivelyNamedTokens()
-    {
-        RegisterMockConfig();
-        var product = new Product { Name = "P", Platform = Platform.SqlServer };
-        product.ScriptTokens["AdminPassword"] = "supersecret";
-        product.ScriptTokens["Region"] = "us-east";
-        var quench = new DatabaseQuench("srv", product, new Template { Name = "T" }, "db",
-            false, "0", false, "0", "1", "1", "1", "1", "1", "1", false, false, false, null);
-
-        var sensitive = quench.SensitiveTokenValues();
-        Assert.That(sensitive.Select(kv => kv.Key), Does.Contain("AdminPassword"));
-        Assert.That(sensitive.Select(kv => kv.Key), Does.Not.Contain("Region"));
-    }
-
-    #endregion
-
-    #region LogScriptErrors — Artifact-Based Failure Reporting
 
     [Test]
     public void LogScriptErrors_WritesResolvedSqlArtifact_AndLogsPath_NotRawSql()
@@ -2331,6 +2313,7 @@ public class DatabaseQuenchTests
             // Stub config with ArtifactPath so the directory is deterministic.
             var mockConfig = Substitute.For<IConfigurationRoot>();
             mockConfig["ArtifactPath"].Returns(@"C:\test-artifacts");
+            mockConfig["WriteDebugSql"].Returns("true");
             mockConfig["ScrubArtifacts"].Returns((string)null);
             FactoryContainer.Register<IConfigurationRoot>(mockConfig);
 
@@ -2382,7 +2365,7 @@ public class DatabaseQuenchTests
     }
 
     [Test]
-    public void LogScriptErrors_ScrubEnabled_MasksSensitiveTokensInArtifact()
+    public void LogScriptErrors_ScrubArtifactsTrue_NoLongerMasks_TheFileHoldsTheRealValue()
     {
         Schema.Utility.LogFactory.Clear();
         try
@@ -2399,6 +2382,7 @@ public class DatabaseQuenchTests
 
             var mockConfig = Substitute.For<IConfigurationRoot>();
             mockConfig["ArtifactPath"].Returns(@"C:\test-artifacts");
+            mockConfig["WriteDebugSql"].Returns("true");
             mockConfig["ScrubArtifacts"].Returns("true");
             FactoryContainer.Register<IConfigurationRoot>(mockConfig);
 
@@ -2418,10 +2402,10 @@ public class DatabaseQuenchTests
             Assert.Throws<ScriptQuenchException>(() =>
                 quench.QuenchDatabaseObjects(mockCmd, new List<SqlScript> { script }, showErrors: true));
 
-            // The sensitive value must be masked in the artifact content.
+            // #576: scrubbing left runnable SQL that wrote the placeholder; the deprecated setting does nothing now.
             Assert.That(capturedContent, Is.Not.Null, "Expected WriteAllText to be called");
-            Assert.That(capturedContent, Does.Not.Contain("supersecret1234"),
-                "Sensitive token value must be scrubbed from the artifact when ScrubArtifacts=true");
+            Assert.That(capturedContent, Does.Contain("supersecret1234"),
+                "ScrubArtifacts is deprecated and does nothing: the file holds the real values");
         }
         finally
         {
@@ -2439,6 +2423,7 @@ public class DatabaseQuenchTests
         // Set up a config with a known ArtifactPath.
         var mockConfig = Substitute.For<IConfigurationRoot>();
         mockConfig["ArtifactPath"].Returns(@"C:\artifacts-test");
+        mockConfig["WriteDebugSql"].Returns("true");
         FactoryContainer.Register<IConfigurationRoot>(mockConfig);
 
         // Capture the write path via the IFile mock.
@@ -2485,6 +2470,7 @@ public class DatabaseQuenchTests
 
             var mockConfig = Substitute.For<IConfigurationRoot>();
             mockConfig["ArtifactPath"].Returns(@"C:\nonexistent-path-that-fails");
+            mockConfig["WriteDebugSql"].Returns("true");
             FactoryContainer.Register<IConfigurationRoot>(mockConfig);
 
             // File mock that throws on write — simulates an unwritable directory.
@@ -2523,12 +2509,13 @@ public class DatabaseQuenchTests
     }
 
     [Test]
-    public void LogSqlScript_ScrubEnabled_MasksSensitiveTokenValue_InWrittenArtifact()
+    public void LogSqlScript_ScrubArtifactsTrue_NoLongerMasks_TheGeneratedStepFileHoldsTheRealValue()
     {
         // #327 S4.2: the always-written generated-DDL debug artifact must be scrub-aware under the
         // same ScrubArtifacts opt-in as user-script / data-delivery artifacts.
         var mockConfig = Substitute.For<IConfigurationRoot>();
         mockConfig["ArtifactPath"].Returns(@"C:\artifacts-test");
+        mockConfig["WriteDebugSql"].Returns("true");
         mockConfig["ScrubArtifacts"].Returns("true");
         FactoryContainer.Register<IConfigurationRoot>(mockConfig);
 
@@ -2557,8 +2544,8 @@ public class DatabaseQuenchTests
         quench.QuenchIndexesAndConstraints(mockCmd);
 
         Assert.That(capturedContent, Is.Not.Null, "Expected WriteAllText to be called by LogSqlScript");
-        Assert.That(capturedContent, Does.Not.Contain("supersecret1234"),
-            "Sensitive token value must be scrubbed from the generated-DDL debug artifact when ScrubArtifacts=true");
+        Assert.That(capturedContent, Does.Contain("supersecret1234"),
+            "ScrubArtifacts is deprecated and does nothing: the generated-step file holds the real values");
     }
 
     [Test]
@@ -2566,6 +2553,7 @@ public class DatabaseQuenchTests
     {
         var mockConfig = Substitute.For<IConfigurationRoot>();
         mockConfig["ArtifactPath"].Returns(@"C:\artifacts-test");
+        mockConfig["WriteDebugSql"].Returns("true");
         mockConfig["ScrubArtifacts"].Returns((string)null); // disabled (default)
         FactoryContainer.Register<IConfigurationRoot>(mockConfig);
 
@@ -2595,6 +2583,28 @@ public class DatabaseQuenchTests
         Assert.That(capturedContent, Is.Not.Null, "Expected WriteAllText to be called by LogSqlScript");
         Assert.That(capturedContent, Does.Contain("supersecret1234"),
             "Without ScrubArtifacts, the generated-DDL debug artifact keeps the raw resolved SQL (local debugging needs the real value)");
+    }
+
+    // #576: this ran before every generated step of every deploy, so every run left a file per step in ArtifactPath.
+    [Test]
+    public void LogSqlScript_WithoutWriteDebugSql_WritesNothing()
+    {
+        var mockConfig = Substitute.For<IConfigurationRoot>();
+        mockConfig["ArtifactPath"].Returns(@"C:\artifacts-test");
+        FactoryContainer.Register<IConfigurationRoot>(mockConfig);
+        var mockFile = Substitute.For<IFile>();
+        FactoryContainer.Register<IFile>(mockFile);
+        FactoryContainer.Register<Schema.Isolators.IDirectory>(Substitute.For<Schema.Isolators.IDirectory>());
+
+        var product = new Product { Name = "P", Platform = Platform.PostgreSQL };
+        var template = new Template { Name = "T" };
+        template.Tables.Add(new Schema.Domain.Table { Name = "Orders" });
+        var quench = new DatabaseQuench("srv", product, template, "db",
+            false, "true", false, "false", "false", "false", "false", "false", "false", "false", "false", false, false, null);
+
+        quench.QuenchModifiedTables(CreateMockCommand());
+
+        mockFile.DidNotReceive().WriteAllText(Arg.Any<string>(), Arg.Any<string>());
     }
 
     #endregion
@@ -2629,6 +2639,7 @@ public class DatabaseQuenchTests
 
             var mockConfig = Substitute.For<IConfigurationRoot>();
             mockConfig["ArtifactPath"].Returns(@"C:\pg-artifacts");
+            mockConfig["WriteDebugSql"].Returns("true");
             mockConfig["ScrubArtifacts"].Returns((string)null);
             mockConfig["Target:User"].Returns("u");
             mockConfig["Target:Password"].Returns("p");

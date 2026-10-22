@@ -105,8 +105,9 @@
     // --- Diagnostics --------------------------------------------------------------------------------
     "FailureContextLines": 25, // Lines of per-scope context captured and shown for each failure in SchemaQuench - Failures.log (0 = disable capture)
     "BottleneckThresholdMs": 30000, // Slot operations slower than this (ms) are highlighted as bottlenecks in the deployment summary report
-    // "ArtifactPath": "", // Where resolved-SQL artifacts are written when a script fails. Blank = beside the log.
-    // "ScrubArtifacts": false // Apply log-hygiene scrubbing to those artifacts too. Off by default because an artifact exists to be debugged, and scrubbing can remove the value that explains the failure.
+    // "WriteDebugSql": false, // Write the resolved SQL of each step to ArtifactPath, to reproduce a failure. Holds real values: local debugging only, never to share. Also the --WriteDebugSql switch.
+    // "ArtifactPath": "", // Where WriteDebugSql writes those files. Blank = the working folder.
+    // "ScrubArtifacts": false // Deprecated and ignored: debug SQL is never scrubbed.
     // "LogHygiene": { "LogTokens": true, "ScrubTokens": [ "ApiKey" ] }, // LogTokens false keeps script token values out of the log; ScrubTokens masks the values of extra setting and token names, beyond the built-in sensitive-name list.
     // "ExitNonZeroOnWarning": false // Exit 1 instead of 0 when the run logged a warning, for pipelines that treat warnings as failures. Also the --ExitNonZeroOnWarning switch.
 }

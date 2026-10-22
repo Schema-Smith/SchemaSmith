@@ -27,7 +27,7 @@ public static class FailureReportWriter
         {
             sb.AppendLine($"─── FAILED  [{record.Phase}]  {record.ScopeKey} ───");
             sb.AppendLine($"Error: {record.Error}");
-            sb.AppendLine($"Debug SQL: {record.ArtifactPath ?? "n/a"}");
+            sb.AppendLine($"Debug SQL: {record.ArtifactPath ?? (DebugSql.Enabled ? "n/a" : "rerun with --WriteDebugSql to write it")}");
             if (record.ContextTail.Count == 0)
                 sb.AppendLine("Context: none captured");
             else

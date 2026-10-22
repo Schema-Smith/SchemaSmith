@@ -312,8 +312,10 @@ TRUNCATE TABLE SchemaSmith.TestLog";
             SetupSharedMocks();
 
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "TemplateObjectsScriptError");
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = "true";
 
             RunSchemaQuench();
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = null;
 
             _progressLog.Received(1).Error(Arg.Is<string>(s => s.EndsWith("Unable to quench all scripts")));
             _progressLog.Received(1).Error(Arg.Is<string>(s => s.EndsWith("One or more database quenches FAILED")));
