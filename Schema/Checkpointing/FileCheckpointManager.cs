@@ -351,6 +351,7 @@ public class FileCheckpointManager : ICheckpointing
             var slotMap = new Dictionary<string, DatabaseScriptSlot>(StringComparer.OrdinalIgnoreCase)
             {
                 ["Completed Steps"] = (DatabaseScriptSlot)(-1),
+                ["Setup Scripts"] = DatabaseScriptSlot.Setup,
                 ["Before Scripts"] = DatabaseScriptSlot.Before,
                 ["Object Scripts"] = DatabaseScriptSlot.Object,
                 ["After Tables Object Scripts"] = DatabaseScriptSlot.AfterTablesObject,
@@ -389,6 +390,7 @@ public class FileCheckpointManager : ICheckpointing
         foreach (var step in checkpoint.CompletedSteps) sb.AppendLine(step);
         sb.AppendLine();
 
+        WriteSlotScripts(checkpoint, DatabaseScriptSlot.Setup, "Setup Scripts", sb);
         WriteSlotScripts(checkpoint, DatabaseScriptSlot.Before, "Before Scripts", sb);
         WriteSlotScripts(checkpoint, DatabaseScriptSlot.Object, "Object Scripts", sb);
         WriteSlotScripts(checkpoint, DatabaseScriptSlot.AfterTablesObject, "After Tables Object Scripts", sb);

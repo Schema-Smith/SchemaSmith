@@ -293,6 +293,7 @@ public class DatabaseQuench
 
     private sealed class IterationContent
     {
+        public List<SqlScript> SetupScripts { get; set; } = [];
         public List<SqlScript> BeforeScripts { get; set; }
         public List<SqlScript> ObjectScripts { get; set; }
         public List<SqlScript> AfterTablesObjectScripts { get; set; }
@@ -311,6 +312,7 @@ public class DatabaseQuench
         public string SequenceSchema { get; set; }
     }
     // Visible for testing — per-iteration slot scripts after folder gating.
+    internal List<SqlScript> IterationSetupScripts => _iteration.SetupScripts;
     internal List<SqlScript> IterationBeforeScripts => _iteration.BeforeScripts;
     internal List<SqlScript> IterationObjectScripts => _iteration.ObjectScripts;
     internal List<SqlScript> IterationAfterTablesObjectScripts => _iteration.AfterTablesObjectScripts;
@@ -380,6 +382,7 @@ public class DatabaseQuench
         var copy = IterationCopier(string.IsNullOrEmpty(_schemaName)
             ? []
             : new List<KeyValuePair<string, string>> { new("SchemaName", _schemaName) });
+        _iteration.SetupScripts = copy(Scripts(_template.SetupFolders));
         _iteration.BeforeScripts = copy(Scripts(_template.BeforeFolders));
         _iteration.ObjectScripts = copy(Scripts(_template.ObjectFolders));
         _iteration.AfterTablesObjectScripts = copy(Scripts(_template.AfterTablesObjectFolders));
@@ -698,6 +701,23 @@ public class DatabaseQuench
                     });
                     validateBaselineSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "ValidateBaseline", validateBaselineSw.ElapsedMilliseconds, 0);
+                }
+
+                // Step: Setup (D13). Database settings and the like that the objects and later scripts rely on: after the
+                // helpers and the baseline check, before the first object. Every deploy, one pass, in order; the first error
+                // fails the deploy, since nothing ahead of these scripts can be missing.
+                if (_iteration.SetupScripts.Count > 0)
+                {
+                    if (!IsWhatIf)
+                    {
+                        SafeProgressLog("  Quenching Setup scripts");
+                        QuenchSetupScripts(command, _iteration.SetupScripts);
+                    }
+                    else
+                    {
+                        SafeProgressLog("  [WhatIf] Setup scripts:");
+                        WhatIfLogSetupScripts(_iteration.SetupScripts);
+                    }
                 }
 
                 // Step: Object scripts without unresolved tokens
@@ -1150,6 +1170,7 @@ public class DatabaseQuench
             // Regular templates copy too: each database a template fans out to runs every script, with
             // its own query-token values (#475). Nothing to substitute here.
             var own = IterationCopier([]);
+            _iteration.SetupScripts = own(_template.SetupScripts);
             _iteration.BeforeScripts = own(_template.BeforeScripts);
             _iteration.ObjectScripts = own(_template.ObjectScripts);
             _iteration.AfterTablesObjectScripts = own(_template.AfterTablesObjectScripts);
@@ -1175,6 +1196,7 @@ public class DatabaseQuench
         };
 
         var copy = IterationCopier(schemaNameTokens);
+        _iteration.SetupScripts = copy(_template.SetupScripts);
         _iteration.BeforeScripts = copy(_template.BeforeScripts);
         _iteration.ObjectScripts = copy(_template.ObjectScripts);
         _iteration.AfterTablesObjectScripts = copy(_template.AfterTablesObjectScripts);
@@ -1251,6 +1273,7 @@ public class DatabaseQuench
     {
         if (_versionScriptTokens == null || _versionScriptTokens.Count == 0) return;
 
+        _iteration.SetupScripts = SubstituteVersionTokens(_iteration.SetupScripts);
         _iteration.BeforeScripts = SubstituteVersionTokens(_iteration.BeforeScripts);
         _iteration.ObjectScripts = SubstituteVersionTokens(_iteration.ObjectScripts);
         _iteration.AfterTablesObjectScripts = SubstituteVersionTokens(_iteration.AfterTablesObjectScripts);
@@ -1506,6 +1529,7 @@ public class DatabaseQuench
 
         // 7. Apply resolved values to this iteration's cloned scripts.
         var tokenList = iterationQueryTokens.ToList();
+        ApplyToIteration(_iteration.SetupScripts, tokenList);
         ApplyToIteration(_iteration.BeforeScripts, tokenList);
         ApplyToIteration(_iteration.ObjectScripts, tokenList);
         ApplyToIteration(_iteration.AfterTablesObjectScripts, tokenList);
@@ -3346,6 +3370,43 @@ SET NOCOUNT ON
                 _product.Name, slot, obsoleteScript, _template.Name, DbScope.SchemaName ?? "");
             destCmd.ExecuteNonQuery();
         }
+    }
+
+    // D13: always run, so no run-once tracking; a resumed run skips the scripts that succeeded in it. Stops at the first
+    // failure and reports that script alone -- the scripts after it did not run, and did not fail.
+    private void QuenchSetupScripts(IDbCommand destCmd, List<SqlScript> scripts)
+    {
+        foreach (var script in scripts.Where(s => !s.HasBeenQuenched))
+        {
+            if (_checkpointing.HasCompletedScript(DbScope, DatabaseScriptSlot.Setup.ToString(), script.LogPath))
+            {
+                script.HasBeenQuenched = true;
+                SafeProgressLog($"    Skipping (previously quenched per checkpoint) {script.LogPath}");
+                continue;
+            }
+
+            QuenchOneScript(destCmd, script, _runScriptsTwice);
+            if (!script.HasBeenQuenched)
+            {
+                _debugFileLocation = "";
+                LogScriptErrors([script]);
+            }
+            _checkpointing.MarkScriptCompleted(DbScope, DatabaseScriptSlot.Setup.ToString(), script.LogPath);
+            MigrationScripts?.Record(_server, _databaseName, _schemaName ?? "", _template.Name, DatabaseScriptSlot.Setup.ToString(),
+                GetRelativeScriptPath(script.LogPath), script.Outcome == ScriptOutcome.Skipped ? "Skipped" : "Ran");
+        }
+    }
+
+    private void WhatIfLogSetupScripts(List<SqlScript> scripts)
+    {
+        var entries = new List<WhatIfConsoleEntry>();
+        foreach (var script in scripts)
+        {
+            entries.Add(new WhatIfConsoleEntry("apply", "APPLY", script.LogPath));
+            WhatIf?.Record(WhatIfCategory.Apply, LogPrefix, script.LogPath);
+        }
+        foreach (var line in WhatIfConsoleFormatter.Render(entries, WhatIfConsoleDetail))
+            SafeProgressLog(line);
     }
 
     internal static bool ShouldAlwaysRun(string scriptName) => Path.GetFileNameWithoutExtension(scriptName).EndsWith("[ALWAYS]");

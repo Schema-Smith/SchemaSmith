@@ -579,19 +579,22 @@ SchemaQuench quenches scripts in a precise order. Understanding the execution sl
 | Order | Slot | What runs |
 |---|---|---|
 | 1 | Product `Before` | Cross-database setup, linked servers, server-level migrations |
-| 2 | Template `Objects` | Programmable objects with dependency retry (schemas, types, functions, views, procedures) |
-| 3 | _(new tables / columns)_ | New tables and columns created from table JSON |
-| 4 | Template `Before` | Pre-modification migration scripts |
-| 5 | _(table modification)_ | Existing tables altered to match JSON |
-| 6 | Template `BetweenTablesAndKeys` | Runs after table structure is final but before FK constraints |
-| 7 | _(indexes and constraints)_ | Missing indexes, checks, defaults, statistics |
-| 8 | Template `AfterTablesScripts` | Runs after structure and indexes, before triggers |
-| 9 | Template `AfterTablesObjects` | Triggers, DDL triggers, rules -- dependency retry |
-| 10 | Template `TableData` | Reference data sync scripts |
-| 11 | _(foreign keys)_ | Foreign key constraints applied after all data is in place |
-| 12 | _(indexed / materialized views)_ | SQL Server indexed views / PostgreSQL materialized views |
-| 13 | Template `After` | Post-migration final scripts |
-| 14 | Product `After` | Cross-database post-migration |
+| 2 | Template `Setup` | Database settings the template relies on (CDC, Change Tracking, database options) -- runs on every deploy |
+| 3 | Template `Objects` | Programmable objects with dependency retry (schemas, types, functions, views, procedures) |
+| 4 | _(new tables / columns)_ | New tables and columns created from table JSON |
+| 5 | Template `Before` | Pre-modification migration scripts |
+| 6 | _(table modification)_ | Existing tables altered to match JSON |
+| 7 | Template `BetweenTablesAndKeys` | Runs after table structure is final but before FK constraints |
+| 8 | _(indexes and constraints)_ | Missing indexes, checks, defaults, statistics |
+| 9 | Template `AfterTablesScripts` | Runs after structure and indexes, before triggers |
+| 10 | Template `AfterTablesObjects` | Triggers, DDL triggers, rules -- dependency retry |
+| 11 | Template `TableData` | Reference data sync scripts |
+| 12 | _(foreign keys)_ | Foreign key constraints applied after all data is in place |
+| 13 | _(indexed / materialized views)_ | SQL Server indexed views / PostgreSQL materialized views |
+| 14 | Template `After` | Post-migration final scripts |
+| 15 | Product `After` | Cross-database post-migration |
+
+**Why Setup exists:** Some scripts have to run before any object does -- a database option a view assumes, CDC switched on before the tables that use it. `Setup` runs ahead of everything else in the template, and on every deploy, so each script should check before it changes anything. See [The Setup slot](../reference/schemaquench.md#the-setup-slot).
 
 **Why BetweenTablesAndKeys exists:** When you split a table or restructure foreign keys, you need a window after the new tables are created but before SchemaSmith tries to create the foreign keys. This slot gives you that window to move data into the new structure so the FK constraints succeed.
 

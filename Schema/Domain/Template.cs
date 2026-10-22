@@ -361,6 +361,9 @@ namespace Schema.Domain
         // accessors below flatten these, and the folder-gate path (#260) filters these per target
         // before flattening, so gating and dispatch always agree on which folder feeds which slot.
         [JsonIgnore]
+        public List<TemplateFolder> SetupFolders => FoldersInSlots(TemplateQuenchSlot.Setup);
+
+        [JsonIgnore]
         public List<TemplateFolder> BeforeFolders => FoldersInSlots(TemplateQuenchSlot.Before);
 
         [JsonIgnore]
@@ -383,6 +386,9 @@ namespace Schema.Domain
 
         private List<TemplateFolder> FoldersInSlots(params TemplateQuenchSlot[] slots) =>
             ScriptFolders.Where(f => slots.Contains(f.QuenchSlot)).ToList();
+
+        [JsonIgnore]
+        public List<SqlScript> SetupScripts => SetupFolders.SelectMany(f => f.Scripts).ToList();
 
         [JsonIgnore]
         public List<SqlScript> BeforeScripts => BeforeFolders.SelectMany(f => f.Scripts).ToList();

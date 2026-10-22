@@ -310,26 +310,27 @@ For each work unit dispatched by a template -- one identified database for regul
 
 1. **Kindle the Forge** -- Deploys SchemaSmith helper procedures, functions, and the migration tracking table for the active platform. Skipped if `KindleTheForge` is `false`.
 2. **Validate baseline** -- Executes `Template.BaselineValidationScript` if configured. Aborts if falsy.
-3. **Object scripts (first pass)** -- Executes `Objects`-slot scripts that need no query-token values, using the dependency retry loop. If `RunScriptsTwice` is enabled, runs a complete second pass to verify idempotency.
-4. **Domain types, enum types, sequences** (PostgreSQL) -- Deploys the template's declared domain types, enum types, and sequences, before the tables whose columns can use them.
-5. **MissingTableAndColumnQuench** -- Parses `Tables/*.json` into session staging tables for the later steps, then creates missing tables and adds missing columns.
-6. **Object scripts (second pass)** -- Retries the `Objects`-slot scripts that need no query-token values, now that missing tables exist, then resolves the template's query tokens. Scripts that use them run in step 15.
-7. **Before scripts** -- Executes migration scripts from any folder in the `Before` slot. Sequential and tracked.
-8. **Database-level CDC and Change Tracking check** (SQL Server, when the template has Before scripts) -- Decides whether the database has the Change Data Capture and Change Tracking its tables ask for, after the Before scripts so a Before script can enable them. Without Before scripts this check runs in the pre-flight, before step 1.
-9. **ModifiedTableQuench** -- Alters existing columns (type changes, nullability, defaults, computed/generated columns), drops tables removed from the product, and manages indexes and check constraints.
-10. **AfterTablesObjects scripts** -- Executes `AfterTablesObjects`-slot scripts (triggers, DDL triggers, rules, post-table views) using the dependency retry loop.
-11. **BetweenTablesAndKeys scripts** -- Executes migration scripts from any folder in the `BetweenTablesAndKeys` slot. Sequential and tracked.
-12. **MissingIndexesAndConstraintsQuench** -- Creates missing indexes, check constraints, default constraints, and (where supported) statistics.
-13. **Table features** (SQL Server) -- Applies Change Data Capture, Change Tracking, and FILESTREAM as declared.
-14. **AfterTablesScripts** -- Executes migration scripts from any folder in the `AfterTablesScripts` slot. Sequential and tracked.
-15. **Object scripts (final pass)** -- Runs every `Objects`- or `AfterTablesObjects`-slot script not yet applied, including those that use query tokens.
-16. **Table data delivery** -- Merges table data described by per-table `DataDelivery` blocks, ordered by foreign key dependencies. See [Table Data Delivery](#table-data-delivery). Then executes any hand-written scripts in the `TableData` slot using the dependency retry loop. Skipped when `DeliverData` is `false`.
-17. **ForeignKeyQuench** -- Creates, drops, and modifies foreign keys to match the schema package.
-18. **Materialized views** (PostgreSQL), **scheduled events** (MySQL, MariaDB), **indexed views** (SQL Server) -- Deployed through the platform's procedure when the template declares any.
-19. **After scripts** -- Executes migration scripts from any folder in the `After` slot. Sequential and tracked.
-20. **Stamp version** -- Executes `Template.VersionStampScript` if configured.
+3. **Setup scripts** -- Executes scripts from any folder in the `Setup` slot, before any object or table is touched. Sequential, run on every deploy, and the first error stops the deploy. See [The Setup slot](#the-setup-slot).
+4. **Object scripts (first pass)** -- Executes `Objects`-slot scripts that need no query-token values, using the dependency retry loop. If `RunScriptsTwice` is enabled, runs a complete second pass to verify idempotency.
+5. **Domain types, enum types, sequences** (PostgreSQL) -- Deploys the template's declared domain types, enum types, and sequences, before the tables whose columns can use them.
+6. **MissingTableAndColumnQuench** -- Parses `Tables/*.json` into session staging tables for the later steps, then creates missing tables and adds missing columns.
+7. **Object scripts (second pass)** -- Retries the `Objects`-slot scripts that need no query-token values, now that missing tables exist, then resolves the template's query tokens. Scripts that use them run in step 16.
+8. **Before scripts** -- Executes migration scripts from any folder in the `Before` slot. Sequential and tracked.
+9. **Database-level CDC and Change Tracking check** (SQL Server, when the template has Before scripts) -- Decides whether the database has the Change Data Capture and Change Tracking its tables ask for, after the Setup and Before scripts so either can enable them. Without Before scripts this check runs at the start of step 6, before any table is created, which is still after the Setup scripts.
+10. **ModifiedTableQuench** -- Alters existing columns (type changes, nullability, defaults, computed/generated columns), drops tables removed from the product, and manages indexes and check constraints.
+11. **AfterTablesObjects scripts** -- Executes `AfterTablesObjects`-slot scripts (triggers, DDL triggers, rules, post-table views) using the dependency retry loop.
+12. **BetweenTablesAndKeys scripts** -- Executes migration scripts from any folder in the `BetweenTablesAndKeys` slot. Sequential and tracked.
+13. **MissingIndexesAndConstraintsQuench** -- Creates missing indexes, check constraints, default constraints, and (where supported) statistics.
+14. **Table features** (SQL Server) -- Applies Change Data Capture, Change Tracking, and FILESTREAM as declared.
+15. **AfterTablesScripts** -- Executes migration scripts from any folder in the `AfterTablesScripts` slot. Sequential and tracked.
+16. **Object scripts (final pass)** -- Runs every `Objects`- or `AfterTablesObjects`-slot script not yet applied, including those that use query tokens.
+17. **Table data delivery** -- Merges table data described by per-table `DataDelivery` blocks, ordered by foreign key dependencies. See [Table Data Delivery](#table-data-delivery). Then executes any hand-written scripts in the `TableData` slot using the dependency retry loop. Skipped when `DeliverData` is `false`.
+18. **ForeignKeyQuench** -- Creates, drops, and modifies foreign keys to match the schema package.
+19. **Materialized views** (PostgreSQL), **scheduled events** (MySQL, MariaDB), **indexed views** (SQL Server) -- Deployed through the platform's procedure when the template declares any.
+20. **After scripts** -- Executes migration scripts from any folder in the `After` slot. Sequential and tracked.
+21. **Stamp version** -- Executes `Template.VersionStampScript` if configured.
 
-When `UpdateTables` is `false`, the table steps -- 5, 8, 9, 12, 13 and 17 -- are skipped; scripts, data delivery and step 18 still run. When `IndexOnlyTableQuenches` is enabled on a template, steps 5, 8, 9, 13 and 17 are skipped and step 12 runs the platform's `IndexOnlyQuench` procedure instead, so the template manages only the indexes of tables it does not own.
+When `UpdateTables` is `false`, the table steps -- 6, 9, 10, 13, 14 and 18 -- are skipped; scripts, data delivery and step 19 still run. When `IndexOnlyTableQuenches` is enabled on a template, steps 6, 9, 10, 14 and 18 are skipped and step 13 runs the platform's `IndexOnlyQuench` procedure instead, so the template manages only the indexes of tables it does not own.
 
 ---
 
@@ -642,6 +643,7 @@ SchemaQuench assigns every script folder to a quench slot that determines when t
 
 | Slot | Execution Style |
 |------|-----------------|
+| `Setup` | Sequential, every deploy |
 | `Before` | Sequential, tracked |
 | `Objects` | Dependency retry loop |
 | `BetweenTablesAndKeys` | Sequential, tracked |
@@ -649,6 +651,23 @@ SchemaQuench assigns every script folder to a quench slot that determines when t
 | `AfterTablesObjects` | Dependency retry loop |
 | `TableData` | Dependency retry loop |
 | `After` | Sequential, tracked |
+
+### The Setup slot
+
+`Setup` is for what the objects and the later scripts rely on being in place first: a database option, turning on Change Data Capture or Change Tracking, a setting a view or a migration assumes. It runs after the helpers are deployed and the baseline is validated, and before the first object pass -- so nothing in the template has been touched yet. No default folder uses it; add one to `ScriptFolders` when you need it:
+
+```json
+{ "FolderPath": "Setup", "QuenchSlot": "Setup" }
+```
+
+A setting is state, not a migration, so `Setup` scripts run on **every** deploy: a value someone changed by hand is put back the next time the package deploys. That makes each script responsible for checking before it changes anything. Some changes refuse to repeat, and some are expensive even when the value is already right -- `sp_cdc_enable_db` fails on a database that already has CDC, and setting `READ_COMMITTED_SNAPSHOT` needs exclusive access to the database even to set the value it already has. Guard them:
+
+```sql
+IF (SELECT is_cdc_enabled FROM sys.databases WHERE database_id = DB_ID()) = 0
+    EXEC sys.sp_cdc_enable_db;
+```
+
+`Setup` scripts run once per database, and once per schema in a [schema template](#templatetargets). There is no retry: nothing in the template has run before them, so a script that fails will fail again, and the deploy stops at the first one. WhatIf lists them without running them, and a run resumed from a [checkpoint](#checkpoint-and-resume) skips the ones that already succeeded in it. Query tokens and `{{SchemaName}}` resolve in them as in any other script.
 
 ### Product quench slots
 
@@ -660,6 +679,8 @@ SchemaQuench assigns every script folder to a quench slot that determines when t
 Product scripts run against the administrative connection, outside the per-database template loop.
 
 **Sequential, tracked** -- scripts run in alphabetical order and are recorded in `CompletedMigrationScripts` so they only run once (unless marked `[ALWAYS]`).
+
+**Sequential, every deploy** -- scripts run in alphabetical order on every deploy and are not recorded, so `[ALWAYS]` has nothing to add. The first script that fails stops the deploy; the ones after it do not run.
 
 **Dependency retry loop** -- scripts are retried in rounds until all succeed or no progress is made. See [Dependency Retry Loop](#dependency-retry-loop). An `Objects` or `AfterTablesObjects` script that is unchanged since it last applied, and whose object the server still holds as it was left, is not re-run. See [Unchanged Object Scripts](#unchanged-object-scripts).
 
@@ -1403,7 +1424,7 @@ This is distinct from [DropUnknownIndexes](#dropunknownindexes): that flag targe
 
 ## RunScriptsTwice
 
-When `RunScriptsTwice` is `true`, the Objects-slot scripts are executed twice in succession during step 3 of the database quench sequence. On the second pass, all scripts are reset to unquenched and processed through the dependency retry loop again. Both runs must succeed -- if either fails, the deployment fails.
+When `RunScriptsTwice` is `true`, the Objects-slot scripts are executed twice in succession during step 4 of the database quench sequence. On the second pass, all scripts are reset to unquenched and processed through the dependency retry loop again. Both runs must succeed -- if either fails, the deployment fails.
 
 This is an **idempotency testing** tool, not a dependency resolution mechanism. Dependency resolution is already handled by the [retry loop](#dependency-retry-loop), which retries failed scripts as long as progress is being made. RunScriptsTwice answers a different question: "Can my `[ALWAYS]` scripts and object scripts run again safely?"
 

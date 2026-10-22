@@ -386,6 +386,7 @@ Tables are always loaded from `Tables/` regardless of platform. SQL Server adds 
 
 | Slot | Behavior |
 |---|---|
+| `Setup` | Database settings and options the rest of the template relies on, such as turning on CDC or Change Tracking. Runs before the first object and before any table is touched. Sequential, and **runs on every deploy** -- write each script to check before it changes anything. The first error stops the deploy. No default folder uses it. See [The Setup slot](schemaquench.md#the-setup-slot). |
 | `Before` | One-time migration scripts that run after initial object creation and new table creation, but before table modifications. Use for data preparation that must happen before columns are altered or dropped. Sequential, tracked. |
 | `Objects` | Database objects that may have cross-dependencies (schemas, types, catalogs, functions, views, procedures). The retry loop resolves creation order automatically. |
 | `BetweenTablesAndKeys` | Migration scripts that need the table structure to exist but must run before foreign key constraints are enforced. Typical use: populating a new NOT NULL column before FKs block the data load. Sequential, tracked. |
