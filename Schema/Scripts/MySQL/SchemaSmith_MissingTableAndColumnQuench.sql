@@ -613,7 +613,7 @@ BEGIN
         -- MariaDB 10.5.2, CHANGE COLUMN preserving the current definition (see the real-path block below).
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Rename column `', r.LiveName,
-                      '` to `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` on `', c.TableName, '`')
+                      '` to `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` on `', SchemaSmith_StripBacktickWrapping(c.TableName), '`')
         FROM _SchemaSmith_Columns c
         JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId;
 
@@ -969,7 +969,7 @@ BEGIN
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Rename column `', r.LiveName,
-                      '` to `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` on `', c.TableName, '`')
+                      '` to `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` on `', SchemaSmith_StripBacktickWrapping(c.TableName), '`')
         FROM _SchemaSmith_Columns c
         JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId;
 

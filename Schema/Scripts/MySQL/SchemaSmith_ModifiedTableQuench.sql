@@ -4481,7 +4481,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
              WHERE EXISTS (SELECT 1 FROM SchemaSmith_ChangeAudit a
                       WHERE a.SessionId = CONNECTION_ID() AND a.ObjectType = 'index' AND a.ActionType = 'wouldDrop'
                         AND CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(CONCAT(d.TableName, '.', d.IndexName) USING utf8mb4) COLLATE utf8mb4_bin);
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown indexes');
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop indexes not declared for this deploy');
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
             SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
             FROM _SchemaSmith_IndexesToDrop;
@@ -4495,7 +4495,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             -- another table's key references -- raises 1553 below and is kept. A key the package drops goes in
             -- ForeignKeyQuench, and the next deploy drops the index.
             -- Now drop the unknown indexes
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown indexes');
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop indexes not declared for this deploy');
 
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropIdxStmts;
             CREATE TEMPORARY TABLE _SchemaSmith_DropIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, LogMsg TEXT, Stmt TEXT, AuditName TEXT,
@@ -4503,7 +4503,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             INSERT INTO _SchemaSmith_DropIdxStmts (LogMsg, Stmt, AuditName, TableName, AlterStmt)
             SELECT
-                CONCAT('  Drop unknown index: ', TableName, '.', IndexName),
+                CONCAT('  Drop index not declared for this deploy: ', TableName, '.', IndexName),
                 CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
                 CONCAT(TableName, '.', IndexName), TableName,
                 CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP INDEX `', IndexName, '`')
