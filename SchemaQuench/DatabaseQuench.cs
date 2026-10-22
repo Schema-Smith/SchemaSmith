@@ -2828,10 +2828,18 @@ SET NOCOUNT ON
         foreach (var dependent in Enumerable.Reverse(scripts))
         {
             var wasQuenched = dependent.HasBeenQuenched;
+            var skippedAsUnchanged = dependent.Outcome == ScriptOutcome.Unchanged;
             QuenchOneScript(destCmd, dependent, _runScriptsTwice, showErrors);
             if (dependent.Error != null) continue;
             dependent.HasBeenQuenched = wasQuenched;
             dependent.Outcome = ScriptOutcome.Applied;
+            // Its "unchanged" was logged before this run dropped it; what the summary counts is that it ran.
+            if (skippedAsUnchanged)
+            {
+                var objectType = ObjectScriptClassifier.Classify(dependent.LogPath);
+                ChangeAudit?.Retract(objectType, dependent.LogPath, "unchanged");
+                ChangeAudit?.RecordRan(objectType, dependent.LogPath);
+            }
             if (ProbeScriptStamp(destCmd, dependent, DatabaseScriptSlot.AfterTablesObject) is { } stamp) RecordScriptStamp(destCmd, stamp);
         }
         ReapplyCapturedPermissions(destCmd, _droppedDependentPermissions);
