@@ -121,7 +121,7 @@ public sealed class DuplicationCheck : ISchemaCheck
     // "dbo"/"public"/the "{{SchemaName}}" token; MySqlTable's explicit interface implementation
     // always returns null), so casting to the interface gives one schema-qualification path for
     // all three platforms instead of a per-platform switch.
-    private static string TableIdentity(Table table)
+    internal static string TableIdentity(Table table)
     {
         var schema = (table as IDeliverableTable)?.Schema;
         return string.IsNullOrEmpty(schema) ? table.Name : $"{schema}.{table.Name}";

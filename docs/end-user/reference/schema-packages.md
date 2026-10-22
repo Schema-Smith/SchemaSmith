@@ -2271,6 +2271,8 @@ Dev uses synthetic data and a lean index set. Staging mirrors production's footp
 
 The same property is available on tables, columns, indexes, foreign keys, check constraints, indexed views, materialized views, statistics, exclude constraints, full-text indexes, XML indexes, and data deliveries. Combined with [Custom Properties](custom-properties.md) and the rest of the [Script Tokens](script-tokens.md) feature surface, you can express deployment-time decisions declaratively without ever writing a separate per-environment script file.
 
+A table declared in more than one file of a template is a variant set only when every declaration carries a `ShouldApplyExpression`. Otherwise the deploy refuses the template before touching any database (exit code `2`), naming the table and each file -- typically a leftover `public.customer.json` beside a newer `customer.json` -- and `--Validate` reports the pair as `SS-DUP-001`. Names compare exactly, so `Customer` and `customer` are two tables wherever the engine keeps them apart.
+
 Data deliveries are the one exception to "one match wins": when a table declares an array of deliveries, every one whose gate passes applies, in declared order -- see [Multiple Deliveries](#multiple-deliveries) for the pattern and the delete-overlap warning that comes with it.
 
 ---

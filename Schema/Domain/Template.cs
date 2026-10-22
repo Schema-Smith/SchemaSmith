@@ -13,6 +13,7 @@ using Schema.Domain.PostgreSQL;
 using Schema.Domain.SqlServer;
 using Schema.Isolators;
 using Schema.Utility;
+using Schema.Validation.Checks;
 
 namespace Schema.Domain
 {
@@ -216,6 +217,8 @@ namespace Schema.Domain
 
         [JsonIgnore]
         public List<Table> Tables { get; } = [];
+
+        private readonly List<(Table Table, string File)> _tableFiles = [];
 
         /// <summary>
         /// Component files (tables / materialized views / indexed views) that
@@ -633,6 +636,7 @@ namespace Schema.Domain
             // resolved values rather than the pre-resolver nulls (which NullValueHandling.Ignore
             // would silently omit from the JSON, leaving user scripts with no Schema field).
             SchemaDefaultResolver.Resolve(this);
+            if (!tolerateComponentLoadErrors) RefuseTablesDeclaredTwice();
 
             QueryTokens = TokenHelper.SplitOutQueryTokens(scriptTokens);
             TokenHelper.ResolveSpecificTableTokens(scriptTokens, Tables, platform);
@@ -1087,7 +1091,9 @@ namespace Schema.Domain
             {
                 try
                 {
-                    Tables.Add(Table.Load(f, platform));
+                    var table = Table.Load(f, platform);
+                    Tables.Add(table);
+                    _tableFiles.Add((table, f));
                 }
                 // prepush-allow: generic-catch -- --Validate must record ANY component failure, and Table.Load rewraps its own into plain Exception (Table.cs:99)
                 catch (Exception e) when (tolerateComponentLoadErrors)
@@ -1100,6 +1106,24 @@ namespace Schema.Domain
                     RecordComponentLoadError(f, e);
                 }
             }
+        }
+
+        // #566: a deploy that loaded both declarations failed partway through with an engine error naming neither. Refused
+        // here instead, by SS-DUP-001's rule, before anything is deployed; --Validate keeps both and reports the finding.
+        // Names compare exactly: two that differ only in case are two tables wherever the engine is case-sensitive, and the
+        // servers that fold case refuse the pair later, with the server's setting in hand.
+        private void RefuseTablesDeclaredTwice()
+        {
+            var duplicates = _tableFiles
+                .GroupBy(t => DuplicationCheck.TableIdentity(t.Table), StringComparer.Ordinal)
+                .Where(g => g.Count() > 1 && g.Any(t => string.IsNullOrWhiteSpace(t.Table.ShouldApplyExpression)))
+                .Select(g => $"{g.Key} ({string.Join(", ", g.Select(t => Path.GetFileName(t.File)))})")
+                .ToList();
+            if (duplicates.Count == 0) return;
+            throw new PackageException(
+                $"Template '{Name}' declares {(duplicates.Count == 1 ? "a table" : "tables")} in more than one file: " +
+                $"{string.Join("; ", duplicates)}. Keep one file per table, or gate every declaration with ShouldApplyExpression " +
+                "to make them variants (--Validate reports this as SS-DUP-001).");
         }
 
         /// <summary>
