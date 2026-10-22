@@ -1,0 +1,1001 @@
+{
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time."
+    },
+    "Description": {
+      "type": "string",
+      "description": "Optional. A description stored on the object: an MS_Description extended property on SQL Server, COMMENT ON on PostgreSQL, the COMMENT clause on MySQL and MariaDB. On SQL Server and PostgreSQL an omitted value leaves an existing description alone and \"\" removes it; on MySQL and MariaDB an omitted value clears the comment, as the engine's own DDL does."
+    },
+    "Name": {
+      "type": "string"
+    },
+    "Columns": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "DataType": {
+            "type": "string"
+          },
+          "Nullable": {
+            "type": "boolean"
+          },
+          "Default": {
+            "type": "string"
+          },
+          "Description": {
+            "type": "string",
+            "description": "Optional. A description stored on the object: an MS_Description extended property on SQL Server, COMMENT ON on PostgreSQL, the COMMENT clause on MySQL and MariaDB. On SQL Server and PostgreSQL an omitted value leaves an existing description alone and \"\" removes it; on MySQL and MariaDB an omitted value clears the comment, as the engine's own DDL does."
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "OldName": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "CheckExpression": {
+            "type": "string"
+          },
+          "ComputedExpression": {
+            "type": "string"
+          },
+          "Persisted": {
+            "type": "boolean"
+          },
+          "Sparse": {
+            "type": "boolean"
+          },
+          "Collation": {
+            "type": "string"
+          },
+          "DataMaskFunction": {
+            "type": "string"
+          },
+          "EncryptionType": {
+            "type": "string",
+            "pattern": "^(?:DETERMINISTIC|RANDOMIZED|NONE)$"
+          },
+          "EncryptionKey": {
+            "type": "string"
+          },
+          "EncryptionAlgorithm": {
+            "type": "string"
+          },
+          "IsColumnSet": {
+            "type": "boolean"
+          },
+          "BackfillExistingRows": {
+            "type": "boolean",
+            "description": "SQL Server only. When adding this column to an existing table, apply its Default to rows that are already there. Without it a nullable column's existing rows stay NULL. Requires Default; ignored when the column is created with the table."
+          },
+          "FileStream": {
+            "type": "boolean"
+          },
+          "AnsiPadding": {
+            "type": "boolean",
+            "description": "SQL Server only, for char, varchar, binary and varbinary columns. false creates the column under SET ANSI_PADDING OFF, so trailing blanks (or trailing zeros) are trimmed on insert; true pads it as usual. Leaving it out leaves an existing column's padding as it is."
+          },
+          "GeneratedAlways": {
+            "type": "string",
+            "pattern": "^(?:RowStart|RowEnd|TransactionIdStart|TransactionIdEnd|SequenceNumberStart|SequenceNumberEnd)$",
+            "description": "A column the engine fills. RowStart or RowEnd (SQL Server 2016+): a temporal table's period column; declare both, as DATETIME2(n), on a table with IsTemporal, and the pair becomes PERIOD FOR SYSTEM_TIME. A rename or a change to Hidden is applied in place; a precision change is reported, because SQL Server cannot alter a period column. Omitted on a new temporal table, the columns are ValidFrom and ValidTo DATETIME2(7). TransactionIdStart, TransactionIdEnd, SequenceNumberStart or SequenceNumberEnd (SQL Server 2022): a ledger table's generated column, BIGINT; an append-only table has only the two Start columns. One left out takes the engine's name (ledger_start_transaction_id and so on), hidden. A rename or a change to Hidden is applied in place."
+          },
+          "Hidden": {
+            "type": "boolean",
+            "description": "SQL Server 2016+, with GeneratedAlways. The column is HIDDEN: left out of SELECT * and of an INSERT without a column list. Changed in place."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "DataType"
+        ]
+      }
+    },
+    "Indexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "PrimaryKey": {
+            "type": "boolean"
+          },
+          "Unique": {
+            "type": "boolean"
+          },
+          "UniqueConstraint": {
+            "type": "boolean"
+          },
+          "IndexColumns": {
+            "type": "string"
+          },
+          "Description": {
+            "type": "string",
+            "description": "Optional. A description stored on the object: an MS_Description extended property on SQL Server, COMMENT ON on PostgreSQL, the COMMENT clause on MySQL and MariaDB. On SQL Server and PostgreSQL an omitted value leaves an existing description alone and \"\" removes it; on MySQL and MariaDB an omitted value clears the comment, as the engine's own DDL does."
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "FilterExpression": {
+            "type": "string"
+          },
+          "CompressionType": {
+            "type": "string"
+          },
+          "Clustered": {
+            "type": "boolean"
+          },
+          "ColumnStore": {
+            "type": "boolean"
+          },
+          "FillFactor": {
+            "type": "integer",
+            "minimum": 0.0,
+            "maximum": 100.0
+          },
+          "IncludeColumns": {
+            "type": "string"
+          },
+          "UpdateFillFactor": {
+            "type": "boolean"
+          },
+          "FileGroup": {
+            "type": "string"
+          },
+          "IgnoreDuplicateKey": {
+            "type": "boolean"
+          },
+          "PadIndex": {
+            "type": "boolean"
+          },
+          "PartitionScheme": {
+            "type": "string"
+          },
+          "XmlCompression": {
+            "type": "boolean",
+            "description": "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022; extracted where the server reports sys.partitions.xml_compression** (2025, and 2022 from CU26; 2022 CU25 does not). On a server without it, SchemaTongs carries the value forward from the package it is refreshing rather than dropping it."
+          },
+          "PartitionColumn": {
+            "type": "string"
+          },
+          "BucketCount": {
+            "type": "integer",
+            "minimum": 1.0,
+            "description": "BUCKET_COUNT for a HASH index on a memory-optimized table. Required for a hash index, ignored elsewhere. SQL Server rounds it up to the next power of two."
+          },
+          "Disabled": {
+            "type": "boolean",
+            "description": "The index is disabled (ALTER INDEX … DISABLE): defined but holding no data and enforcing nothing. Declared true, a live index is disabled after it is created; left false, an index someone disabled by hand is rebuilt, which enables it. Disabling a clustered index makes the table unreadable, and disabling a key's index disables the foreign keys that reference it."
+          },
+          "Order": {
+            "type": "string",
+            "description": "ColumnStore only: the ORDER columns, comma-separated in sort order. A clustered columnstore index from SQL Server 2022, a nonclustered one from 2025; below that it is created unordered and a downgrade recorded. A change re-creates the index."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ColumnStore": {
+                  "const": true
+                }
+              },
+              "required": [
+                "ColumnStore"
+              ]
+            },
+            "else": {
+              "required": [
+                "IndexColumns"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ForeignKeys": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Columns": {
+            "type": "string"
+          },
+          "RelatedTable": {
+            "type": "string"
+          },
+          "RelatedColumns": {
+            "type": "string"
+          },
+          "DeleteAction": {
+            "type": "string",
+            "pattern": "^(NO ACTION|RESTRICT|CASCADE|SET NULL|SET DEFAULT)?$"
+          },
+          "UpdateAction": {
+            "type": "string",
+            "pattern": "^(NO ACTION|RESTRICT|CASCADE|SET NULL|SET DEFAULT)?$"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "RelatedTableSchema": {
+            "type": "string"
+          },
+          "Enforced": {
+            "type": "boolean",
+            "description": "false disables the key (ALTER TABLE ... NOCHECK CONSTRAINT): it stays defined but is not checked. Omitted means enforced, and a deploy re-enables a key someone disabled."
+          },
+          "Validated": {
+            "type": "boolean",
+            "description": "false creates the key WITH NOCHECK, so the rows already in the table are not checked and the key is untrusted. true over an untrusted key re-checks those rows, which fails when any violate it. Omitted means validated."
+          },
+          "NotForReplication": {
+            "type": "boolean",
+            "description": "NOT FOR REPLICATION: the key is not checked when a replication agent applies changes. Create-time only, so a change drops and re-creates the key."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Columns",
+          "RelatedTable",
+          "RelatedColumns"
+        ]
+      }
+    },
+    "CheckConstraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Expression": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Enforced": {
+            "type": "boolean",
+            "description": "false disables the constraint (ALTER TABLE ... NOCHECK CONSTRAINT): it stays defined but is not checked. Omitted means enforced, and a deploy re-enables a constraint someone disabled."
+          },
+          "Validated": {
+            "type": "boolean",
+            "description": "false creates the constraint WITH NOCHECK, so the rows already in the table are not checked and the constraint is untrusted. true over an untrusted constraint re-checks those rows, which fails when any violate it. Omitted means validated."
+          },
+          "NotForReplication": {
+            "type": "boolean",
+            "description": "NOT FOR REPLICATION: the constraint is not checked when a replication agent applies changes. Create-time only, so a change drops and re-creates the constraint."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Expression"
+        ]
+      }
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "DataDelivery": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "ContentFile": {
+              "type": "string"
+            },
+            "MergeType": {
+              "type": "string",
+              "pattern": "^(?:[Ii][Nn][Ss][Ee][Rr][Tt]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]/[Dd][Ee][Ll][Ee][Tt][Ee])$"
+            },
+            "MatchColumns": {
+              "type": "string"
+            },
+            "MergeFilter": {
+              "type": "string"
+            },
+            "MergeDisableTriggers": {
+              "type": "boolean"
+            },
+            "ShouldApplyExpression": {
+              "type": "string"
+            },
+            "VariantName": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "Optional label for a conditional data-delivery variant — names the intent behind its ShouldApplyExpression, appears in deployment logging when the delivery applies, and identifies which array variant a DataTongs re-extraction reconciles."
+            },
+            "ContentEncoding": {
+              "type": "string",
+              "pattern": "^(?:Json|Xml)$"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "ContentFile": {
+                "type": "string"
+              },
+              "MergeType": {
+                "type": "string",
+                "pattern": "^(?:[Ii][Nn][Ss][Ee][Rr][Tt]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]|[Ii][Nn][Ss][Ee][Rr][Tt]/[Uu][Pp][Dd][Aa][Tt][Ee]/[Dd][Ee][Ll][Ee][Tt][Ee])$"
+              },
+              "MatchColumns": {
+                "type": "string"
+              },
+              "MergeFilter": {
+                "type": "string"
+              },
+              "MergeDisableTriggers": {
+                "type": "boolean"
+              },
+              "ShouldApplyExpression": {
+                "type": "string"
+              },
+              "VariantName": {
+                "type": "string",
+                "maxLength": 128,
+                "description": "Optional label for a conditional data-delivery variant — names the intent behind its ShouldApplyExpression, appears in deployment logging when the delivery applies, and identifies which array variant a DataTongs re-extraction reconciles."
+              },
+              "ContentEncoding": {
+                "type": "string",
+                "pattern": "^(?:Json|Xml)$"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      ]
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+    },
+    "DropColumnsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropColumnsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropForeignKeysRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropForeignKeysRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropCheckConstraintsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropCheckConstraintsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "DropStatisticsRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropStatisticsRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting. SQL Server and PostgreSQL only."
+    },
+    "DropIndexesRemovedFromProduct": {
+      "type": "boolean",
+      "description": "When set, overrides the template- and product-level DropIndexesRemovedFromProduct flag for this table only. Null inherits from the template (or product) setting."
+    },
+    "OldName": {
+      "type": "string"
+    },
+    "PreventDrop": {
+      "type": "boolean",
+      "description": "When true, this table is protected from drop-by-absence and the protection is sticky: it is persisted in SchemaSmith's ownership tracking so a protected table that is later removed from the product package is skipped (never silently dropped) rather than reconciled away. Set false and re-deploy while the table is still in the package to clear the protection before an intended removal. Default false."
+    },
+    "RebuildPolicy": {
+      "type": "object",
+      "properties": {
+        "Mode": {
+          "type": "string",
+          "pattern": "^\\s*(?:[Nn][Ee][Vv][Ee][Rr]|[Aa][Ll][Ww][Aa][Yy][Ss]|[Tt][Hh][Rr][Ee][Ss][Hh][Oo][Ll][Dd])\\s*$",
+          "description": "When to rebuild the table instead of altering it in place. NEVER (the default) always alters in place. ALWAYS rebuilds for any change. THRESHOLD rebuilds once the number of pending changes reaches Threshold, which is then required."
+        },
+        "Threshold": {
+          "type": "integer",
+          "minimum": 1.0,
+          "description": "Required when Mode is THRESHOLD: the number of pending changes at which the table is rebuilt rather than altered in place. Ignored for every other Mode."
+        },
+        "OnOrderMismatch": {
+          "type": "boolean",
+          "description": "Rebuild when the deployed column order does not match the authored column order. An independent trigger that composes with Mode rather than replacing it — a table can ask for both a threshold and an order-mismatch rebuild."
+        }
+      },
+      "additionalProperties": false,
+      "description": "When set, overrides the template-, product- and environment-level RebuildPolicy for this table only. Null inherits from the nearest level that declares one. The winning policy applies whole — a policy declared here does NOT pick up fields it omits from a higher level."
+    },
+    "OnlineApply": {
+      "type": "string",
+      "pattern": "^\\s*(?:[Oo][Ff][Ff]|[Pp][Rr][Ee][Ff][Ee][Rr]|[Rr][Ee][Qq][Uu][Ii][Rr][Ee])\\s*$",
+      "description": "When set, overrides the environment's OnlineApply for this table only. Off runs the plain statements; Prefer uses the engine's online or instant form where the version and edition allow it, and the plain form otherwise; Require uses the online or instant form or refuses the deploy, naming the statement. Null inherits the environment setting."
+    },
+    "Schema": {
+      "type": "string"
+    },
+    "CompressionType": {
+      "type": "string"
+    },
+    "IsTemporal": {
+      "type": "boolean"
+    },
+    "XmlIndexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "IsPrimary": {
+            "type": "boolean"
+          },
+          "Column": {
+            "type": "string"
+          },
+          "PrimaryIndex": {
+            "type": "string"
+          },
+          "SecondaryIndexType": {
+            "type": "string",
+            "pattern": "^(?:VALUE|PATH|PROPERTY)$"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "XmlCompression": {
+            "type": "boolean",
+            "description": "SQL Server 2022+. Compresses this XML index (XML_COMPRESSION). A secondary XML index has its own setting and does not inherit its primary's. Extracted where the server reports sys.partitions.xml_compression (2025, and 2022 from CU26); elsewhere SchemaTongs carries the value forward from the package it is refreshing."
+          },
+          "Selective": {
+            "type": "object",
+            "properties": {
+              "Namespaces": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "Prefix": {
+                      "type": "string",
+                      "description": "The prefix the paths use. Omitted, this is the DEFAULT namespace."
+                    },
+                    "Uri": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "Uri"
+                  ]
+                },
+                "description": "The WITH XMLNAMESPACES declarations the paths use. A namespace with no Prefix is the DEFAULT namespace."
+              },
+              "Paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "Name": {
+                      "type": "string",
+                      "description": "The path's name, which a secondary selective index names in ForPath."
+                    },
+                    "Path": {
+                      "type": "string",
+                      "description": "The XQuery path, e.g. /order/id."
+                    },
+                    "Type": {
+                      "type": "string",
+                      "description": "Omitted, the engine infers it. An XQuery type (\"xs:string\", \"xs:double\", …) or \"node()\" maps the path AS XQUERY; anything else is a SQL type (\"DECIMAL(10,2)\", \"NVARCHAR(40)\") and maps it AS SQL."
+                    },
+                    "MaxLength": {
+                      "type": "integer",
+                      "description": "MAXLENGTH for an xs:string path."
+                    },
+                    "SingletonCardinality": {
+                      "type": "boolean",
+                      "description": "SINGLETON: the path occurs at most once per document."
+                    }
+                  },
+                  "additionalProperties": false,
+                  "required": [
+                    "Name",
+                    "Path"
+                  ]
+                },
+                "description": "The promoted paths, in the order they are declared."
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "Paths"
+            ],
+            "description": "SQL Server 2012 SP1+. Makes this a selective XML index (CREATE SELECTIVE XML INDEX) promoting the listed paths. IsPrimary, PrimaryIndex and SecondaryIndexType do not apply to it."
+          },
+          "ForPath": {
+            "type": "string",
+            "description": "SQL Server 2012 SP1+. Makes this a secondary selective XML index on the path of that name in the selective index named by PrimaryIndex (USING XML INDEX … FOR (path)). SecondaryIndexType does not apply to it."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Column"
+        ]
+      }
+    },
+    "Statistics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Columns": {
+            "type": "string"
+          },
+          "SampleSize": {
+            "type": "integer",
+            "minimum": 0.0,
+            "maximum": 100.0
+          },
+          "FilterExpression": {
+            "type": "string"
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Columns"
+        ]
+      }
+    },
+    "FullTextIndex": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "FullTextCatalog": {
+              "type": "string"
+            },
+            "KeyIndex": {
+              "type": "string"
+            },
+            "ChangeTracking": {
+              "type": "string"
+            },
+            "StopList": {
+              "type": "string"
+            },
+            "Columns": {
+              "type": "string"
+            },
+            "ShouldApplyExpression": {
+              "type": "string"
+            },
+            "VariantName": {
+              "type": "string",
+              "maxLength": 128,
+              "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+            },
+            "Extensions": {}
+          },
+          "additionalProperties": false,
+          "required": [
+            "FullTextCatalog",
+            "KeyIndex",
+            "Columns"
+          ]
+        },
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "FullTextCatalog": {
+                "type": "string"
+              },
+              "KeyIndex": {
+                "type": "string"
+              },
+              "ChangeTracking": {
+                "type": "string"
+              },
+              "StopList": {
+                "type": "string"
+              },
+              "Columns": {
+                "type": "string"
+              },
+              "ShouldApplyExpression": {
+                "type": "string"
+              },
+              "VariantName": {
+                "type": "string",
+                "maxLength": 128,
+                "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+              },
+              "Extensions": {}
+            },
+            "additionalProperties": false,
+            "required": [
+              "FullTextCatalog",
+              "KeyIndex",
+              "Columns"
+            ]
+          }
+        }
+      ]
+    },
+    "UpdateFillFactor": {
+      "type": "boolean"
+    },
+    "EnableCDC": {
+      "type": "boolean",
+      "description": "Enable SQL Server Change Data Capture on this table (needs CDC enabled on the database). false disables it, dropping the change table and its history; leaving it out leaves the table's CDC as it is."
+    },
+    "HistoryTableSchema": {
+      "type": "string"
+    },
+    "HistoryTableName": {
+      "type": "string"
+    },
+    "HistoryRetentionPeriod": {
+      "type": "string"
+    },
+    "FileGroup": {
+      "type": "string"
+    },
+    "EnableChangeTracking": {
+      "type": "boolean",
+      "description": "Enable SQL Server Change Tracking on this table (needs a primary key, and Change Tracking enabled on the database). false disables it; leaving it out leaves the table's tracking as it is."
+    },
+    "TrackColumnsUpdated": {
+      "type": "boolean"
+    },
+    "FileStreamFileGroup": {
+      "type": "string"
+    },
+    "GraphType": {
+      "type": "string",
+      "pattern": "^(?:None|Node|Edge)$"
+    },
+    "Ledger": {
+      "type": "string",
+      "pattern": "^(?:Off|AppendOnly|Updatable)$"
+    },
+    "EdgeConstraints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Clauses": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "FromTable": {
+                  "type": "string",
+                  "description": "The node table the edge starts at, schema-qualified ([dbo].[Person]) or bare (the edge table's own schema)."
+                },
+                "ToTable": {
+                  "type": "string",
+                  "description": "The node table the edge ends at, schema-qualified or bare."
+                },
+                "Extensions": {}
+              },
+              "additionalProperties": false,
+              "required": [
+                "FromTable",
+                "ToTable"
+              ]
+            },
+            "description": "The CONNECTION clauses, each a from-node table and a to-node table (schema-qualified, or the edge table's own schema). Order does not matter."
+          },
+          "DeleteAction": {
+            "type": "string",
+            "pattern": "^(?:NO ACTION|CASCADE)$",
+            "description": "ON DELETE action when a connected node row is deleted: NO ACTION (the default) refuses the delete while an edge connects the node; CASCADE deletes the edges too."
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Clauses"
+        ]
+      },
+      "description": "SQL Server 2019+, on a table whose GraphType is Edge: which node tables the edges may connect (CONNECTION clauses) and what a delete of a connected node does. Below 2019 the constraint is skipped and a downgrade recorded."
+    },
+    "TextImageFileGroup": {
+      "type": "string"
+    },
+    "XmlCompression": {
+      "type": "boolean",
+      "description": "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022; extracted where the server reports sys.partitions.xml_compression** (2025, and 2022 from CU26; 2022 CU25 does not). On a server without it, SchemaTongs carries the value forward from the package it is refreshing rather than dropping it."
+    },
+    "PartitionScheme": {
+      "type": "string"
+    },
+    "PartitionColumn": {
+      "type": "string"
+    },
+    "MemoryOptimized": {
+      "type": "boolean"
+    },
+    "Durability": {
+      "type": "string",
+      "pattern": "^(?:SCHEMA_AND_DATA|SCHEMA_ONLY)$",
+      "description": "Memory-optimized durability: SCHEMA_AND_DATA (default, data persists) or SCHEMA_ONLY (rows are transient). Only meaningful with MemoryOptimized. Create-time only."
+    },
+    "CdcFilegroup": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Filegroup for this table's CDC change table; overrides the template's CdcFilegroup. Only meaningful with EnableCDC. A change creates a new capture instance on the new filegroup and leaves the old one, with its history, for you to drain and drop."
+    },
+    "CdcSupportsNetChanges": {
+      "type": "boolean",
+      "description": "Whether this table's CDC capture instance supports net changes (sp_cdc_enable_table @supports_net_changes); overrides the template's CdcSupportsNetChanges. Only meaningful with EnableCDC, and true needs a primary key. Unset: off for a new table, unchanged on rotation. A change creates a new capture instance; the old one keeps its history."
+    },
+    "CdcIndexName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "The unique index this table's CDC capture instance identifies rows by (sp_cdc_enable_table @index_name), instead of the primary key. Must name one of this table's declared unique indexes, over NOT NULL columns. Lets CdcSupportsNetChanges be true on a table with no primary key. Only meaningful with EnableCDC. A change creates a new capture instance; the old one keeps its history."
+    },
+    "SpatialIndexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Column": {
+            "type": "string",
+            "description": "The geometry or geography column the index covers."
+          },
+          "Tessellation": {
+            "type": "string",
+            "pattern": "^(?:GEOMETRY_GRID|GEOGRAPHY_GRID|GEOMETRY_AUTO_GRID|GEOGRAPHY_AUTO_GRID)$",
+            "description": "USING: GEOMETRY_GRID or GEOMETRY_AUTO_GRID on a geometry column, GEOGRAPHY_GRID or GEOGRAPHY_AUTO_GRID on a geography column. The AUTO_GRID schemes are SQL Server 2012+. Omitted, the engine chooses."
+          },
+          "BoundingBox": {
+            "type": "object",
+            "properties": {
+              "XMin": {
+                "type": "number"
+              },
+              "YMin": {
+                "type": "number"
+              },
+              "XMax": {
+                "type": "number"
+              },
+              "YMax": {
+                "type": "number"
+              }
+            },
+            "additionalProperties": false,
+            "required": [
+              "XMin",
+              "YMin",
+              "XMax",
+              "YMax"
+            ],
+            "description": "BOUNDING_BOX for a geometry tessellation, which requires one. Not allowed on a geography tessellation."
+          },
+          "Grids": {
+            "type": "object",
+            "properties": {
+              "Level1": {
+                "type": "string",
+                "pattern": "^(?:LOW|MEDIUM|HIGH)$"
+              },
+              "Level2": {
+                "type": "string",
+                "pattern": "^(?:LOW|MEDIUM|HIGH)$"
+              },
+              "Level3": {
+                "type": "string",
+                "pattern": "^(?:LOW|MEDIUM|HIGH)$"
+              },
+              "Level4": {
+                "type": "string",
+                "pattern": "^(?:LOW|MEDIUM|HIGH)$"
+              }
+            },
+            "additionalProperties": false,
+            "description": "GRIDS for GEOMETRY_GRID and GEOGRAPHY_GRID: the density of each of the four levels. Not allowed on an AUTO_GRID tessellation. Omitted, every level is MEDIUM."
+          },
+          "CellsPerObject": {
+            "type": "integer",
+            "minimum": 1.0,
+            "maximum": 8192.0,
+            "description": "CELLS_PER_OBJECT. Omitted, the engine's default for the tessellation: 16 for the GRID schemes, 8 for GEOMETRY_AUTO_GRID, 12 for GEOGRAPHY_AUTO_GRID."
+          },
+          "FillFactor": {
+            "type": "integer",
+            "minimum": 1.0,
+            "maximum": 100.0,
+            "description": "FILLFACTOR. Omitted, the server's default."
+          },
+          "CompressionType": {
+            "type": "string",
+            "pattern": "^(?:[Nn][Oo][Nn][Ee]|[Rr][Oo][Ww]|[Pp][Aa][Gg][Ee])$",
+            "description": "DATA_COMPRESSION: NONE, ROW or PAGE. Omitted, the index is created uncompressed and its compression is not compared. SQL Server 2012+ on any edition; below 2012 the index is created uncompressed and a downgrade is recorded."
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Column"
+        ]
+      }
+    },
+    "LedgerView": {
+      "type": "object",
+      "properties": {
+        "Schema": {
+          "type": "string",
+          "description": "The view's schema. Omitted, the table's."
+        },
+        "Name": {
+          "type": "string",
+          "description": "The view's name. Omitted, <table>_Ledger."
+        },
+        "TransactionIdColumn": {
+          "type": "string",
+          "description": "Omitted, ledger_transaction_id."
+        },
+        "SequenceNumberColumn": {
+          "type": "string",
+          "description": "Omitted, ledger_sequence_number."
+        },
+        "OperationTypeColumn": {
+          "type": "string",
+          "description": "Omitted, ledger_operation_type."
+        },
+        "OperationTypeDescColumn": {
+          "type": "string",
+          "description": "Omitted, ledger_operation_type_desc."
+        }
+      },
+      "additionalProperties": false,
+      "description": "SQL Server 2022, with Ledger. The ledger view and its four column names; a member left out takes the engine's default (<table>_Ledger in the table's schema, ledger_transaction_id and so on). A new name for the view, in its schema, is applied with sp_rename; another schema or other column names are reported, since SQL Server cannot change them."
+    },
+    "JsonIndexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "Column": {
+            "type": "string",
+            "description": "The json column the index covers. The table needs a clustered primary key, and a column takes one JSON index."
+          },
+          "Paths": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The FOR list: the SQL/JSON paths to index, such as $.customer.id. No two may overlap, and wildcards are not allowed. Omitted or empty, the whole document ($) is indexed."
+          },
+          "OptimizeForArraySearch": {
+            "type": "boolean",
+            "description": "OPTIMIZE_FOR_ARRAY_SEARCH: also index array elements, for JSON_CONTAINS searches. Omitted, off."
+          },
+          "FillFactor": {
+            "type": "integer",
+            "minimum": 1.0,
+            "maximum": 100.0,
+            "description": "FILLFACTOR. Omitted, the server's default, and not compared."
+          },
+          "CompressionType": {
+            "type": "string",
+            "pattern": "^(?:[Nn][Oo][Nn][Ee]|[Rr][Oo][Ww]|[Pp][Aa][Gg][Ee])$",
+            "description": "DATA_COMPRESSION: NONE, ROW or PAGE. Omitted, the index is created uncompressed and its compression is not compared."
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "Column"
+        ]
+      }
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name"
+  ]
+}

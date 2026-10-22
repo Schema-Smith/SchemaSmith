@@ -1,0 +1,9 @@
+{
+  "$schema": ".json-schemas/products.mariadb.schema",
+  "Name": "Shop",
+  "ValidationScript": "SELECT CAST(CASE WHEN EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name LIKE 'shop_tenant_%') THEN 1 ELSE 0 END AS UNSIGNED)",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "Platform": "MariaDb"
+}

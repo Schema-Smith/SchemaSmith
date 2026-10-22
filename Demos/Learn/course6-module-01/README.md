@@ -1,5 +1,7 @@
 # Course 6, Module 1 — Datafix & limited-privilege deployment (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (#547 run-once record): delete the "On 2.7.x" callouts -->
+
 **Goal:** ship a data-only fix — correct a batch of mispriced order lines across three tenant databases — deploying it through SchemaSmith under the **datafix profile** as a **scoped, least-privilege account**, one tenant at a time (canary). You'll see two independent things hold the structural boundary: the deployment *profile* (SchemaSmith performs no structural DDL) and the deploy *account* (it has no power to drop or alter the product's tables).
 
 ## The scenario
@@ -27,23 +29,61 @@ Confirm the defect is present in the canary tenant — each line prints `10` (10
 
 > **Lesson from the field:** ask a DBA for "rights to create a table" and you may be handed `ALTER ON SCHEMA` — a drop capability in disguise. Owning a schema lets you ask for, and *prove*, exactly "create my backup tables, nothing structural." The grant scripts here are codified in the [datafix-role grants reference](../../../docs/end-user/reference/datafix-role-grants.md).
 
-## Step 2 — Read the datafix profile
+## Step 2 — An admin kindles the fleet and grants the run-once record
+
+`datafix_user` can't install SchemaSmith's own objects in a tenant, and shouldn't: that is an admin's one-time job. The admin deploys [`<engine>/kindle/`](sqlserver/kindle/) — the same product and template, with no scripts at all — to all three tenants, with `KindleTheForge: true` and the structural phases still off:
+
+```bash
+# from course6-module-01/<engine>
+schemaquench --ConfigFile:quench.settings.kindle.json
+```
+
+Each tenant logs `Kindling the forge` and then `Successfully Quenched`; nothing else runs. Among what the kindle creates is SchemaSmith's **run-once record** — `SchemaSmith.CompletedMigrationScripts` (`SchemaSmith_CompletedMigrationScripts` on MySQL and MariaDB) — where a deploy notes each migration script it has run. The datafix account needs that one table, so the admin grants it in each tenant with [`<engine>/grant_run_once.sql`](sqlserver/grant_run_once.sql), the run-once row of the [datafix-role grants reference](../../../docs/end-user/reference/datafix-role-grants.md):
+
+```bash
+# from course6-module-01
+../lab-sql.sh sqlserver shop_tenant_a --file sqlserver/grant_run_once.sql
+../lab-sql.sh sqlserver shop_tenant_b --file sqlserver/grant_run_once.sql
+../lab-sql.sh sqlserver shop_tenant_c --file sqlserver/grant_run_once.sql
+../lab-sql.sh postgres shop_tenant_a --file postgres/grant_run_once.sql
+../lab-sql.sh postgres shop_tenant_b --file postgres/grant_run_once.sql
+../lab-sql.sh postgres shop_tenant_c --file postgres/grant_run_once.sql
+../lab-sql.sh mysql shop_tenant_a --file mysql/grant_run_once.sql
+../lab-sql.sh mysql shop_tenant_b --file mysql/grant_run_once.sql
+../lab-sql.sh mysql shop_tenant_c --file mysql/grant_run_once.sql
+../lab-sql.sh mariadb shop_tenant_a --file mariadb/grant_run_once.sql
+../lab-sql.sh mariadb shop_tenant_b --file mariadb/grant_run_once.sql
+../lab-sql.sh mariadb shop_tenant_c --file mariadb/grant_run_once.sql
+```
+
+`SELECT` and `INSERT` let a deploy check for the fix and note it; `DELETE` lets it forget a script you later remove from the package. On MySQL and MariaDB the tenant-wide `SELECT, INSERT` that `course6-setup` granted already cover the record, so only `DELETE` is added.
+
+Skip the grant on SQL Server or PostgreSQL and the datafix deploy stops before the slot runs, exit `2`, naming what is missing (SQL Server's wording; PostgreSQL's names `"SchemaSmith"."CompletedMigrationScripts"` and the schema's `USAGE`):
+
+```text
+Cannot read or record which Before scripts have already run: the deploy login has no SELECT and INSERT on SchemaSmith.CompletedMigrationScripts. Nothing in the slot was run, because a run-once script would run again. Grant the deploy login SELECT, INSERT and DELETE on SchemaSmith.CompletedMigrationScripts.
+```
+
+> **On 2.7.x** a deploy without the grant does not stop: SQL Server logs the permission errors and exits `0`,
+> PostgreSQL logs nothing, and the fix runs again on every deploy (#547).
+
+## Step 3 — Read the datafix profile
 
 Open [`sqlserver/quench.settings.json`](sqlserver/quench.settings.json). Two things to notice:
 
 ```jsonc
 {
   "Target": { "User": "datafix_user", "Password": "DataFix!Demo123", "Databases": ["shop_tenant_a"] },
-  "KindleTheForge": false,          // don't (re)create databases
+  "KindleTheForge": false,          // the admin's kindle (Step 2) already installed SchemaSmith's objects
   "UpdateTables": false,            // skip the structural table-quench phase entirely
   "DropTablesRemovedFromProduct": false,  // never drop by absence
-  "TrackRunOnceMigrations": false   // every migration script runs every time
+  "TrackRunOnceMigrations": true    // record the fix in each tenant; never run it there twice
 }
 ```
 
-The four flags are the **datafix profile**: SchemaSmith runs your migration scripts and nothing else — no structural reconciliation. `Target.Databases` scopes this run to **one tenant** (`shop_tenant_a`) — your canary. And `TrackRunOnceMigrations: false` means the script runs on *every* deploy, so it **must be idempotent** — which is why the migration backs up and fixes only rows it hasn't already handled.
+The four flags are the **datafix profile**: SchemaSmith runs your migration scripts and nothing else — no structural reconciliation. `Target.Databases` scopes this run to **one tenant** (`shop_tenant_a`) — your canary. And `TrackRunOnceMigrations: true` means the fix runs **once per tenant**: the deploy notes it in the record Step 2 granted, and every later deploy skips it. Keep the script **idempotent** anyway — a record can be cleared and a fix replayed by hand, and money must not move twice either way — which is why the migration backs up and fixes only rows it hasn't already handled.
 
-## Step 3 — Canary: deploy to one tenant, as the scoped account
+## Step 4 — Canary: deploy to one tenant, as the scoped account
 
 ```bash
 # from course6-module-01/<engine>
@@ -59,7 +99,7 @@ The log shows it connect **as `datafix_user`**, filter **1 of 3** discovered dat
 [localhost,11433].[shop_tenant_a] Successfully Quenched
 ```
 
-## Step 4 — Verify the canary
+## Step 5 — Verify the canary
 
 Two checks per engine, each identifier in its engine's style (see the [per-engine notes](#per-engine-notes) below): PostgreSQL's backup is `datafix.orderitem_pricefix_backup` (lowercase), MySQL/MariaDB's is `OrderItem_PriceFix_Backup` in the tenant db. The first line of each pair counts the backup — the 10 originals, in the backup table the account owns — and prints `10`; the second counts May lines still mispriced in `shop_tenant_a` and prints `0`:
 
@@ -77,13 +117,18 @@ Two checks per engine, each identifier in its engine's style (see the [per-engin
 
 `shop_tenant_b` and `shop_tenant_c` are **untouched** — no `datafix` backup table, defect intact. The canary changed exactly one tenant.
 
-## Step 5 — Idempotency, then widen
+## Step 6 — Run once, then widen
 
-Re-run the same command. The backup count stays **10** and 0 rows change — the script is a no-op on already-fixed data (it must be, since run-once tracking is off):
+Re-run the same command. The fix is not run again — the record says it already ran in `shop_tenant_a` — and the backup count stays **10**:
 
 ```bash
 # from course6-module-01/<engine>
 schemaquench --ConfigFile:quench.settings.json
+```
+
+```
+[localhost,11433].[shop_tenant_a]     Skipping (previously quenched) .\Package\Templates\Main\After Scripts\01_backup_and_fix_prices.sql
+[localhost,11433].[shop_tenant_a] Successfully Quenched
 ```
 
 Now widen: in `<engine>/quench.settings.json`, edit `Target.Databases` to `["shop_tenant_b","shop_tenant_c"]` and deploy again. Both fix; the rollout is complete.
@@ -94,7 +139,7 @@ Now widen: in `<engine>/quench.settings.json`, edit `Target.Databases` to `["sho
 schemaquench --ConfigFile:quench.settings.json
 ```
 
-## Step 6 — Prove the boundary
+## Step 7 — Prove the boundary
 
 Two layers held the line, and you can demonstrate both:
 
@@ -109,7 +154,7 @@ Two layers held the line, and you can demonstrate both:
 ../lab-sql.sh mariadb information_schema "SHOW GRANTS FOR 'datafix_user'@'%'"
 ```
 
-The SQL Server line fails with `Msg 3701: ... you do not have permission` and the PostgreSQL line with `ERROR:  must be owner of table orderitem`; that failure is the proof. Denied. The account can back up and fix data; it cannot alter or drop the product schema. The boundary doesn't depend on remembering to set a flag — it's enforced by what the account *can't do*.
+The SQL Server line fails with `Msg 3701: ... you do not have permission` and the PostgreSQL line with `ERROR:  must be owner of table orderitem`; that failure is the proof. (The MySQL and MariaDB lists end with Step 2's `DELETE` on `SchemaSmith_CompletedMigrationScripts`, one line per tenant.) Denied. The account can back up and fix data; it cannot alter or drop the product schema. The boundary doesn't depend on remembering to set a flag — it's enforced by what the account *can't do*.
 
 ## Per-engine notes
 
@@ -118,6 +163,7 @@ The SQL Server line fails with `Msg 3701: ... you do not have permission` and th
 | Product schema | `dbo` (PascalCase) | `public` (lowercase) | the tenant database |
 | Backup table | `datafix.OrderItem_PriceFix_Backup` | `datafix.orderitem_pricefix_backup` | `OrderItem_PriceFix_Backup` (in the db) |
 | Why the account can't drop | no `ALTER ON SCHEMA::dbo` (owns `datafix` instead) | not the owner of `public` tables; no `CREATE` on `public` | no `DROP` privilege granted |
+| Run-once record grant | `SELECT, INSERT, DELETE` on `SchemaSmith.CompletedMigrationScripts` | `USAGE` on `"SchemaSmith"`, plus `SELECT, INSERT, DELETE` on its `"CompletedMigrationScripts"` | `DELETE` on `SchemaSmith_CompletedMigrationScripts` |
 | Connection | `localhost,11433` | `localhost:15432` | `localhost:13306` |
 
 > *MariaDB is a fourth platform in the MySQL family — its own `Platform: MariaDb` selection and native package, not the MySQL package retargeted. Its dialect matches MySQL except for a few DDL specifics (invisible indexes, check-constraint drops, column-default reporting) that SchemaSmith handles for you.*

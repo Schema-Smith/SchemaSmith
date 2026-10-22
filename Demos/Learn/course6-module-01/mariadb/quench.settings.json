@@ -12,5 +12,5 @@
   "KindleTheForge": false,
   "UpdateTables": false,
   "DropTablesRemovedFromProduct": false,
-  "TrackRunOnceMigrations": false
+  "TrackRunOnceMigrations": true
 }
