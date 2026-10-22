@@ -2814,6 +2814,17 @@ public class CoherenceCheckTests
         Assert.That(findings.Where(f => f.Code == "SS-IDENT-002"), Is.Not.Empty);
     }
 
+    // MariaDB allows 64 characters, and refuses a longer name itself rather than truncating it.
+    [Test]
+    public void ALongMariaDbSequenceName_IsNotThisCheck()
+    {
+        var template = new Template { Name = "Main" };
+        template.MariaDbSequences.Add(new MariaDbSequence { Name = new string('s', 40) + new string('é', 12) });
+        var product = new Product { Name = "Acme", Platform = Platform.MariaDb, TemplateOrder = [] };
+        var findings = new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg")).ToList();
+        Assert.That(findings.Where(f => f.Code == "SS-IDENT-002"), Is.Empty);
+    }
+
     [Test]
     public void ALongNameOnAnotherEngine_IsNotThisCheck()
     {
