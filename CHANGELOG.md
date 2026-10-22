@@ -84,6 +84,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Fixed
 
+- **A primary-key column declared `"Nullable": true` deploys NOT NULL instead of failing the deploy.** Every engine refuses a nullable key column: SQL Server, MySQL and MariaDB failed the first deploy, and PostgreSQL failed every deploy after it. The column is now deployed NOT NULL, with a warning ahead of the table step naming the column and its key, so a column that already holds NULLs fails with the reason in view. `--Validate` reports the contradiction as `SS-COL-008`, a warning.
 - **The configuration echo prints a section line and a `true`/`false` as written.** A setting whose name contains `Token` printed as `***` even with no value (the `ScriptTokens:` line) or a boolean (`TokenizeScripts: ***`), so the log could not confirm a switch. A real value under a sensitive name is still masked.
 - **A failed connection names the engine the package targets.** `Unable to connect to localhost with user postgres` now reads `Unable to connect to SQL Server at localhost with user postgres`, so settings pointed at a different engine than the package show as that instead of as a server that is down.
 - **A failed data delivery's roll-up points at its debug file.** `Failures.log` and `Summary.json` said `Debug SQL: n/a` for a delivery failure although its `Failed DataDelivery` file had been written; they now name it.

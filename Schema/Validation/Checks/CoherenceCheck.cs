@@ -63,6 +63,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string NationalCharacterTypeCode = "SS-COL-005";
     private const string DeprecatedNumericFormCode = "SS-COL-006";
     private const string QuotedExpressionDefaultCode = "SS-COL-007";
+    private const string NullableKeyColumnCode = "SS-COL-008";
     private const string RebuildThresholdCode = "SS-TBL-001";
     private const string IgnoredThresholdCode = "SS-TBL-002";
     private const string EdgeConstraintTableKindCode = "SS-TBL-003";
@@ -151,6 +152,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         [NationalCharacterTypeCode] = WarningLevel,
         [DeprecatedNumericFormCode] = WarningLevel,
         [QuotedExpressionDefaultCode] = WarningLevel,
+        [NullableKeyColumnCode] = WarningLevel,
         [RebuildThresholdCode] = ErrorLevel,
         [IgnoredThresholdCode] = WarningLevel,
         [EdgeConstraintTableKindCode] = ErrorLevel,
@@ -216,6 +218,11 @@ public sealed class CoherenceCheck : ISchemaCheck
                 $"Template '{template.Name}'"));
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckScheduledEvents(template));
+
+        // Load already made each of these NOT NULL, so the deploy works: the declaration is wrong, the package is not.
+        foreach (var template in ctx.Templates)
+            findings.AddRange(template.PrimaryKeyColumnNotices.Select(n =>
+                new Finding(Severity.Warning, NullableKeyColumnCode, Category, n.Location, n.Message)));
 
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckForeignKeyNameReuse(template, ctx.Product));
@@ -993,9 +1000,9 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static string IdentityKey(string identifier, bool exact = false) =>
         exact ? NormalizeIdentifier(identifier) : NormalizeIdentifier(identifier).ToLowerInvariant();
 
-    private static bool ComparesExactly(Table table) => table is PostgreSqlTable;
+    internal static bool ComparesExactly(Table table) => table is PostgreSqlTable;
 
-    private static StringComparer NameComparer(Table table) =>
+    internal static StringComparer NameComparer(Table table) =>
         ComparesExactly(table) ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
 
     private static (string Schema, string Name) TableKey(Table table) =>
@@ -1017,7 +1024,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static string NormalizeAction(string action) =>
         System.Text.RegularExpressions.Regex.Replace((action ?? "").Trim(), @"\s+", " ").ToUpperInvariant();
 
-    private static string NormalizeIdentifier(string identifier)
+    internal static string NormalizeIdentifier(string identifier)
     {
         var trimmed = (identifier ?? "").Trim();
         if (trimmed.Length < 2)
@@ -1038,7 +1045,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     // outside a backtick-quoted span, so a functional/expression key part's own internal comma (e.g.
     // `(concat(\`a\`,\`b\`))`) isn't mistaken for a key-part boundary. Also used for FK Columns/
     // RelatedColumns — a no-op there, since FK column lists never contain parens or backticks.
-    private static List<string> SplitNames(string csv)
+    internal static List<string> SplitNames(string csv)
     {
         var text = csv ?? "";
         var len = text.Length;
@@ -1717,7 +1724,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     // Mirrors SchemaSmith_NormalizeIndexColumns.sql's DESC/ASC suffix handling (source of truth —
     // keep in sync): a trailing " DESC" or " ASC" (case-insensitive) is ordering, not part of the
     // column name.
-    private static string StripOrderingSuffix(string column)
+    internal static string StripOrderingSuffix(string column)
     {
         if (column.EndsWith(" DESC", StringComparison.OrdinalIgnoreCase))
             return column[..^5].TrimEnd();
@@ -1727,7 +1734,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     // A MySQL/MariaDB prefix key part -- `Email`(20) -- names the column before its length, as extraction writes it.
-    private static string StripPrefixLength(string column)
+    internal static string StripPrefixLength(string column)
     {
         if (!column.EndsWith(')')) return column;
         var open = column.LastIndexOf('(');
@@ -1740,5 +1747,16 @@ public sealed class CoherenceCheck : ISchemaCheck
     // backtick-wraps a plain column name, so this is an unambiguous discriminator (mirrors
     // SchemaSmith_NormalizeIndexColumns.sql). Validating the identifiers inside the expression would
     // need a real SQL parser and is out of scope — skip rather than false-flag.
-    private static bool IsExpressionKeyPart(string column) => column.StartsWith('(');
+    internal static bool IsExpressionKeyPart(string column) => column.StartsWith('(');
+
+    /// <summary>The table's columns an index key names, matched the way the deploy matches them; expression key parts name none.</summary>
+    internal static IEnumerable<Column> KeyColumns(Table table, Index index)
+    {
+        var keyNames = SplitNames(index.IndexColumns).Select(StripOrderingSuffix)
+            .Select(part => table is MySqlTable ? StripPrefixLength(part) : part)
+            .Where(part => !IsExpressionKeyPart(part))
+            .Select(NormalizeIdentifier)
+            .ToHashSet(NameComparer(table));
+        return table.Columns.Where(c => keyNames.Contains(NormalizeIdentifier(c.Name ?? "")));
+    }
 }

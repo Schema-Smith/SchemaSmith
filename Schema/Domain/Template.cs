@@ -248,6 +248,9 @@ namespace Schema.Domain
         public List<DeprecationNotice> DeprecationNotices { get; } = [];
 
         [JsonIgnore]
+        public List<PrimaryKeyColumnNotice> PrimaryKeyColumnNotices { get; } = [];
+
+        [JsonIgnore]
         public string TableSchema { get; set; } = "";
 
         // A2: XML twin of TableSchema — the same model encoded as ingest XML, so an author can shred the
@@ -655,6 +658,7 @@ namespace Schema.Domain
             var tableQueue = new TaskQueueManager<Table>(Environment.ProcessorCount * 2);
             Tables.ForEach(table => tableQueue.AddToQueue(table, t => t.ResolveScriptTokensInTableComponentScripts(tokens)));
             tableQueue.WaitForAll();
+            MakePrimaryKeyColumnsNotNull();
 
             MaterializedViews.ForEach(mv =>
             {
@@ -1293,6 +1297,21 @@ namespace Schema.Domain
         /// through the progress log so the user can correct it. <see cref="ContinueOnDatabaseFailure"/>
         /// is excluded: it is the regular template's own setting.
         /// </summary>
+        // Every engine refuses a nullable primary-key column (PostgreSQL on every deploy after the first), and nobody
+        // who puts a column in the key means it to hold NULL. A conditional key may not deploy, so its columns stay as declared.
+        private void MakePrimaryKeyColumnsNotNull()
+        {
+            foreach (var table in Tables)
+            foreach (var key in table.Indexes.Where(i => i.PrimaryKey && string.IsNullOrWhiteSpace(i.ShouldApplyExpression)))
+            foreach (var column in CoherenceCheck.KeyColumns(table, key).Where(c => c.Nullable))
+            {
+                column.Nullable = false;
+                PrimaryKeyColumnNotices.Add(new PrimaryKeyColumnNotice($"Template '{Name}' / Table '{table.Name}' / Column '{column.Name}'",
+                    $"Column '{column.Name}' of table '{table.Name}' is declared Nullable but is in primary key '{key.Name}', so it is deployed NOT NULL. " +
+                    "If the column already exists and holds NULLs, that change fails; remove \"Nullable\": true so the declaration says what deploys."));
+            }
+        }
+
         private void WarnIfSchemaOnlyFieldsSetOnRegularTemplate()
         {
             if (IsSchemaTemplate) return;

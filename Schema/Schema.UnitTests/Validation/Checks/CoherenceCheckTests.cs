@@ -3172,4 +3172,20 @@ public class CoherenceCheckTests
             if (expected) Assert.That(finding!.Message, Does.Contain("re-extract"));
         }
     }
+
+    [Test]
+    public void ANullableKeyColumnLoadMadeNotNull_IsAWarning_NotAnError()
+    {
+        // The deploy makes the column NOT NULL and works, so the contradiction warns rather than refusing the package.
+        var template = new Template { Name = "Main" };
+        template.PrimaryKeyColumnNotices.Add(new PrimaryKeyColumnNotice("Template 'Main' / Table 'Widget' / Column 'Id'", "deployed NOT NULL"));
+
+        var findings = new CoherenceCheck().Run(new ValidationContext(new Product { Name = "P", Platform = Platform.SqlServer }, new[] { template }, "pkg")).ToArray();
+
+        Assert.That(findings.Select(f => (f.Severity, f.Code, f.Location, f.Message)), Is.EqualTo(new[]
+        {
+            (Severity.Warning, "SS-COL-008", "Template 'Main' / Table 'Widget' / Column 'Id'", "deployed NOT NULL"),
+        }));
+        Assert.That(CoherenceCheck.Codes["SS-COL-008"], Is.EqualTo(new[] { Severity.Warning }));
+    }
 }

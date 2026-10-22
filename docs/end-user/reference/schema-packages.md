@@ -709,7 +709,7 @@ Every entry in the `Columns` array defines one column. The shared shape is small
 |---|---|---|---|
 | `Name` | string | | Column name. |
 | `DataType` | string | | Platform-appropriate data type with precision/scale/length. SQL Server: `NVARCHAR(50)`, `INT IDENTITY(1,1)`. PostgreSQL: `VARCHAR(50)`, `INTEGER GENERATED ALWAYS AS IDENTITY`. MySQL: `VARCHAR(50)`, `INT AUTO_INCREMENT`. |
-| `Nullable` | bool | `false` | Whether the column allows NULL. |
+| `Nullable` | bool | `false` | Whether the column allows NULL. A column in the primary key deploys NOT NULL whatever this says, with a warning (`SS-COL-008` in `--Validate`). |
 | `Default` | string | | Default constraint expression -- e.g., `"getdate()"` (SQL Server), `"now()"` (PostgreSQL), `"CURRENT_TIMESTAMP"` (MySQL). |
 | `Description` | string | | The column's description: `MS_Description` on SQL Server, `COMMENT ON COLUMN` on PostgreSQL, the column `COMMENT` on MySQL and MariaDB. See [Descriptions](#descriptions). |
 | `ShouldApplyExpression` | string | | Conditional inclusion. See [Conditional Application](#conditional-application). |
