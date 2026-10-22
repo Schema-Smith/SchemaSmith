@@ -22,6 +22,7 @@ DECLARE
   view_json TEXT = CASE WHEN LEFT(p_ViewDefinitions, 1) = '[' THEN p_ViewDefinitions ELSE '[' || p_ViewDefinitions || ']' END;
   sql_script TEXT = '';
   preserved RECORD;
+  missing_tablespaces TEXT;
 BEGIN
   -- Ensure temp_tables exists for FixupMaterializedViewOwnership
   -- (may not exist if product has no tables, IndexOnlyTableQuenches=true, or UpdateTables=false)
@@ -94,6 +95,17 @@ BEGIN
   -- drop-detection below is what enforces per-template/per-schema scope.)
 
   -- Drop/recreate changed and removed materialized views
+  -- #571: a declared tablespace that does not exist failed mid-deploy with the engine's 42704. Refused here, before any
+  -- DDL, naming what declares it, as SQL Server refuses a missing partition scheme or filegroup.
+  missing_tablespaces := (SELECT STRING_AGG(d.what || ' declares tablespace ' || d.ts, '; ' ORDER BY d.what)
+                            FROM (SELECT 'materialized view ' || v."Schema" || '.' || v."Name" AS what, v."Tablespace" AS ts FROM temp_materialized_views v
+                                UNION ALL SELECT 'index ' || i."ViewSchema" || '.' || i."ViewName" || '.' || i."Name", i."Tablespace"
+                                  FROM temp_mv_indexes i JOIN temp_materialized_views v ON v."Schema" = i."ViewSchema" AND v."Name" = i."ViewName") d
+                           WHERE d.ts <> '' AND NOT EXISTS (SELECT 1 FROM pg_tablespace s WHERE s.spcname IN (d.ts, LOWER(d.ts))));
+  IF missing_tablespaces IS NOT NULL THEN
+    RAISE EXCEPTION 'Tablespace not found: %. Create it, or remove Tablespace from the declaration.', missing_tablespaces;
+  END IF;
+
   RAISE NOTICE 'Materialized View Diff — Drop Changed/Removed';
 
   -- Drop indexes on views that will be dropped (changed definition or removed from product)

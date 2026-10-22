@@ -155,6 +155,49 @@ public class TablespaceTests
         return Convert.ToString(cmd.ExecuteScalar());
     }
 
+    // #571: a tablespace that does not exist failed mid-deploy with 42704, after earlier tables were already created. It is
+    // refused before any DDL, naming what declares it, as SQL Server refuses a missing partition scheme. (Whether anything
+    // was created is not asserted: the failed CALL rolls its own work back either way.)
+    [TestCase("table")]
+    [TestCase("index")]
+    public void AMissingTablespace_IsRefusedBeforeAnythingIsCreated(string declaredOn)
+    {
+        OnDb(cmd =>
+        {
+            var json = "[" + Package("ts_before").Trim('[', ']') + ","
+                       + Package("ts_missing", tableTablespace: declaredOn == "table" ? "ss_no_such_ts" : null,
+                                 indexTablespace: declaredOn == "index" ? "ss_no_such_ts" : null).Trim('[', ']') + "]";
+
+            var ex = Assert.Catch(() => Deploy(cmd, json));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain("ss_no_such_ts").And.Contain(declaredOn == "table" ? "ts_missing" : "ix_ts_missing"));
+                Assert.That(ex.Message, Does.Not.Contain("42704"), "the refusal is ours, not the engine's");
+            });
+        });
+    }
+
+    [Test]
+    public void AMissingTablespace_OnAnIndexOnlyDeploy_OrAMaterializedView_IsRefusedToo()
+    {
+        OnDb(cmd =>
+        {
+            Deploy(cmd, Package("ts_idxonly"));
+            var indexOnly = Assert.Catch(() => Exec2(cmd, "CALL \"SchemaSmith\".\"IndexOnlyQuench\"('TsTest', $ss$"
+                + Package("ts_idxonly", indexTablespace: "ss_no_such_ts") + "$ss$, false, false, false)"));
+            var view = Assert.Catch(() => Exec2(cmd, "CALL \"SchemaSmith\".\"MaterializedViewQuench\"('TsTest', $ss$"
+                + "[{ \"Schema\": \"public\", \"Name\": \"ts_mv\", \"Definition\": \"SELECT 1 AS x\", \"Tablespace\": \"ss_no_such_ts\" }]"
+                + "$ss$, false, true)"));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(indexOnly!.Message, Does.Contain("Tablespace not found").And.Contain("ix_ts_idxonly"));
+                Assert.That(view!.Message, Does.Contain("Tablespace not found").And.Contain("ts_mv"));
+            });
+        });
+    }
+
     [Test]
     public void ADeclaredTableTablespace_PlacesTheTable()
     {

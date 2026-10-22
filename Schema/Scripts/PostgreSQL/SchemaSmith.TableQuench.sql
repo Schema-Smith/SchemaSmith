@@ -41,8 +41,22 @@ AS $$
 DECLARE
   table_json TEXT = CASE WHEN LEFT(p_TableDefinitions, 1) = '[' THEN p_TableDefinitions ELSE '[' || p_TableDefinitions || ']' END;
   sql_script TEXT = '';
+  missing_tablespaces TEXT;
 BEGIN
 {{ParseJson}}
+
+  -- #571: a declared tablespace that does not exist failed mid-deploy with the engine's 42704. Refused here, before any
+  -- DDL, naming what declares it, as SQL Server refuses a missing partition scheme or filegroup.
+  missing_tablespaces := (SELECT STRING_AGG(d.what || ' declares tablespace ' || d.ts, '; ' ORDER BY d.what)
+                            FROM (SELECT 'table ' || t."Schema" || '.' || t."Name" AS what, t."Tablespace" AS ts FROM temp_tables t
+                                UNION ALL SELECT 'index ' || i."TableSchema" || '.' || i."TableName" || '.' || i."Name", i."Tablespace"
+                                  FROM temp_indexes i JOIN temp_tables t ON t."Schema" = i."TableSchema" AND t."Name" = i."TableName"
+                                UNION ALL SELECT 'exclude constraint ' || x."TableSchema" || '.' || x."TableName" || '.' || x."Name", x."Tablespace"
+                                  FROM temp_excludes x JOIN temp_tables t ON t."Schema" = x."TableSchema" AND t."Name" = x."TableName") d
+                           WHERE d.ts <> '' AND NOT EXISTS (SELECT 1 FROM pg_tablespace s WHERE s.spcname IN (d.ts, LOWER(d.ts))));
+  IF missing_tablespaces IS NOT NULL THEN
+    RAISE EXCEPTION 'Tablespace not found: %. Create it, or remove Tablespace from the declaration.', missing_tablespaces;
+  END IF;
 
   -- #508: before any table or column is created, so only what already exists is checked on a scratch copy.
   CALL "SchemaSmith"."ExpressionMapAdopt"(p_WhatIf);
