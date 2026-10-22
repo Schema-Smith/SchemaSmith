@@ -561,7 +561,7 @@ The first extraction is where your schema package is born. When SchemaTongs runs
 6. Creates a `.json-schemas/` directory with JSON Schema validation files generated **on the fly** from the live engine types.
 7. Writes a `$schema` reference into each package JSON, pointing at the matching file from step 6, so editors validate the package with no per-user configuration.
 
-On subsequent runs against an existing package, SchemaTongs overwrites object scripts and table definitions with the current database state. It does not modify the content of `Product.json` or `Template.json` -- if you change `Platform`, `Name`, or `TemplateOrder` after the first extraction, those edits stick. The one exception is the `$schema` reference from step 7: it is added if absent and otherwise left alone, which means **a reference you deleted on purpose is written again on the next run** -- there is no record distinguishing it from one that was never there.
+On subsequent runs against an existing package, SchemaTongs overwrites object scripts and table definitions with the current database state. It does not modify the content of `Product.json` or `Template.json` -- if you change `Platform`, `Name`, or `TemplateOrder` after the first extraction, or add keys of your own, those edits stick. Extracting a template the product does not list yet adds it to `TemplateOrder` and adds its `<Template>Db` script token, and nothing else. The one exception is the `$schema` reference from step 7: it is added if absent and otherwise left alone, which means **a reference you deleted on purpose is written again on the next run** -- there is no record distinguishing it from one that was never there.
 
 ### Helper procedures
 

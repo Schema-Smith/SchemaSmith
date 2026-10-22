@@ -71,7 +71,11 @@ public static class RepositoryHelper
             ValidationScript = GetValidationScript(templateName, platform)
         };
 
-        if (file.Exists(productFile)) product = JsonHelper.Load<Product>(productFile) ?? product;
+        if (file.Exists(productFile))
+        {
+            UpdateExistingProductFile(productPath, productFile, templateName, dbName, platform, isSchemaTemplate);
+            return;
+        }
         if (product.Platform == Platform.Unknown)
             product.Platform = platform;
         else if (product.Platform != platform)
@@ -93,6 +97,47 @@ public static class RepositoryHelper
             .ToList();
 
         JsonHelper.Write(productFile, product);
+    }
+
+    // #551: an existing Product.json is the user's. Writing the model back dropped every key it does not write
+    // (BranchNameFile, BeforeBranchNameMask, and a DropTablesRemovedFromProduct: true equal to its default), and a
+    // <Template>Db token was added for a template the package already had, which nothing referenced. Only what extraction
+    // owns changes -- a new template's TemplateOrder entry and token, the order's regular-before-schema partition, and a
+    // missing Platform -- in the file's own JSON, and the file is written only when one of them did.
+    private static void UpdateExistingProductFile(string productPath, string productFile, string templateName, string dbName,
+        Platform platform, bool isSchemaTemplate)
+    {
+        var file = FileWrapper.GetFromFactory();
+        var existing = JsonHelper.Load<Product>(productFile) ?? new Product();
+        if (existing.Platform != Platform.Unknown && existing.Platform != platform)
+            throw new Exception($"Platform mismatch: Product '{existing.Name}' is configured for {existing.Platform} but config specifies {platform}.");
+
+        var json = JsonText.ParseObject(file.ReadAllText(productFile));
+        var changed = false;
+        if (existing.Platform == Platform.Unknown)
+        {
+            json["Platform"] = platform.ToString();
+            changed = true;
+        }
+
+        var order = existing.TemplateOrder.ToList();
+        if (order.All(t => !t.EqualsIgnoringCase(templateName)))
+        {
+            order.Add(templateName);
+            if (json["ScriptTokens"] is not JObject tokens) json["ScriptTokens"] = tokens = new JObject();
+            if (!tokens.Properties().Any(t => t.Name.EqualsIgnoringCase($"{templateName}Db")))
+                tokens[$"{templateName}Db"] = dbName;
+            changed = true;
+        }
+
+        var ordered = order.OrderBy(t => ClassifyTemplateEntry(productPath, t, templateName, isSchemaTemplate, file) ? 1 : 0).ToList();
+        if (!ordered.SequenceEqual(existing.TemplateOrder))
+        {
+            json["TemplateOrder"] = new JArray(ordered);
+            changed = true;
+        }
+
+        if (changed) file.WriteAllText(productFile, json.ToString(Formatting.Indented));
     }
 
     private static bool ClassifyTemplateEntry(string productPath, string templateNameToCheck,

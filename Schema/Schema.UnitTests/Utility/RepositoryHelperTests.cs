@@ -613,8 +613,8 @@ public class RepositoryHelperTests
             FakeProductPath, productName: "P", templateName: "Shared", dbName: "db",
             platform: Platform.SqlServer, isSchemaTemplate: false);
 
-        var product = JsonConvert.DeserializeObject<Product>(writtenProductJson);
-        Assert.That(product.TemplateOrder, Is.EqualTo(new[] { "Shared", "TenantSchema" }));
+        // Nothing changed, so the file is not rewritten at all (#551) -- the strongest form of no churn.
+        Assert.That(writtenProductJson, Is.Empty);
     }
 
     [Test]
@@ -646,5 +646,68 @@ public class RepositoryHelperTests
 
         var product = JsonConvert.DeserializeObject<Product>(writtenProductJson);
         Assert.That(product.TemplateOrder, Is.EqualTo(new[] { "MysteryTemplate", "Shared" }));
+    }
+
+    // #551: re-extracting loaded Product.json into the model and wrote the model back, so every key it does not write --
+    // BranchNameFile, BeforeBranchNameMask, DropTablesRemovedFromProduct: true (the default, so omitted) -- was lost, and
+    // a <Template>Db token nothing referenced was added for a template the package already had.
+    private const string ExistingProductJson = """
+        {
+          "Name": "P",
+          "BranchNameFile": "{{repo_path}}/.git/HEAD",
+          "BeforeBranchNameMask": "ref: refs/heads/",
+          "AfterBranchNameMask": "",
+          "Platform": "SqlServer",
+          "DropTablesRemovedFromProduct": true,
+          "TemplateOrder": [ "Main" ],
+          "ScriptTokens": { "Env": "dev" }
+        }
+        """;
+
+    [Test]
+    public void UpdateOrInitRepository_AnExistingTemplate_LeavesProductJsonExactlyAsWritten()
+    {
+        _file.Exists(FakeProductFile).Returns(true);
+        _file.ReadAllText(FakeProductFile).Returns(ExistingProductJson);
+
+        RepositoryHelper.UpdateOrInitRepository(FakeProductPath, productName: "P", templateName: "Main", dbName: "learn_2022",
+            platform: Platform.SqlServer);
+
+        _file.DidNotReceive().WriteAllText(FakeProductFile, Arg.Any<string>());
+    }
+
+    [Test]
+    public void UpdateOrInitRepository_ANewTemplate_AddsOnlyItsOrderAndToken_AndKeepsEveryOtherKey()
+    {
+        _file.Exists(FakeProductFile).Returns(true);
+        _file.ReadAllText(FakeProductFile).Returns(ExistingProductJson);
+        var written = "";
+        _file.When(f => f.WriteAllText(FakeProductFile, Arg.Any<string>())).Do(ci => written = ci.ArgAt<string>(1));
+
+        RepositoryHelper.UpdateOrInitRepository(FakeProductPath, productName: "P", templateName: "Audit", dbName: "audit_db",
+            platform: Platform.SqlServer);
+
+        var json = Newtonsoft.Json.Linq.JObject.Parse(written);
+        Assert.Multiple(() =>
+        {
+            Assert.That((string)json["BranchNameFile"], Is.EqualTo("{{repo_path}}/.git/HEAD"));
+            Assert.That((string)json["BeforeBranchNameMask"], Is.EqualTo("ref: refs/heads/"));
+            Assert.That((string)json["AfterBranchNameMask"], Is.EqualTo(""));
+            Assert.That((bool?)json["DropTablesRemovedFromProduct"], Is.True);
+            Assert.That(json["TemplateOrder"]!.ToObject<string[]>(), Is.EqualTo(new[] { "Main", "Audit" }));
+            Assert.That((string)json["ScriptTokens"]!["Env"], Is.EqualTo("dev"));
+            Assert.That((string)json["ScriptTokens"]!["AuditDb"], Is.EqualTo("audit_db"));
+            Assert.That(json["ScriptTokens"]!["MainDb"], Is.Null, "no token for a template the package already had");
+        });
+    }
+
+    [Test]
+    public void UpdateOrInitRepository_AnExistingProductOnAnotherPlatform_IsStillRefused()
+    {
+        _file.Exists(FakeProductFile).Returns(true);
+        _file.ReadAllText(FakeProductFile).Returns(ExistingProductJson);
+
+        Assert.That(() => RepositoryHelper.UpdateOrInitRepository(FakeProductPath, "P", "Main", "db", Platform.PostgreSQL),
+            Throws.Exception.With.Message.Contains("Platform mismatch"));
     }
 }
