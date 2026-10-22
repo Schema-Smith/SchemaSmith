@@ -610,7 +610,7 @@
     },
     "ReplicaIdentityIndex": {
       "type": "string",
-      "maxLength": 128,
+      "maxLength": 63,
       "description": "PostgreSQL only. Names the unique index backing ReplicaIdentity = INDEX. The index must be unique, non-partial and over NOT NULL columns; PostgreSQL rejects anything else."
     },
     "Tablespace": {
