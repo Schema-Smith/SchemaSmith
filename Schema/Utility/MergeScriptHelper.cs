@@ -1129,7 +1129,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         var aggExpr = $@"CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
-                       THEN CASE WHEN c.DATA_TYPE = 'geography' THEN 'geography' ELSE 'geometry' END + '::STGeomFromText([' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '.STSrid]) AS [' + c.COLUMN_NAME + ']'
+                       THEN CASE WHEN c.DATA_TYPE = 'geography' THEN 'geography' ELSE 'geometry' END + '::STGeomFromText([' + c.COLUMN_NAME + '], COALESCE([' + c.COLUMN_NAME + '.STSrid], ' + CASE WHEN c.DATA_TYPE = 'geography' THEN '4326' ELSE '0' END + ')) AS [' + c.COLUMN_NAME + ']'
                        WHEN c.DATA_TYPE IN {SqlServerCharacterTypeList}
                        THEN 'COALESCE([' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '{AsJsonSuffix}]) AS [' + c.COLUMN_NAME + ']'
                        ELSE '[' + c.COLUMN_NAME + ']' END";
@@ -1172,7 +1172,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
             {
                 var spatialType = c.DataType.Equals("geography", StringComparison.OrdinalIgnoreCase) ? "geography" : "geometry";
                 // WKT + SRID companion (<c n="Col.STSrid">), mirroring the JSON path's [Col]/[Col.STSrid] pair.
-                return $"{spatialType}::STGeomFromText(Src.n.value('{Node(c.Name)}','NVARCHAR(4000)'), Src.n.value('{Node(c.Name + ".STSrid")}','INT')) AS {alias}";
+                return $"{spatialType}::STGeomFromText(Src.n.value('{Node(c.Name)}','NVARCHAR(4000)'), COALESCE(Src.n.value('{Node(c.Name + ".STSrid")}','INT'), {DefaultSridSqlServer(spatialType)})) AS {alias}";
             }
             if (c.IsBinary)
                 // Delivery stores binary as base64 text; xs:base64Binary decodes it in-shred (a straight
@@ -1238,6 +1238,11 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
     // AS JSON, reading under this suffix.
     internal const string AsJsonSuffix = " (as JSON)";
     private const string SqlServerCharacterTypeList = "('char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext')";
+
+    // #584: a NULL spatial value has no SRID, and STGeomFromText refuses a NULL one even for NULL text; a value from a file
+    // written without its SRID has none either. Each takes the type's own default.
+    internal static string DefaultSridSqlServer(string spatialType) =>
+        spatialType.Equals("geography", StringComparison.OrdinalIgnoreCase) ? "4326" : "0";
 
     internal static bool IsSqlServerCharacterType(string dataType) =>
         dataType?.ToLowerInvariant() is "char" or "varchar" or "nchar" or "nvarchar" or "text" or "ntext";

@@ -109,7 +109,7 @@ internal static class DeferredMergeBuilder
             if (deferredSet.Contains(c.Name))
                 return $"CAST(NULL AS {c.JsonParseType}) AS [{c.Name}]";
             if (c.IsGeometry)
-                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText([{c.Name}], [{c.Name}.STSrid]) AS [{c.Name}]";
+                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText([{c.Name}], COALESCE([{c.Name}.STSrid], {MergeScriptHelper.DefaultSridSqlServer(c.DataType)})) AS [{c.Name}]";
             if (MergeScriptHelper.IsSqlServerCharacterType(c.DataType))
                 return $"COALESCE([{c.Name}], [{c.Name}{MergeScriptHelper.AsJsonSuffix}]) AS [{c.Name}]";
             return $"[{c.Name}]";
@@ -130,7 +130,7 @@ internal static class DeferredMergeBuilder
             if (deferredSet.Contains(c.Name))
                 return $"CAST(NULL AS {c.JsonParseType}) AS [{c.Name}]";
             if (c.IsGeometry)
-                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText(Src.n.value('{Node(c.Name)}','NVARCHAR(4000)'), Src.n.value('{Node(c.Name + ".STSrid")}','INT')) AS [{c.Name}]";
+                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText(Src.n.value('{Node(c.Name)}','NVARCHAR(4000)'), COALESCE(Src.n.value('{Node(c.Name + ".STSrid")}','INT'), {MergeScriptHelper.DefaultSridSqlServer(c.DataType)})) AS [{c.Name}]";
             if (c.IsBinary)
                 return $"Src.n.value('xs:base64Binary({Node(c.Name)})','{c.JsonParseType}') AS [{c.Name}]";
             if (c.IsXml)
