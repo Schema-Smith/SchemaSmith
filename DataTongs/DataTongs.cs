@@ -302,6 +302,11 @@ public class DataTongs
             ? TargetVersionDetector.Detect(cmd, _platform).ServerComparable
             : 0;
 
+        // When every table gets a script the settings alone decide this, so it is refused before anything is extracted.
+        // With ConfigureDataDelivery only the tables delivery could not be configured for get one; those are checked below.
+        if (outputScripts && !configureDataDelivery && mySqlServerVersionNum is not (> 0 and < 800))
+            RefuseUndeliverableScripts(extractAsXml, _platform, tokenizeScripts);
+
         // A MySQL or MariaDB TIMESTAMP is rendered in the session's time zone. Extract at +00:00 and record it, so the
         // delivery reads the values back in the same zone wherever it runs.
         var extractionTimeZone = _platform.GetBasePlatform() == Platform.MySQL ? "+00:00" : null;
@@ -467,6 +472,8 @@ public class DataTongs
                     continue;
                 }
 
+                RefuseUndeliverableScripts(extractAsXml, _platform, tokenizeScripts);
+
                 // #390: wire the ScriptTokens entry the merge script's {{key}} placeholder needs to
                 // resolve, using the exact key already embedded in the filename (contentFileToken) —
                 // never re-derived. Requires both a written content file and a known template root;
@@ -493,7 +500,6 @@ public class DataTongs
                     }
                 }
 
-                RefuseUndeliverableScripts(extractAsXml, _platform, tokenizeScripts);
                 // A MySQL/MariaDB script names the table alone, so it writes into the database it is deployed to.
                 var destSchemaOverride = schemaTemplateMode ? "{{SchemaName}}" : _platform.GetBasePlatform() == Platform.MySQL ? "" : null;
                 var mergeSQL = MergeScriptHelper.BuildMergeScript(_platform, cmd, querySchema, tableName, tableData,
