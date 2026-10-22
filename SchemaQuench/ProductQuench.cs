@@ -496,6 +496,11 @@ public class ProductQuench
         ? _whatIfOnly == "true"
         : _whatIfOnly == "1";
 
+    // The engine is named because a package run with another engine's settings fails here, and "unable to connect"
+    // alone reads as a server that is down.
+    internal static string ConnectFailure(Platform platform, string server, string detail, string user) =>
+        $"Unable to connect to {platform.ToDisplayName()} at {server}{detail}{(string.IsNullOrWhiteSpace(user) ? "" : $" with user {user}")}";
+
     internal virtual IDbCommand GetCommand(string server)
     {
         var initDb = GetInitDatabase(_product.Platform);
@@ -523,7 +528,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new RunFailedException($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User]), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -572,7 +577,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new RunFailedException($"Unable to connect to {server} [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, $" [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]", _config[SettingsKeys.Target.User]), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -620,7 +625,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new RunFailedException($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User]), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;

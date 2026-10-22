@@ -18,6 +18,15 @@ namespace SchemaQuench.UnitTests;
 [TestFixture]
 public class ProductQuenchTests
 {
+    // A package run with another engine's settings failed with "Unable to connect to localhost with user postgres",
+    // which reads as a server that is down. The message names the engine the package targets.
+    [TestCase(Platform.SqlServer, "postgres", "Unable to connect to SQL Server at localhost with user postgres")]
+    [TestCase(Platform.MariaDb, null, "Unable to connect to MariaDB at localhost")]
+    public void AConnectionFailure_NamesTheEngineThePackageTargets(Platform platform, string user, string expected)
+    {
+        Assert.That(ProductQuench.ConnectFailure(platform, "localhost", "", user), Is.EqualTo(expected));
+    }
+
     #region Platform Dispatch - Init Database
 
     [Test]
