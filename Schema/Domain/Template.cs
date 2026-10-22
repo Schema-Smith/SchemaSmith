@@ -248,7 +248,7 @@ namespace Schema.Domain
         public List<DeprecationNotice> DeprecationNotices { get; } = [];
 
         [JsonIgnore]
-        public List<PrimaryKeyColumnNotice> PrimaryKeyColumnNotices { get; } = [];
+        public List<LoadNotice> LoadNotices { get; } = [];
 
         [JsonIgnore]
         public string TableSchema { get; set; } = "";
@@ -658,6 +658,7 @@ namespace Schema.Domain
             var tableQueue = new TaskQueueManager<Table>(Environment.ProcessorCount * 2);
             Tables.ForEach(table => tableQueue.AddToQueue(table, t => t.ResolveScriptTokensInTableComponentScripts(tokens)));
             tableQueue.WaitForAll();
+            UnwrapQuotedPostgreSqlNames();
             MakePrimaryKeyColumnsNotNull();
 
             MaterializedViews.ForEach(mv =>
@@ -1306,10 +1307,41 @@ namespace Schema.Domain
             foreach (var column in CoherenceCheck.KeyColumns(table, key).Where(c => c.Nullable))
             {
                 column.Nullable = false;
-                PrimaryKeyColumnNotices.Add(new PrimaryKeyColumnNotice($"Template '{Name}' / Table '{table.Name}' / Column '{column.Name}'",
+                LoadNotices.Add(new LoadNotice("SS-COL-008", $"Template '{Name}' / Table '{table.Name}' / Column '{column.Name}'",
                     $"Column '{column.Name}' of table '{table.Name}' is declared Nullable but is in primary key '{key.Name}', so it is deployed NOT NULL. " +
                     "If the column already exists and holds NULLs, that change fails; remove \"Nullable\": true so the declaration says what deploys."));
             }
+        }
+
+        // PostgreSQL keeps a quote inside a name, so a table or column Name still wrapped in double quotes (the form
+        // SS-IDENT-001 used to refuse) would deploy under a different name, quotes included. One wrapper pair is stripped,
+        // as it is from an OldName.
+        private void UnwrapQuotedPostgreSqlNames()
+        {
+            foreach (var table in Tables.OfType<PostgreSqlTable>())
+            {
+                var tableName = table.Name;
+                if (Unwrap(tableName) is { } bareTable)
+                {
+                    table.Name = bareTable;
+                    LoadNotices.Add(WrappedNameNotice($"Template '{Name}' / Table '{bareTable}'", "Table", tableName, bareTable));
+                }
+                foreach (var column in table.Columns)
+                {
+                    var columnName = column.Name;
+                    if (Unwrap(columnName) is not { } bareColumn) continue;
+                    column.Name = bareColumn;
+                    LoadNotices.Add(WrappedNameNotice($"Template '{Name}' / Table '{table.Name}' / Column '{bareColumn}'", "Column", columnName, bareColumn));
+                }
+            }
+
+            static string Unwrap(string name) =>
+                name is { Length: > 2 } && name[0] == '"' && name[^1] == '"' ? name[1..^1].Replace("\"\"", "\"") : null;
+
+            static LoadNotice WrappedNameNotice(string location, string kind, string declared, string bare) =>
+                new("SS-IDENT-003", location,
+                    $"{kind} name '{declared}' is wrapped in double quotes, which PostgreSQL would keep as part of the name, so it deploys as '{bare}'. " +
+                    "Remove the quotes so the declaration says what deploys.");
         }
 
         private void WarnIfSchemaOnlyFieldsSetOnRegularTemplate()

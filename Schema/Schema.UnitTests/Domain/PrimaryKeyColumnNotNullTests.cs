@@ -71,8 +71,8 @@ namespace Schema.UnitTests.Domain
             {
                 Assert.That(DeployedColumn(template, columnName)["Nullable"], Is.Null, "the deployed JSON carries no Nullable: true for the key column, which the engine reads as NOT NULL");
                 Assert.That((bool?)DeployedColumn(template, "Note")["Nullable"], Is.True, "a column outside the key keeps its declaration");
-                Assert.That(template.PrimaryKeyColumnNotices.Select(n => n.Location), Is.EqualTo(new[] { "Template 'Main' / Table 'Widget' / Column '" + columnName + "'" }));
-                Assert.That(template.PrimaryKeyColumnNotices.Single().Message, Is.EqualTo(
+                Assert.That(template.LoadNotices.Select(n => n.Location), Is.EqualTo(new[] { "Template 'Main' / Table 'Widget' / Column '" + columnName + "'" }));
+                Assert.That(template.LoadNotices.Single().Message, Is.EqualTo(
                     $"Column '{columnName}' of table 'Widget' is declared Nullable but is in primary key 'PK_Widget', so it is deployed NOT NULL. " +
                     "If the column already exists and holds NULLs, that change fails; remove \"Nullable\": true so the declaration says what deploys."));
             });
@@ -92,7 +92,7 @@ namespace Schema.UnitTests.Domain
             {
                 Assert.That(DeployedColumn(template, "B")["Nullable"], Is.Null);
                 Assert.That((bool?)DeployedColumn(template, "C")["Nullable"], Is.True, "a nullable column in an ordinary index is left alone");
-                Assert.That(template.PrimaryKeyColumnNotices.Select(n => n.Location), Is.EqualTo(new[] { "Template 'Main' / Table 'Widget' / Column 'B'" }));
+                Assert.That(template.LoadNotices.Select(n => n.Location), Is.EqualTo(new[] { "Template 'Main' / Table 'Widget' / Column 'B'" }));
             });
         }
 
@@ -104,7 +104,7 @@ namespace Schema.UnitTests.Domain
                 ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""INT"", ""Nullable"": true } ],
                 ""Indexes"": [ { ""Name"": ""PK_Widget"", ""PrimaryKey"": true, ""IndexColumns"": ""id"" } ] }");
 
-            Assert.That(template.PrimaryKeyColumnNotices, Is.Empty);
+            Assert.That(template.LoadNotices, Is.Empty);
         }
 
         [Test]
@@ -118,7 +118,7 @@ namespace Schema.UnitTests.Domain
             Assert.Multiple(() =>
             {
                 Assert.That((bool?)DeployedColumn(template, "Id")["Nullable"], Is.True);
-                Assert.That(template.PrimaryKeyColumnNotices, Is.Empty);
+                Assert.That(template.LoadNotices, Is.Empty);
             });
         }
 
@@ -129,7 +129,7 @@ namespace Schema.UnitTests.Domain
                 ""Columns"": [ { ""Name"": ""Id"", ""DataType"": ""INT"" } ],
                 ""Indexes"": [ { ""Name"": ""PK_Widget"", ""PrimaryKey"": true, ""IndexColumns"": ""Id"" } ] }");
 
-            Assert.That(template.PrimaryKeyColumnNotices, Is.Empty);
+            Assert.That(template.LoadNotices, Is.Empty);
         }
     }
 }

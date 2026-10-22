@@ -3189,7 +3189,7 @@ public class CoherenceCheckTests
     {
         // The deploy makes the column NOT NULL and works, so the contradiction warns rather than refusing the package.
         var template = new Template { Name = "Main" };
-        template.PrimaryKeyColumnNotices.Add(new PrimaryKeyColumnNotice("Template 'Main' / Table 'Widget' / Column 'Id'", "deployed NOT NULL"));
+        template.LoadNotices.Add(new LoadNotice("SS-COL-008", "Template 'Main' / Table 'Widget' / Column 'Id'", "deployed NOT NULL"));
 
         var findings = new CoherenceCheck().Run(new ValidationContext(new Product { Name = "P", Platform = Platform.SqlServer }, new[] { template }, "pkg")).ToArray();
 

@@ -64,6 +64,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string DeprecatedNumericFormCode = "SS-COL-006";
     private const string QuotedExpressionDefaultCode = "SS-COL-007";
     private const string NullableKeyColumnCode = "SS-COL-008";
+    private const string WrappedPostgreSqlNameCode = "SS-IDENT-003";
     private const string RebuildThresholdCode = "SS-TBL-001";
     private const string IgnoredThresholdCode = "SS-TBL-002";
     private const string EdgeConstraintTableKindCode = "SS-TBL-003";
@@ -161,6 +162,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         [PoliciesWithoutRlsCode] = WarningLevel,
         [ReplicaIdentityIndexMissingCode] = ErrorLevel,
         [IdentifierTooLongCode] = ErrorLevel,
+        [WrappedPostgreSqlNameCode] = WarningLevel,
         [ReplicaIdentityIndexUnknownCode] = ErrorLevel,
         [ReplicaIdentityIndexNotUniqueCode] = ErrorLevel,
         [ReplicaIdentityIndexIgnoredCode] = WarningLevel,
@@ -219,10 +221,9 @@ public sealed class CoherenceCheck : ISchemaCheck
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckScheduledEvents(template));
 
-        // Load already made each of these NOT NULL, so the deploy works: the declaration is wrong, the package is not.
+        // Load already changed each of these so it deploys: the declaration is wrong, the package is not.
         foreach (var template in ctx.Templates)
-            findings.AddRange(template.PrimaryKeyColumnNotices.Select(n =>
-                new Finding(Severity.Warning, NullableKeyColumnCode, Category, n.Location, n.Message)));
+            findings.AddRange(template.LoadNotices.Select(n => new Finding(Severity.Warning, n.Code, Category, n.Location, n.Message)));
 
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckForeignKeyNameReuse(template, ctx.Product));

@@ -782,7 +782,7 @@ public class DatabaseQuench
                 if (!_template.IndexOnlyTableQuenches && _updateTables)
                 {
                     // Said before the change, so a column whose existing NULLs refuse it fails with its reason in view.
-                    foreach (var notice in _template.PrimaryKeyColumnNotices)
+                    foreach (var notice in _template.LoadNotices)
                         lock (_lockObject) _progressLog.Warn($"{LogPrefix} {notice.Message}");
                     QuenchMissingTablesAndColumns(effectiveTableCmd);
                 }
