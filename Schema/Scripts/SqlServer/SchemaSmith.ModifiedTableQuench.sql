@@ -1457,6 +1457,14 @@ BEGIN TRY
       AND @DropForeignKeysRemovedFromProduct = 1
       AND ISNULL(t.[DropForeignKeysRemovedFromProduct], 1) = 1
 
+  -- WhatIf drops nothing, so a key an earlier step would drop is still in the catalog here; preview it once.
+  IF @WhatIf = 1
+    DELETE df FROM #FKsToDrop df
+     WHERE EXISTS (SELECT 1 FROM SchemaSmith.ChangeAudit a
+                    WHERE a.SessionId = @@SPID AND a.ObjectType = 'foreignKey' AND a.ActionType = 'wouldDrop'
+                      AND REPLACE(REPLACE(a.ObjectName, '[', ''), ']', '') COLLATE DATABASE_DEFAULT
+                        = REPLACE(REPLACE(df.[Schema] + '.' + df.[TableName] + '.' + df.[FKName], '[', ''), ']', '') COLLATE DATABASE_DEFAULT)
+
   RAISERROR('Drop Foreign Keys No Longer Defined In The Product', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping foreign Key ' + df.[Schema] + '.' + df.[TableName] + '.' + df.[FKName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'IF OBJECT_ID(''' + df.[Schema] + '.' + QUOTENAME(df.[FKName]) + ''') IS NOT NULL ALTER TABLE ' + df.[Schema] + '.' + df.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(df.[FKName]) + ';' + CHAR(13) + CHAR(10) +
@@ -2127,13 +2135,30 @@ BEGIN TRY
 
   RAISERROR('Drop Referencing Foreign Keys When Dropping Unique Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping foreign Key ' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '.' + OBJECT_NAME(fk.parent_object_id) + '.' + fk.[name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'IF OBJECT_ID(''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''') IS NOT NULL ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + ' DROP CONSTRAINT ' + QUOTENAME(fk.[name]) + ';' AS NVARCHAR(MAX))
+                                  'IF OBJECT_ID(''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''') IS NOT NULL ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + ' DROP CONSTRAINT ' + QUOTENAME(fk.[name]) + ';' + CHAR(13) + CHAR(10) +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''', ''dropped'');' AS NVARCHAR(MAX))
                            FROM #IndexesToDrop di WITH (NOLOCK)
                            JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(di.[Schema] + '.' + di.[TableName]) AND si.[name] = di.[IndexName] COLLATE DATABASE_DEFAULT
                            JOIN sys.foreign_keys fk ON fk.referenced_object_id = si.[object_id] AND fk.key_index_id = si.index_id
-                           WHERE IsConstraint = 1 OR IsUnique = 1
+                           WHERE (IsConstraint = 1 OR IsUnique = 1)
+                             AND (@WhatIf = 0 OR NOT EXISTS (SELECT 1 FROM SchemaSmith.ChangeAudit a
+                    WHERE a.SessionId = @@SPID AND a.ObjectType = 'foreignKey' AND a.ActionType = 'wouldDrop'
+                      AND REPLACE(REPLACE(a.ObjectName, '[', ''), ']', '') COLLATE DATABASE_DEFAULT
+                        = REPLACE(REPLACE(OBJECT_SCHEMA_NAME(fk.parent_object_id) + '.' + OBJECT_NAME(fk.parent_object_id) + '.' + fk.[name], '[', ''), ']', '') COLLATE DATABASE_DEFAULT))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+
+  IF @WhatIf = 1
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+      SELECT DISTINCT @@SPID, 'foreignKey', QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]), 'wouldDrop'
+        FROM #IndexesToDrop di WITH (NOLOCK)
+        JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(di.[Schema] + '.' + di.[TableName]) AND si.[name] = di.[IndexName] COLLATE DATABASE_DEFAULT
+        JOIN sys.foreign_keys fk ON fk.referenced_object_id = si.[object_id] AND fk.key_index_id = si.index_id
+        WHERE (IsConstraint = 1 OR IsUnique = 1)
+          AND NOT EXISTS (SELECT 1 FROM SchemaSmith.ChangeAudit a
+                    WHERE a.SessionId = @@SPID AND a.ObjectType = 'foreignKey' AND a.ActionType = 'wouldDrop'
+                      AND REPLACE(REPLACE(a.ObjectName, '[', ''), ']', '') COLLATE DATABASE_DEFAULT
+                        = REPLACE(REPLACE(OBJECT_SCHEMA_NAME(fk.parent_object_id) + '.' + OBJECT_NAME(fk.parent_object_id) + '.' + fk.[name], '[', ''), ']', '') COLLATE DATABASE_DEFAULT)
   
   RAISERROR('Drop FullText Indexes Referencing Unique Indexes That Will Be Dropped', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping fulltext index on ' + ef.[Schema] + '.' + ef.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -2220,12 +2245,25 @@ BEGIN TRY
       AND NOT EXISTS (SELECT 1 FROM #SuppressedColumnDrops s WITH (NOLOCK)  -- #358
                         WHERE s.[Schema] = cc.[Schema] AND s.[TableName] = cc.[TableName] AND s.[ColumnName] = cc.[ColumnName])
 
+  IF @WhatIf = 1
+    DELETE df FROM #FKsToDropForChanges df
+     WHERE EXISTS (SELECT 1 FROM SchemaSmith.ChangeAudit a
+                    WHERE a.SessionId = @@SPID AND a.ObjectType = 'foreignKey' AND a.ActionType = 'wouldDrop'
+                      AND REPLACE(REPLACE(a.ObjectName, '[', ''), ']', '') COLLATE DATABASE_DEFAULT
+                        = REPLACE(REPLACE(df.[Schema] + '.' + df.[TableName] + '.' + df.[FKName], '[', ''), ']', '') COLLATE DATABASE_DEFAULT)
+
   RAISERROR('Drop Foreign Keys Referencing Modified Columns', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping foreign Key ' + df.[Schema] + '.' + df.[TableName] + '.' + df.[FKName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'IF OBJECT_ID(''' + df.[Schema] + '.' + QUOTENAME(df.[FKName]) + ''') IS NOT NULL ALTER TABLE ' + df.[Schema] + '.' + df.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(df.[FKName]) + ';' AS NVARCHAR(MAX))
+                                  'IF OBJECT_ID(''' + df.[Schema] + '.' + QUOTENAME(df.[FKName]) + ''') IS NOT NULL ALTER TABLE ' + df.[Schema] + '.' + df.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(df.[FKName]) + ';' + CHAR(13) + CHAR(10) +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + df.[Schema] + '.' + df.[TableName] + '.' + df.[FKName] + ''', ''dropped'');' AS NVARCHAR(MAX))
                            FROM #FKsToDropForChanges df WITH (NOLOCK)
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+
+  IF @WhatIf = 1
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+      SELECT @@SPID, 'foreignKey', df.[Schema] + '.' + df.[TableName] + '.' + df.[FKName], 'wouldDrop'
+        FROM #FKsToDropForChanges df WITH (NOLOCK)
   
   RAISERROR('Identify Defaults To Drop Based On Column Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#DefaultsToDropForChanges') IS NOT NULL DROP TABLE #DefaultsToDropForChanges

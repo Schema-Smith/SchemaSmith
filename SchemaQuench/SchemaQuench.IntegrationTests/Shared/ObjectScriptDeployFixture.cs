@@ -102,7 +102,7 @@ public abstract class ObjectScriptDeployFixture
 
     /// <param name="expectSuccess">False for a deploy that is meant to stop: the result is returned instead of asserted on.</param>
     protected DeployResult Deploy(bool skipUnchanged = true, bool whatIf = false, bool runTwice = false, bool expectSuccess = true, bool dropSchemaBoundDependents = false,
-        bool updateTables = true, (string User, string Password)? login = null)
+        bool updateTables = true, (string User, string Password)? login = null, bool dropRemovedTables = false)
     {
         var checkpointDir = Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
         lock (FactoryContainer.SharedLockObject)
@@ -143,7 +143,7 @@ public abstract class ObjectScriptDeployFixture
                 var audit = new ChangeAuditCapture();
                 var quench = new DatabaseQuench("127.0.0.1", product, template, MainDb,
                     suppressKindling: login != null, whatIfOnly: whatIf ? yes : no, runScriptsTwice: runTwice,
-                    dropRemovedTables: no, dropRemovedColumns: yes, dropRemovedForeignKeys: yes, dropRemovedCheckConstraints: yes, dropRemovedExcludeConstraints: yes, dropRemovedStatistics: yes, dropRemovedIndexes: yes, dropUnknownIndexes: false, updateTables: updateTables,
+                    dropRemovedTables: dropRemovedTables ? yes : no, dropRemovedColumns: yes, dropRemovedForeignKeys: yes, dropRemovedCheckConstraints: yes, dropRemovedExcludeConstraints: yes, dropRemovedStatistics: yes, dropRemovedIndexes: yes, dropUnknownIndexes: false, updateTables: updateTables,
                     deliverData: false, checkpointing: new FileCheckpointManager(checkpointDir)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents };
                 quench.Execute();
                 var scripts = quench.IterationObjectScripts.Concat(quench.IterationAfterTablesObjectScripts).ToList();

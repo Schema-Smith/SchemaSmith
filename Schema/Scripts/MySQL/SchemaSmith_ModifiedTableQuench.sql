@@ -2287,17 +2287,10 @@ BEGIN
     -- OnlineApply: each table's mode, for the column drops below.
     CALL SchemaSmith_StageOnlineApply();
 
-    IF p_WhatIf = 1 THEN
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unused columns');
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP COLUMN `', ColumnName, '`')
-        FROM _SchemaSmith_ColumnsToDrop;
-        -- WhatIf twin of the 'column'/'dropped' rows below.
-        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT CONNECTION_ID(), 'column', CONCAT(TableName, '.', ColumnName), 'wouldDrop'
-        FROM _SchemaSmith_ColumnsToDrop;
-    ELSE
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unused columns');
+    -- WhatIf takes the same path and skips only the statements, so it previews the keys, indexes and generated columns
+    -- that go with each column, and records them for the later steps that would otherwise find them again.
+    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unused columns');
+    IF EXISTS (SELECT 1 FROM _SchemaSmith_ColumnsToDrop) THEN
         -- First, drop foreign keys that reference columns we're about to drop
         -- Note: Uses a helper table keyed on (TableName, ConstraintName), same shape as
         -- SchemaSmith_ForeignKeyQuench's _SchemaSmith_ModifiedFKs, with two separate INSERTs to
@@ -2360,15 +2353,20 @@ BEGIN
         FROM _SchemaSmith_FKsToDrop
         GROUP BY TableName;
 
-        SET @v_fkcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKDropForColStmts);
-        WHILE @v_fkcol_id IS NOT NULL DO
-            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_FKDropForColStmts WHERE RowId = @v_fkcol_id;
-            PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            DEALLOCATE PREPARE stmt;
-            SET @v_fkcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKDropForColStmts WHERE RowId > @v_fkcol_id);
-        END WHILE;
+        IF p_WhatIf = 0 THEN
+            SET @v_fkcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKDropForColStmts);
+            WHILE @v_fkcol_id IS NOT NULL DO
+                SELECT Stmt INTO @exec_sql FROM _SchemaSmith_FKDropForColStmts WHERE RowId = @v_fkcol_id;
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+                SET @v_fkcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKDropForColStmts WHERE RowId > @v_fkcol_id);
+            END WHILE;
+        END IF;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKDropForColStmts;
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'foreignKey', CONCAT(TableName, '.', ConstraintName), IF(p_WhatIf = 1, 'wouldDrop', 'dropped')
+        FROM _SchemaSmith_FKsToDrop;
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKsToDrop;
 
@@ -2422,14 +2420,16 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         FROM _SchemaSmith_CKsToDrop
         GROUP BY TableName;
 
-        SET @v_ckcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_CKDropStmts);
-        WHILE @v_ckcol_id IS NOT NULL DO
-            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_CKDropStmts WHERE RowId = @v_ckcol_id;
-            PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            DEALLOCATE PREPARE stmt;
-            SET @v_ckcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_CKDropStmts WHERE RowId > @v_ckcol_id);
-        END WHILE;
+        IF p_WhatIf = 0 THEN
+            SET @v_ckcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_CKDropStmts);
+            WHILE @v_ckcol_id IS NOT NULL DO
+                SELECT Stmt INTO @exec_sql FROM _SchemaSmith_CKDropStmts WHERE RowId = @v_ckcol_id;
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+                SET @v_ckcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_CKDropStmts WHERE RowId > @v_ckcol_id);
+            END WHILE;
+        END IF;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CKDropStmts;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CKsToDrop;
 
@@ -2469,15 +2469,20 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         FROM _SchemaSmith_IdxsToDrop
         GROUP BY TableName;
 
-        SET @v_idxcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_IdxDropStmts);
-        WHILE @v_idxcol_id IS NOT NULL DO
-            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_IdxDropStmts WHERE RowId = @v_idxcol_id;
-            PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            DEALLOCATE PREPARE stmt;
-            SET @v_idxcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_IdxDropStmts WHERE RowId > @v_idxcol_id);
-        END WHILE;
+        IF p_WhatIf = 0 THEN
+            SET @v_idxcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_IdxDropStmts);
+            WHILE @v_idxcol_id IS NOT NULL DO
+                SELECT Stmt INTO @exec_sql FROM _SchemaSmith_IdxDropStmts WHERE RowId = @v_idxcol_id;
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+                SET @v_idxcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_IdxDropStmts WHERE RowId > @v_idxcol_id);
+            END WHILE;
+        END IF;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDropStmts;
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'index', CONCAT(TableName, '.', IndexName), IF(p_WhatIf = 1, 'wouldDrop', 'dropped')
+        FROM _SchemaSmith_IdxsToDrop;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxsToDrop;
 
         -- Drop generated columns that reference columns being dropped
@@ -2526,16 +2531,18 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         FROM _SchemaSmith_GenColsToDrop
         GROUP BY TableName;
 
-        SET @v_gencol_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenColDropStmts);
-        WHILE @v_gencol_id IS NOT NULL DO
-            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_GenColDropStmts WHERE RowId = @v_gencol_id;
-            PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
-            DEALLOCATE PREPARE stmt;
-            SET @v_gencol_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenColDropStmts WHERE RowId > @v_gencol_id);
-        END WHILE;
+        IF p_WhatIf = 0 THEN
+            SET @v_gencol_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenColDropStmts);
+            WHILE @v_gencol_id IS NOT NULL DO
+                SELECT Stmt INTO @exec_sql FROM _SchemaSmith_GenColDropStmts WHERE RowId = @v_gencol_id;
+                PREPARE stmt FROM @exec_sql;
+                EXECUTE stmt;
+                DEALLOCATE PREPARE stmt;
+                SET @v_gencol_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenColDropStmts WHERE RowId > @v_gencol_id);
+            END WHILE;
+        END IF;
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT CONNECTION_ID(), 'column', CONCAT(TableName, '.', ColumnName), 'dropped'
+        SELECT CONNECTION_ID(), 'column', CONCAT(TableName, '.', ColumnName), IF(p_WhatIf = 1, 'wouldDrop', 'dropped')
         FROM _SchemaSmith_GenColsToDrop;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColDropStmts;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColsToDrop;
@@ -2582,19 +2589,21 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             AND isc.ColumnKey = ctd.ColumnKey
         WHERE (isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '');
 
-        SET @v_dropcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColDropStmts);
-        WHILE @v_dropcol_id IS NOT NULL DO
-            SELECT s.Stmt, COALESCE(MAX(t.OnlineMode), 'OFF'), s.TableName INTO @exec_sql, @ss_online_mode, @ss_online_table
-              FROM _SchemaSmith_ColDropStmts s
-              LEFT JOIN _SchemaSmith_Tables t ON t.TableKey = s.TableKey
-             WHERE s.RowId = @v_dropcol_id
-             GROUP BY s.Stmt, s.TableName;
-            CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
-            UPDATE _SchemaSmith_ColDropStmts SET Form = @ss_online_form WHERE RowId = @v_dropcol_id;
-            SET @v_dropcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColDropStmts WHERE RowId > @v_dropcol_id);
-        END WHILE;
+        IF p_WhatIf = 0 THEN
+            SET @v_dropcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColDropStmts);
+            WHILE @v_dropcol_id IS NOT NULL DO
+                SELECT s.Stmt, COALESCE(MAX(t.OnlineMode), 'OFF'), s.TableName INTO @exec_sql, @ss_online_mode, @ss_online_table
+                  FROM _SchemaSmith_ColDropStmts s
+                  LEFT JOIN _SchemaSmith_Tables t ON t.TableKey = s.TableKey
+                 WHERE s.RowId = @v_dropcol_id
+                 GROUP BY s.Stmt, s.TableName;
+                CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
+                UPDATE _SchemaSmith_ColDropStmts SET Form = @ss_online_form WHERE RowId = @v_dropcol_id;
+                SET @v_dropcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColDropStmts WHERE RowId > @v_dropcol_id);
+            END WHILE;
+        END IF;
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
-        SELECT CONNECTION_ID(), 'column', d.ObjectName, 'dropped', s.Form
+        SELECT CONNECTION_ID(), 'column', d.ObjectName, IF(p_WhatIf = 1, 'wouldDrop', 'dropped'), s.Form
         FROM _SchemaSmith_ColDropped d
         INNER JOIN _SchemaSmith_ColDropStmts s ON s.TableKey = d.TableKey;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColDropped;
@@ -3464,86 +3473,67 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
         -- #289: drop any foreign key that REFERENCES a table about to be removed BEFORE the table
         -- drop below, otherwise the DROP TABLE fails on a still-present inbound dependency.
+        -- Helper temp table mirrors the column-drop FK pattern above (avoids the MySQL
+        -- optimizer bug with INFORMATION_SCHEMA.KEY_COLUMN_USAGE joins), keyed on
+        -- (TableName, ConstraintName) like SchemaSmith_ForeignKeyQuench's approach.
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_InboundFKsToDrop;
+        CREATE TEMPORARY TABLE _SchemaSmith_InboundFKsToDrop (
+            TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+            PRIMARY KEY (TableName, ConstraintName)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+        INSERT IGNORE INTO _SchemaSmith_InboundFKsToDrop (TableName, ConstraintName)
+        SELECT DISTINCT
+            CONVERT(kcu.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
+            CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
+        FROM SchemaSmith_ProductOwnership po
+        INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+            ON kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
+           AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = SchemaSmith_IdentifierKey(po.ObjectName)
+        INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+            ON SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA)
+           AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(kcu.TABLE_NAME)
+           AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = SchemaSmith_NameKeyCI(kcu.CONSTRAINT_NAME)
+           AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
+        WHERE CONVERT(po.ProductName USING utf8mb4) = CONVERT(p_ProductName USING utf8mb4)
+          AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
+          AND po.ObjectType = 'TABLE'
+          AND COALESCE(po.PreventDrop, 0) = 0
+          AND EXISTS (
+              SELECT 1 FROM _SchemaSmith_ExistingTables ist
+              WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
+          )
+          AND NOT EXISTS (
+              SELECT 1 FROM _SchemaSmith_Tables t
+              WHERE SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(po.ObjectName)
+          );
+
+        -- WhatIf drops nothing, so a key the column drops would take is still in the catalog here; preview it once.
         IF p_WhatIf = 1 THEN
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop inbound foreign keys referencing tables removed from product');
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT DISTINCT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
-                                   CONVERT(kcu.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
-                                   '` DROP FOREIGN KEY `', CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`')
-            FROM SchemaSmith_ProductOwnership po
-            INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                ON kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
-               AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = SchemaSmith_IdentifierKey(po.ObjectName)
-            INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-                ON SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA)
-               AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(kcu.TABLE_NAME)
-               AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = SchemaSmith_NameKeyCI(kcu.CONSTRAINT_NAME)
-               AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
-            WHERE CONVERT(po.ProductName USING utf8mb4) = CONVERT(p_ProductName USING utf8mb4)
-              AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
-              AND po.ObjectType = 'TABLE'
-              AND COALESCE(po.PreventDrop, 0) = 0
-              AND EXISTS (
-                  SELECT 1 FROM _SchemaSmith_ExistingTables ist
-                  WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
-              )
-              AND NOT EXISTS (
-                  SELECT 1 FROM _SchemaSmith_Tables t
-                  WHERE SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(po.ObjectName)
-              );
-        ELSE
-            -- Helper temp table mirrors the column-drop FK pattern above (avoids the MySQL
-            -- optimizer bug with INFORMATION_SCHEMA.KEY_COLUMN_USAGE joins), keyed on
-            -- (TableName, ConstraintName) like SchemaSmith_ForeignKeyQuench's approach.
-            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_InboundFKsToDrop;
-            CREATE TEMPORARY TABLE _SchemaSmith_InboundFKsToDrop (
-                TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-                ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
-                PRIMARY KEY (TableName, ConstraintName)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+            DELETE i FROM _SchemaSmith_InboundFKsToDrop i
+             WHERE EXISTS (SELECT 1 FROM SchemaSmith_ChangeAudit a
+                      WHERE a.SessionId = CONNECTION_ID() AND a.ObjectType = 'foreignKey' AND a.ActionType = 'wouldDrop'
+                        AND CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(CONCAT(i.TableName, '.', i.ConstraintName) USING utf8mb4) COLLATE utf8mb4_bin);
+        END IF;
 
-            INSERT IGNORE INTO _SchemaSmith_InboundFKsToDrop (TableName, ConstraintName)
-            SELECT DISTINCT
-                CONVERT(kcu.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
-                CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
-            FROM SchemaSmith_ProductOwnership po
-            INNER JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
-                ON kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
-               AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = SchemaSmith_IdentifierKey(po.ObjectName)
-            INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-                ON SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA)
-               AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(kcu.TABLE_NAME)
-               AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = SchemaSmith_NameKeyCI(kcu.CONSTRAINT_NAME)
-               AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'
-            WHERE CONVERT(po.ProductName USING utf8mb4) = CONVERT(p_ProductName USING utf8mb4)
-              AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
-              AND po.ObjectType = 'TABLE'
-              AND COALESCE(po.PreventDrop, 0) = 0
-              AND EXISTS (
-                  SELECT 1 FROM _SchemaSmith_ExistingTables ist
-                  WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
-              )
-              AND NOT EXISTS (
-                  SELECT 1 FROM _SchemaSmith_Tables t
-                  WHERE SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(po.ObjectName)
-              );
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop inbound foreign keys referencing tables removed from product');
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  Drop inbound FK: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName,
+                      '` DROP FOREIGN KEY `', ConstraintName, '`')
+        FROM _SchemaSmith_InboundFKsToDrop;
 
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop inbound foreign keys referencing tables removed from product');
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Drop inbound FK: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName,
-                          '` DROP FOREIGN KEY `', ConstraintName, '`')
-            FROM _SchemaSmith_InboundFKsToDrop;
+        -- Materialize: fold each table's inbound FK drops into one multi-clause ALTER, then drain.
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_InboundFKDropStmts;
+        CREATE TEMPORARY TABLE _SchemaSmith_InboundFKDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+            ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        INSERT INTO _SchemaSmith_InboundFKDropStmts (Stmt)
+        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
+                      GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', ConstraintName, '`') ORDER BY ConstraintName SEPARATOR ', '))
+        FROM _SchemaSmith_InboundFKsToDrop
+        GROUP BY TableName;
 
-            -- Materialize: fold each table's inbound FK drops into one multi-clause ALTER, then drain.
-            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_InboundFKDropStmts;
-            CREATE TEMPORARY TABLE _SchemaSmith_InboundFKDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
-                ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-            INSERT INTO _SchemaSmith_InboundFKDropStmts (Stmt)
-            SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                          GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', ConstraintName, '`') ORDER BY ConstraintName SEPARATOR ', '))
-            FROM _SchemaSmith_InboundFKsToDrop
-            GROUP BY TableName;
-
+        IF p_WhatIf = 0 THEN
             SET @v_inboundfk_id := (SELECT MIN(RowId) FROM _SchemaSmith_InboundFKDropStmts);
             WHILE @v_inboundfk_id IS NOT NULL DO
                 SELECT Stmt INTO @exec_sql FROM _SchemaSmith_InboundFKDropStmts WHERE RowId = @v_inboundfk_id;
@@ -3552,10 +3542,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 DEALLOCATE PREPARE stmt;
                 SET @v_inboundfk_id := (SELECT MIN(RowId) FROM _SchemaSmith_InboundFKDropStmts WHERE RowId > @v_inboundfk_id);
             END WHILE;
-            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_InboundFKDropStmts;
-
-            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_InboundFKsToDrop;
         END IF;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_InboundFKDropStmts;
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'foreignKey', CONCAT(TableName, '.', ConstraintName), IF(p_WhatIf = 1, 'wouldDrop', 'dropped')
+        FROM _SchemaSmith_InboundFKsToDrop;
+
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_InboundFKsToDrop;
 
         -- A CustomTableDrop hook (e.g. a recyclebin pattern) replaces the plain DROP TABLE when the
         -- user has installed a SchemaSmith_CustomTableDrop procedure in this database, mirroring the
@@ -4514,6 +4507,10 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             ON ft.TableKey = SchemaSmith_IdentifierKey(d.TableName) AND ft.IndexKey = SchemaSmith_NameKeyCI(d.IndexName);
 
         IF p_WhatIf = 1 THEN
+            DELETE d FROM _SchemaSmith_IndexesToDrop d
+             WHERE EXISTS (SELECT 1 FROM SchemaSmith_ChangeAudit a
+                      WHERE a.SessionId = CONNECTION_ID() AND a.ObjectType = 'index' AND a.ActionType = 'wouldDrop'
+                        AND CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(CONCAT(d.TableName, '.', d.IndexName) USING utf8mb4) COLLATE utf8mb4_bin);
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown indexes');
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
             SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')

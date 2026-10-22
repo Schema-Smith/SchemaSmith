@@ -123,7 +123,8 @@ BEGIN
       -- Drop any foreign key that REFERENCES a table about to be removed (from any table), so the
       -- table drop below does not fail on a still-present inbound dependency. Same removed-table
       -- predicate as the drop pass; catalog-driven so it is not limited to product-declared parents.
-      SELECT STRING_AGG('ALTER TABLE ' || "SchemaSmith"."QuoteName"(pn.nspname) || '.' || "SchemaSmith"."QuoteName"(pc.relname) || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(con.conname) || ';' || CHR(10) ||
+      SELECT STRING_AGG('RAISE NOTICE ''  Foreign Key ' || pn.nspname || '.' || pc.relname || '.' || con.conname || ' references a table no longer in product'';' || CHR(10) ||
+                        'ALTER TABLE ' || "SchemaSmith"."QuoteName"(pn.nspname) || '.' || "SchemaSmith"."QuoteName"(pc.relname) || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(con.conname) || ';' || CHR(10) ||
                         'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || pn.nspname || '.' || pc.relname || '.' || con.conname || ''', ''dropped'');', CHR(10))
         INTO sql_script
         FROM temp_product_ownership tp
@@ -676,7 +677,11 @@ BEGIN
                        WHERE ek."TableSchema" = fk2."TableSchema"
                          AND ek."TableName" = fk2."TableName"
                          AND ek."KeyName" = fk2."Name")
-             OR (p_DropForeignKeysRemovedFromProduct AND COALESCE(tt."DropForeignKeysRemovedFromProduct", TRUE)));
+             OR (p_DropForeignKeysRemovedFromProduct AND COALESCE(tt."DropForeignKeysRemovedFromProduct", TRUE)))
+        -- WhatIf drops nothing, so a key the inbound pass would drop is still here; preview it once.
+        AND (NOT p_WhatIf OR NOT EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                                          WHERE a."SessionId" = pg_backend_pid() AND a."ObjectType" = 'foreignKey' AND a."ActionType" = 'wouldDrop'
+                                            AND a."ObjectName" = ek."TableSchema" || '.' || ek."TableName" || '.' || ek."KeyName"));
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     -- #363: WhatIf twin of the embedded 'foreignKey'/'dropped' audit above; same source/predicate.
@@ -704,7 +709,11 @@ BEGIN
                            WHERE ek."TableSchema" = fk2."TableSchema"
                              AND ek."TableName" = fk2."TableName"
                              AND ek."KeyName" = fk2."Name")
-                 OR (p_DropForeignKeysRemovedFromProduct AND COALESCE(tt."DropForeignKeysRemovedFromProduct", TRUE)));
+                 OR (p_DropForeignKeysRemovedFromProduct AND COALESCE(tt."DropForeignKeysRemovedFromProduct", TRUE)))
+        -- WhatIf drops nothing, so a key the inbound pass would drop is still here; preview it once.
+        AND (NOT p_WhatIf OR NOT EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                                          WHERE a."SessionId" = pg_backend_pid() AND a."ObjectType" = 'foreignKey' AND a."ActionType" = 'wouldDrop'
+                                            AND a."ObjectName" = ek."TableSchema" || '.' || ek."TableName" || '.' || ek."KeyName"));
     END IF;
 
     -- A changed DEFERRABLE / INITIALLY DEFERRED is applied in place: ALTER CONSTRAINT changes it without re-validating
