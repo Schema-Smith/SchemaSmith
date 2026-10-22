@@ -3092,6 +3092,21 @@ public class DatabaseQuenchTests
     }
 
     #endregion
+    // The explicit_defaults_for_timestamp note is printed only when the package declares the column it is about.
+    [TestCase("TIMESTAMP", false, null, true)]
+    [TestCase(" timestamp(3)", false, "", true)]
+    [TestCase("TIMESTAMP", true, null, false)]
+    [TestCase("TIMESTAMP", false, "CURRENT_TIMESTAMP", false)]
+    [TestCase("DATETIME", false, null, false)]
+    public void TheTimestampNote_IsForATimestampNotNullWithoutADefault(string dataType, bool nullable, string defaultValue, bool expected)
+    {
+        var tables = new List<Table>
+        {
+            new() { Name = "`t`", Columns = { new Column { Name = "`id`", DataType = "INT", Nullable = false },
+                                              new Column { Name = "`c`", DataType = dataType, Nullable = nullable, Default = defaultValue } } }
+        };
+        Assert.That(DatabaseQuench.DeclaresATimestampTheServerWouldDefault(tables), Is.EqualTo(expected));
+    }
 }
 
 

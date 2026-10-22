@@ -3617,13 +3617,18 @@ SET NOCOUNT ON
         if (_product.Platform.GetBasePlatform() != Platform.MySQL) return null;
         return MySqlSessionSettings.UseExplicitTimestampDefaults(tableCommand, () =>
         {
-            if (_explicitTimestampDefaultsReadOnlyReported) return;
+            if (_explicitTimestampDefaultsReadOnlyReported || !DeclaresATimestampTheServerWouldDefault(_template.Tables)) return;
             _explicitTimestampDefaultsReadOnlyReported = true;
             SafeProgressLog("  explicit_defaults_for_timestamp is OFF and this server or account does not let a session change it, so a " +
                             "TIMESTAMP NOT NULL column declared without a default gets one the server chooses. Declare the " +
                             "default, or turn the variable ON in the server configuration.");
         });
     }
+
+    // The note is about a TIMESTAMP NOT NULL declared without a default; a package with none has nothing to be told.
+    internal static bool DeclaresATimestampTheServerWouldDefault(IEnumerable<Table> tables) =>
+        tables.SelectMany(t => t.Columns).Any(c => !c.Nullable && string.IsNullOrWhiteSpace(c.Default)
+            && (c.DataType ?? "").TrimStart().StartsWith("TIMESTAMP", StringComparison.OrdinalIgnoreCase));
 
     private void SafeProgressLog(string msg)
     {
