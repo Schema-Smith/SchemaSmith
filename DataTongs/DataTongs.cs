@@ -722,17 +722,19 @@ SELECT EXISTS (
         };
     }
 
+    // Joined with FOR XML PATH, which every compatibility level parses: STRING_AGG's WITHIN GROUP is parsed only from
+    // level 110, so a level-100 source failed every table (#573).
     private static string GetSelectColumnsSqlServer(IDbCommand cmd, string tableSchema, string tableName)
     {
         cmd.CommandText = $@"
-SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
+SELECT STUFF((SELECT ',' + CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '].STSrid AS [' + c.COLUMN_NAME + '.STSrid]'
                        WHEN c.DATA_TYPE = 'hierarchyid'
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + ']'
                        -- A vector as its text, which SQL Server writes exactly; FOR JSON would write an array delivery cannot read.
                        WHEN c.DATA_TYPE = 'vector'
                        THEN 'CAST([' + c.COLUMN_NAME + '] AS NVARCHAR(MAX)) AS [' + c.COLUMN_NAME + ']'
-                       ELSE '[' + c.COLUMN_NAME + ']' END, ',') WITHIN GROUP (ORDER BY c.COLUMN_NAME)
+                       ELSE '[' + c.COLUMN_NAME + ']' END
   FROM INFORMATION_SCHEMA.COLUMNS c
   JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
@@ -740,6 +742,8 @@ SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
     {MergeScriptHelper.SqlServerGraphColumnFilter}AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
+  ORDER BY c.COLUMN_NAME
+  FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '')
 ";
         return cmd.ExecuteScalar()?.ToString();
     }
