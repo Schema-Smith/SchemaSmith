@@ -441,7 +441,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static IEnumerable<Finding> CheckMySqlFamilyForeignKeys(Table table, string tableLocation,
         IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey, Platform platform)
     {
-        if (platform.GetBasePlatform() != Platform.MySQL) yield break;
+        if (platform is not (Platform.MySQL or Platform.MariaDb)) yield break;
         foreach (var fk in table.ForeignKeys)
         {
             var location = $"{tableLocation} / FK '{fk.Name}'";
@@ -476,7 +476,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// </summary>
     private static IEnumerable<Finding> CheckMySqlFamilyColumnTypes(Table table, string tableLocation, Platform platform)
     {
-        if (platform.GetBasePlatform() != Platform.MySQL) yield break;
+        if (platform is not (Platform.MySQL or Platform.MariaDb)) yield break;
         var expressions = table.Columns.OfType<MySqlColumn>()
             .SelectMany(c => new[] { ($"Column '{c.Name}'", c.GenerationExpression), ($"Column '{c.Name}'", c.Default) })
             .Concat(table.CheckConstraints.Select(cc => ($"Check constraint '{cc.Name}'", cc.Expression)))
@@ -538,7 +538,7 @@ public sealed class CoherenceCheck : ISchemaCheck
                 ? " On SQL Server a value of 2000 or more is read as a RELEASE YEAR and must be one of "
                   + "2008, 2012, 2014, 2016, 2017, 2019, 2022 or 2025 — an in-between year such as 2018 or "
                   + "2020 does not resolve. A major version number (13, 16) also works."
-                : " Use a numeric version such as " + (product.Platform.GetBasePlatform() == Platform.MySQL
+                : " Use a numeric version such as " + (product.Platform is Platform.MySQL or Platform.MariaDb
                     ? "'8.0' or '10.6'." : "'12' or '16'.")));
     }
 

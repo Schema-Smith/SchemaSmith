@@ -71,6 +71,8 @@ public sealed class JsonSchemaCheck : ISchemaCheck
 
     public IEnumerable<Finding> Run(ValidationContext ctx)
     {
+        // The schemas are per platform, so without one there is nothing to compare against.
+        if (ctx.Platform == Platform.Unknown) return [];
         var dir = ProductDirectoryWrapper.GetFromFactory();
         var file = ProductFileWrapper.GetFromFactory();
         var schemaDir = Path.Combine(ctx.PackagePath, ".json-schemas");
