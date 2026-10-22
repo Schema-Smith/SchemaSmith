@@ -62,6 +62,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string RemovedFunctionCode = "SS-COL-004";
     private const string NationalCharacterTypeCode = "SS-COL-005";
     private const string DeprecatedNumericFormCode = "SS-COL-006";
+    private const string QuotedExpressionDefaultCode = "SS-COL-007";
     private const string RebuildThresholdCode = "SS-TBL-001";
     private const string IgnoredThresholdCode = "SS-TBL-002";
     private const string EdgeConstraintTableKindCode = "SS-TBL-003";
@@ -149,6 +150,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         [RemovedFunctionCode] = WarningLevel,
         [NationalCharacterTypeCode] = WarningLevel,
         [DeprecatedNumericFormCode] = WarningLevel,
+        [QuotedExpressionDefaultCode] = WarningLevel,
         [RebuildThresholdCode] = ErrorLevel,
         [IgnoredThresholdCode] = WarningLevel,
         [EdgeConstraintTableKindCode] = ErrorLevel,
@@ -487,8 +489,16 @@ public sealed class CoherenceCheck : ISchemaCheck
             if (platform == Platform.MySQL && DeprecatedNumericForm.IsMatch(column.DataType ?? ""))
                 yield return new Finding(Severity.Warning, DeprecatedNumericFormCode, Category, location,
                     $"'{column.DataType}' uses a form MySQL 8.0.17 deprecated (FLOAT(M,D), UNSIGNED on FLOAT, DOUBLE or DECIMAL, or ZEROFILL), which a later release will remove.");
+            // D5: a package extracted before 2.8 wrote an expression default as a quoted string, which deploys as that text.
+            if (QuotedFunctionCall.IsMatch(column.Default ?? ""))
+                yield return new Finding(Severity.Warning, QuotedExpressionDefaultCode, Category, location,
+                    $"Default {column.Default.Trim()} is a quoted function call, so it deploys as that text, not as the expression. " +
+                    "A package extracted before 2.8 wrote expression defaults this way: re-extract it, or write the expression in parentheses.");
         }
     }
+
+    private static readonly System.Text.RegularExpressions.Regex QuotedFunctionCall =
+        new(@"^\s*'\s*[A-Za-z_][A-Za-z0-9_$]*\s*\(.*\)\s*'\s*$", System.Text.RegularExpressions.RegexOptions.Singleline);
 
     /// <summary>
     /// A declared <c>MinimumVersion</c> the engine cannot resolve aborts the deploy before any object is

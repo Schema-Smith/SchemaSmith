@@ -3148,4 +3148,28 @@ public class CoherenceCheckTests
             Assert.That(RunOnMaria(MariaRates("`id`", withoutOverlaps: false)).Where(f => f.Code.StartsWith("SS-PER")), Is.Empty);
         });
     }
+
+    // D5: a package extracted before 2.8 wrote an expression default as a quoted string -- MariaDB upper-cased,
+    // 'CONCAT(''A'',''B'')', and MySQL the expression's text -- which deploys as that text, not as the expression.
+    [TestCase("'CONCAT(''A'',''B'')'", true)]
+    [TestCase("'uuid()'", true)]
+    [TestCase(" 'DATE_FORMAT(NOW(), ''%Y'')' ", true)]
+    [TestCase("(CONCAT('A','B'))", false)]
+    [TestCase("'n/a (unknown)'", false)]
+    [TestCase("'abc'", false)]
+    [TestCase("CURRENT_TIMESTAMP", false)]
+    [TestCase(null, false)]
+    public void AQuotedFunctionCallDefault_IsAStalePackageWarning(string defaultValue, bool expected)
+    {
+        foreach (var findings in new[]
+                 {
+                     RunOnMy(new Schema.Domain.MySQL.MySqlTable { Name = "`t`", Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "`c`", DataType = "VARCHAR(20)", Default = defaultValue } } }),
+                     RunOnMaria(new Schema.Domain.MariaDb.MariaDbTable { Name = "`t`", Columns = { new Schema.Domain.MariaDb.MariaDbColumn { Name = "`c`", DataType = "VARCHAR(20)", Default = defaultValue } } })
+                 })
+        {
+            var finding = findings.SingleOrDefault(f => f.Code == "SS-COL-007");
+            Assert.That(finding?.Severity, Is.EqualTo(expected ? Severity.Warning : (Severity?)null), defaultValue);
+            if (expected) Assert.That(finding!.Message, Does.Contain("re-extract"));
+        }
+    }
 }
