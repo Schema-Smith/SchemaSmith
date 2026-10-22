@@ -22,6 +22,11 @@
       "ObjectType": "Procedures"
     },
     {
+      "FolderPath": "Sequences",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Sequences"
+    },
+    {
       "FolderPath": "Triggers",
       "QuenchSlot": "AfterTablesObjects",
       "ObjectType": "Triggers"

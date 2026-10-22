@@ -63,8 +63,8 @@ Check what actually landed on each database:
 
 ```bash
 # from course4-recipe-10
-../lab-sql.sh sqlserver Shop_Primary "SELECT name FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp') ORDER BY name"
-../lab-sql.sh sqlserver Shop_Replica "SELECT name FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp') ORDER BY name"
+../lab-sql.sh sqlserver Shop_Primary "SELECT name FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp','ProductOwnership','ScriptStamp') ORDER BY name"
+../lab-sql.sh sqlserver Shop_Replica "SELECT name FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp','ProductOwnership','ScriptStamp') ORDER BY name"
 ../lab-sql.sh sqlserver Shop_Replica "SELECT name FROM sys.foreign_keys"
 ```
 
@@ -147,7 +147,7 @@ The subscriber now has all three tables:
 
 ```bash
 # from course4-recipe-10
-../lab-sql.sh sqlserver Shop_Replica "SELECT name FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp') ORDER BY name"
+../lab-sql.sh sqlserver Shop_Replica "SELECT name FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp','ProductOwnership','ScriptStamp') ORDER BY name"
 ```
 
 ```
@@ -193,7 +193,7 @@ user tables**: the dry run touched nothing.
 
 ```bash
 # from course4-recipe-10
-../lab-sql.sh sqlserver Shop_Replica "SELECT COUNT(*) FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp')"
+../lab-sql.sh sqlserver Shop_Replica "SELECT COUNT(*) FROM sys.tables WHERE name NOT IN ('ChangeAudit','CompletedMigrationScripts','ExpressionMap','KindleStamp','ProductOwnership','ScriptStamp')"
 ```
 
  WhatIf shows what *would* run; it never executes a script,

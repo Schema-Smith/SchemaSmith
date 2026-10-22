@@ -4,26 +4,24 @@
   "Columns": [
     {
       "Name": "`PlaylistId`",
-      "DataType": "int"
+      "DataType": "int(11)"
     },
     {
       "Name": "`TrackId`",
-      "DataType": "int"
+      "DataType": "int(11)"
     }
   ],
   "Indexes": [
     {
       "Name": "FK_PlaylistTrack_Track",
-      "IndexColumns": "`TrackId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`TrackId`"
     },
     {
       "Name": "PRIMARY",
       "PrimaryKey": true,
       "Unique": true,
       "UniqueConstraint": true,
-      "IndexColumns": "`PlaylistId`,`TrackId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`PlaylistId`,`TrackId`"
     }
   ],
   "ForeignKeys": [
@@ -32,8 +30,8 @@
       "Columns": "`PlaylistId`",
       "RelatedTable": "`Playlist`",
       "RelatedColumns": "`PlaylistId`",
-      "DeleteAction": "NO ACTION",
-      "UpdateAction": "NO ACTION",
+      "DeleteAction": "RESTRICT",
+      "UpdateAction": "RESTRICT",
       "RelatedTableSchema": ""
     },
     {
@@ -41,15 +39,15 @@
       "Columns": "`TrackId`",
       "RelatedTable": "`Track`",
       "RelatedColumns": "`TrackId`",
-      "DeleteAction": "NO ACTION",
-      "UpdateAction": "NO ACTION",
+      "DeleteAction": "RESTRICT",
+      "UpdateAction": "RESTRICT",
       "RelatedTableSchema": ""
     }
   ],
   "CheckConstraints": [],
-  "Engine": "InnoDB",
   "RowFormat": "Dynamic",
   "CharacterSet": "utf8mb4",
-  "Collation": "utf8mb4_unicode_ci",
-  "FullTextIndexes": []
+  "Collation": "utf8mb4_uca1400_ai_ci",
+  "FullTextIndexes": [],
+  "Periods": []
 }

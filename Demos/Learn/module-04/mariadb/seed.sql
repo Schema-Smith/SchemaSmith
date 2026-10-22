@@ -1,4 +1,4 @@
--- Module 4 seed (MySQL): a small "existing" music-catalog database that nobody
+-- Module 4 seed (MariaDB): a small "existing" music-catalog database that nobody
 -- has under source control yet. Plain DDL + a little data — NOT a SchemaSmith
 -- package. You'll point SchemaTongs at it and cast it into one.
 -- A trimmed-down slice of the classic Chinook sample schema.

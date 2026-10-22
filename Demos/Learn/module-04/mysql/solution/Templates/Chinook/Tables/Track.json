@@ -44,26 +44,22 @@
   "Indexes": [
     {
       "Name": "FK_Track_Album",
-      "IndexColumns": "`AlbumId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`AlbumId`"
     },
     {
       "Name": "FK_Track_Genre",
-      "IndexColumns": "`GenreId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`GenreId`"
     },
     {
       "Name": "FK_Track_MediaType",
-      "IndexColumns": "`MediaTypeId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`MediaTypeId`"
     },
     {
       "Name": "PRIMARY",
       "PrimaryKey": true,
       "Unique": true,
       "UniqueConstraint": true,
-      "IndexColumns": "`TrackId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`TrackId`"
     }
   ],
   "ForeignKeys": [
@@ -77,15 +73,6 @@
       "RelatedTableSchema": ""
     },
     {
-      "Name": "FK_Track_MediaType",
-      "Columns": "`MediaTypeId`",
-      "RelatedTable": "`MediaType`",
-      "RelatedColumns": "`MediaTypeId`",
-      "DeleteAction": "NO ACTION",
-      "UpdateAction": "NO ACTION",
-      "RelatedTableSchema": ""
-    },
-    {
       "Name": "FK_Track_Genre",
       "Columns": "`GenreId`",
       "RelatedTable": "`Genre`",
@@ -93,10 +80,18 @@
       "DeleteAction": "NO ACTION",
       "UpdateAction": "NO ACTION",
       "RelatedTableSchema": ""
+    },
+    {
+      "Name": "FK_Track_MediaType",
+      "Columns": "`MediaTypeId`",
+      "RelatedTable": "`MediaType`",
+      "RelatedColumns": "`MediaTypeId`",
+      "DeleteAction": "NO ACTION",
+      "UpdateAction": "NO ACTION",
+      "RelatedTableSchema": ""
     }
   ],
   "CheckConstraints": [],
-  "Engine": "InnoDB",
   "RowFormat": "Dynamic",
   "CharacterSet": "utf8mb4",
   "Collation": "utf8mb4_0900_ai_ci",

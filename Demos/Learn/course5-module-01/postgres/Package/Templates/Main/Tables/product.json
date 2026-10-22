@@ -3,21 +3,10 @@
   "Name": "product",
   "Columns": [
     {
-      "Name": "name",
-      "DataType": "varchar(200)",
-      "ShouldApplyExpression": "",
-      "OldName": "",
-      "VariantName": "",
-      "Generated": "NEVER",
-      "Storage": "EXTENDED",
-      "Compression": "DEFAULT"
-    },
-    {
       "Name": "productid",
       "DataType": "int4",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "PLAIN",
       "Compression": "DEFAULT"
@@ -27,7 +16,15 @@
       "DataType": "varchar(64)",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
+      "Generated": "NEVER",
+      "Storage": "EXTENDED",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "name",
+      "DataType": "varchar(200)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
       "Generated": "NEVER",
       "Storage": "EXTENDED",
       "Compression": "DEFAULT"
@@ -37,7 +34,6 @@
       "DataType": "numeric(10, 2)",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "MAIN",
       "Compression": "DEFAULT"
@@ -50,18 +46,16 @@
       "Unique": true,
       "IndexColumns": "productid",
       "ShouldApplyExpression": "",
-      "VariantName": "",
-      "AccessMethod": "btree",
-      "FillFactor": 90
+      "AccessMethod": "btree"
     }
   ],
   "ForeignKeys": [],
   "CheckConstraints": [],
   "ShouldApplyExpression": "",
-  "VariantName": "",
   "OldName": "",
   "Statistics": [],
   "ExcludeConstraints": [],
+  "Policies": [],
   "AccessMethod": "heap",
   "PersistenceType": "Logged",
   "FillFactor": 100

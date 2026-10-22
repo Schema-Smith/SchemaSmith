@@ -3,21 +3,19 @@
   "Name": "orderitem",
   "Columns": [
     {
-      "Name": "orderid",
+      "Name": "orderitemid",
       "DataType": "int4",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "PLAIN",
       "Compression": "DEFAULT"
     },
     {
-      "Name": "orderitemid",
+      "Name": "orderid",
       "DataType": "int4",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "PLAIN",
       "Compression": "DEFAULT"
@@ -27,7 +25,6 @@
       "DataType": "int4",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "PLAIN",
       "Compression": "DEFAULT"
@@ -37,7 +34,6 @@
       "DataType": "int4",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "PLAIN",
       "Compression": "DEFAULT"
@@ -47,7 +43,6 @@
       "DataType": "numeric(10, 2)",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "MAIN",
       "Compression": "DEFAULT"
@@ -60,9 +55,7 @@
       "Unique": true,
       "IndexColumns": "orderitemid",
       "ShouldApplyExpression": "",
-      "VariantName": "",
-      "AccessMethod": "btree",
-      "FillFactor": 90
+      "AccessMethod": "btree"
     }
   ],
   "ForeignKeys": [
@@ -74,9 +67,7 @@
       "DeleteAction": "",
       "UpdateAction": "",
       "ShouldApplyExpression": "",
-      "VariantName": "",
-      "RelatedTableSchema": "public",
-      "MatchType": "SIMPLE"
+      "RelatedTableSchema": "public"
     },
     {
       "Name": "fk_orderitem_salesorder",
@@ -86,17 +77,15 @@
       "DeleteAction": "",
       "UpdateAction": "",
       "ShouldApplyExpression": "",
-      "VariantName": "",
-      "RelatedTableSchema": "public",
-      "MatchType": "SIMPLE"
+      "RelatedTableSchema": "public"
     }
   ],
   "CheckConstraints": [],
   "ShouldApplyExpression": "",
-  "VariantName": "",
   "OldName": "",
   "Statistics": [],
   "ExcludeConstraints": [],
+  "Policies": [],
   "AccessMethod": "heap",
   "PersistenceType": "Logged",
   "FillFactor": 100

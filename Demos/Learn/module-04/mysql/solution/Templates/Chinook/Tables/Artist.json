@@ -20,13 +20,11 @@
       "PrimaryKey": true,
       "Unique": true,
       "UniqueConstraint": true,
-      "IndexColumns": "`ArtistId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`ArtistId`"
     }
   ],
   "ForeignKeys": [],
   "CheckConstraints": [],
-  "Engine": "InnoDB",
   "RowFormat": "Dynamic",
   "CharacterSet": "utf8mb4",
   "Collation": "utf8mb4_0900_ai_ci",

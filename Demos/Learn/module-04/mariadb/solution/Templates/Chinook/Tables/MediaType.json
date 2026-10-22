@@ -4,7 +4,7 @@
   "Columns": [
     {
       "Name": "`MediaTypeId`",
-      "DataType": "int",
+      "DataType": "int(11)",
       "AutoIncrement": true
     },
     {
@@ -20,16 +20,15 @@
       "PrimaryKey": true,
       "Unique": true,
       "UniqueConstraint": true,
-      "IndexColumns": "`MediaTypeId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`MediaTypeId`"
     }
   ],
   "ForeignKeys": [],
   "CheckConstraints": [],
-  "Engine": "InnoDB",
   "RowFormat": "Dynamic",
   "CharacterSet": "utf8mb4",
-  "Collation": "utf8mb4_unicode_ci",
+  "Collation": "utf8mb4_uca1400_ai_ci",
   "AutoIncrementValue": 3,
-  "FullTextIndexes": []
+  "FullTextIndexes": [],
+  "Periods": []
 }

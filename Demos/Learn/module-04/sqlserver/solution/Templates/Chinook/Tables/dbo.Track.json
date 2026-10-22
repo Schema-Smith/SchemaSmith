@@ -3,24 +3,39 @@
   "Name": "[Track]",
   "Columns": [
     {
+      "Name": "[TrackId]",
+      "DataType": "INT IDENTITY(1, 1)",
+      "OldName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    },
+    {
+      "Name": "[Name]",
+      "DataType": "NVARCHAR(200)",
+      "OldName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    },
+    {
       "Name": "[AlbumId]",
       "DataType": "INT",
       "Nullable": true,
       "OldName": "",
       "Collation": "",
       "DataMaskFunction": "",
-      "EncryptionType": "NONE",
       "EncryptionKey": "",
       "EncryptionAlgorithm": ""
     },
     {
-      "Name": "[Composer]",
-      "DataType": "NVARCHAR(220)",
-      "Nullable": true,
+      "Name": "[MediaTypeId]",
+      "DataType": "INT",
       "OldName": "",
       "Collation": "",
       "DataMaskFunction": "",
-      "EncryptionType": "NONE",
       "EncryptionKey": "",
       "EncryptionAlgorithm": ""
     },
@@ -31,17 +46,16 @@
       "OldName": "",
       "Collation": "",
       "DataMaskFunction": "",
-      "EncryptionType": "NONE",
       "EncryptionKey": "",
       "EncryptionAlgorithm": ""
     },
     {
-      "Name": "[MediaTypeId]",
-      "DataType": "INT",
+      "Name": "[Composer]",
+      "DataType": "NVARCHAR(220)",
+      "Nullable": true,
       "OldName": "",
       "Collation": "",
       "DataMaskFunction": "",
-      "EncryptionType": "NONE",
       "EncryptionKey": "",
       "EncryptionAlgorithm": ""
     },
@@ -51,27 +65,6 @@
       "OldName": "",
       "Collation": "",
       "DataMaskFunction": "",
-      "EncryptionType": "NONE",
-      "EncryptionKey": "",
-      "EncryptionAlgorithm": ""
-    },
-    {
-      "Name": "[Name]",
-      "DataType": "NVARCHAR(200)",
-      "OldName": "",
-      "Collation": "",
-      "DataMaskFunction": "",
-      "EncryptionType": "NONE",
-      "EncryptionKey": "",
-      "EncryptionAlgorithm": ""
-    },
-    {
-      "Name": "[TrackId]",
-      "DataType": "INT IDENTITY(1, 1)",
-      "OldName": "",
-      "Collation": "",
-      "DataMaskFunction": "",
-      "EncryptionType": "NONE",
       "EncryptionKey": "",
       "EncryptionAlgorithm": ""
     },
@@ -81,7 +74,6 @@
       "OldName": "",
       "Collation": "",
       "DataMaskFunction": "",
-      "EncryptionType": "NONE",
       "EncryptionKey": "",
       "EncryptionAlgorithm": ""
     }
@@ -89,15 +81,13 @@
   "Indexes": [
     {
       "Name": "[IX_Track_AlbumId]",
-      "IndexColumns": "[AlbumId]",
-      "CompressionType": "NONE"
+      "IndexColumns": "[AlbumId]"
     },
     {
       "Name": "[PK_Track]",
       "PrimaryKey": true,
       "Unique": true,
       "IndexColumns": "[TrackId]",
-      "CompressionType": "NONE",
       "Clustered": true
     }
   ],
@@ -133,7 +123,6 @@
   "CheckConstraints": [],
   "OldName": "",
   "Schema": "[dbo]",
-  "CompressionType": "NONE",
   "XmlIndexes": [],
   "Statistics": []
 }

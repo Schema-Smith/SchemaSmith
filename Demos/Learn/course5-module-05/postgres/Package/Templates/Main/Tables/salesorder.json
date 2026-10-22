@@ -3,11 +3,19 @@
   "Name": "salesorder",
   "Columns": [
     {
+      "Name": "orderid",
+      "DataType": "int4",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
       "Name": "customerid",
       "DataType": "int4",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "PLAIN",
       "Compression": "DEFAULT"
@@ -17,17 +25,6 @@
       "DataType": "timestamp",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
-      "Generated": "NEVER",
-      "Storage": "PLAIN",
-      "Compression": "DEFAULT"
-    },
-    {
-      "Name": "orderid",
-      "DataType": "int4",
-      "ShouldApplyExpression": "",
-      "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "PLAIN",
       "Compression": "DEFAULT"
@@ -37,7 +34,6 @@
       "DataType": "varchar(20)",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "EXTENDED",
       "Compression": "DEFAULT"
@@ -50,9 +46,7 @@
       "Unique": true,
       "IndexColumns": "orderid",
       "ShouldApplyExpression": "",
-      "VariantName": "",
-      "AccessMethod": "btree",
-      "FillFactor": 90
+      "AccessMethod": "btree"
     }
   ],
   "ForeignKeys": [
@@ -64,17 +58,15 @@
       "DeleteAction": "",
       "UpdateAction": "",
       "ShouldApplyExpression": "",
-      "VariantName": "",
-      "RelatedTableSchema": "public",
-      "MatchType": "SIMPLE"
+      "RelatedTableSchema": "public"
     }
   ],
   "CheckConstraints": [],
   "ShouldApplyExpression": "",
-  "VariantName": "",
   "OldName": "",
   "Statistics": [],
   "ExcludeConstraints": [],
+  "Policies": [],
   "AccessMethod": "heap",
   "PersistenceType": "Logged",
   "FillFactor": 100

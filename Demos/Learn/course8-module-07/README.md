@@ -208,7 +208,7 @@ No names, no values. The tokens still reach your scripts — confirm the After s
 ../lab-sql.sh mariadb diag_hygiene "SELECT setting_name FROM app_setting ORDER BY setting_name"
 ```
 
-Three rows: `deploy_key`, `region`, `webhook_url`.
+Five rows: `audit_dsn`, `deploy_key`, `region`, `report_api_key`, `webhook_url`.
 
 ## Step 6 — the file the log points at
 

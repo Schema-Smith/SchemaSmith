@@ -46,11 +46,16 @@ Each database hands errors back through a different door:
 | --- | --- | --- | --- |
 | **Channel** | `InfoMessage` events | `Notice` stream | `SchemaSmith_StatusMessages` sidecar table (polled) |
 | **Fault detail** | ProgressLog **and Errors.log** (with `at Line: N`) | ProgressLog (SQLSTATE) | ProgressLog |
-| **Errors.log** | populated | **empty** | **empty** |
-| **`VerboseLogging`** | surfaces your scripts' `PRINT`/low-severity output (suppressed by default); use `=true` on the CLI | no effect | no effect |
+| **Errors.log — engine-computed phase** | populated | **empty** | **empty** |
+| **Errors.log — your script (`Unable to quench`)** | populated | populated | populated |
+| **Errors.log — data delivery** | **empty** | **empty** | **empty** |
+| **`VerboseLogging`** | surfaces your scripts' `PRINT`/low-severity output (suppressed by default); use `=true` on the CLI | surfaces your scripts' `RAISE NOTICE` output (suppressed by default) | no effect |
 
-**Rule of thumb:** on SQL Server, `Errors.log` gives you the fault + line fast. On PostgreSQL and
-MySQL, read the `Progress.log` — `Errors.log` will be empty.
+> **On 2.7.x** `VerboseLogging` has no effect on PostgreSQL: a `RAISE NOTICE` always shows.
+
+**Rule of thumb:** `Progress.log` always has the fault. On SQL Server, `Errors.log` gives you the
+fault + line fast for a failed phase or script. On PostgreSQL and MySQL, `Errors.log` holds only a
+failed script's `Unable to quench` line — for anything else, read the `Progress.log`.
 
 ## 5. Per-platform error codes
 
@@ -71,9 +76,11 @@ MySQL prints the classic message.)
 
 | Situation | Tool |
 | --- | --- |
-| A script bug you fixed in the package | **fix + plain re-run** (the default — discards the checkpoint, re-converges) |
+| A script bug you fixed in the package | **fix + plain re-run** (the default — ignores any checkpoint and re-converges from the top) |
 | Same fix, but don't redo expensive completed phases | **`--ResumeQuench`** (keeps the checkpoint, resumes at the failure; Kindling + missing-tables still re-run) |
 | You fixed the problem **by hand**, outside the package | **mark-done** — `INSERT` a row into `CompletedMigrationScripts` so the run-once script is skipped |
+
+> **On 2.7.x** a plain re-run reads a checkpoint it finds and resumes from it; delete the checkpoint folder to start from the top.
 
 The checkpoint (`%TEMP%/schemaquench-checkpoints`, or `--CheckpointDirectory:`) is your map: `[Completed
 Steps]` + per-slot completed scripts. Preserved on failure, deleted on success.

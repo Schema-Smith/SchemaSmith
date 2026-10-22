@@ -1,5 +1,7 @@
 # Course 8 · Module 2 — Structure-change failures
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (plain run ignores checkpoints): delete the "On 2.7.x" callouts -->
+
 Two induced incidents on one database (`diag_structure`), read end to end. This is the **structure
 half** of the mechanical engine: how column *adds* (`MissingTableAndColumnQuench`) and column
 *alters* (`ModifiedTableQuench`) fail, and how to read them. Same method as Module 1 — locate the
@@ -113,9 +115,11 @@ Shorten them (from the lab folder), then redeploy the same change from your engi
 schemaquench --ConfigFile:quench.settings.beat2-broken.json --LogPath:"$PWD/logs"
 ```
 
-Green on all four — the narrow now applies. (This redeploy runs on the checkpointed
-`ModifiedTables` phase with the failed run's checkpoint still present; PostgreSQL re-converges
-cleanly here.)
+Green on all four — the narrow now applies. (The failed run's checkpoint is still on disk, but a
+plain redeploy does not read it: it converges from the top. Only `--ResumeQuench` picks up a
+checkpoint — that's Module 5.)
+
+> **On 2.7.x** a plain redeploy reads the failed run's checkpoint and resumes at the `ModifiedTables` phase; it still exits `0`.
 
 ## Beat 3 — the change an in-place `ALTER` cannot make, and the state that blocks it
 

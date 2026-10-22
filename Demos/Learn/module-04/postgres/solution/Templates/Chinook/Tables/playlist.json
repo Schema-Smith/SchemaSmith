@@ -1,0 +1,45 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Name": "playlist",
+  "Columns": [
+    {
+      "Name": "playlist_id",
+      "DataType": "int4",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "GENERATED ALWAYS AS IDENTITY(START WITH 1 INCREMENT BY 1)",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "name",
+      "DataType": "varchar(120)",
+      "Nullable": true,
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "EXTENDED",
+      "Compression": "DEFAULT"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_playlist",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "playlist_id",
+      "ShouldApplyExpression": "",
+      "AccessMethod": "btree"
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "OldName": "",
+  "Statistics": [],
+  "ExcludeConstraints": [],
+  "Policies": [],
+  "AccessMethod": "heap",
+  "PersistenceType": "Logged",
+  "FillFactor": 100
+}

@@ -1,0 +1,32 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "audit_trail",
+  "Columns": [
+    {
+      "Name": "audit_id",
+      "DataType": "int4",
+      "Nullable": false
+    },
+    {
+      "Name": "actor",
+      "DataType": "varchar(128)",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_audit_trail",
+      "IndexColumns": "audit_id",
+      "PrimaryKey": true,
+      "Unique": true
+    }
+  ],
+  "RowLevelSecurity": true,
+  "Policies": [
+    {
+      "Name": "p_actor_present",
+      "UsingExpression": "actor <> ''"
+    }
+  ]
+}

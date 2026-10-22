@@ -1,5 +1,7 @@
 # Module 4 — Bring an existing database under management (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (extraction column order and keys): delete the "On 2.7.x" callouts -->
+
 Goal: take a database that nobody has under source control, point **SchemaTongs** at it, and cast it
 into a schema package — tables, keys, and indexes — that you then own and manage like any other.
 
@@ -99,13 +101,17 @@ miss transcribing a schema by hand.
 
 Per-engine differences are cosmetic: SQL Server quotes with `[brackets]` and reports `INT IDENTITY`;
 PostgreSQL folds names to lowercase (`album.json`) and reports types like `int4`; MySQL quotes
-with `` `backticks` `` and records `AutoIncrement` plus the storage engine. MariaDB matches MySQL's
-quoting and casing here — it's a fourth platform in the MySQL family, not the MySQL package retargeted.
+with `` `backticks` `` and records `AutoIncrement` plus the table's next `AutoIncrementValue`. MariaDB matches
+MySQL's quoting and casing here, and writes its own types (`int(11)`) — it's a fourth platform in the MySQL family, not the MySQL package retargeted.
 
 ## Step 4: Compare against the solution
 
 Your `Extracted/` package should match `solution/`. From here, it's a normal SchemaSmith package — you
 manage it exactly like the one you built in Module 2: edit a table, preview with WhatIf, and quench.
+
+> **On 2.7.x** your extraction lists each table's columns alphabetically rather than in the table's own order,
+> and on PostgreSQL every index also carries `"FillFactor": 90`, so those lines differ from `solution/`. The
+> tables, keys and indexes are the same.
 
 ## Reset
 

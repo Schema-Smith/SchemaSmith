@@ -1,20 +1,25 @@
 {
   "$schema": "../../../.json-schemas/tables.postgresql.schema",
-  "Schema": "public",
   "Name": "genre",
   "Columns": [
     {
       "Name": "genre_id",
       "DataType": "int4",
       "ShouldApplyExpression": "",
-      "OldName": ""
+      "OldName": "",
+      "Generated": "GENERATED ALWAYS AS IDENTITY(START WITH 1 INCREMENT BY 1)",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
     },
     {
       "Name": "name",
       "DataType": "varchar(120)",
       "Nullable": true,
       "ShouldApplyExpression": "",
-      "OldName": ""
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "EXTENDED",
+      "Compression": "DEFAULT"
     }
   ],
   "Indexes": [
@@ -23,11 +28,18 @@
       "PrimaryKey": true,
       "Unique": true,
       "IndexColumns": "genre_id",
-      "ShouldApplyExpression": ""
+      "ShouldApplyExpression": "",
+      "AccessMethod": "btree"
     }
   ],
   "ForeignKeys": [],
   "CheckConstraints": [],
   "ShouldApplyExpression": "",
-  "OldName": ""
+  "OldName": "",
+  "Statistics": [],
+  "ExcludeConstraints": [],
+  "Policies": [],
+  "AccessMethod": "heap",
+  "PersistenceType": "Logged",
+  "FillFactor": 100
 }

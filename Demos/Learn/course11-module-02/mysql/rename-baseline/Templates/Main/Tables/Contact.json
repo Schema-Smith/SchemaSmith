@@ -1,0 +1,24 @@
+{
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
+  "Name": "Contact",
+  "Columns": [
+    {
+      "Name": "Id",
+      "DataType": "int",
+      "Nullable": false
+    },
+    {
+      "Name": "Email",
+      "DataType": "varchar(100)",
+      "Nullable": true
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "IndexColumns": "Id",
+      "PrimaryKey": true,
+      "Unique": true
+    }
+  ]
+}

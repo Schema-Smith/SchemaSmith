@@ -9,9 +9,6 @@
     "MainDb": "shop_from_efcore"
   },
   "ScriptFolders": [],
-  "BranchNameFile": "{{repo_path}}/.git/HEAD",
-  "BeforeBranchNameMask": "ref: refs/heads/",
   "AfterBranchNameMask": "",
-  "Platform": "PostgreSQL",
-  "DropTablesRemovedFromProduct": true
+  "Platform": "PostgreSQL"
 }

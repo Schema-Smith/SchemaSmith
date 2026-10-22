@@ -55,8 +55,11 @@ Procedures/Identity/usp_customer_lookup.sql
 
 Both objects went back to their own subfolders, on SQL Server, PostgreSQL, MySQL and MariaDB. **The
 assertion is `git status`, not the file listing** — if a file had moved you would see a delete and an
-add, and here you see nothing at all. Run the extraction twice more; still nothing. That stability is
-the whole feature: a re-extraction that churns your tree is one nobody runs.
+add, and here you see neither. You do see modified files, and they are edits in place, not moves: the
+extraction writes the database it read into `Product.json` (a `MainDb` script token) on every engine,
+and on MySQL and MariaDB it rewrites both procedures in the form the server returns them, with a
+`sql_mode` pin around each. Commit that once; what you are checking for is files that changed folder.
+That stability is the whole feature: a re-extraction that churns your tree is one nobody runs.
 
 Before it writes anything, SchemaTongs walks the template folder and builds an index of every `.sql`,
 `.sqlerror` and `.json` file it finds, mapping each name to the full path it currently occupies. When

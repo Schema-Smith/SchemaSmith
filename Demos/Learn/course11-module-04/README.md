@@ -98,10 +98,11 @@ Not a special case for tablespaces — the same reading applies across the produ
 | `DataDirectory` (MySQL, MariaDB) | placement unmanaged, **not** "has none" |
 | `PartitionScheme` / `Partitioning` | partitioning unmanaged; a hand-partitioned table is left exactly as it is |
 | `Encryption` / `Encrypted` | encryption unmanaged; a tablespace someone encrypted stays encrypted |
+| `Compression` (MySQL), `PageCompressed` (MariaDB) | page compression unmanaged; an omitted value never uncompresses a table |
 | `ReplicaIdentity` (PostgreSQL) | leave the server's current setting alone |
 | `Statistics` | only named statistics your product defines; **auto-created statistics are never touched** |
 
-Read that list as one idea rather than six: your package's authority extends exactly as far as what it
+Read that list as one idea rather than seven: your package's authority extends exactly as far as what it
 declares, and no further.
 
 ## Cleanup

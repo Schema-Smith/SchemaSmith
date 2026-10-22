@@ -27,6 +27,11 @@
       "ObjectType": "CompositeTypes"
     },
     {
+      "FolderPath": "Collations",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Collations"
+    },
+    {
       "FolderPath": "Functions",
       "QuenchSlot": "Objects",
       "ObjectType": "Functions"
@@ -55,6 +60,11 @@
       "FolderPath": "Sequences",
       "QuenchSlot": "Objects",
       "ObjectType": "Sequences"
+    },
+    {
+      "FolderPath": "Publications",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Publications"
     },
     {
       "FolderPath": "Rules",

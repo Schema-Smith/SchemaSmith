@@ -1,19 +1,24 @@
 {
   "$schema": "../../../.json-schemas/tables.postgresql.schema",
-  "Schema": "public",
   "Name": "playlist_track",
   "Columns": [
     {
       "Name": "playlist_id",
       "DataType": "int4",
       "ShouldApplyExpression": "",
-      "OldName": ""
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
     },
     {
       "Name": "track_id",
       "DataType": "int4",
       "ShouldApplyExpression": "",
-      "OldName": ""
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
     }
   ],
   "Indexes": [
@@ -22,7 +27,8 @@
       "PrimaryKey": true,
       "Unique": true,
       "IndexColumns": "playlist_id,track_id",
-      "ShouldApplyExpression": ""
+      "ShouldApplyExpression": "",
+      "AccessMethod": "btree"
     }
   ],
   "ForeignKeys": [
@@ -33,7 +39,8 @@
       "RelatedColumns": "playlist_id",
       "DeleteAction": "",
       "UpdateAction": "",
-      "ShouldApplyExpression": ""
+      "ShouldApplyExpression": "",
+      "RelatedTableSchema": "public"
     },
     {
       "Name": "fk_playlist_track_track",
@@ -42,10 +49,17 @@
       "RelatedColumns": "track_id",
       "DeleteAction": "",
       "UpdateAction": "",
-      "ShouldApplyExpression": ""
+      "ShouldApplyExpression": "",
+      "RelatedTableSchema": "public"
     }
   ],
   "CheckConstraints": [],
   "ShouldApplyExpression": "",
-  "OldName": ""
+  "OldName": "",
+  "Statistics": [],
+  "ExcludeConstraints": [],
+  "Policies": [],
+  "AccessMethod": "heap",
+  "PersistenceType": "Logged",
+  "FillFactor": 100
 }

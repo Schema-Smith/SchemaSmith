@@ -1,6 +1,6 @@
 # Course 6, Module 4 — Runtime validation gates (validation scripts) (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (server-validation failure exits 2): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (server-validation failure exits 2; plain run ignores checkpoints): delete the "On 2.7.x" callouts -->
 
 **Goal:** make a deployment refuse the wrong server and refuse to run an older release over a newer one — before it touches the schema. This lab exercises SchemaQuench's runtime validation gates: the product-level `ValidationScript` (a server-identity / dependency / version gate) and the template-level `BaselineValidationScript` + `VersionStampScript` (the anti-rollback pairing). SQL Server, PostgreSQL, MySQL, and MariaDB.
 
@@ -125,7 +125,9 @@ To return to a clean first-deploy state:
 
 1. Re-run `course6-setup` (re-seeds the Shop tables).
 2. **Empty the version registry** — `course6-setup` does not touch it. In each tenant: `DELETE FROM dbo.SchemaVersion;` (SQL Server), `DELETE FROM public.schema_version;` (PostgreSQL), or `DELETE FROM schema_version;` (MySQL / MariaDB) — or drop and re-create it per *Before you start*.
-3. **Clear the checkpoint cache** — delete the `schemaquench-checkpoints` directory in your temp folder (`%TEMP%\schemaquench-checkpoints` on Windows, `$TMPDIR/schemaquench-checkpoints` or `/tmp/schemaquench-checkpoints` on macOS/Linux). SchemaQuench keeps per-run checkpoints there; if a database is reset out from under a checkpoint, the next run may skip steps it believes are already done.
+3. **No checkpoint cache to clear.** SchemaQuench keeps per-run checkpoints in a `schemaquench-checkpoints` directory in your temp folder, but a plain run never reads them — only `--ResumeQuench` does — so a reset database gets a full deploy.
+
+   > **On 2.7.x** every run reads those checkpoints, so if a database is reset out from under one, the next run may skip steps it believes are already done. Delete the directory as part of the reset: `%TEMP%\schemaquench-checkpoints` on Windows, `$TMPDIR/schemaquench-checkpoints` or `/tmp/schemaquench-checkpoints` on macOS/Linux.
 
 ## Cross-platform
 

@@ -1,5 +1,7 @@
 # Course 11, Module 1 — Applied at CREATE, refused on change (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (page compression applied by ALTER): delete the "On 2.7.x" callouts -->
+
 Goal: some things about a table are decided when it is built and cannot be moved afterwards without
 rewriting every row in it. SchemaSmith applies those at CREATE and **refuses them by name** on a
 deployed table — it does not quietly ignore your declaration, and it does not quietly rewrite your
@@ -152,10 +154,11 @@ a deployed table because the change rewrites the table:
 | `Tablespace` (general) | MySQL |
 | `DataDirectory` | MySQL, MariaDB |
 | `XmlCompression` | SQL Server |
-| InnoDB page compression | MySQL, MariaDB |
 
 And the irreversible table *types*, which behave identically because the engine has no `ALTER` for
 them at all: memory-optimized durability and inline-index shape, `Ledger`, `GraphType`.
+
+> **On 2.7.x** InnoDB page compression (MySQL `Compression`, MariaDB `PageCompressed`) is applied only when a table is created: a changed value on an existing table is left unapplied, at exit `0`, rather than refused.
 
 ## Cleanup
 

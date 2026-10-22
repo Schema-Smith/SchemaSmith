@@ -1,5 +1,7 @@
 # Course 7, Module 6 — Reading the deployment summary report (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (unchanged object scripts skipped): delete the "On 2.7.x" callouts -->
+
 Goal: roll a real, mixed change across the whole fleet — a new table, a new unique index, a widened column, a new column, a dropped index, and a re-applied view — with one tenant pre-seeded to fail, then read the run's structured receipt end to end. You'll pull apart `SchemaQuench - Summary.json`: the run verdict, every target's outcome, where the milliseconds went, the failure as data, and — the centerpiece — the verified `objectChanges` audit. SQL Server, then PostgreSQL, MySQL, and MariaDB.
 
 This is the reporting capstone of Course 7. Module 5 taught you to *hunt* a failure through `Failures.log`, checkpoints, and artifacts. Module 6 opens the one structured file that names every target's fate and every verified change in a single read — the file a dashboard or a release gate parses without a human scrolling logs.
@@ -52,6 +54,7 @@ Open `out/whatif-summary.md` first — the human receipt, same `Object Changes` 
 - Modified: tables=0, columns=5
 - Dropped: tables=0, indexes=5, constraints=0, foreignKeys=0
 - Ran (object scripts): 0
+- Unchanged (object scripts): 0
 ```
 
 Now `out/whatif-summary.json` — same section, structured, with the mode that marks it a preview and the itemized actions behind those counts:
@@ -71,7 +74,8 @@ Now `out/whatif-summary.json` — same section, structured, with the mode that m
     { "objectType": "column",     "objectName": "[dbo].[Customer].[Region]",                "action": "wouldCreate" },
     { "objectType": "column",     "objectName": "[dbo].[Customer].[FullName]",              "action": "wouldModify" },
     { "objectType": "index",      "objectName": "[dbo].[Customer].IX_Customer_FullName",    "action": "wouldDrop" }
-  ]
+  ],
+  "scriptsUnchanged": 0
 }
 ```
 
@@ -139,7 +143,17 @@ Reset the one tenant and re-run to watch the summary go all-green:
 schemaquench --ConfigFile:quench.settings.after.json --report:./out/deploy-summary --BottleneckThresholdMs=800
 ```
 
-Exit `0`, `outcome: "Success"`, empty `failures[]`, and `objectChanges` now shows only what this second run changed — the structure already converged, so the counts are near-empty except the view, which re-runs every time (`scriptsRan`). That contrast — a busy first run, a quiet idempotent second — is the audit telling the truth about what each run actually did.
+Exit `0`, `outcome: "Success"`, empty `failures[]`, and `objectChanges` now shows only what this second run changed — the structure already converged, so the counts are near-empty, and the view is not re-run either. Each tenant logs:
+
+```
+Unchanged, not re-run: .\after\Templates\Main\Views\vw_ActiveProducts.sql
+```
+
+and the view moves from `scriptsRan` to `scriptsUnchanged` (`Unchanged (object scripts)` in the Markdown).
+
+> **On 2.7.x** the view re-runs on every deploy: each tenant logs `Quenched .\after\Templates\Main\Views\vw_ActiveProducts.sql` again, exit `0`, it counts in `scriptsRan`, and the report has no unchanged count.
+
+That contrast — a busy first run, a quiet idempotent second — is the audit telling the truth about what each run actually did.
 
 ## Step 7: Do it on PostgreSQL, MySQL, and MariaDB
 

@@ -1,5 +1,7 @@
 # Course 4, Recipe 16 — Trust the round trip: extraction that gives you back what you have (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (ObjectOrder defaults to Physical): delete the "On 2.7.x" callouts -->
+
 Goal: extract a database you inherited, rebuild it from the package, and prove nothing was lost, widened or
 reshuffled on the way. "Extract what you have and trust the result" is how most people adopt SchemaSmith — it is
 the whole premise of Course 5 — so the round trip has to be exact. This lab checks the four places it was not
@@ -81,13 +83,17 @@ Check the PostgreSQL column types the package produced:
 ../lab-sql.sh postgres cookbook_r16 "SELECT attname, format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.device'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum"
 # → device_id|integer
 # → flags|bit(8)
-# → label|text
 # → mask|bit varying(16)
+# → label|text
 ```
 
 `bit(8)`, not `bit(1)`. On 2.6.0 this is the step where eight bits of every flag value became one, and nothing
-anywhere said so. Deploy once more with `--report:./rerun` and `rerun.md` reports zero changes on all three
-engines — the package describes the database exactly.
+anywhere said so. The columns also come back in the order the inherited table had them, because extraction
+wrote them in the table's physical order. Deploy once more with `--report:./rerun` and `rerun.md` reports zero
+changes on all three engines — the package describes the database exactly.
+
+> **On 2.7.x** extraction writes columns in name order (`ObjectOrder` defaults to `Name`), so the rebuilt table
+> reads `device_id`, `flags`, `label`, `mask`.
 
 ```bash
 # from course4-recipe-16

@@ -14,16 +14,14 @@
   "Indexes": [
     {
       "Name": "FK_PlaylistTrack_Track",
-      "IndexColumns": "`TrackId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`TrackId`"
     },
     {
       "Name": "PRIMARY",
       "PrimaryKey": true,
       "Unique": true,
       "UniqueConstraint": true,
-      "IndexColumns": "`PlaylistId`,`TrackId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`PlaylistId`,`TrackId`"
     }
   ],
   "ForeignKeys": [
@@ -47,7 +45,6 @@
     }
   ],
   "CheckConstraints": [],
-  "Engine": "InnoDB",
   "RowFormat": "Dynamic",
   "CharacterSet": "utf8mb4",
   "Collation": "utf8mb4_0900_ai_ci",

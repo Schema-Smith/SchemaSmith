@@ -1,0 +1,138 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Name": "track",
+  "Columns": [
+    {
+      "Name": "track_id",
+      "DataType": "int4",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "GENERATED ALWAYS AS IDENTITY(START WITH 1 INCREMENT BY 1)",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "name",
+      "DataType": "varchar(200)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "EXTENDED",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "album_id",
+      "DataType": "int4",
+      "Nullable": true,
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "media_type_id",
+      "DataType": "int4",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "genre_id",
+      "DataType": "int4",
+      "Nullable": true,
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "composer",
+      "DataType": "varchar(220)",
+      "Nullable": true,
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "EXTENDED",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "milliseconds",
+      "DataType": "int4",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "unit_price",
+      "DataType": "numeric(10, 2)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "MAIN",
+      "Compression": "DEFAULT"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "ix_track_album_id",
+      "IndexColumns": "album_id",
+      "ShouldApplyExpression": "",
+      "AccessMethod": "btree"
+    },
+    {
+      "Name": "pk_track",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "track_id",
+      "ShouldApplyExpression": "",
+      "AccessMethod": "btree"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "fk_track_album",
+      "Columns": "album_id",
+      "RelatedTable": "album",
+      "RelatedColumns": "album_id",
+      "DeleteAction": "",
+      "UpdateAction": "",
+      "ShouldApplyExpression": "",
+      "RelatedTableSchema": "public"
+    },
+    {
+      "Name": "fk_track_genre",
+      "Columns": "genre_id",
+      "RelatedTable": "genre",
+      "RelatedColumns": "genre_id",
+      "DeleteAction": "",
+      "UpdateAction": "",
+      "ShouldApplyExpression": "",
+      "RelatedTableSchema": "public"
+    },
+    {
+      "Name": "fk_track_media_type",
+      "Columns": "media_type_id",
+      "RelatedTable": "media_type",
+      "RelatedColumns": "media_type_id",
+      "DeleteAction": "",
+      "UpdateAction": "",
+      "ShouldApplyExpression": "",
+      "RelatedTableSchema": "public"
+    }
+  ],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "OldName": "",
+  "Statistics": [],
+  "ExcludeConstraints": [],
+  "Policies": [],
+  "AccessMethod": "heap",
+  "PersistenceType": "Logged",
+  "FillFactor": 100
+}

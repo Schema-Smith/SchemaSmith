@@ -1,5 +1,7 @@
 # Course 4, Recipe 15 — The re-run that wasn't a no-op: expression change detection (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (empty expression map is verified): delete the "On 2.7.x" callouts -->
+
 Goal: prove that a second deploy of an unchanged package changes **nothing** — on the objects where that used to
 be a lie. Every engine rewrites an expression when it stores it. SQL Server keeps `RetentionDays <= 365` as
 `([RetentionDays]<=(365))`; PostgreSQL keeps `starts_with(plan_code, 'P')` as
@@ -8,8 +10,8 @@ Compare what you wrote against what the catalog hands back and they never match 
 constraint, a computed column or a generated column could be dropped and rebuilt on **every** deploy, at exit 0,
 with nothing in the log saying why. On a `PERSISTED` or `STORED` column that is a table rewrite every time.
 
-SchemaSmith 2.7.0 decides from what it **applied** rather than from the text. This lab makes you watch both the
-old behaviour and the new one, on the same table, on all four engines.
+SchemaSmith 2.7.0 decides from what it **applied** rather than from the text. This lab makes you watch it on one
+table, on all four engines — including a deploy with nothing recorded yet.
 
 Everything runs against `cookbook_r15`.
 
@@ -87,10 +89,11 @@ them — MySQL added a charset introducer, PostgreSQL added casts. That gap is e
 On the next deploy SchemaSmith asks one question per object: *does the live text still match what I recorded
 for this declaration?* If yes, nothing moved and nothing is touched, however differently the two texts read.
 
-## Step 3: Watch what 2.6.0 did
+## Step 3: Empty the record
 
-The table is safe to empty — the worst it costs is one more comparison. Emptying it also shows you precisely how
-a deploy behaved before 2.7.0, because **no record means no opinion**: the comparison falls back to the text.
+The table is safe to empty. An empty table is also what a database starts with when SchemaSmith didn't build it
+— another tool made it, or it was deployed before 2.7.0. There is no record to check against, and a text
+comparison would rebuild every expression, so SchemaSmith checks first.
 
 ```bash
 # from course4-recipe-15
@@ -102,28 +105,19 @@ cd <engine> && schemaquench --ConfigFile:deploy.settings.json --report:./norecor
 ```
 
 ```
-Dropping index [dbo].[Subscription].IX_Subscription_ActivePlan
-Dropping columns from [dbo].[Subscription] ([RetentionWeeks])
-Dropping check constraint [dbo].[Subscription].CK_Subscription_Retention
-Adding 1 new column(s) to [dbo].[Subscription]
-Creating index [dbo].[Subscription].[IX_Subscription_ActivePlan]
-Adding check constraint [dbo].[Subscription].CK_Subscription_Retention
+Verified 3 expression(s) on a scratch copy of their table: the declared text renders to exactly what the database holds, so they are recorded rather than re-applied.
 ```
 
-Nothing in the package changed. The computed column was dropped and re-added — a `PERSISTED` column, so every
-row was rewritten — and the index and check went with it. Before 2.7.0 that happened on **every** deploy. The
-other engines do the same thing in their own dialect:
+Nothing in the package changed, and nothing in the database did either. SchemaSmith applied the declared text to
+a scratch copy of the table, read back what the engine stored, and found exactly what the live table holds — so
+the computed column, the filtered index and the check are recorded as they stand, not rebuilt. The other engines
+print the same line: `Verified 2 expression(s)` on PostgreSQL, MySQL and MariaDB. The table is full again, and
+the next deploy compares against it as usual.
 
-```
-PostgreSQL:  Check Constraint public.subscription.ck_subscription_plan modified or no longer in product
-             Recreating generated column public.subscription.retention_weeks (expression changed)
-             Add missing check constraint public.subscription.ck_subscription_plan
-MySQL:       Modify column: ALTER TABLE `cookbook_r15`.`Subscription` MODIFY COLUMN `PlanLabel` ... VIRTUAL
-             Modify column: ALTER TABLE `cookbook_r15`.`Subscription` MODIFY COLUMN `RetentionWeeks` ... STORED
-```
-
-That deploy re-recorded everything as it went. Deploy once more and the report is back to zeros — the churn
-happens at most once, on the first deploy that has nothing recorded.
+> **On 2.7.x** an empty table falls back to the text comparison, so this deploy rebuilds them once at exit 0:
+> `Dropping index …`, `Dropping columns from [dbo].[Subscription] ([RetentionWeeks])`, `Dropping check constraint …`
+> and the matching `Adding`/`Creating` lines on SQL Server; on PostgreSQL `Recreating generated column
+> public.subscription.retention_weeks (expression changed)` and the check dropped and re-added.
 
 ## Step 4: Edit it behind SchemaSmith's back
 
@@ -197,8 +191,8 @@ as a mystery. Set it back to `160` and you get the same line for 160.
 The PostgreSQL generated-column churn is worst at the supported floor — it reproduces on PostgreSQL 12 and not
 on 17, so a modern server alone would never show you the bug. If you run Course 10's mixed fleet
 (`docker compose --profile mixed-fleet up -d`), point a copy of `postgres/deploy.settings.json` at port `15433`,
-create `cookbook_r15` there, and repeat Steps 1 and 3: the same zeros on the rerun, the same single
-re-application with the record emptied.
+create `cookbook_r15` there, and repeat Steps 1 and 3: the same zeros on the rerun, and the same verification
+— not a rebuild — with the record emptied.
 
 ## A note on nullability
 

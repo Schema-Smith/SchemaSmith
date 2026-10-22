@@ -70,7 +70,7 @@ Five rows, on a tier where `OPENJSON` can't even parse. `JP`'s JSON `null` arriv
 > **On 2.7.x** this delivery doesn't land. Under the default `warn` policy it is skipped —
 > `[SKIPPED - requires compatibility level 130 for JSON delivery] JSON data delivery for dbo.CountryCode requires SQL Server compatibility level 130 (target is at 100); re-encode this delivery as XML ("ContentEncoding": "Xml") to deploy it on a legacy-compat target.`
 > — the run still exits `0`, and the table is empty. Under `fail` (next step) the run stops with
-> that message and exits `2`. Upgrade, or deploy the XML package from Part 3.
+> that message and exits `2`. Deploy the XML package from Part 3 instead.
 
 Now set the policy to `fail`. `quench.settings.json.legacy-fail.json` is identical except it sets
 `"UnsupportedFeaturePolicy": "fail"` under `Target`:

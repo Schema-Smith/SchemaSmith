@@ -8,7 +8,6 @@
       "OldName": "",
       "Collation": "",
       "DataMaskFunction": "",
-      "EncryptionType": "NONE",
       "EncryptionKey": "",
       "EncryptionAlgorithm": ""
     },
@@ -19,7 +18,6 @@
       "OldName": "",
       "Collation": "",
       "DataMaskFunction": "",
-      "EncryptionType": "NONE",
       "EncryptionKey": "",
       "EncryptionAlgorithm": ""
     }
@@ -30,7 +28,6 @@
       "PrimaryKey": true,
       "Unique": true,
       "IndexColumns": "[GenreId]",
-      "CompressionType": "NONE",
       "Clustered": true
     }
   ],
@@ -38,7 +35,6 @@
   "CheckConstraints": [],
   "OldName": "",
   "Schema": "[dbo]",
-  "CompressionType": "NONE",
   "XmlIndexes": [],
   "Statistics": []
 }

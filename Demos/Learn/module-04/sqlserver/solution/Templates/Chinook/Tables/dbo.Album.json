@@ -8,17 +8,6 @@
       "OldName": "",
       "Collation": "",
       "DataMaskFunction": "",
-      "EncryptionType": "NONE",
-      "EncryptionKey": "",
-      "EncryptionAlgorithm": ""
-    },
-    {
-      "Name": "[ArtistId]",
-      "DataType": "INT",
-      "OldName": "",
-      "Collation": "",
-      "DataMaskFunction": "",
-      "EncryptionType": "NONE",
       "EncryptionKey": "",
       "EncryptionAlgorithm": ""
     },
@@ -28,7 +17,15 @@
       "OldName": "",
       "Collation": "",
       "DataMaskFunction": "",
-      "EncryptionType": "NONE",
+      "EncryptionKey": "",
+      "EncryptionAlgorithm": ""
+    },
+    {
+      "Name": "[ArtistId]",
+      "DataType": "INT",
+      "OldName": "",
+      "Collation": "",
+      "DataMaskFunction": "",
       "EncryptionKey": "",
       "EncryptionAlgorithm": ""
     }
@@ -36,15 +33,13 @@
   "Indexes": [
     {
       "Name": "[IX_Album_ArtistId]",
-      "IndexColumns": "[ArtistId]",
-      "CompressionType": "NONE"
+      "IndexColumns": "[ArtistId]"
     },
     {
       "Name": "[PK_Album]",
       "PrimaryKey": true,
       "Unique": true,
       "IndexColumns": "[AlbumId]",
-      "CompressionType": "NONE",
       "Clustered": true
     }
   ],
@@ -62,7 +57,6 @@
   "CheckConstraints": [],
   "OldName": "",
   "Schema": "[dbo]",
-  "CompressionType": "NONE",
   "XmlIndexes": [],
   "Statistics": []
 }

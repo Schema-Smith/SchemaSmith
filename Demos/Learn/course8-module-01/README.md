@@ -1,5 +1,7 @@
 # Course 8 · Module 1 — Reading the black box
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (Quench Indexes artifact calls): delete the "On 2.7.x" callouts -->
+
 One induced failure on one database (`diag_blackbox`), read end to end. Module 0 showed you the trail a *healthy* deploy leaves. This is the first deploy that stops on purpose — a unique index that won't take on dirty data — and the walk from `exit 2` to a named phase to green.
 
 ## Prerequisites
@@ -70,13 +72,25 @@ Context (last 25 lines):   [trail abbreviated here — the full 25-line context 
 
 > *MariaDB is a fourth platform in the MySQL family — its own `Platform: MariaDb` selection and native package, not the MySQL package retargeted. Its dialect matches MySQL except for a few DDL specifics (invisible indexes, check-constraint drops, column-default reporting) that SchemaSmith handles for you.*
 
-The line just below the error points at the artifact (SQL Server also prints it just above the block): `Resolved SQL written to: ./artifacts/SchemaQuench - Quench Indexes ….sql`. That file is **copy-runnable** — a single proc call:
+The line just below the error points at the artifact (SQL Server also prints it just above the block): `Resolved SQL written to: ./artifacts/SchemaQuench - Quench Indexes ….sql`. That file is **copy-runnable**. On SQL Server it's a single proc call:
 
 ```sql
-EXEC [diag_blackbox].SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName = 'Shop', @WhatIf = 0
+EXEC [diag_blackbox].SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName = 'Shop', @WhatIf = 0, @OnlineApply = 'OFF', @OnlineApplyMaxDuration = NULL
 ```
 
-Paste it into your client and the phase fails identically, by hand — that's your reproduction. There's no `>>> FAILING BATCH` marker here; that's a *user-script* thing (Module 4). A mechanical phase like this one puts the error in `Progress.log` and hands you the one-line proc call. (On SQL Server the error also lands in `Errors.log`; on PostgreSQL, MySQL, and MariaDB that file stays empty — `Progress.log` is the cross-engine place to read.)
+On PostgreSQL it's five `CALL`s, the phase's own proc first:
+
+```sql
+CALL "SchemaSmith"."MissingIndexesAndConstraintsQuench"(p_WhatIf := false, p_OnlineApply := 'OFF');
+CALL "SchemaSmith"."DescriptionQuench"(p_WhatIf := false);
+CALL "SchemaSmith"."ReplicaIdentityQuench"(p_WhatIf := false);
+CALL "SchemaSmith"."FixupTableOwnership"(p_ProductName := 'Shop', p_WhatIf := false, p_TemplateName := 'Main', p_SchemaName := '');
+CALL "SchemaSmith"."FixupIndexOwnership"(p_ProductName := 'Shop', p_WhatIf := false, p_TemplateName := 'Main', p_SchemaName := '');
+```
+
+> **On 2.7.x** the SQL Server call ends at `@WhatIf = 0`, and the PostgreSQL artifact has four `CALL`s — no `DescriptionQuench`, and `MissingIndexesAndConstraintsQuench(p_WhatIf := false)` takes no `p_OnlineApply`.
+
+Paste it into your client and the phase fails identically, by hand — that's your reproduction. There's no `>>> FAILING BATCH` marker here; that's a *user-script* thing (Module 4). A mechanical phase like this one puts the error in `Progress.log` and hands you the proc calls. (On SQL Server the error also lands in `Errors.log`; on PostgreSQL, MySQL, and MariaDB that file stays empty — `Progress.log` is the cross-engine place to read.)
 
 **Name the phase:** `Quenching indexes and constraints`. That's what turns a wall of SQL into "the unique index couldn't be created because the data has duplicates." And notice `checkpoints/` — the failed run **left a checkpoint** behind (a green run deletes it; a failure keeps it).
 

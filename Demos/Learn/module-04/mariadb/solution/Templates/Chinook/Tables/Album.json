@@ -4,7 +4,7 @@
   "Columns": [
     {
       "Name": "`AlbumId`",
-      "DataType": "int",
+      "DataType": "int(11)",
       "AutoIncrement": true
     },
     {
@@ -14,22 +14,20 @@
     },
     {
       "Name": "`ArtistId`",
-      "DataType": "int"
+      "DataType": "int(11)"
     }
   ],
   "Indexes": [
     {
       "Name": "FK_Album_Artist",
-      "IndexColumns": "`ArtistId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`ArtistId`"
     },
     {
       "Name": "PRIMARY",
       "PrimaryKey": true,
       "Unique": true,
       "UniqueConstraint": true,
-      "IndexColumns": "`AlbumId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`AlbumId`"
     }
   ],
   "ForeignKeys": [
@@ -38,16 +36,16 @@
       "Columns": "`ArtistId`",
       "RelatedTable": "`Artist`",
       "RelatedColumns": "`ArtistId`",
-      "DeleteAction": "NO ACTION",
-      "UpdateAction": "NO ACTION",
+      "DeleteAction": "RESTRICT",
+      "UpdateAction": "RESTRICT",
       "RelatedTableSchema": ""
     }
   ],
   "CheckConstraints": [],
-  "Engine": "InnoDB",
   "RowFormat": "Dynamic",
   "CharacterSet": "utf8mb4",
-  "Collation": "utf8mb4_unicode_ci",
+  "Collation": "utf8mb4_uca1400_ai_ci",
   "AutoIncrementValue": 6,
-  "FullTextIndexes": []
+  "FullTextIndexes": [],
+  "Periods": []
 }

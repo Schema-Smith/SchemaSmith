@@ -83,7 +83,7 @@ Open the artifact it names — `artifacts/SchemaQuench - Failed 02_backfill_cust
 repeats the error, and a **`-- >>> FAILING BATCH (#N) >>>`** marker sits on the exact statement that
 blew up:
 
-- On **SQL Server** and **PostgreSQL** the script splits into two batches (SS on `GO`, PG on `;`), so
+- On **SQL Server** and **PostgreSQL** the script splits into two batches (SS on `GO`, PG where a statement ends), so
   the marker reads **`(#2)`** — the `INSERT`, not the tidy-up `UPDATE` before it.
 - On **MySQL** and **MariaDB** the whole script runs as **one** batch, so the marker reads **`(#1)`**.
   (Neither engine's batch splitter breaks a plain `;`-separated script apart — a per-engine difference
@@ -124,8 +124,9 @@ schemaquench --ConfigFile:quench.settings.beat2-broken.json --LogPath:"$PWD/logs
 ```
 
 Fails at the **TableData** slot, exit `2`. `DataDelivery` orders parents before children and retries
-to resolve dependencies — you'll see `Delivering SalesOrder` attempted, then the per-item line
-**`Error delivering SalesOrder: <error>`**:
+to resolve dependencies — you'll see `Delivering dbo.SalesOrder` attempted, then the per-item line
+**`Error delivering dbo.SalesOrder: <error>`** (`public.salesorder` on PostgreSQL, `SalesOrder` on MySQL
+and MariaDB):
 
 | Engine | Error |
 | --- | --- |
@@ -136,10 +137,14 @@ to resolve dependencies — you'll see `Delivering SalesOrder` attempted, then t
 
 > *MariaDB is a fourth platform in the MySQL family — its own `Platform: MariaDb` selection and native package, not the MySQL package retargeted. Its dialect matches MySQL except for a few DDL specifics (invisible indexes, check-constraint drops, column-default reporting) that SchemaSmith handles for you.*
 
-The artifact — `artifacts/SchemaQuench - Failed DataDelivery SalesOrder#0 ….sql` — is the **generated
-MERGE**, copy-runnable (on SQL Server, `OPENJSON` shredding your `.tabledata` into a `MERGE`). Paste it
-into your client and it fails identically. No ordering or retry can save a row whose parent genuinely
-isn't there — the fix is in the data you shipped.
+The artifact — `artifacts/SchemaQuench - Failed DataDelivery dbo.SalesOrder#0 ….sql`, named after the
+same table — is the **generated MERGE**, copy-runnable (on SQL Server, `OPENJSON` shredding your
+`.tabledata` into a `MERGE`). Paste it into your client and it fails identically. No ordering or retry
+can save a row whose parent genuinely isn't there — the fix is in the data you shipped.
+
+In `Failures.log` the delivery's roll-up names the table but not the artifact:
+`Error: Data delivery failed for 1 table(s): dbo.SalesOrder`, then `Debug SQL: n/a`. The artifact's
+path is in the `Resolved SQL written to:` line of its context tail.
 
 **Recover — fix the content, redeploy.** Reparent the orphan in the `.tabledata` file (`999` → a real
 customer, e.g. `1`): in `<engine>/beat2-broken/Templates/Main/data/` (`dbo.SalesOrder.tabledata`,

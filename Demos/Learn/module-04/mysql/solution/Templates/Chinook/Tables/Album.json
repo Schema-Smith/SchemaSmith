@@ -20,16 +20,14 @@
   "Indexes": [
     {
       "Name": "FK_Album_Artist",
-      "IndexColumns": "`ArtistId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`ArtistId`"
     },
     {
       "Name": "PRIMARY",
       "PrimaryKey": true,
       "Unique": true,
       "UniqueConstraint": true,
-      "IndexColumns": "`AlbumId`",
-      "IndexType": "BTREE"
+      "IndexColumns": "`AlbumId`"
     }
   ],
   "ForeignKeys": [
@@ -44,7 +42,6 @@
     }
   ],
   "CheckConstraints": [],
-  "Engine": "InnoDB",
   "RowFormat": "Dynamic",
   "CharacterSet": "utf8mb4",
   "Collation": "utf8mb4_0900_ai_ci",

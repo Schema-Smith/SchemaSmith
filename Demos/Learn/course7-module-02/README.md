@@ -1,5 +1,7 @@
 # Course 7, Module 2 — Steering the roster (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (missing DatabaseIdentificationScript exits 2): delete the "On 2.7.x" callouts -->
+
 Goal: keep the same four-table `Shop` package from Module 1, but stop letting the **catalog** decide the
 fleet. Here your **deployment config** owns the roster — a dev roster, a prod roster, and a one-tenant
 canary — and a **scope filter** narrows any single run to a subset. Two mechanisms, one distinction to
@@ -108,8 +110,12 @@ schemaquench --ConfigFile:quench.settings.dev.json
 ```
 
 ```
-SchemaQuench.TemplateTargetValidationException: TemplateTargets.Main.Databases requires Template 'Main' to declare a DatabaseIdentificationScript. Add a placeholder script (e.g., SELECT 'CONFIG-DRIVEN' AS DatabaseName WHERE 1=0) to mark this template as database-fan-out.
+FAILED: TemplateTargets.Main.Databases requires Template 'Main' to declare a DatabaseIdentificationScript. Add a placeholder script (e.g., SELECT 'CONFIG-DRIVEN' AS DatabaseName WHERE 1=0) to mark this template as database-fan-out.
 ```
+
+Exit code `2`.
+
+> **On 2.7.x** the same message arrives as `SchemaQuench.TemplateTargetValidationException: TemplateTargets.Main.Databases requires Template 'Main' to declare a DatabaseIdentificationScript. …` followed by a stack trace, and the exit code is `3`.
 
 When your deployment system is the *sole* authority and there's no naming convention to discover, use the
 placeholder the error names. Put the line back in the same `Template.json`, with the placeholder as its

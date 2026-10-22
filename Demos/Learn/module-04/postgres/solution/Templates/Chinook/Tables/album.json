@@ -1,0 +1,70 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Name": "album",
+  "Columns": [
+    {
+      "Name": "album_id",
+      "DataType": "int4",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "GENERATED ALWAYS AS IDENTITY(START WITH 1 INCREMENT BY 1)",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "title",
+      "DataType": "varchar(160)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "EXTENDED",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "artist_id",
+      "DataType": "int4",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "ix_album_artist_id",
+      "IndexColumns": "artist_id",
+      "ShouldApplyExpression": "",
+      "AccessMethod": "btree"
+    },
+    {
+      "Name": "pk_album",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "album_id",
+      "ShouldApplyExpression": "",
+      "AccessMethod": "btree"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "fk_album_artist",
+      "Columns": "artist_id",
+      "RelatedTable": "artist",
+      "RelatedColumns": "artist_id",
+      "DeleteAction": "",
+      "UpdateAction": "",
+      "ShouldApplyExpression": "",
+      "RelatedTableSchema": "public"
+    }
+  ],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "OldName": "",
+  "Statistics": [],
+  "ExcludeConstraints": [],
+  "Policies": [],
+  "AccessMethod": "heap",
+  "PersistenceType": "Logged",
+  "FillFactor": 100
+}

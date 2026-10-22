@@ -7,7 +7,6 @@
       "DataType": "int4",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "PLAIN",
       "Compression": "DEFAULT"
@@ -17,7 +16,6 @@
       "DataType": "text",
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "EXTENDED",
       "Compression": "DEFAULT"
@@ -28,7 +26,6 @@
       "Nullable": true,
       "ShouldApplyExpression": "",
       "OldName": "",
-      "VariantName": "",
       "Generated": "NEVER",
       "Storage": "EXTENDED",
       "Compression": "DEFAULT"
@@ -41,18 +38,16 @@
       "Unique": true,
       "IndexColumns": "customerid",
       "ShouldApplyExpression": "",
-      "VariantName": "",
-      "AccessMethod": "btree",
-      "FillFactor": 90
+      "AccessMethod": "btree"
     }
   ],
   "ForeignKeys": [],
   "CheckConstraints": [],
   "ShouldApplyExpression": "",
-  "VariantName": "",
   "OldName": "",
   "Statistics": [],
   "ExcludeConstraints": [],
+  "Policies": [],
   "AccessMethod": "heap",
   "PersistenceType": "Logged",
   "FillFactor": 100

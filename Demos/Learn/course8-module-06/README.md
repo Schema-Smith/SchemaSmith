@@ -1,5 +1,7 @@
 # Course 8 · Module 6 — Per-engine dialects & your runbook
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (PostgreSQL notices need VerboseLogging; Errors.log line number): delete the "On 2.7.x" callouts -->
+
 The last of Course 8's failure modules. You've read SQL Server logs all course. Now the same failure lands on
 PostgreSQL, MySQL, and MariaDB — and the error isn't where you expected, because **each database hands
 it back through a different door**. This module shows all three doors (MariaDB rides MySQL's), then has
@@ -55,17 +57,22 @@ Read the `Progress.log` **and** the `Errors.log` on each engine:
 
 | Engine | `Progress.log` | `Errors.log` |
 | --- | --- | --- |
-| **SQL Server** | `The CREATE UNIQUE INDEX statement terminated… duplicate key… (ana.f@shop.test)` | **populated** — same message + `at Line: 2` |
+| **SQL Server** | `The CREATE UNIQUE INDEX statement terminated… duplicate key… (ana.f@shop.test)` | **populated** — same message + `at Line: 504` |
 | **PostgreSQL** | `23505: could not create unique index "ix_customer_email"` | **empty** |
 | **MySQL** | `Duplicate entry 'ana.f@shop.test' for key 'Customer.IX_Customer_Email'` (`1062`) | **empty** |
 | **MariaDB** | `Duplicate entry 'ana.f@shop.test' for key 'IX_Customer_Email'` (`1062`) — no table prefix on the key | **empty** |
 
-That's the headline: **only SQL Server populates `Errors.log`** (with the fault + line number). On
-PostgreSQL, MySQL, and MariaDB the detail is in the `Progress.log`, and `Errors.log` is empty. *Where
-you look for the fault is engine-specific.* Three doors:
+> **On 2.7.x** SQL Server's `Errors.log` carries the same message with `at Line: 458`.
+
+That's the headline: **for a failure in a phase the engine computes, only SQL Server populates
+`Errors.log`** (with the fault + line number). On PostgreSQL, MySQL, and MariaDB the detail is in the
+`Progress.log`, and `Errors.log` is empty. A failed *user script* is different: its
+`Unable to quench '<path>': …` line lands in `Errors.log` on every engine (Module 4's backfill), while
+a failed data delivery leaves `Errors.log` empty on every engine, SQL Server included. *Where you look for the fault depends
+on the engine and on what failed.* Three doors:
 
 - **SQL Server** — an `InfoMessage` event stream. Severity > 10 → both logs (with the line number).
-- **PostgreSQL** — a `Notice` stream. The SQLSTATE (`23505`) is printed literally; `Errors.log` stays empty.
+- **PostgreSQL** — a `Notice` stream. The SQLSTATE (`23505`) is printed literally; for this index failure `Errors.log` stays empty.
 - **MySQL and MariaDB** — no async event at all. Progress rides a **`SchemaSmith_StatusMessages`**
   sidecar table that a monitor polls every ~200 ms, because neither engine can push a notice on the busy
   line over a single connection. Confirm it's there with the lines below.
@@ -80,10 +87,11 @@ you look for the fault is engine-specific.* Three doors:
 
 ## Demo 2 — turning up the volume with `VerboseLogging`
 
-SQL Server user scripts love to talk — `PRINT` statements, low-severity warnings. SchemaSmith
-**suppresses that noise by default** and gives you one dial to bring it back: `VerboseLogging`
-(top-level config, default `false`, **SQL-Server-only**). The `verbose/` package adds a script that
-`PRINT`s a line every deploy. Deploy it twice:
+User scripts love to talk — `PRINT` statements and low-severity warnings on SQL Server, `RAISE NOTICE`
+on PostgreSQL. SchemaSmith **suppresses that noise by default** and gives you one dial to bring it
+back: `VerboseLogging` (top-level config, default `false`, **SQL Server and PostgreSQL**). The
+`verbose/` package adds a script that reports a line every deploy (`PRINT` on SQL Server,
+`RAISE NOTICE` on PostgreSQL). Deploy it twice:
 
 ```bash
 # from course8-module-06/<engine>
@@ -93,13 +101,17 @@ schemaquench --ConfigFile:quench.settings.verbose.json --LogPath:"$PWD/logs-verb
 
 - **SQL Server** — the `PRINT` line is **absent** from the plain log and **present** in the verbose one.
   That's the dial: your script's output, suppressed by default, surfaced on demand.
-- **PostgreSQL** — a `RAISE NOTICE` shows in **both** logs. `VerboseLogging` has no effect here; PostgreSQL surfaces its notices by default.
+- **PostgreSQL** — the same dial. The `RAISE NOTICE` line,
+  `Course 8 M6: VerboseLogging demo notice from a user script.`, is **absent** from the plain log and
+  **present** in the verbose one.
 - **MySQL and MariaDB** — the report line appears in **neither**. User scripts on these engines have no progress channel at all — the `SchemaSmith_StatusMessages` sidecar is the *engine's* channel, not yours.
+
+> **On 2.7.x** `VerboseLogging` has no effect on PostgreSQL: the `RAISE NOTICE` line shows in **both** logs, the plain one included (both runs exit `0`).
 
 > **Note:** Set it on the command line in either form — `--VerboseLogging=true` or `--VerboseLogging:true` — or put `"VerboseLogging": true` in your settings file.
 
 `VerboseLogging` doesn't touch SchemaSmith's own progress — the tool always shows you its phases — it's
-purely a valve for the low-severity chatter your SQL Server scripts produce.
+purely a valve for the low-severity chatter your SQL Server and PostgreSQL scripts produce.
 
 ## The capstone — your runbook
 

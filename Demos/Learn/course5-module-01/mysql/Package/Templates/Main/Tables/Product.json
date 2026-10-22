@@ -4,33 +4,21 @@
   "Columns": [
     {
       "Name": "`ProductId`",
-      "DataType": "int",
-      "ShouldApplyExpression": "",
-      "OldName": "",
-      "VariantName": ""
+      "DataType": "int"
     },
     {
       "Name": "`Sku`",
       "DataType": "varchar(64)",
-      "ShouldApplyExpression": "",
-      "OldName": "",
-      "VariantName": "",
       "CharacterSet": "utf8mb4"
     },
     {
       "Name": "`Name`",
       "DataType": "varchar(200)",
-      "ShouldApplyExpression": "",
-      "OldName": "",
-      "VariantName": "",
       "CharacterSet": "utf8mb4"
     },
     {
       "Name": "`UnitPrice`",
-      "DataType": "decimal(10,2)",
-      "ShouldApplyExpression": "",
-      "OldName": "",
-      "VariantName": ""
+      "DataType": "decimal(10,2)"
     }
   ],
   "Indexes": [
@@ -39,18 +27,11 @@
       "PrimaryKey": true,
       "Unique": true,
       "UniqueConstraint": true,
-      "IndexColumns": "`ProductId`",
-      "ShouldApplyExpression": "",
-      "VariantName": "",
-      "IndexType": "BTREE"
+      "IndexColumns": "`ProductId`"
     }
   ],
   "ForeignKeys": [],
   "CheckConstraints": [],
-  "ShouldApplyExpression": "",
-  "VariantName": "",
-  "OldName": "",
-  "Engine": "InnoDB",
   "RowFormat": "Dynamic",
   "CharacterSet": "utf8mb4",
   "Collation": "utf8mb4_0900_ai_ci",

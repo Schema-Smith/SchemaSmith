@@ -4,26 +4,17 @@
   "Columns": [
     {
       "Name": "`CustomerId`",
-      "DataType": "int",
-      "ShouldApplyExpression": "",
-      "OldName": "",
-      "VariantName": ""
+      "DataType": "int(11)"
     },
     {
       "Name": "`Email`",
       "DataType": "varchar(256)",
-      "ShouldApplyExpression": "",
-      "OldName": "",
-      "VariantName": "",
       "CharacterSet": "utf8mb4"
     },
     {
       "Name": "`FullName`",
       "DataType": "varchar(200)",
       "Nullable": true,
-      "ShouldApplyExpression": "",
-      "OldName": "",
-      "VariantName": "",
       "CharacterSet": "utf8mb4"
     }
   ],
@@ -33,20 +24,14 @@
       "PrimaryKey": true,
       "Unique": true,
       "UniqueConstraint": true,
-      "IndexColumns": "`CustomerId`",
-      "ShouldApplyExpression": "",
-      "VariantName": "",
-      "IndexType": "BTREE"
+      "IndexColumns": "`CustomerId`"
     }
   ],
   "ForeignKeys": [],
   "CheckConstraints": [],
-  "ShouldApplyExpression": "",
-  "VariantName": "",
-  "OldName": "",
-  "Engine": "InnoDB",
   "RowFormat": "Dynamic",
   "CharacterSet": "utf8mb4",
-  "Collation": "utf8mb4_unicode_ci",
-  "FullTextIndexes": []
+  "Collation": "utf8mb4_uca1400_ai_ci",
+  "FullTextIndexes": [],
+  "Periods": []
 }

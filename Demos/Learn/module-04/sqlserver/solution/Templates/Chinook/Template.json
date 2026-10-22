@@ -4,6 +4,10 @@
   "DatabaseIdentificationScript": "SELECT [Name] FROM master.sys.databases WHERE [Name] = '{{ChinookDb}}'",
   "ScriptFolders": [
     {
+      "FolderPath": "Prerequisites",
+      "QuenchSlot": "Objects"
+    },
+    {
       "FolderPath": "Before Scripts"
     },
     {
@@ -47,6 +51,16 @@
       "ObjectType": "Procedures"
     },
     {
+      "FolderPath": "Sequences",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Sequences"
+    },
+    {
+      "FolderPath": "Synonyms",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Synonyms"
+    },
+    {
       "FolderPath": "Triggers",
       "QuenchSlot": "AfterTablesObjects",
       "ObjectType": "Triggers"
@@ -55,6 +69,16 @@
       "FolderPath": "DDLTriggers",
       "QuenchSlot": "AfterTablesObjects",
       "ObjectType": "DDLTriggers"
+    },
+    {
+      "FolderPath": "SchemaBound Views",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "SchemaBoundViews"
+    },
+    {
+      "FolderPath": "SchemaBound Functions",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "SchemaBoundFunctions"
     },
     {
       "FolderPath": "Table Data",
