@@ -822,6 +822,12 @@ public class DatabaseQuench
                     WhatIfLogTemplateScripts(command, "Between Table And Keys", _iteration.BetweenTablesAndKeysScripts, DatabaseScriptSlot.BetweenTablesAndKeys);
                 }
 
+                // Step: MariaDB VECTOR indexes whose M or DISTANCE changed. MariaDB has no ALTER for either, and the options are
+                // only in SHOW CREATE TABLE, which a procedure cannot read: the index is dropped here, and the indexes step
+                // builds it again as declared.
+                if (_product.Platform == Platform.MariaDb && _updateTables && _mySqlServerVersionNum >= 1107)
+                    RebuildChangedVectorIndexes(effectiveTableCmd);
+
                 // Step: Indexes and constraints
                 if (_updateTables)
                 {
@@ -1827,6 +1833,63 @@ EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
         catch (DbException e)
         {
             SafeProgressLog($"  Could not record the expression map ({e.Message}). Expression comparison falls back to text on the next run.");
+        }
+    }
+
+    private void RebuildChangedVectorIndexes(IDbCommand cmd)
+    {
+        var declared = _template.Tables
+            .SelectMany(t => t.Indexes.OfType<Schema.Domain.MariaDb.MariaDbIndex>()
+                .Where(i => string.Equals(i.IndexType, "VECTOR", StringComparison.OrdinalIgnoreCase))
+                .Select(i => (Table: Unquote(t.Name), Index: i)))
+            .ToList();
+        if (declared.Count == 0) return;
+
+        var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        cmd.CommandText = "SELECT TABLE_NAME, INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_TYPE = 'VECTOR'";
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read()) live.Add($"{reader.GetString(0)}.{reader.GetString(1)}");
+        if (live.Count == 0) return;
+
+        cmd.CommandText = "SELECT @@mhnsw_default_m, @@mhnsw_default_distance";
+        int defaultM;
+        string defaultDistance;
+        using (var reader = cmd.ExecuteReader())
+        {
+            reader.Read();
+            defaultM = Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
+            defaultDistance = reader.GetValue(1)?.ToString();
+        }
+
+        foreach (var table in declared.GroupBy(d => d.Table, StringComparer.OrdinalIgnoreCase))
+        {
+            var candidates = table.Where(d => live.Contains($"{table.Key}.{Unquote(d.Index.Name)}")).ToList();
+            if (candidates.Count == 0) continue;
+            cmd.CommandText = $"SHOW CREATE TABLE `{table.Key.Replace("`", "``")}`";
+            string createTable;
+            using (var reader = cmd.ExecuteReader())
+                createTable = reader.Read() ? reader.GetString(1) : "";
+            foreach (var (_, index) in candidates.Where(c => MariaDbVectorIndexOptions.NeedsRebuild(c.Index, createTable, defaultM, defaultDistance)))
+            {
+                var name = Unquote(index.Name);
+                var auditName = $"{table.Key}.{name}";
+                if (IsWhatIf)
+                {
+                    SafeProgressLog($"  [WhatIf] Would rebuild VECTOR index `{table.Key}`.`{name}`: its M or DISTANCE changed");
+                    ChangeAudit?.Record("index", auditName, "wouldRebuild");
+                    continue;
+                }
+                SafeProgressLog($"  Rebuilding VECTOR index `{table.Key}`.`{name}`: its M or DISTANCE changed");
+                cmd.CommandText = $"ALTER TABLE `{table.Key.Replace("`", "``")}` DROP INDEX `{name.Replace("`", "``")}`";
+                cmd.ExecuteNonQuery();
+                ChangeAudit?.Record("index", auditName, "dropped");
+            }
+        }
+
+        static string Unquote(string name)
+        {
+            name = name?.Trim() ?? "";
+            return name.Length > 1 && name[0] == '`' && name[^1] == '`' ? name[1..^1].Replace("``", "`") : name;
         }
     }
 
