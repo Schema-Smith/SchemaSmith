@@ -688,6 +688,7 @@ public static class ForgeKindler
                 // Must follow fn_RebuildBlockedReason (it calls it to refuse) and PrintWithNoWait (its
                 // WhatIf output), and precede the quench procedures that will elect a rebuild.
                 new("SchemaSmith.RebuildTable.sql"),
+                new("SchemaSmith.ValidateTableOwnership.sql"),
                 new("SchemaSmith.MissingTableAndColumnQuench.sql"),
                 // Must precede ModifiedTableQuench, which CALLs it. Split out of that procedure because
                 // SQL Server compiles a procedure's statements whether or not they run and caches the plan
@@ -1000,6 +1001,7 @@ public static class ForgeKindler
                 // ladder every converted ALTER runs through. Called by the table and index quenches below.
                 new("SchemaSmith_StageOnlineApply.sql"),
                 new("SchemaSmith_ExecuteOnline.sql"),
+                new("SchemaSmith_ValidateTableOwnership.sql"),
                 new("SchemaSmith_MissingTableAndColumnQuench.sql"),
                 // #530: a table's FullTextIndexes, created and re-created by both index paths, not only the index-only one.
                 new("SchemaSmith_DropModifiedFullTextIndexes.sql"),

@@ -139,9 +139,7 @@ public abstract class TableQuench_MiscellaneousSharedTests : BaseTableQuenchTest
 
         var ex = Assert.Throws<MySqlException>(() =>
         {
-            // Index-drop flags (trailing 0, 0) are irrelevant here: the call must fail at the
-            // ownership check long before any index work.
-            cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{TestSchema}', 0, 0, 1, 1, 1, 1, 0, 0, 0)";
+            cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ValidateTableOwnership('{_productName}', '{TestSchema}')";
             cmd.ExecuteNonQuery();
         });
         Assert.That(ex!.Message, Does.Contain("already owned by another product").IgnoreCase);

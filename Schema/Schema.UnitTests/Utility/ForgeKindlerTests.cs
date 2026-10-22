@@ -348,7 +348,8 @@ public class ForgeKindlerTests
         // +1 on SQL Server = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
         // +1 on SQL Server = DegradeUnsupportedSelectiveXmlIndexes (below 2012 SP1 a selective XML index is skipped).
         // +1 on SQL Server = DegradeUnsupportedJsonIndexes (below 2025 a JSON index is skipped).
-        Assert.That(sqlServer.Length, Is.EqualTo(74));
+        // +1 on SQL Server = ValidateTableOwnership (the ownership refusal, before anything is created or renamed).
+        Assert.That(sqlServer.Length, Is.EqualTo(75));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -545,7 +546,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_ConvergePrimaryKeys (an existing table's declared primary key, added or replaced).
         // +2 = SchemaSmith_SupportsVectorIndex + SchemaSmith_DegradeVectorIndexes (MariaDB 11.7's VECTOR index).
         // +1 = SchemaSmith_CleanCheckClause (a check's introducers removed without cutting names that end in one).
-        Assert.That(mysql.Length, Is.EqualTo(108));
+        // +1 = SchemaSmith_ValidateTableOwnership (the ownership refusal, before anything is created or renamed).
+        Assert.That(mysql.Length, Is.EqualTo(109));
     }
 
     [Test]

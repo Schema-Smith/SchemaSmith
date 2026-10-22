@@ -58,10 +58,11 @@ BEGIN
     RAISE EXCEPTION 'Tablespace not found: %. Create it, or remove Tablespace from the declaration.', missing_tablespaces;
   END IF;
 
+  -- Before anything is created or renamed, so a refusal leaves another product's table as it was.
+  CALL "SchemaSmith"."ValidateTableOwnership"(p_ProductName, p_WhatIf);
   -- #508: before any table or column is created, so only what already exists is checked on a scratch copy.
   CALL "SchemaSmith"."ExpressionMapAdopt"(p_WhatIf);
   CALL "SchemaSmith"."MissingTableAndColumnQuench"(p_WhatIf);
-  CALL "SchemaSmith"."ValidateTableOwnership"(p_ProductName, p_WhatIf);
   CALL "SchemaSmith"."ModifiedTableQuench"(p_WhatIf := p_WhatIf, p_DropUnknownIndexes := p_DropUnknownIndexes, p_DropTablesRemovedFromProduct := p_DropTablesRemovedFromProduct,
                                            p_RebuildPolicyMode := p_RebuildPolicyMode, p_RebuildPolicyThreshold := p_RebuildPolicyThreshold, p_RebuildPolicyOnOrderMismatch := p_RebuildPolicyOnOrderMismatch,
                                            p_OnlineApply := p_OnlineApply);

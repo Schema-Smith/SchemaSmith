@@ -108,26 +108,6 @@ BEGIN TRY
       JOIN #SchemaList sl WITH (NOLOCK) ON sl.[Schema] = po.[Schema] COLLATE DATABASE_DEFAULT
       WHERE po.[IndexName] = ''
 
-  RAISERROR('Validate Table Ownership', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Table ' + tp.[Schema] + '.' + tp.[TableName] + ' owned by different product. [' + tp.[value] + ']'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
-                           FROM #Tables t WITH (NOLOCK)
-                           JOIN #TableProperties tp WITH (NOLOCK) ON t.[Schema] = tp.[Schema]
-                                                                 AND t.[Name] = QUOTENAME(tp.TableName)
-                           WHERE tp.PropertyName = 'ProductName'
-                             AND tp.[value] <> @ProductName
-                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-
-  IF EXISTS (SELECT *
-               FROM #Tables t WITH (NOLOCK)
-               JOIN #TableProperties tp WITH (NOLOCK) ON t.[Schema] = tp.[Schema]
-                                                     AND t.[Name] = QUOTENAME(tp.TableName)
-               WHERE tp.PropertyName = 'ProductName'
-                 AND tp.[value] <> @ProductName)
-  BEGIN
-    RAISERROR('One or more tables in this quench are already owned by another product', 16, 1) WITH NOWAIT
-  END
-
   -- Filegroup placement (#filegroups): an EXISTING table (NewTable = 0) whose declared filegroup differs
   -- from where it is currently deployed is a MOVE -- SQL Server rebuild territory (Table Rebuild Triggers,
   -- deferred to RC2), so this errors naming both rather than silently rebuilding it. Declared NULL means

@@ -1766,7 +1766,7 @@ public class DatabaseQuenchTests
     }
 
     [Test]
-    public void QuenchModifiedTables_PostgreSql_ProductNameWithApostrophe_EscapesCorrectly()
+    public void QuenchMissingTablesAndColumns_PostgreSql_ProductNameWithApostrophe_EscapesCorrectly()
     {
         RegisterMockFileWrapper();
         var product = new Product { Name = "O'Brien's DB", Platform = Platform.PostgreSQL };
@@ -1774,8 +1774,9 @@ public class DatabaseQuenchTests
         var quench = new DatabaseQuench("srv", product, template, "db",
             false, "false", false, "false", "false", "false", "false", "false", "false", "false", "false", false, false, null);
 
+        // The ownership check, which names the product, runs ahead of the missing-table step.
         var mockCmd = CreateMockCommand();
-        quench.QuenchModifiedTables(mockCmd);
+        quench.QuenchMissingTablesAndColumns(mockCmd);
 
         Assert.That(mockCmd.CommandText, Does.Contain("O''Brien''s DB"));
     }

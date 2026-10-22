@@ -1652,7 +1652,7 @@ public class DatabaseQuench
 
     #region Platform-Specific Table Quench SQL
 
-    private void QuenchMissingTablesAndColumns(IDbCommand tableCommand)
+    internal void QuenchMissingTablesAndColumns(IDbCommand tableCommand)
     {
         if (_product.Platform.GetBasePlatform() == Platform.MySQL && _template.Tables.Count == 0)
             return;
@@ -1694,8 +1694,10 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
                     $@"CALL ""SchemaSmith"".""ParseTableJson""(@tableJson, {_template.UpdateFillFactor.ToString().ToLower()});",
                     IterationTableSchema, "Parse Table Json");
 
-                // #508: before any table or column is created, so only what already exists is checked on a scratch copy.
-                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {_whatIfOnly}); CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {_whatIfOnly})";
+                // Ownership first, so a refusal leaves another product's table as it was. #508: adoption before any table
+                // or column is created, so only what already exists is checked on a scratch copy.
+                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ValidateTableOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
+CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {_whatIfOnly}); CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {_whatIfOnly})";
                 break;
             }
             case Platform.MySQL:
@@ -1703,8 +1705,9 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
                 ParseMySqlTableJson(tableCommand);
                 SetMySqlOnlineApply(tableCommand);
                 var whatIf = _whatIfOnly == "1" ? 1 : 0;
-                // #508: before any table or column is created (skipped under WhatIf inside the procedure: its copy is a real table).
-                tableCommand.CommandText = $"CALL SchemaSmith_ExpressionMapAdopt('{EscapeSqlLiteral(_databaseName)}', {whatIf}); CALL SchemaSmith_MissingTableAndColumnQuench('{EscapeSqlLiteral(_databaseName)}', {whatIf})";
+                // Ownership first, so a refusal leaves another product's table as it was. #508: adoption before any table or
+                // column is created (skipped under WhatIf inside the procedure: its copy is a real table).
+                tableCommand.CommandText = $"CALL SchemaSmith_ValidateTableOwnership('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(_databaseName)}'); CALL SchemaSmith_ExpressionMapAdopt('{EscapeSqlLiteral(_databaseName)}', {whatIf}); CALL SchemaSmith_MissingTableAndColumnQuench('{EscapeSqlLiteral(_databaseName)}', {whatIf})";
                 break;
             }
         }
@@ -1739,7 +1742,6 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"
-CALL ""SchemaSmith"".""ValidateTableOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
 CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnknownIndexes}, p_WhatIf := {_whatIfOnly}, p_DropTablesRemovedFromProduct := {_dropRemovedTables}, p_DropColumnsRemovedFromProduct := {_dropRemovedColumns}, p_DropForeignKeysRemovedFromProduct := {_dropRemovedForeignKeys}, p_DropCheckConstraintsRemovedFromProduct := {_dropRemovedCheckConstraints}, p_DropExcludeConstraintsRemovedFromProduct := {_dropRemovedExcludeConstraints}, p_DropStatisticsRemovedFromProduct := {_dropRemovedStatistics}, p_DropIndexesRemovedFromProduct := {_dropRemovedIndexes}, p_CaptureWouldDrop := {FormatBooleanFlag(CaptureWouldDrop)}, p_RebuildPolicyMode := '{RebuildPolicyMode}', p_RebuildPolicyThreshold := {RebuildPolicyThreshold}, p_RebuildPolicyOnOrderMismatch := {RebuildPolicyOnOrderMismatch}, p_OnlineApply := '{OnlineApply}');";
                 break;
             case Platform.MySQL:
@@ -1820,6 +1822,7 @@ END CATCH";
     }
 
     internal string SqlServerPreflight => $@"BEGIN TRY
+  EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ValidateTableOwnership @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}
   EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.DegradeUnsupportedFeatures @DeferDatabaseToggles = {(DeferDatabaseToggles ? 1 : 0)}
   EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.CdcPreflight @CdcFilegroup = {TemplateCdcFilegroup}, @CdcSupportsNetChanges = {TemplateCdcSupportsNetChanges}
 END TRY
