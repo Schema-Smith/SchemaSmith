@@ -95,6 +95,30 @@ namespace Schema.UnitTests.Capabilities
             Assert.That(problems, Is.Empty, string.Join("; ", problems));
         }
 
+        // A gate that turns on a patch (MariaDB 10.5.3, MySQL 8.0.16) must say so in its registry row, or the row reads the
+        // whole minor as supported and tooling driven from it advises a declaration the server will degrade.
+        [Test]
+        public void EveryPatchLevelGate_HasARegistryRowAtThatPatch()
+        {
+            var patchLiteral = new Regex(@"PatchNum\(\)\s*>=\s*(\d+)");
+            var problems = new List<string>();
+            foreach (var (gate, key) in GateRegistryKey)
+            {
+                var resource = SchemaAsm.GetManifestResourceNames().First(n => n.EndsWith("." + gate, StringComparison.Ordinal));
+                using var reader = new StreamReader(SchemaAsm.GetManifestResourceStream(resource)!);
+                var sql = reader.ReadToEnd();
+                var patches = CapabilityRegistry.All.Where(c => c.Key == key).Select(c => c.IntroducedInPatchComparable).ToList();
+                foreach (Match m in patchLiteral.Matches(sql))
+                {
+                    var n = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                    if (n % 100 != 0 && !patches.Contains(n))
+                        problems.Add($"{gate} turns on patch {n}, but no '{key}' row has IntroducedInPatchComparable {n}");
+                }
+            }
+
+            Assert.That(problems, Is.Empty, string.Join("; ", problems));
+        }
+
         // The Supports*.sql sweep above only sees gates written as a gate FUNCTION. A degrade written as an
         // inline version comparison has no such file and is invisible to it -- which is how PostgreSQL's
         // VIRTUAL generated-column degrade shipped in v2.5.0 with no registry row, fully policy-routed and

@@ -230,7 +230,8 @@ namespace Schema.Capabilities
             rows.Add(new("explicit-system-time-columns", "Explicit system-time columns on an existing table", Platform.MariaDb,
                 1107, "MariaDB 11.7", null, DegradeKind.Skip, "explicit system-time columns (MariaDB 11.7)"));
             rows.Add(new("temporal-key", "Temporal key (WITHOUT OVERLAPS)", Platform.MariaDb,
-                1005, "MariaDB 10.5.3", null, DegradeKind.Reduced, "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)"));
+                1005, "MariaDB 10.5.3", null, DegradeKind.Reduced, "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)",
+                IntroducedInPatchComparable: 100503));
             // A VECTOR index is skipped below 11.7. MySQL Community has none at any version, so it has no row.
             rows.Add(new("vector-index", "Vector index", Platform.MariaDb,
                 1107, "MariaDB 11.7", null, DegradeKind.Skip, "INDEX (VECTOR, MariaDB 11.7)"));
