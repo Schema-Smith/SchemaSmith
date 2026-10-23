@@ -449,6 +449,17 @@ public abstract class ResolvedSqlArtifactIntegrationTestsSharedTests
                     "Generated-DDL failure must surface with the unified 'Resolved SQL written to:' wording, not 'Debug Script:'.");
                 Assert.That(progressOutput, Does.Not.Contain("Debug Script:"),
                     "The legacy 'Debug Script:' wording must no longer appear.");
+
+                // A table step's file reads the parse step's temp tables, so on its own it failed on a missing one.
+                string[] tableSteps = ["Quench Missing Tables And Columns", "Quench Modified Tables", "Quench Table Features", "Quench Indexes", "Quench Foreign Keys"];
+                var stepFiles = artifactFiles.Where(f => tableSteps.Any(step => Path.GetFileName(f).StartsWith("SchemaQuench - " + step))).ToList();
+                Assert.That(stepFiles, Is.Not.Empty, "the failing index step writes its file; written: " + string.Join(", ", artifactFiles.Select(Path.GetFileName)));
+                foreach (var stepFile in stepFiles)
+                {
+                    var lines = File.ReadAllLines(stepFile);
+                    Assert.That(lines[0], Does.StartWith(ResolvedSqlArtifactWriter.OwnerLinePrefix), "the owner line stays first, for the cleanup that reads it");
+                    Assert.That(lines, Does.Contain(DatabaseQuench.ParsedTablesNote), $"{Path.GetFileName(stepFile)} says what has to run before it");
+                }
             }
             finally
             {

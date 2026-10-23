@@ -429,8 +429,7 @@
   -- The fill half has to be safe to run twice against the same working set. It is retried on transient
   -- contention, and the retry re-executes THIS half only -- the tables are created once, above, and are
   -- not re-created between attempts. Without the reset, a deadlock partway through would leave the rows
-  -- that had already committed in place and the retry would add a second copy of them. (Before the
-  -- script was split, the retry re-ran the DROP/CREATE too, so it started clean by accident.)
+  -- that had already committed in place and the retry would add a second copy of them.
   -- TRUNCATE rather than DELETE: no foreign keys point at these, and on the first run they are empty.
   TRUNCATE TABLE #Tables
   TRUNCATE TABLE #Indexes

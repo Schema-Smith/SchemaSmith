@@ -1712,7 +1712,7 @@ CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {_whatIfOnly}); CALL ""S
             }
         }
 
-        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Missing Tables And Columns"), tableCommand.CommandText);
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Missing Tables And Columns"), ReadsTheParsedTables(tableCommand.CommandText));
         try
         {
             ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
@@ -1772,7 +1772,7 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
             }
         }
 
-        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Modified Tables"), tableCommand.CommandText);
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Modified Tables"), ReadsTheParsedTables(tableCommand.CommandText));
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
         RunDeferredOnlineWork(tableCommand);
@@ -1845,7 +1845,7 @@ END CATCH";
 EXEC [{db}].SchemaSmith.FileStreamColumnQuench @WhatIf = {_whatIfOnly}
 EXEC [{db}].SchemaSmith.CdcQuench @WhatIf = {_whatIfOnly}
 EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
-        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Table Features"), tableCommand.CommandText);
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Table Features"), ReadsTheParsedTables(tableCommand.CommandText));
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
     }
@@ -1979,7 +1979,7 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
             }
         }
 
-        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Indexes"), tableCommand.CommandText);
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Indexes"), ReadsTheParsedTables(tableCommand.CommandText));
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
         RunDeferredOnlineWork(tableCommand);
@@ -2048,7 +2048,7 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
             }
         }
 
-        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Foreign Keys"), tableCommand.CommandText);
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Foreign Keys"), ReadsTheParsedTables(tableCommand.CommandText));
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
         RunDeferredOnlineWork(tableCommand);
@@ -2421,6 +2421,12 @@ SET NOCOUNT ON
     #endregion
 
     #region Connection and Execution
+
+    // A table step reads the temp tables the parse step built on the same connection, so its file alone fails on a missing
+    // temp table; the file says what has to run first.
+    internal const string ParsedTablesNote = "-- Reads the temp tables the Parse Table Json step builds: run that step's file first, in the same session.";
+
+    private static string ReadsTheParsedTables(string sql) => ParsedTablesNote + Environment.NewLine + sql;
 
     // A connect that stalled said only "The operation has timed out", under "Begin Quench", naming neither the target nor
     // that it was the connect.

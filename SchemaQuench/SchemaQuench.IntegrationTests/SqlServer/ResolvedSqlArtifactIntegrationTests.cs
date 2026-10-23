@@ -439,6 +439,17 @@ public class ResolvedSqlArtifactIntegrationTests
                 var artifactContent = string.Join("\n", artifactFiles.Select(File.ReadAllText));
                 Assert.That(artifactContent, Does.Contain("sup3rs3cr3t_ddl_probe"),
                     "Without ScrubArtifacts, the generated-DDL artifact must retain the raw resolved SQL.");
+
+                // A table step's file reads the parse step's temp tables, so on its own it failed on a missing one.
+                string[] tableSteps = ["Quench Missing Tables And Columns", "Quench Modified Tables", "Quench Table Features", "Quench Indexes", "Quench Foreign Keys"];
+                var stepFiles = artifactFiles.Where(f => tableSteps.Any(step => Path.GetFileName(f).StartsWith("SchemaQuench - " + step))).ToList();
+                Assert.That(stepFiles, Is.Not.Empty, "the failing index step writes its file; written: " + string.Join(", ", artifactFiles.Select(Path.GetFileName)));
+                foreach (var stepFile in stepFiles)
+                {
+                    var lines = File.ReadAllLines(stepFile);
+                    Assert.That(lines[0], Does.StartWith(ResolvedSqlArtifactWriter.OwnerLinePrefix), "the owner line stays first, for the cleanup that reads it");
+                    Assert.That(lines, Does.Contain(DatabaseQuench.ParsedTablesNote), $"{Path.GetFileName(stepFile)} says what has to run before it");
+                }
             }
             finally
             {
