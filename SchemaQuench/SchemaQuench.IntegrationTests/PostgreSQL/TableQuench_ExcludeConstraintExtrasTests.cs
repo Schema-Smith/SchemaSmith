@@ -13,7 +13,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// is a no-op; a change to the storage parameters replaces the constraint.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ExcludeConstraintExtrasTests : BaseTableQuenchTests
 {
     private static string Json(string table, string extras) => $$"""

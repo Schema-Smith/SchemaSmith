@@ -6,6 +6,7 @@ using Microsoft.Data.SqlClient;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Domain.SqlServer;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -20,7 +21,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 //
 // Each test owns a UNIQUE product name so it is scoped to its own tables under parallel execution.
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_PartitioningTests : BaseTableQuenchTests
 {
     private const string SchemeA = "PS_SchemaSmithTestA";
@@ -578,7 +579,7 @@ SELECT ds.[name]
     private static SqlServerTable GenerateTable(IDbCommand cmd, string table)
     {
         cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
-        using var reader = cmd.ExecuteReader();
+        using var reader = TransientRetry.Run(() => cmd.ExecuteReader());
         var json = string.Empty;
         while (reader.Read()) json += $"{reader.GetString(0)}\r\n";
         return (SqlServerTable)PlatformDeserializer.DeserializeTable(json, Platform.SqlServer);

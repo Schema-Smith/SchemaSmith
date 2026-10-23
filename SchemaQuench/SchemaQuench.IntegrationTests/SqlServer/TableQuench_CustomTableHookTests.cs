@@ -6,6 +6,7 @@ using Microsoft.Data.SqlClient;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -15,7 +16,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 // does not recreate it if the restore brought it back. The hooks are detected per database, so each
 // test runs against its own throwaway database (created, kindled, dropped here).
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_CustomTableHookTests : BaseTableQuenchTests
 {
     private const string Product = "Custom Hook Tests";
@@ -177,7 +178,7 @@ END");
     private void Quench(IDbCommand cmd, string db, string json, bool autoDrop)
     {
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{Product}', @TableDefinitions = '{json.Replace("'", "''")}', @WhatIf = 0, @DropTablesRemovedFromProduct = {(autoDrop ? 1 : 0)}, @DropUnknownIndexes = 0";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static void Exec(IDbCommand cmd, string sql)

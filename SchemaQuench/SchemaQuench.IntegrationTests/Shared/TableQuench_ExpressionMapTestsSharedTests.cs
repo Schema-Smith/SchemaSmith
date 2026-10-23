@@ -386,11 +386,11 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
                 """;
 
             cmd.CommandText = $"CALL SchemaSmith_TableQuench('{_productName}', '{_mainDb}', '{Json("IX_Tag_Old").Replace("'", "''")}', 0, 1, 0)";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             ClearMessages(cmd);
 
             cmd.CommandText = $"CALL SchemaSmith_TableQuench('{_productName}', '{_mainDb}', '{Json("IX_Tag_New").Replace("'", "''")}', 0, 1, 0)";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
             cmd.CommandText = $@"SELECT GROUP_CONCAT(DISTINCT INDEX_NAME ORDER BY INDEX_NAME) FROM INFORMATION_SCHEMA.STATISTICS
                                   WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}'";

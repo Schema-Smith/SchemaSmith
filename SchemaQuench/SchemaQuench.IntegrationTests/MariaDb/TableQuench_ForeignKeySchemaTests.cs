@@ -10,7 +10,7 @@ namespace SchemaQuench.IntegrationTests.MariaDb;
 /// <summary>MariaDb binding of the shared foreign-key referenced-database test (MY-027).</summary>
 [Category("MariaDb")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ForeignKeySchemaTests : TableQuench_ForeignKeySchemaSharedTests
 {
     protected override Platform Platform => Platform.MariaDb;

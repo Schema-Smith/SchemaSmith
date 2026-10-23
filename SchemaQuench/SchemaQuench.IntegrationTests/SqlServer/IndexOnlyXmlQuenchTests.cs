@@ -6,6 +6,7 @@ using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer
 {
@@ -93,7 +94,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             using var cmd = conn.CreateCommand();
             cmd.CommandText = sql;
             foreach (var (n, v) in parameters) AddParam(cmd, n, v);
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
 
         private static void AddParam(IDbCommand cmd, string name, string value)

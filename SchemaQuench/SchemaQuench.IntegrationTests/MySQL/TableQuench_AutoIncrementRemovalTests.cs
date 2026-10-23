@@ -8,7 +8,7 @@ using SchemaQuench.IntegrationTests.Shared;
 namespace SchemaQuench.IntegrationTests.MySQL;
 
 [Category("MySQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_AutoIncrementRemovalTests : TableQuench_AutoIncrementRemovalSharedTests
 {
     protected override Platform Platform => Platform.MySQL;

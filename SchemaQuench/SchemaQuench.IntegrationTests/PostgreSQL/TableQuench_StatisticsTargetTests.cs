@@ -13,7 +13,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// says nothing. Below 13 a declared target follows the unsupported-feature policy.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_StatisticsTargetTests : BaseTableQuenchTests
 {
     private static string Json(string table, string target) => $$"""

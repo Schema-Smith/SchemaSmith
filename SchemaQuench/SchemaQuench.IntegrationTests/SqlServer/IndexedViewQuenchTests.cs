@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Isolators;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -672,7 +673,7 @@ WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSum
     @UpdateFillFactor = 0,
     @TemplateName = N'Main',
     @SchemaName = N''";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static string ViewDefinitionWithTwoIndexes()
@@ -1151,7 +1152,6 @@ EXEC sp_addextendedproperty 'MS_Description', 'kept column', 'SCHEMA', '{_schema
         Assert.That(ViewDescription(cmd), Is.Null, "an empty string is the request to remove it");
         EnsureViewDropped(cmd);
     }
-}
 
     private static string ViewDefinitionWithIndexDescription(string description) =>
         ViewDefinitionWithTwoIndexes().Replace("\"Name\":\"[IX_vTestSummary_Name]\",", "\"Name\":\"[IX_vTestSummary_Name]\",\"Description\":\"" + description + "\",");
@@ -1187,3 +1187,4 @@ EXEC sp_addextendedproperty 'MS_Description', 'kept column', 'SCHEMA', '{_schema
         Assert.That(IndexDescription(cmd), Is.Null, "an empty string is the request to remove it");
         EnsureViewDropped(cmd);
     }
+}

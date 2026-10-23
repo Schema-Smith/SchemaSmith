@@ -4,11 +4,12 @@ using Schema.DataAccess;
 using Schema.Domain;
 using System;
 using Npgsql;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_MiscellaneousTests : BaseTableQuenchTests
 {
     [Test]
@@ -190,7 +191,7 @@ INSERT INTO ""SchemaSmith"".""ProductOwnership"" (""Schema"", ""TableName"", ""I
             """;
 
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_DropTablesRemovedFromProduct := true);";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema = 'MiscellaneousTests' AND table_name = 'TableNoLongerInProduct')";
         Assert.That(cmd.ExecuteScalar() as bool?, Is.False);
@@ -420,7 +421,7 @@ INSERT INTO public.{oldTableName} (id, val) VALUES (1, 42);
 
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := false)";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{oldTableName}'";
         Assert.That((long)cmd.ExecuteScalar()!, Is.EqualTo(0), "Old table should no longer exist");
@@ -466,7 +467,7 @@ INSERT INTO public.{tableName} (id, old_col) VALUES (1, 99);
 
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := false)";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '{tableName}' AND column_name = 'old_col'";
         Assert.That((long)cmd.ExecuteScalar()!, Is.EqualTo(0), "Old column name should no longer exist");
@@ -510,7 +511,7 @@ INSERT INTO public.{tableName} (id, old_col) VALUES (1, 99);
         }
         """;
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{jsonV1.Replace("'", "''")}', p_DropTablesRemovedFromProduct := true, p_DropUnknownIndexes := false)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.CommandText = $"INSERT INTO public.{oldTableName} (id, val) VALUES (1, 42)";
         cmd.ExecuteNonQuery();
 
@@ -527,7 +528,7 @@ INSERT INTO public.{tableName} (id, old_col) VALUES (1, 99);
         }
         """;
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{jsonV2.Replace("'", "''")}', p_DropTablesRemovedFromProduct := true, p_DropUnknownIndexes := false)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{oldTableName}'";
         Assert.That((long)cmd.ExecuteScalar()!, Is.EqualTo(0), "Old table should no longer exist");
@@ -565,7 +566,7 @@ INSERT INTO public.{tableName} (id, old_col) VALUES (1, 99);
         }
         """;
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{jsonV1.Replace("'", "''")}', p_DropTablesRemovedFromProduct := true, p_DropUnknownIndexes := false)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.CommandText = $"INSERT INTO public.{tableName} (id, old_col) VALUES (1, 99)";
         cmd.ExecuteNonQuery();
 
@@ -580,7 +581,7 @@ INSERT INTO public.{tableName} (id, old_col) VALUES (1, 99);
         }
         """;
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{jsonV2.Replace("'", "''")}', p_DropTablesRemovedFromProduct := true, p_DropUnknownIndexes := false)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '{tableName}' AND column_name = 'old_col'";
         Assert.That((long)cmd.ExecuteScalar()!, Is.EqualTo(0), "Old column name should no longer exist");
@@ -645,7 +646,7 @@ INSERT INTO public.{tableName} (id, old_col) VALUES (1, 99);
         ]
         """;
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{jsonV1.Replace("'", "''")}', p_DropTablesRemovedFromProduct := true, p_DropUnknownIndexes := false)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.CommandText = $"INSERT INTO public.{parentTable} (\"CustomerId\") VALUES (7)";
         cmd.ExecuteNonQuery();
         cmd.CommandText = $"INSERT INTO public.{oldTableName} (\"OrderId\", \"CustomerId\") VALUES (1, 7)";
@@ -683,7 +684,7 @@ INSERT INTO public.{tableName} (id, old_col) VALUES (1, 99);
         ]
         """;
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{jsonV2.Replace("'", "''")}', p_DropTablesRemovedFromProduct := true, p_DropUnknownIndexes := false)";
-        Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(), "Renaming a table and its constraints via OldName should not error (PG 42P16)");
+        Assert.DoesNotThrow(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()), "Renaming a table and its constraints via OldName should not error (PG 42P16)");
 
         // Table renamed, data preserved.
         cmd.CommandText = $"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{oldTableName}'";
@@ -757,7 +758,7 @@ CREATE TABLE public.{tableName} (id INT NOT NULL, room_id INT NOT NULL, during T
 
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := false)";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify exclude constraint exists
         cmd.CommandText = $@"
@@ -810,7 +811,7 @@ WHERE n.nspname = 'public' AND t.relname = '{tableName}'
 
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_WhatIf := true, p_DropUnknownIndexes := false, p_DropTablesRemovedFromProduct := false)";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' AND table_name = '{tableName}' AND column_name = 'new_col')";
         Assert.That(cmd.ExecuteScalar() as bool?, Is.False, "Column should not be added in WhatIf mode");
@@ -877,7 +878,7 @@ INSERT INTO public.{parentTable} (id) VALUES (1);
 
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := false)";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify FK is deferrable and initially deferred
         cmd.CommandText = $@"
@@ -956,7 +957,7 @@ COMMIT;
         """;
 
         cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := false)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $@"
 SELECT c.condeferrable, c.condeferred, c.confdeltype::TEXT, c.confupdtype::TEXT

@@ -353,7 +353,7 @@ public abstract class EventQuench_DropByAbsenceSharedTests : BaseTableQuenchTest
         {
             statements.Clear();
             var call = cmd.CommandText;
-            using var reader = cmd.ExecuteReader();
+            using var reader = TransientRetry.Run(() => cmd.ExecuteReader());
             while (reader.Read())
                 if (!reader.IsDBNull(0)) statements.Add(reader.GetString(0));
             reader.Close();

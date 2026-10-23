@@ -178,7 +178,7 @@ END");
     private void Quench(IDbCommand cmd, string db, string json, bool autoDrop)
     {
         cmd.CommandText = $"CALL SchemaSmith_TableQuench('{Product}', '{db}', '{json.Replace("'", "''")}', 0, 0, {(autoDrop ? 1 : 0)})";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static void Exec(IDbCommand cmd, string sql)

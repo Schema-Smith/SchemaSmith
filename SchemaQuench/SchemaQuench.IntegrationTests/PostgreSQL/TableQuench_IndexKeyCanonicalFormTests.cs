@@ -14,7 +14,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// index as one declared without it; and a changed operator class is a real change that replaces the index.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_IndexKeyCanonicalFormTests : BaseTableQuenchTests
 {
     private static string Json(string table, string indexColumns, string accessMethod = "btree") => $$"""

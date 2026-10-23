@@ -427,7 +427,7 @@ public class SystemVersioningDeployTests : BaseTableQuenchTests
             Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, package), "and it redeploys");
 
             cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
-            var partitioning = Newtonsoft.Json.Linq.JObject.Parse(cmd.ExecuteScalar()?.ToString() ?? "{}")["Partitioning"];
+            var partitioning = Newtonsoft.Json.Linq.JObject.Parse(TransientRetry.Run(() => cmd.ExecuteScalar())?.ToString() ?? "{}")["Partitioning"];
             Assert.Multiple(() =>
             {
                 Assert.That((string)partitioning?["Method"], Is.EqualTo("SYSTEM_TIME"), partitioning?.ToString());

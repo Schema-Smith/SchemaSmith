@@ -6,6 +6,7 @@ using System.Data;
 using Npgsql;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -14,7 +15,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 // plain unique index a key references could not be dropped at all, failing the deploy. A deploy now never drops a key
 // it will not re-create: an index such a key references is kept as it is.
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ForeignKeySafetyTests : BaseTableQuenchTests
 {
     private sealed record Tables(string Parent, string Suffix);
@@ -68,7 +69,7 @@ CREATE TABLE public.fksafe_byid_{u} (id integer PRIMARY KEY, parent_id integer N
         cmd.CommandText = indexOnly
             ? $"CALL \"SchemaSmith\".\"IndexOnlyQuench\"(p_ProductName := 'FkSafety', p_TableDefinitions := '{json.Replace("'", "''")}', p_DropUnknownIndexes := true);"
             : $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := 'FkSafety', p_TableDefinitions := '{json.Replace("'", "''")}', p_WhatIf := false, p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := true);";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private IDbCommand Open(out IDbConnection conn)

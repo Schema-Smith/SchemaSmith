@@ -11,7 +11,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// switched it deployed at exit 0 and left the old kind. PostgreSQL has no ALTER for it; the column is re-created.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_GeneratedColumnKindTests : BaseTableQuenchTests
 {
     [Test]

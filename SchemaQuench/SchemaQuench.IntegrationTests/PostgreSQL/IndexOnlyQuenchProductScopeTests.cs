@@ -7,6 +7,7 @@ using System.Data;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -23,7 +24,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// </summary>
 [Category("PostgreSQL")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class IndexOnlyQuenchProductScopeTests : BaseTableQuenchTests
 {
     [Test]
@@ -245,7 +246,7 @@ CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{product}', p_TableDe
 CALL ""SchemaSmith"".""ReplicaIdentityQuench""(p_WhatIf := {w});
 " + (whatIf ? "" : $@"CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{product}');
 ");
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private void CreateVendorTable(IDbCommand cmd, string table)

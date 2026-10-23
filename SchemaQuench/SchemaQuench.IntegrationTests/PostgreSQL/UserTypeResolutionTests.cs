@@ -16,7 +16,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// user-defined type is folded to the catalog's.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class UserTypeResolutionTests : BaseTableQuenchTests
 {
     private sealed record Env(IDbConnection Conn, IDbCommand Cmd, string Schema) : IDisposable

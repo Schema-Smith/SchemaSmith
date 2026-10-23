@@ -18,7 +18,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// and declared in natural form (Rule 32). The assertions are identity and the audit, not text.
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ExpressionMapAdoptTests : BaseTableQuenchTests
 {
     private static string Create(string t, string parked = "'AwaitingCompanyMapping', 'AwaitingRoleMapping'") => $"""

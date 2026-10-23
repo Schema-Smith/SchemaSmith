@@ -18,7 +18,7 @@ namespace SchemaQuench.IntegrationTests.MySQL;
 // and a package that declares a primary key replaces it. The deploy runs on this connection, so a session setting
 // stands in for the server one.
 [Category("MySQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_GeneratedInvisiblePrimaryKeyTests : BaseTableQuenchTests
 {
     protected override Platform Platform => Platform.MySQL;
@@ -100,7 +100,7 @@ public class TableQuench_GeneratedInvisiblePrimaryKeyTests : BaseTableQuenchTest
             RunTableQuenchProc(cmd, Json(table, primaryKey: false));
             cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
             var json = new StringBuilder();
-            using (var reader = cmd.ExecuteReader())
+            using (var reader = TransientRetry.Run(() => cmd.ExecuteReader()))
                 while (reader.Read()) json.Append(reader.GetString(0));
             var extracted = JObject.Parse(json.ToString());
             Assert.Multiple(() =>

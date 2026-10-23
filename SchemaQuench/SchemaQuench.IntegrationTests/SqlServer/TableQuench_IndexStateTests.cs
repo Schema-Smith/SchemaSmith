@@ -14,7 +14,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// where before it was invisible to the scan and the re-create failed on the taken name (1913).
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_IndexStateTests : BaseTableQuenchTests
 {
     private static string Json(string table, string indexExtra = "", string columns = "[Code]") => $$"""

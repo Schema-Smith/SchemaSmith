@@ -13,7 +13,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 // policy were both silently lost on an extract -> deploy round trip (a retention policy disappearing is
 // compliance-shaped loss). Each test owns a UNIQUE product name so it is scoped to its own tables.
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_TemporalHistoryAndRetentionTests : BaseTableQuenchTests
 {
     [Test]

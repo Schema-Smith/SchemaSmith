@@ -10,7 +10,7 @@ namespace SchemaQuench.IntegrationTests.MySQL;
 /// <summary>MySQL binding of the shared table-compression tests (MY-026).</summary>
 [Category("MySQL")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_CompressionTests : TableQuench_CompressionSharedTests
 {
     protected override Platform Platform => Platform.MySQL;

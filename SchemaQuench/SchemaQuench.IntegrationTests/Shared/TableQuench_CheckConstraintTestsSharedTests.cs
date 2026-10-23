@@ -186,14 +186,14 @@ VALUES ('{_productName}', '', '{_mainDb}', 'CHECK CONSTRAINT', '{table}.{ck}');"
     private void ReQuenchChecks(System.Data.IDbCommand cmd, string json)
     {
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{_mainDb}', '{json.Replace("'", "''")}')";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         // Trailing 0, 1 are DropUnknownIndexes and DropIndexesRemovedFromProduct: index removal now
         // happens here, and the 1 carries over from the MissingIndexesAndConstraintsQuench call below,
         // which keeps DropCheckConstraintsRemovedFromProduct (its 4th and last argument).
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{_mainDb}', 0, 0, 1, 1, 1, 1, 0, 0, 1)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingIndexesAndConstraintsQuench('{_productName}', '{_mainDb}', 0, 1)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
 

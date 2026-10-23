@@ -9,6 +9,7 @@ using Schema.Delivery;
 using Schema.Domain;
 using Schema.Domain.SqlServer;
 using Microsoft.Data.SqlClient;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -20,7 +21,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// existing table's pair is left alone, so an <c>IsTemporal</c>-only package behaves exactly as before.
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_PeriodColumnTests : BaseTableQuenchTests
 {
     private const string Hidden2 = """
@@ -78,7 +79,7 @@ public class TableQuench_PeriodColumnTests : BaseTableQuenchTests
     private static SqlServerTable Extract(IDbCommand cmd, string table)
     {
         cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
-        using var reader = cmd.ExecuteReader();
+        using var reader = TransientRetry.Run(() => cmd.ExecuteReader());
         var json = "";
         while (reader.Read()) json += reader.GetString(0);
         return (SqlServerTable)PlatformDeserializer.DeserializeTable(json, Platform.SqlServer);

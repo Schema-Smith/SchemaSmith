@@ -6,11 +6,12 @@ using System.Text;
 using Microsoft.Data.SqlClient;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class IndexOnlyQuench_FullTextVariantTests : BaseTableQuenchTests
 {
     private string TableJson(string tableName, string fullTextJson) => $$"""
@@ -38,7 +39,7 @@ public class IndexOnlyQuench_FullTextVariantTests : BaseTableQuenchTests
         var p = cmd.CreateParameter(); p.ParameterName = "@p"; p.Value = _productName; cmd.Parameters.Add(p);
         var t = cmd.CreateParameter(); t.ParameterName = "@t"; t.Value = TableJson(tableName, fullTextJson); cmd.Parameters.Add(t);
         var w = cmd.CreateParameter(); w.ParameterName = "@w"; w.Value = whatIf; cmd.Parameters.Add(w);
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.Parameters.Clear();
     }
 
@@ -511,7 +512,7 @@ SELECT COL_NAME(fc.[object_id], fc.type_column_id) FROM sys.fulltext_index_colum
             cmd.Parameters.Clear();
             var p = cmd.CreateParameter(); p.ParameterName = "@p"; p.Value = _productName; cmd.Parameters.Add(p);
             var t = cmd.CreateParameter(); t.ParameterName = "@t"; t.Value = json; cmd.Parameters.Add(t);
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             cmd.Parameters.Clear();
         });
         Assert.That(ex!.Message, Does.Contain("mutually exclusive"));
@@ -558,7 +559,7 @@ SELECT COUNT(*) FROM sys.stats WITH (NOLOCK)
         cmd.Parameters.Clear();
         var p = cmd.CreateParameter(); p.ParameterName = "@p"; p.Value = _productName; cmd.Parameters.Add(p);
         var t = cmd.CreateParameter(); t.ParameterName = "@t"; t.Value = json; cmd.Parameters.Add(t);
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.Parameters.Clear();
     }
 
@@ -703,7 +704,7 @@ CREATE TABLE dbo.{tableName} (Id INT NOT NULL CONSTRAINT PK_{tableName} PRIMARY 
             cmd.Parameters.Clear();
             var p = cmd.CreateParameter(); p.ParameterName = "@p"; p.Value = _productName; cmd.Parameters.Add(p);
             var t = cmd.CreateParameter(); t.ParameterName = "@t"; t.Value = json; cmd.Parameters.Add(t);
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             cmd.Parameters.Clear();
 
             Assert.That(messages, Has.Some.Contains("(variant: Modern engines)"));

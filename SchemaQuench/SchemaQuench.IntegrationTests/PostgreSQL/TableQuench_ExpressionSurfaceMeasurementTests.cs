@@ -5,6 +5,7 @@ using System.Data;
 using Npgsql;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -17,7 +18,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// <para>Identity, not text: an index and a constraint each keep their oid unless they were re-created.</para>
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ExpressionSurfaceMeasurementTests : BaseTableQuenchTests
 {
     private sealed class Ctx : IDisposable
@@ -278,7 +279,7 @@ public class TableQuench_ExpressionSurfaceMeasurementTests : BaseTableQuenchTest
             ctx.Cmd.CommandText = indexOnly
                 ? $@"CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{_productName}', p_TableDefinitions := '{renamed.Replace("'", "''")}', p_DropUnknownIndexes := true);"
                 : $@"CALL ""SchemaSmith"".""TableQuench""(p_ProductName := '{_productName}', p_TableDefinitions := '{renamed.Replace("'", "''")}', p_WhatIf := false, p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := true)";
-            ctx.Cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => ctx.Cmd.ExecuteNonQuery());
 
             Assert.Multiple(() =>
             {

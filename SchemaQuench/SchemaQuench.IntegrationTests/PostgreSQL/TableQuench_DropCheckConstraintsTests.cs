@@ -6,7 +6,7 @@ using Schema.Domain;
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_DropCheckConstraintsTests : BaseTableQuenchTests
 {
     // Non-vacuous: both checks are removed from the JSON in the same quench.

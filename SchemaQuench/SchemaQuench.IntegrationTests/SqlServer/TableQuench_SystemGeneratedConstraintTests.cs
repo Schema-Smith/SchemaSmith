@@ -3,6 +3,7 @@
 using System;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -20,7 +21,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 // were fixed to bracket-wrap explicitly; the latter three are guarded by the parser's
 // fn_SafeBracketWrap pre-pass and these tests catch regressions if that protection erodes.
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_SystemGeneratedConstraintTests : BaseTableQuenchTests
 {
     [Test]
@@ -61,7 +62,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 """;
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // The old auto-named CHECK should be dropped, a single new CHECK should remain
         // with the declared expression.
@@ -119,7 +120,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 """;
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $@"
 SELECT SchemaSmith.fn_StripParenWrapping([definition])
@@ -173,7 +174,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 """;
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.foreign_keys WITH (NOLOCK)
@@ -219,7 +220,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 """;
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.key_constraints WITH (NOLOCK)
@@ -266,7 +267,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 """;
         cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $@"
 SELECT COUNT(*) FROM sys.key_constraints WITH (NOLOCK)

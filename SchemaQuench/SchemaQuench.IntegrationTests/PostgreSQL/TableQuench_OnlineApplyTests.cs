@@ -8,6 +8,7 @@ using System.Threading;
 using Npgsql;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -19,7 +20,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// then the queue) and asserts the end state and the change row's Mode.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
 {
     private sealed class Session : IDisposable
@@ -73,7 +74,7 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
         {
             try
             {
-                s.Command.ExecuteNonQuery();
+                TransientRetry.Run(() => s.Command.ExecuteNonQuery());
                 done = true;
             }
             catch (PostgresException e) when (++tries < 10 && e.SqlState == "40P01")

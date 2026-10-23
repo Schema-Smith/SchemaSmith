@@ -13,7 +13,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// changed dimension count is a real change and is applied. Skipped below 2025, where the type does not exist.
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_VectorColumnTests : BaseTableQuenchTests
 {
     private static string Json(string table, string embDims, string halfDims) => $$"""

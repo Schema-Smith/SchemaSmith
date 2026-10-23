@@ -17,7 +17,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 //
 // Each test owns a UNIQUE product name so DropTablesRemovedFromProduct is scoped to its own tables.
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_RemovedTemporalTableTests : BaseTableQuenchTests
 {
     [Test]

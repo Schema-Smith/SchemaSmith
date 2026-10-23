@@ -70,14 +70,14 @@ public abstract class ObjectScriptDeployFixture
     {
         using var cmd = Connection.CreateCommand();
         cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     protected object Scalar(string sql)
     {
         using var cmd = Connection.CreateCommand();
         cmd.CommandText = sql;
-        return cmd.ExecuteScalar();
+        return TransientRetry.Run(() => cmd.ExecuteScalar());
     }
 
     protected long Count(string sql) => Convert.ToInt64(Scalar(sql));

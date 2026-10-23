@@ -110,7 +110,7 @@ public abstract class TableQuench_DropCompositeFkIndexSharedTests : BaseTableQue
         cmd.CommandText =
             $"CALL SchemaSmith_ParseTableJson('{_mainDb}', '{withoutIndex.Replace("'", "''")}'); " +
             $"CALL SchemaSmith_ModifiedTableQuench('{CompositeFkProduct}', '{_mainDb}', 0, 0, 0, 1, 1, 1, 0, 1, 1);";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         conn.Close();
     }

@@ -17,7 +17,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 // Each test owns a UNIQUE product name so DropTablesRemovedFromProduct is scoped to its own tables
 // and never drops a sibling test's tables under parallel execution.
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_RemovedTableInboundFkTests : BaseTableQuenchTests
 {
     [Test]

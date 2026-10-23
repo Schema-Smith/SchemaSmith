@@ -9,7 +9,7 @@ namespace SchemaQuench.IntegrationTests.MariaDb;
 /// <summary>MariaDb binding of the case-only name-difference tests.</summary>
 [Category("MariaDb")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_CaseOnlyNameDifferenceTests : TableQuench_CaseOnlyNameDifferenceSharedTests
 {
     protected override Platform Platform => Schema.Domain.Platform.MariaDb;

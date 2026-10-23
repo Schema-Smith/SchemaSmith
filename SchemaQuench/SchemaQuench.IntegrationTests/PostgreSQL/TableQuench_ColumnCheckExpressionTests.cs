@@ -18,7 +18,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 // table-level check pass — compares equal to the live definition and leaves the constraint
 // untouched on a no-op run.
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ColumnCheckExpressionTests : BaseTableQuenchTests
 {
     [Test]

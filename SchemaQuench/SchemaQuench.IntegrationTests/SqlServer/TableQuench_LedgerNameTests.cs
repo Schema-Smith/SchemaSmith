@@ -8,6 +8,7 @@ using Microsoft.Data.SqlClient;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Domain.SqlServer;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -19,7 +20,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// reported and the deploy goes on.
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_LedgerNameTests : BaseTableQuenchTests
 {
     private static string Updatable(string table, string columns = "", string ledgerView = "") => $$"""
@@ -59,7 +60,7 @@ public class TableQuench_LedgerNameTests : BaseTableQuenchTests
     private static SqlServerTable Extract(IDbCommand cmd, string table)
     {
         cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
-        using var reader = cmd.ExecuteReader();
+        using var reader = TransientRetry.Run(() => cmd.ExecuteReader());
         var json = "";
         while (reader.Read()) json += reader.GetString(0);
         return (SqlServerTable)PlatformDeserializer.DeserializeTable(json, Platform.SqlServer);

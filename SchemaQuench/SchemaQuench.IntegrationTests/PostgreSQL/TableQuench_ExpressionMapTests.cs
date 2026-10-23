@@ -19,7 +19,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// text, and both directions covered — an out-of-band edit must still be re-applied.</para>
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
 {
     private sealed class Ctx : IDisposable

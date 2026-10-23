@@ -9,7 +9,7 @@ namespace SchemaQuench.IntegrationTests.MariaDb;
 
 [Category("MariaDb")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_PartitionedTableDropGuardTests : TableQuench_PartitionedTableDropGuardSharedTests
 {
     protected override Platform Platform => Platform.MariaDb;

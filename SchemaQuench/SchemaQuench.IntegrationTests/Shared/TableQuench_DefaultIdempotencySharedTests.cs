@@ -71,11 +71,11 @@ CREATE TABLE `{_mainDb}`.`{tableName}` (
             cmd.ExecuteNonQuery();
 
             cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{_mainDb}', '{json.Replace("'", "''")}')";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             // Trailing 0, 0 are DropUnknownIndexes and DropIndexesRemovedFromProduct. Index removal
             // lives in this procedure now; nothing here recreates an index, so both stay off.
             cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{_mainDb}', 0, 0, 1, 1, 1, 1, 0, 0, 0)";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
             cmd.CommandText = $@"SELECT COUNT(*) FROM SchemaSmith_StatusMessages
  WHERE SessionId = CONNECTION_ID()

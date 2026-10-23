@@ -8,6 +8,7 @@ using System.Threading;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -53,7 +54,7 @@ public class RebuildTableTests : BaseTableQuenchTests
     {
         cmd.CommandTimeout = 120;
         cmd.CommandText = RebuildBatch(json, table, whatIf);
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static void Exec(IDbCommand cmd, string sql)

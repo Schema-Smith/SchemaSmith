@@ -9,7 +9,7 @@ namespace SchemaQuench.IntegrationTests.MySQL;
 
 [Category("MySQL")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class EventQuench_DropByAbsenceTests : EventQuench_DropByAbsenceSharedTests
 {
     protected override Platform Platform => Platform.MySQL;

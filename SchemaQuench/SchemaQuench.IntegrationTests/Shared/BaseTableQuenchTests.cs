@@ -25,10 +25,11 @@ public abstract class BaseTableQuenchTests
 
     protected readonly string _connectionString;
     protected readonly string _mainDb;
-    protected readonly string _productName = "Quench Table Tests";
+    protected readonly string _productName;
 
     protected BaseTableQuenchTests()
     {
+        _productName = FixtureProduct.NameFor(GetType());
         _connectionString = MainConnectionString;
         _mainDb = MainDbName;
     }
@@ -95,40 +96,10 @@ public abstract class BaseTableQuenchTests
     private void ExecuteWithDeadlockRetry(IDbCommand cmd) =>
         RetryingTransientConcurrency(() => cmd.ExecuteNonQuery());
 
-    /// <summary>
-    /// The transient failures two test workers provoke against one shared database. Deadlock and
-    /// lock-wait timeout were always here; the other two were found by the full suite at two workers and
-    /// are the same family — a catalog read or a temp-table operation caught mid-DDL by a sibling.
-    /// <para>These are the test-side mirror of <c>DeadlockClassifier.IsRetryableContention</c>, which is
-    /// what the PRODUCT retries. Matched on message text rather than the typed code because these helpers
-    /// take an <see cref="IDbCommand"/> and stay engine-agnostic; the product, which knows its client,
-    /// matches the codes.</para>
-    /// </summary>
-    protected static bool IsTransientConcurrency(Exception e) =>
-        e.Message.ContainsIgnoringCase("Deadlock found when trying to get lock")
-        || e.Message.ContainsIgnoringCase("Lock wait timeout exceeded")
-        || e.Message.ContainsIgnoringCase("is being modified by concurrent DDL statement")   // 1684
-        || e.Message.ContainsIgnoringCase("Failed to read auto-increment value");            // 1467
+    protected static bool IsTransientConcurrency(Exception e) => TransientRetry.IsTransient(e);
 
-    /// <summary>
-    /// Run <paramref name="action"/>, retrying only transient concurrency. Anything else is rethrown
-    /// immediately: a retry loop that swallows real failures turns one clear error into ten slow ones.
-    /// </summary>
-    protected static void RetryingTransientConcurrency(Action action)
-    {
-        for (var attempt = 1; attempt <= 10; attempt++)
-        {
-            try
-            {
-                action();
-                return;
-            }
-            catch (Exception e) when (attempt < 10 && IsTransientConcurrency(e))
-            {
-                Thread.Sleep(1000);
-            }
-        }
-    }
+    /// <summary>Run <paramref name="action"/>, retrying only the contention a deploy also retries.</summary>
+    protected static void RetryingTransientConcurrency(Action action) => TransientRetry.Run(action);
 
     /// <summary>
     /// Gets the data type string for a column in a table.

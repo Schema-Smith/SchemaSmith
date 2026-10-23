@@ -22,7 +22,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// </summary>
 [Category("SqlServer")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class DataTypeSynonymChurnTests : BaseTableQuenchTests
 {
     // Left is what a user writes; the comment is what sys.types reports back.

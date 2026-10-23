@@ -224,7 +224,7 @@ public abstract class TableQuench_TwinNameSharedTests : BaseTableQuenchTests
     private static void Exec(IDbCommand cmd, string sql)
     {
         cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static void TryExec(IDbCommand cmd, string sql)
@@ -242,7 +242,7 @@ public abstract class TableQuench_TwinNameSharedTests : BaseTableQuenchTests
     private static string Scalar(IDbCommand cmd, string sql)
     {
         cmd.CommandText = sql;
-        var value = cmd.ExecuteScalar();
+        var value = TransientRetry.Run(() => cmd.ExecuteScalar());
         return value switch
         {
             null or DBNull => "",

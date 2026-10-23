@@ -17,7 +17,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// "SchemaSmith"."StripLeadingSelect" wrap.)
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ShouldApplySelectFormTests : BaseTableQuenchTests
 {
     [Test]

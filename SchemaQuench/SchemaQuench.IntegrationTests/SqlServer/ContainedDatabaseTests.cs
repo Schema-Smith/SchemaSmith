@@ -5,6 +5,7 @@ using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -95,7 +96,7 @@ public class ContainedDatabaseTests : BaseTableQuenchTests
             string extracted = "";
             Assert.DoesNotThrow(() =>
             {
-                using var reader = cmd.ExecuteReader();
+                using var reader = TransientRetry.Run(() => cmd.ExecuteReader());
                 while (reader.Read()) extracted += reader.GetValue(0)?.ToString();
             }, "extraction");
             Assert.That(extracted, Does.Contain("FK_Child_Parent").And.Contain("IX_Child_Parent").And.Contain("CK_Child_Label")

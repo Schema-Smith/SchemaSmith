@@ -11,6 +11,7 @@ using Schema.Isolators;
 using Schema.Utility;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -528,7 +529,7 @@ SELECT c.oid FROM pg_class c
             p_DropTablesRemovedFromProduct := true,
             p_DropUnknownIndexes := false
         )";
-        Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(), "TableQuench should not fail when materialized view exists in ProductOwnership");
+        Assert.DoesNotThrow(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()), "TableQuench should not fail when materialized view exists in ProductOwnership");
 
         // Verify materialized view was NOT dropped
         cmd.CommandText = "SELECT COUNT(*) FROM pg_matviews WHERE schemaname = 'public' AND matviewname = 'mv_test'";
@@ -668,7 +669,7 @@ END $$;";
         {
             try
             {
-                cmd.ExecuteNonQuery();
+                TransientRetry.Run(() => cmd.ExecuteNonQuery());
                 retry = false;
             }
             catch (Exception e)
@@ -915,7 +916,6 @@ ALTER MATERIALIZED VIEW public.mv_test OWNER TO ""{role}"";";
         Assert.That(ViewComment(cmd), Is.Null, "an empty string is the request to remove it");
         EnsureViewDropped(cmd);
     }
-}
 
     private static string ViewDefinitionWithIndexDescription(string description) =>
         ViewDefinitionWithIndex().Replace("\"Name\":\"ix_mv_test_id\",", "\"Name\":\"ix_mv_test_id\",\"Description\":\"" + description + "\",");
@@ -949,3 +949,4 @@ ALTER MATERIALIZED VIEW public.mv_test OWNER TO ""{role}"";";
         Assert.That(IndexComment(cmd), Is.Null, "an empty string is the request to remove it");
         EnsureViewDropped(cmd);
     }
+}

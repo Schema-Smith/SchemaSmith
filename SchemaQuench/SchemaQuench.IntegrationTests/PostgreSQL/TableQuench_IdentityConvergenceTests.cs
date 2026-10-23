@@ -7,7 +7,7 @@ using Schema.Domain;
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_IdentityConvergenceTests : BaseTableQuenchTests
 {
     // Regression guard for the "Alter Modified Columns" 42601 bug: a GENERATED ALWAYS

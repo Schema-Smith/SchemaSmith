@@ -9,7 +9,7 @@ namespace SchemaQuench.IntegrationTests.MySQL;
 /// <summary>MySQL binding of the case-differing ownership tests.</summary>
 [Category("MySQL")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_CaseDifferingOwnershipTests : TableQuench_CaseDifferingOwnershipSharedTests
 {
     protected override Platform Platform => Platform.MySQL;

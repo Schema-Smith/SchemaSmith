@@ -4,6 +4,7 @@ using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -117,6 +118,6 @@ public class TableQuench_MixedCompressionTests : BaseTableQuenchTests
     private static void Run(IDbCommand cmd, string sql)
     {
         cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 }

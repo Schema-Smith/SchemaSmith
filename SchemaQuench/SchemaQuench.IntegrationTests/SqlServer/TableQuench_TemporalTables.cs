@@ -7,7 +7,7 @@ using Schema.Domain;
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_TemporalTables : BaseTableQuenchTests
 {
     [Test]

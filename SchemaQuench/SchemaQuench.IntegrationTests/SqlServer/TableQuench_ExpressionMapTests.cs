@@ -5,6 +5,7 @@ using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -396,7 +397,7 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
                 payload.ParameterName = "@payload";
                 payload.Value = xml;
                 cmd.Parameters.Add(payload);
-                cmd.ExecuteNonQuery();
+                TransientRetry.Run(() => cmd.ExecuteNonQuery());
                 cmd.Parameters.Clear();
             }
 
