@@ -482,6 +482,22 @@ namespace Schema.UnitTests.Domain
             Assert.That(ex.Message, Does.Contain("SchemaIdentificationScript"));
         }
 
+        // On the MySQL family a schema is a database, so the flag is refused, naming the engine as it is written (#588).
+        [TestCase(Platform.MySQL, "MySQL")]
+        [TestCase(Platform.MariaDb, "MariaDB")]
+        public void CreateSchemaIfMissing_OnTheMySqlFamily_IsRefused_NamingTheEngine(Platform platform, string engineName)
+        {
+            var (templateFile, tablesPath) = Paths();
+            var json = @"{ ""Name"": ""Main"", ""CreateSchemaIfMissing"": true }";
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(json);
+            _mockDirectory.Exists(tablesPath).Returns(false);
+            _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
+
+            var ex = Assert.Throws<PackageException>(() => Template.Load("Main", MakeProduct(platform)));
+            Assert.That(ex!.Message, Does.Contain($"does not apply on {engineName}: a schema is a database there"));
+        }
+
         // Token names match case-insensitively, so Foo and foo in one scope are one token with two values. That failed
         // with "An item with the same key has already been added", naming neither token nor template.
         [Test]
