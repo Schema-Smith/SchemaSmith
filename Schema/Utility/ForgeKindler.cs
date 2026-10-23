@@ -75,7 +75,9 @@ public static class ForgeKindler
                 serverMajorVersion = TargetVersionDetector.TryDetect(command, Platform.SqlServer)?.ServerComparable ?? 0;
 
             bool? xmlCompressionReadable = platform == Platform.SqlServer ? ReportsXmlCompression(command) : null;
-            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode, xmlCompressionReadable);
+            bool? checkConstraintsReadable = platform == Platform.MariaDb ? ReportsCheckConstraints(command) : null;
+            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode, xmlCompressionReadable,
+                checkConstraintsReadable);
             var current = ReadStamp(command, platform);
             if (!forceReKindle && string.Equals(current, expected, StringComparison.Ordinal))
             {
@@ -100,7 +102,7 @@ public static class ForgeKindler
             if (platform == Platform.PostgreSQL)
                 DropSupersededPostgreSqlOverloads(command);
 
-            KindleScripts(command, platform, encoding, serverMajorVersion, policy, xmlCompressionReadable);
+            KindleScripts(command, platform, encoding, serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable);
             if (platform.GetBasePlatform() == Platform.MySQL)
                 CleanupMySqlStatusMessages(command);
 
@@ -113,11 +115,11 @@ public static class ForgeKindler
     }
 
     private static void KindleScripts(IDbCommand command, Platform platform, IngestEncoding encoding,
-        int serverMajorVersion, string policy, bool? xmlCompressionReadable)
+        int serverMajorVersion, string policy, bool? xmlCompressionReadable, bool? checkConstraintsReadable)
     {
         foreach (var s in GetKindlingScripts(platform, encoding))
             KindleOneFile(command, s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
-                serverMajorVersion, policy, xmlCompressionReadable);
+                serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable);
     }
 
     // Whether sys.partitions carries xml_compression on this server. COL_LENGTH reads metadata only, so the question is
@@ -132,6 +134,22 @@ public static class ForgeKindler
         catch (DbException)
         {
             return false;
+        }
+    }
+
+    // Whether INFORMATION_SCHEMA carries CHECK_CONSTRAINTS, which MariaDB added in 10.2.22. Asked of the server rather than
+    // read from the version, as for XML compression; a server that cannot answer is treated as having it, the kindle's
+    // behaviour before the question was asked.
+    public static bool ReportsCheckConstraints(IDbCommand command)
+    {
+        try
+        {
+            command.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'information_schema' AND TABLE_NAME = 'CHECK_CONSTRAINTS'";
+            return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
+        }
+        catch (DbException)
+        {
+            return true;
         }
     }
 
@@ -162,9 +180,14 @@ public static class ForgeKindler
     /// </summary>
     internal static string ResolveKindleScript(string fileName, Platform platform,
         bool replaceParseJson, bool replaceTableDef, IngestEncoding encoding = IngestEncoding.Json,
-        int serverMajorVersion = 0, string policy = "warn", bool? xmlCompressionReadable = null)
+        int serverMajorVersion = 0, string policy = "warn", bool? xmlCompressionReadable = null, bool? checkConstraintsReadable = null)
     {
-        var script = ResourceLoader.Load(fileName, platform)
+        // MariaDB's column-level check reads INFORMATION_SCHEMA.CHECK_CONSTRAINTS, and a function naming a view the server
+        // lacks fails to CREATE. Below 10.2.22 it takes the MySQL body, which reads nothing.
+        var source = platform == Platform.MariaDb && checkConstraintsReadable == false && fileName == "SchemaSmith_ColumnLevelCheck.sql"
+            ? Platform.MySQL
+            : platform;
+        var script = ResourceLoader.Load(fileName, source)
             ?? throw new Exception($"Script '{fileName}' not found for platform '{platform}'.");
         if (replaceParseJson)
             script = script.Replace("{{ParseJson}}", encoding == IngestEncoding.Xml
@@ -242,12 +265,12 @@ public static class ForgeKindler
     public static void KindleOneFile(IDbCommand command, string fileName, Platform platform,
         bool replaceParseJsonToken = false, bool replaceTableDefToken = false,
         IngestEncoding encoding = IngestEncoding.Json, int serverMajorVersion = 0, string policy = "warn",
-        bool? xmlCompressionReadable = null)
+        bool? xmlCompressionReadable = null, bool? checkConstraintsReadable = null)
     {
         try
         {
             var script = ResolveKindleScript(fileName, platform, replaceParseJsonToken, replaceTableDefToken,
-                encoding, serverMajorVersion, policy, xmlCompressionReadable);
+                encoding, serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable);
 
             if (platform.GetBasePlatform() == Platform.MySQL)
             {
@@ -1231,7 +1254,8 @@ public static class ForgeKindler
     /// -> the next kindle re-runs automatically (alternating version/policy across runs re-kindles; cheap).
     /// </summary>
     public static string ComputeKindleStamp(Platform platform, IngestEncoding encoding = IngestEncoding.Json,
-        int serverMajorVersion = 0, string policy = "warn", string sqlMode = null, bool? xmlCompressionReadable = null)
+        int serverMajorVersion = 0, string policy = "warn", string sqlMode = null, bool? xmlCompressionReadable = null,
+        bool? checkConstraintsReadable = null)
     {
         var sb = new StringBuilder();
         if (!string.IsNullOrEmpty(sqlMode))
@@ -1240,7 +1264,7 @@ public static class ForgeKindler
         // resolved text — and therefore the stamp — already differs from Json; no extra discriminator needed.
         foreach (var s in GetKindlingScripts(platform, encoding))
             sb.Append(ResolveKindleScript(s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
-                serverMajorVersion, policy, xmlCompressionReadable));
+                serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable));
 
         using var sha = SHA256.Create();
         var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(sb.ToString()));

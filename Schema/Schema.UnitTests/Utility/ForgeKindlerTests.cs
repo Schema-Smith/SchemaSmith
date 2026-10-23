@@ -607,6 +607,36 @@ public class ForgeKindlerTests
         });
     }
 
+    // INFORMATION_SCHEMA.CHECK_CONSTRAINTS arrived in MariaDB 10.2.22, and a function naming it fails to CREATE on a server
+    // without it, taking the kindle down. Below it the column-level check reads nothing, as on MySQL, and the stamp differs
+    // so an upgraded server re-kindles the reading body.
+    [TestCase(null, true)]
+    [TestCase(true, true)]
+    [TestCase(false, false)]
+    public void ResolveKindleScript_MariaDbColumnLevelCheck_ReadsTheCatalogOnlyWhereItExists(bool? readable, bool reads)
+    {
+        var resolved = ForgeKindler.ResolveKindleScript("SchemaSmith_ColumnLevelCheck.sql", Platform.MariaDb, replaceParseJson: false,
+            replaceTableDef: false, checkConstraintsReadable: readable);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolved.Contains("INFORMATION_SCHEMA.CHECK_CONSTRAINTS"), Is.EqualTo(reads));
+            Assert.That(resolved, Does.Contain("CREATE FUNCTION SchemaSmith_ColumnLevelCheck"));
+        });
+    }
+
+    [Test]
+    public void ComputeKindleStamp_MariaDb_DiffersWhenCheckConstraintsCannotBeRead()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ForgeKindler.ComputeKindleStamp(Platform.MariaDb, checkConstraintsReadable: false),
+                Is.Not.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.MariaDb, checkConstraintsReadable: true)));
+            Assert.That(ForgeKindler.ComputeKindleStamp(Platform.MariaDb, checkConstraintsReadable: true),
+                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.MariaDb)), "a server that has the view keeps today's stamp");
+        });
+    }
+
     // #CdcRotate is created in three places, and a column added to one copy and not the others failed every deploy.
     [TestCase("SchemaSmith.TableQuench.sql", true)]
     [TestCase("SchemaSmith.ModifiedTableQuench.sql", false)]

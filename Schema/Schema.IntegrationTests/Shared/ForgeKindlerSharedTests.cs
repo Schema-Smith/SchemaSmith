@@ -332,8 +332,9 @@ public abstract class ForgeKindlerSharedTests
             // The stamp covers the content and the parse-neutral sql_mode the procedures were created under.
             command.CommandText = "SELECT @@SESSION.sql_mode";
             var sqlMode = MySqlSessionSettings.ParseNeutral(command.ExecuteScalar()?.ToString());
+            bool? checkConstraintsReadable = Platform == Platform.MariaDb ? ForgeKindler.ReportsCheckConstraints(command) : null;
             Assert.That(ForgeKindler.ReadStamp(command, Platform),
-                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform, sqlMode: sqlMode)),
+                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform, sqlMode: sqlMode, checkConstraintsReadable: checkConstraintsReadable)),
                 "A fresh kindle must write the current content stamp.");
         }
         finally
