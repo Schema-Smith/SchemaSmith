@@ -82,6 +82,9 @@ FLOORS=(
   "floor-mysql-5722:mysql:5.7.22:13422:MySQL"
   "floor-mysql-8023:mysql:8.0.23:13423:MySQL"
   "floor-postgres-12:postgres:12:15412:PostgreSQL"
+  # System versioning without the 10.5 SYSTEM_TIME partitioning forms (STARTS, the interval count) and without AUTO:
+  # the only band whose downgrades for them are not empty, and no CI leg runs it.
+  "band-mariadb-104:mariadb:10.4:13404:MariaDb"
   "band-mariadb-106:mariadb:10.6:13406:MariaDb"
   # A patch with the JSON_TABLE bugs SchemaSmith routes around (MDEV-25875 before 10.6.9, MDEV-27412 before 10.6.20):
   # every other leg is past them, so this is the only one that runs the workaround against the engine that needs it.
