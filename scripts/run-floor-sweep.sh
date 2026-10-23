@@ -78,6 +78,9 @@ FAILED=0
 FLOORS=(
   "floor-mariadb-102:mariadb:10.2:13402:MariaDb"
   "floor-mysql-57:mysql:5.7:13457:MySQL"
+  # The supported floor patches: the 5.7 and 8.0 tags resolve to each line's newest, past every patch-level gate.
+  "floor-mysql-5722:mysql:5.7.22:13422:MySQL"
+  "floor-mysql-8023:mysql:8.0.23:13423:MySQL"
   "floor-postgres-12:postgres:12:15412:PostgreSQL"
   "band-mariadb-106:mariadb:10.6:13406:MariaDb"
   # A patch with the JSON_TABLE bugs SchemaSmith routes around (MDEV-25875 before 10.6.9, MDEV-27412 before 10.6.20):
@@ -195,7 +198,7 @@ for f in "${FLOORS[@]}"; do
   # MySQL 5.7's TLS handshake is incompatible with the modern connector's negotiation on the stock image
   # (SSL Authentication Error / corrupted frame). CI disables SSL for that leg only; mirror it.
   SSL_ENV=""
-  [ "$image:$tag" = "mysql:5.7" ] && SSL_ENV="SmithySettings_MySQL__ConnectionProperties__SslMode=None"
+  case "$image:$tag" in mysql:5.7*) SSL_ENV="SmithySettings_MySQL__ConnectionProperties__SslMode=None" ;; esac
 
   case "$category" in
     MariaDb)    PORT_ENV="SmithySettings_MariaDB__Port=$port" ;;

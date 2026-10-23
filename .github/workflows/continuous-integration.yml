@@ -481,18 +481,20 @@ jobs:
     needs: [build-and-unit-tests, sweep-record]
     # Current 8.0 + the supported floor (5.7). MySQL 5.7 lacks JSON_TABLE, CHECK constraints, descending indexes,
     # and RENAME COLUMN — the version-adaptive engine takes an equivalent path or degrades via the policy.
+    # 8.0.23 and 5.7.22 are the supported floor patches. The 8.0 and 5.7 tags resolve to each line's newest patch, so
+    # without these legs the patch-level gates (8.0.13, 8.0.16, 8.0.17, 8.0.23) run only on servers past all of them.
     strategy:
       fail-fast: false
       matrix:
-        mysql: ${{ github.event_name == 'pull_request' && fromJSON('["26","5.7"]') || fromJSON('["26","9.7","8.4","8.0","5.7"]') }}
+        mysql: ${{ github.event_name == 'pull_request' && fromJSON('["26","5.7"]') || fromJSON('["26","9.7","8.4","8.0","8.0.23","5.7","5.7.22"]') }}
     permissions:
       contents: read
       checks: write
     env:
       # MySQL 5.7's TLS handshake is incompatible with the modern MySqlConnector's negotiation on the stock
       # image (SSL Authentication Error / "corrupted frame"); the integration suite tests schema, not transport,
-      # so disable SSL for the 5.7 leg. 8.0 keeps the client default.
-      SmithySettings_MySQL__ConnectionProperties__SslMode: ${{ matrix.mysql == '5.7' && 'None' || 'Preferred' }}
+      # so disable SSL for the 5.7 legs. 8.0 keeps the client default.
+      SmithySettings_MySQL__ConnectionProperties__SslMode: ${{ startsWith(matrix.mysql, '5.7') && 'None' || 'Preferred' }}
     services:
       mysql:
         image: mysql:${{ matrix.mysql }}
