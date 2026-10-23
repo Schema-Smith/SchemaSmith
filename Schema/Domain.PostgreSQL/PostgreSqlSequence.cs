@@ -81,7 +81,7 @@ namespace Schema.Domain.PostgreSQL
         /// sequence is logged and an existing one's persistence is left alone. Below 15 the clause is dropped and the
         /// downgrade recorded, under the unsupported-feature policy.
         /// </summary>
-        [SchemaProperty(Description = "Unlogged for a sequence that skips the write-ahead log (PostgreSQL 15+), or Logged. Left out, the sequence is created logged and an existing one's persistence is not changed.")]
+        [SchemaProperty(Pattern = "Logged|Unlogged", PatternIgnoreCase = true, Description = "Unlogged for a sequence that skips the write-ahead log (PostgreSQL 15+), or Logged. Left out, the sequence is created logged and an existing one's persistence is not changed.")]
         [JsonProperty(Order = 12, NullValueHandling = NullValueHandling.Ignore)]
         public string PersistenceType { get; set; }
     }
