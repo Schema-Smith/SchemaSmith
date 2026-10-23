@@ -25,14 +25,21 @@ BEGIN
       INTO sql_script
       FROM temp_tables t
       JOIN "SchemaSmith"."ProductOwnership" tp ON tp."Schema" = t."Schema"
-                                              AND tp."TableName" = t."Name"
+                                              AND (tp."TableName" = t."Name"
+                                                   -- A table declared under a new name is still the old one until the rename, which runs
+                                                   -- only when the old name exists and the new one does not.
+                                                   OR (COALESCE(t."OldName", '') <> '' AND tp."TableName" = t."OldName"
+                                                       AND NOT EXISTS (SELECT 1 FROM information_schema.tables it WHERE it.table_schema = t."Schema" AND it.table_name = t."Name")))
                                               AND tp."IndexName" IS NULL -- table level ownership
       WHERE tp."ProductName" <> p_ProductName;
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     IF EXISTS (SELECT 1
                  FROM temp_tables t
-                 JOIN "SchemaSmith"."ProductOwnership" tp ON t."Schema" = tp."Schema" AND t."Name" = tp."TableName" AND tp."IndexName" IS NULL -- table level ownership
+                 JOIN "SchemaSmith"."ProductOwnership" tp ON t."Schema" = tp."Schema" AND tp."IndexName" IS NULL -- table level ownership
+                                                  AND (tp."TableName" = t."Name"
+                                                   OR (COALESCE(t."OldName", '') <> '' AND tp."TableName" = t."OldName"
+                                                       AND NOT EXISTS (SELECT 1 FROM information_schema.tables it WHERE it.table_schema = t."Schema" AND it.table_name = t."Name")))
                  WHERE tp."ProductName" <> p_ProductName) THEN
         RAISE EXCEPTION 'One or more tables in this quench are already owned by another product';
     END IF;

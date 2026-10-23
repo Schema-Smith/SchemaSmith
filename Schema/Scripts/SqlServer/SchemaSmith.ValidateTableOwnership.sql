@@ -17,21 +17,26 @@ BEGIN
 
   RAISERROR('Validate Table Ownership', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ForeignOwners') IS NOT NULL DROP TABLE #ForeignOwners
-  SELECT t.[Schema], t.[Name], o.[Owner]
+  SELECT t.[Schema], tgt.[Name], o.[Owner]
     INTO #ForeignOwners
     FROM #Tables t WITH (NOLOCK)
+    -- A table declared under a new name is still the old one until the rename, which runs only when the old name exists
+    -- and the new one does not.
+    CROSS APPLY (SELECT [Name] = CASE WHEN OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NULL AND ISNULL(t.[OldName], '') <> ''
+                                           AND OBJECT_ID(t.[Schema] + '.' + t.[OldName]) IS NOT NULL
+                                      THEN t.[OldName] ELSE t.[Name] END) tgt
     CROSS APPLY (SELECT CONVERT(NVARCHAR(50), ep.[value]) COLLATE DATABASE_DEFAULT AS [Owner]
                    FROM sys.extended_properties ep
                    WHERE ep.class = 1
                      AND ep.minor_id = 0
-                     AND ep.major_id = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+                     AND ep.major_id = OBJECT_ID(t.[Schema] + '.' + tgt.[Name])
                      AND ep.[name] = 'ProductName'
                  UNION ALL
                  SELECT po.[ProductName] COLLATE DATABASE_DEFAULT
                    FROM SchemaSmith.ProductOwnership po
                    WHERE po.[IndexName] = ''
                      AND po.[Schema] COLLATE DATABASE_DEFAULT = t.[Schema]
-                     AND QUOTENAME(po.[TableName]) COLLATE DATABASE_DEFAULT = t.[Name]) o
+                     AND QUOTENAME(po.[TableName]) COLLATE DATABASE_DEFAULT = tgt.[Name]) o
     WHERE o.[Owner] <> @ProductName
 
   IF NOT EXISTS (SELECT * FROM #ForeignOwners) RETURN
@@ -41,5 +46,7 @@ BEGIN
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL);
 
-  THROW 50001, 'One or more tables in this quench are already owned by another product', 1;
+  -- RAISERROR, not THROW: this runs on SQL Server 2008 R2.
+  RAISERROR('One or more tables in this quench are already owned by another product', 16, 1)
+  RETURN
 END

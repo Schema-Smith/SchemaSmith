@@ -28,7 +28,14 @@ BEGIN
     INTO v_ConflictingTable, v_ConflictingOwner
     FROM _SchemaSmith_Tables t
     INNER JOIN SchemaSmith_ProductOwnership po
-        ON SchemaSmith_IdentifierKey(po.ObjectName) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName))
+        ON (SchemaSmith_IdentifierKey(po.ObjectName) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName))
+            -- A table declared under a new name is still the old one until the rename, which runs only when the old name
+            -- exists and the new one does not.
+            OR (COALESCE(t.OldName, '') <> ''
+                AND SchemaSmith_IdentifierKey(po.ObjectName) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.OldName))
+                AND NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES it
+                                 WHERE SchemaSmith_IdentifierKey(it.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
+                                   AND SchemaSmith_IdentifierKey(it.TABLE_NAME) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)))))
         AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
         AND po.ObjectType = 'TABLE'
     WHERE CONVERT(po.ProductName USING utf8mb4) != CONVERT(p_ProductName USING utf8mb4)

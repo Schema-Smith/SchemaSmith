@@ -15,6 +15,7 @@ public abstract class OwnershipRefusalSharedTests : ObjectScriptDeployFixture
     private const string Owner = "OwnershipRefusalOwner";
     private const string Intruder = "OwnershipRefusalIntruder";
     private const string Table = "ownership_refusal_probe";
+    private const string Renamed = "ownership_refusal_renamed";
 
     private string _productName = Owner;
     protected sealed override string ProductName => _productName;
@@ -39,20 +40,24 @@ public abstract class OwnershipRefusalSharedTests : ObjectScriptDeployFixture
     public void DropTableAndOwnership()
     {
         Exec($"DROP TABLE IF EXISTS {Quote(Table)}");
+        Exec($"DROP TABLE IF EXISTS {Quote(Renamed)}");
         ClearOwnership(Owner, Intruder);
         _productName = Owner;
     }
 
-    private void WriteTable(string product, string columns, string indexes)
+    private void WriteTable(string product, string columns, string indexes, string name = Table, string oldName = null)
     {
         _productName = product;
         WritePackage("");
-        WriteFile("Tables", $"{Table}.json", $$"""
-            { "Name": "{{Quote(Table)}}",
+        WriteFile("Tables", $"{name}.json", $$"""
+            { "Name": "{{Quote(name)}}",{{(oldName == null ? "" : $" \"OldName\": \"{Quote(oldName)}\",")}}
               "Columns": [ { "Name": "{{Quote("id")}}", "DataType": "INT", "Nullable": false }{{columns}} ],
               "Indexes": [ { "Name": "{{Quote("ix_id")}}", "IndexColumns": "{{Quote("id")}}" }{{indexes}} ] }
             """);
     }
+
+    private long TableCount(string table) => Count(
+        $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{TableSchema}' AND TABLE_NAME = '{table}'");
 
     private long ColumnCount(string column) => Count(
         $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{TableSchema}' AND TABLE_NAME = '{Table}' AND COLUMN_NAME = '{column}'");
@@ -77,6 +82,25 @@ public abstract class OwnershipRefusalSharedTests : ObjectScriptDeployFixture
             Assert.That(ColumnCount("mail"), Is.Zero, "the refused rename is not applied");
             Assert.That(ColumnCount("extra"), Is.Zero, "the refused product's column is not added");
             Assert.That(ExpressionIndexCount(), Is.EqualTo(expressionIndexes), "the owner's expression index is still there");
+        });
+    }
+
+    // The check looked the table up by its declared name only, which a rename has not created yet: the other product's
+    // table was renamed and converged, and only the next deploy was refused.
+    [Test]
+    public void ADeployRefusedForAnotherProductsTable_DeclaredUnderANewName_LeavesItUnrenamed()
+    {
+        WriteTable(Owner, "", "");
+        Deploy();
+
+        WriteTable(Intruder, "", "", Renamed, Table);
+        var refused = Deploy(expectSuccess: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(refused.Log, Has.Some.Contains("owned by"), "the deploy is refused for the ownership: " + string.Join(" | ", refused.Log));
+            Assert.That(TableCount(Table), Is.EqualTo(1), "the owner's table keeps its name");
+            Assert.That(TableCount(Renamed), Is.Zero, "the refused rename is not applied");
         });
     }
 }
