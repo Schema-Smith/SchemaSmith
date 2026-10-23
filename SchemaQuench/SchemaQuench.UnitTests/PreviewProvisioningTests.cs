@@ -107,6 +107,31 @@ public class PreviewProvisioningTests
         });
     }
 
+    // The same for a database whose existence could not be checked: the check failing is not "it is missing".
+    [Test]
+    public void ADatabaseWhoseExistenceCheckFailed_IsAFailedTarget_AndAFailure()
+    {
+        WithPreviewProbe("db_unreadable", createIfMissing: true, dbExists: false, whatIf: false, existsThrows: true, body: (pq, template) =>
+        {
+            var units = pq.CallEnumerate(template, previewOnly: false);
+            Assert.Multiple(() =>
+            {
+                Assert.That(units, Is.Empty, "nothing is deployed to a database that could not be checked");
+                Assert.That(pq.ProvisionCalls, Is.Empty, "and nothing tries to create it");
+                var target = pq.TargetResults.SingleOrDefault(t => t.Database == "db_unreadable");
+                Assert.That(target?.Outcome, Is.EqualTo(SchemaQuench.Reporting.TargetOutcome.Failed), "targets[] lists it as failed");
+                var failure = pq.FailureRecords.SingleOrDefault(f => f.ScopeKey.Contains("db_unreadable"));
+                Assert.That(failure?.Error, Does.Contain("VIEW ANY DATABASE permission denied"), "failures[] carries the engine's message");
+            });
+
+            // The console's failure manifest renders the same records, so it names the database too.
+            var failureLog = Substitute.For<log4net.ILog>();
+            Schema.Utility.LogFactory.Register("FailureLog", failureLog);
+            pq.EmitFailureRollup();
+            failureLog.Received().Info(Arg.Is<object>(m => m.ToString().Contains("db_unreadable")));
+        });
+    }
+
     // ─── helpers ─────────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -118,7 +143,7 @@ public class PreviewProvisioningTests
     /// </summary>
     private static void WithPreviewProbe(
         string databaseName, bool createIfMissing, bool dbExists,
-        System.Action<PreviewProbe, Template> body, bool whatIf = true, bool provisionThrows = false)
+        System.Action<PreviewProbe, Template> body, bool whatIf = true, bool provisionThrows = false, bool existsThrows = false)
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -162,7 +187,7 @@ public class PreviewProvisioningTests
 
             try
             {
-                var probe = new PreviewProbe(dbExists) { ProvisionThrows = provisionThrows };
+                var probe = new PreviewProbe(dbExists) { ProvisionThrows = provisionThrows, ExistsThrows = existsThrows };
                 var template = new Template
                 {
                     Name = "PreviewTemplate",
@@ -190,14 +215,15 @@ public class PreviewProvisioningTests
         private readonly bool _dbExists;
         public List<string> ProvisionCalls { get; } = [];
         public bool ProvisionThrows { get; init; }
+        public bool ExistsThrows { get; init; }
 
         public PreviewProbe(bool dbExists = false) { _dbExists = dbExists; }
 
         public List<WorkUnit> CallEnumerate(Template template, bool previewOnly)
             => EnumerateWorkUnitsForTemplate(template, previewOnly);
 
-        internal override bool DatabaseExistsOnServer(string server, string databaseName)
-            => _dbExists;
+        internal override bool DatabaseExistsOnServer(string server, string databaseName) =>
+            ExistsThrows ? throw new System.InvalidOperationException("VIEW ANY DATABASE permission denied in database 'master'.") : _dbExists;
 
         internal override void ProvisionDatabaseViaAdminConnection(string server, string databaseName)
         {
