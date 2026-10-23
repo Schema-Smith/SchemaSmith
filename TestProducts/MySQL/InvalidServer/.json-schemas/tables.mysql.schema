@@ -202,7 +202,7 @@
           },
           "Enforced": {
             "type": "boolean",
-            "description": "false declares the constraint NOT ENFORCED: it is kept but not checked. MySQL cannot alter it below 8.0.19, so a change drops and re-creates the constraint. Omitted means enforced. MariaDB has no such state."
+            "description": "false declares the constraint NOT ENFORCED: it is kept but not checked. MySQL cannot alter it below 8.0.19, so a change drops and re-creates the constraint. Omitted leaves an existing constraint as it is, and a new one is enforced. MariaDB has no such state."
           },
           "Extensions": {}
         },
