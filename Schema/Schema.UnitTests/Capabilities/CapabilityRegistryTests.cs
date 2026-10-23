@@ -20,6 +20,8 @@ namespace Schema.UnitTests.Capabilities
         private static readonly HashSet<string> KnownManifestObjectTypes = new()
         {
             "temporal (SQL Server 2016)",
+            // Recorded by the C# delivery step, not a script.
+            Schema.Delivery.DataDeliveryProcessor.DowngradeObjectType,
             "full-text statistical semantics (no semantic database)",
             "nonclustered columnstore index (writable from SQL Server 2016)",
             "clustered columnstore beside rowstore indexes (SQL Server 2016)",
@@ -204,14 +206,22 @@ namespace Schema.UnitTests.Capabilities
         }
 
         [Test]
-        public void DataDelivery_IsAMySqlSkip_WithNoManifest_AndNoMariaDbRow()
+        public void DataDelivery_IsAMySqlSkip_AndNoMariaDbRow()
         {
             var dd = CapabilityRegistry.For(Platform.MySQL).Single(c => c.Key == "data-delivery");
             Assert.That(dd.IntroducedInComparable, Is.EqualTo(800));
             Assert.That(dd.Degrade, Is.EqualTo(DegradeKind.Skip));
-            Assert.That(dd.ManifestObjectType, Is.Null, "data delivery skips at the C# layer — no ChangeAudit manifest");
             Assert.That(CapabilityRegistry.For(Platform.MariaDb).Any(c => c.Key == "data-delivery"), Is.False,
                 "MariaDb <10.6 delivers the same rows via a recursive CTE (equivalent-path) — no row");
+        }
+
+        // The skip records a manifest row, so the row names its type: a consumer mapping a recorded downgrade back to its
+        // registry row could not link this one while the row said there was none.
+        [Test]
+        public void TheMySqlDataDeliveryRow_NamesTheManifestTypeTheSkipRecords()
+        {
+            Assert.That(CapabilityRegistry.For(Platform.MySQL).Single(c => c.Key == "data-delivery").ManifestObjectType,
+                Is.EqualTo(Schema.Delivery.DataDeliveryProcessor.DowngradeObjectType));
         }
     }
 }

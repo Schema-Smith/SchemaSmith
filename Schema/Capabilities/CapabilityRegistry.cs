@@ -169,11 +169,11 @@ namespace Schema.Capabilities
                 800, "MySQL 8.0.16", null, DegradeKind.Skip, "CHECK constraint (MySQL 8.0.16)", IntroducedInPatchComparable: 80016));
             // Automatic data delivery needs JSON_TABLE (MySQL 8.0). MySQL 5.7 has neither JSON_TABLE nor
             // recursive CTEs, so there is no row-source fallback: the delivery is skipped (warn) or aborts
-            // (fail) at the C# layer (DataDeliveryProcessor) — a genuine skip, but with no ChangeAudit manifest
-            // row, so ManifestObjectType is null. (MariaDb is absent: 10.2-10.5 deliver the same rows via a
-            // recursive-CTE shred — equivalent-path, not a degrade.)
+            // (fail) at the C# layer (DataDeliveryProcessor), which records the skip in the manifest under
+            // DowngradeObjectType. (MariaDb is absent: 10.2-10.5 deliver the same rows via a recursive-CTE
+            // shred — equivalent-path, not a degrade.)
             rows.Add(new("data-delivery", "Automatic data delivery (JSON_TABLE row source)", Platform.MySQL,
-                800, "MySQL 8.0", null, DegradeKind.Skip, null));
+                800, "MySQL 8.0", null, DegradeKind.Skip, Schema.Delivery.DataDeliveryProcessor.DowngradeObjectType));
 
             // Column DEFAULT expression: below the floor the whole column is skipped (not just the clause —
             // see MissingTableAndColumnQuench/ModifiedTableQuench). MariaDB is absent on purpose: MDEV-10134
