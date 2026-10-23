@@ -279,6 +279,41 @@ public class DataTypeSynonymChurnTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // The sysname fold read any system alias as TYPE_NAME(system_type_id), and the CLR types (hierarchyid, geometry,
+    // geography) are aliases of system type 240, which has no name: their type read as NULL, so a change to one compared
+    // as unknown, was skipped, and the deploy reported success. SQL Server converts none of them in place, so the change
+    // now reaches the engine and fails, naming the type.
+    [TestCase("HIERARCHYID", "VARBINARY(892)")]
+    [TestCase("GEOMETRY", "GEOGRAPHY")]
+    public void AClrTypedColumn_DeclaredAsAnotherType_IsNotSilentlySkipped(string liveType, string declaredType)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var table = $"ClrTypeChange_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = $"CREATE TABLE [dbo].[{table}] ([Id] INT NOT NULL, [Val] {liveType} NULL);";
+        cmd.ExecuteNonQuery();
+
+        try
+        {
+            Assert.That(() => RunTableQuenchProc(cmd, $$"""
+                [ { "Schema": "[dbo]", "Name": "[{{table}}]",
+                    "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[Val]", "DataType": "{{declaredType}}", "Nullable": true } ] } ]
+                """, productName: $"ClrTypeChange_{uid}"),
+                Throws.Exception.With.Message.Contains(liveType.ToLowerInvariant()),
+                $"a {liveType} column declared {declaredType} was compared as unchanged");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
     private static string IndexedTable(string table, string dataType, bool nullable) => $$"""
 [
   {

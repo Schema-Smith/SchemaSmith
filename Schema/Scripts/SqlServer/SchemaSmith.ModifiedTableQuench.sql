@@ -532,8 +532,9 @@ BEGIN TRY
     JOIN (SELECT CASE WHEN SCHEMA_NAME(st.[schema_id]) IN ('sys', 'dbo')
                       THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END
                  -- #582: a system alias (sysname) is read as its base type, so it compares by what it stores. Only the
-                 -- comparison folds it: a declared SYSNAME is still created as one.
-                 + CASE WHEN st.is_user_defined = 0 AND st.user_type_id <> st.system_type_id THEN TYPE_NAME(st.system_type_id) ELSE st.[name] END
+                 -- comparison folds it: a declared SYSNAME is still created as one. hierarchyid, geometry and geography are
+                 -- aliases of a system type with no name, so they keep their own.
+                 + ISNULL(CASE WHEN st.is_user_defined = 0 AND st.user_type_id <> st.system_type_id THEN TYPE_NAME(st.system_type_id) END, st.[name])
                  COLLATE DATABASE_DEFAULT AS USER_TYPE, st.user_type_id
             FROM sys.types st) st ON st.user_type_id = sc.user_type_id
     LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
