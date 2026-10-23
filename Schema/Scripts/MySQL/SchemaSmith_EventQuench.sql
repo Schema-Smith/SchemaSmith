@@ -171,6 +171,15 @@ BEGIN
                                                      ExecuteAt, Starts, Ends, Status, Preserve,
                                                      Comment, Definition, TimeZone, SqlModeCanonical) = 1 THEN 0 ELSE 1 END;
 
+    -- One line per event the deploy changes, previewed or not: the DDL runs from the caller, which logs nothing per event.
+    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(),
+               CONCAT(IF(EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.EVENTS ie
+                                  WHERE CONVERT(ie.EVENT_SCHEMA USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci
+                                    AND CONVERT(ie.EVENT_NAME USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT(e.Name USING utf8mb4) COLLATE utf8mb4_general_ci),
+                         '  Replace changed event `', '  Create event `'), e.Name, '`')
+          FROM _SchemaSmith_Events e WHERE e.ShouldApply = 1 AND e.Changed = 1 ORDER BY e.Id;
+
     -- ---- create or replace ------------------------------------------------------------------------
     -- Converging means DROP then CREATE: ALTER EVENT cannot change every attribute and CREATE OR REPLACE
     -- EVENT is MariaDB-only. Safe for an event, which carries no data -- but NOT free, because it resets
@@ -269,6 +278,9 @@ BEGIN
                AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Events e
                                 WHERE CONVERT(e.Name USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT(po.ObjectName USING utf8mb4) COLLATE utf8mb4_general_ci
                                   AND e.ShouldApply = 1);
+
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), CONCAT('  Drop event `', Name, '` (removed from product)') FROM _SchemaSmith_EventsToDrop ORDER BY Id;
 
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
