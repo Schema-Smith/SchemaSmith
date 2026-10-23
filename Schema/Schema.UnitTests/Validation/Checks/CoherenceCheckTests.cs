@@ -3134,6 +3134,14 @@ public class CoherenceCheckTests
     // deploy. MariaDB names them per table from 12.1, so there it fails only on an older server -- a warning, unless
     // MinimumVersion already rules older servers out. PostgreSQL names them per table on every version.
 
+    // #588: the message printed the enum value, "SqlServer names foreign keys per schema".
+    [Test]
+    public void AReusedForeignKeyName_NamesTheEngineAsItIsWritten()
+    {
+        Assert.That(RunFkReuse(Platform.SqlServer, null, ("dbo", "A", "FK_X"), ("dbo", "B", "FK_X")).Single().Message,
+            Does.Contain("SQL Server names foreign keys per schema"));
+    }
+
     private static ForeignKey ParentFk(string name) =>
         new() { Name = name, Columns = "ParentId", RelatedTable = "Parent", RelatedColumns = "Id" };
 

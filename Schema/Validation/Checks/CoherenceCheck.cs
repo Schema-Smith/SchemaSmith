@@ -333,7 +333,7 @@ public sealed class CoherenceCheck : ISchemaCheck
                     ? $"Foreign key '{name}' is declared on tables {tables}. MariaDB names foreign keys per database " +
                       "before 12.1, so the deploy fails on an older server. Rename one, or set the product's " +
                       "MinimumVersion to 12.1 or later."
-                    : $"Foreign key '{name}' is declared on tables {tables}. {product.Platform} names foreign keys per " +
+                    : $"Foreign key '{name}' is declared on tables {tables}. {product.Platform.ToDisplayName()} names foreign keys per " +
                       (scopeBySchema ? "schema" : "database") + ", so the second one fails the deploy. Rename one.");
         }
     }
@@ -546,7 +546,7 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         yield return new Finding(Severity.Error, MinimumVersionUnresolvableCode, Category,
             $"Product '{product.Name}'",
-            $"MinimumVersion '{product.MinimumVersion}' is not a valid {product.Platform} version, so the "
+            $"MinimumVersion '{product.MinimumVersion}' is not a valid {product.Platform.ToDisplayName()} version, so the "
             + "deploy will refuse this package before touching any object."
             + (product.Platform == Platform.SqlServer
                 ? " On SQL Server a value of 2000 or more is read as a RELEASE YEAR and must be one of "

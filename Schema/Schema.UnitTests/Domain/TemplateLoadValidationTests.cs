@@ -100,6 +100,8 @@ namespace Schema.UnitTests.Domain
             Assert.That(template.DeprecationNotices[0].Code, Is.EqualTo("SS-DEP-001"));
             Assert.That(template.DeprecationNotices[0].Location, Is.EqualTo(templateFile));
             Assert.That(template.DeprecationNotices[0].Message, Does.Contain("DatabaseIdentificationScript"));
+            // #588: the log line said (MySQL) for a MariaDB product.
+            _mockProgressLog.Received().Warn(Arg.Is<string>(m => m.Contains($"({platform.ToDisplayName()})")));
         }
 
         [TestCase(Platform.SqlServer)]

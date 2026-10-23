@@ -616,7 +616,7 @@ namespace Schema.Domain
                 $"Template '{Name}' uses 'SchemaIdentificationScript', a deprecated alias on MySQL and MariaDB. " +
                 "Rename it to 'DatabaseIdentificationScript' -- the value is identical, and the alias only still works because load migrates it."));
             LogFactory.GetLogger("ProgressLog").Warn(
-                $"Template '{Name}' (MySQL) uses the legacy 'SchemaIdentificationScript' alias. " +
+                $"Template '{Name}' ({Product.Platform.ToDisplayName()}) uses the legacy 'SchemaIdentificationScript' alias. " +
                 $"Rename the field to 'DatabaseIdentificationScript' in {FilePath}. " +
                 $"The alias is preserved for backward compatibility and migrates the value silently.");
             SchemaIdentificationScript = null;
@@ -1203,7 +1203,7 @@ namespace Schema.Domain
             if (CreateSchemaIfMissing && Product is { } product && product.Platform.GetBasePlatform() == Platform.MySQL)
                 throw new PackageException(
                     $"Template '{Name}' (file: {FilePath}) sets CreateSchemaIfMissing=true, which does not apply on " +
-                    $"{product.Platform}: a schema is a database there, and templates do not fan out per schema. " +
+                    $"{product.Platform.ToDisplayName()}: a schema is a database there, and templates do not fan out per schema. " +
                     $"Remove CreateSchemaIfMissing; use DatabaseIdentificationScript to target tenant databases.");
 
             if (CreateSchemaIfMissing && !IsSchemaTemplate)

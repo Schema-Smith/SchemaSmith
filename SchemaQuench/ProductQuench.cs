@@ -399,7 +399,7 @@ public class ProductQuench
 
         var required = VersionHelper.ParseDeclaredVersion(_product.MinimumVersion, _product.Platform);
         if (required == null)
-            throw new RunFailedException($"Product MinimumVersion '{_product.MinimumVersion}' is not a valid {_product.Platform} version.");
+            throw new RunFailedException($"Product MinimumVersion '{_product.MinimumVersion}' is not a valid {_product.Platform.ToDisplayName()} version.");
 
         _progressLog.Info("Validate Minimum Version");
         var detected = new List<(string Server, TargetVersionInfo Info)>();

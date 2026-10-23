@@ -79,7 +79,7 @@ public static class RepositoryHelper
         if (product.Platform == Platform.Unknown)
             product.Platform = platform;
         else if (product.Platform != platform)
-            throw new Exception($"Platform mismatch: Product '{product.Name}' is configured for {product.Platform} but config specifies {platform}.");
+            throw new Exception($"Platform mismatch: Product '{product.Name}' is configured for {product.Platform.ToDisplayName()} but config specifies {platform.ToDisplayName()}.");
         product.FilePath = productFile;
         if (!product.ScriptTokens.Any(t => t.Key.EqualsIgnoringCase($"{templateName}Db")))
             product.ScriptTokens.Add($"{templateName}Db", dbName);
