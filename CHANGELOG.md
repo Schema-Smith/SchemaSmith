@@ -4,7 +4,7 @@ All notable changes to SchemaSmith are documented here.
 
 For full release details and download links, see [GitHub Releases](https://github.com/Schema-Smith/SchemaSmith/releases).
 
-## [Unreleased]
+## [v2.8.0]
 
 ### Breaking Changes
 
