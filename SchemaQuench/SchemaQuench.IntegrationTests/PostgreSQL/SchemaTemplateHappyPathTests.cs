@@ -115,6 +115,11 @@ public class SchemaTemplateHappyPathTests
                         $"SELECT COUNT(*) FROM \"{tenant}\".customers WHERE marker = '{tenant}_marker'");
                     Assert.That(count, Is.EqualTo(1), $"Tenant '{tenant}' should have its per-iteration marker row.");
                 }
+
+                // The Setup slot ran once in each tenant schema, with that schema's token.
+                foreach (var tenant in DefaultTenants)
+                    Assert.That(ScalarCount($"SELECT COUNT(*) FROM \"{tenant}\".setup_marker"), Is.EqualTo(1),
+                        $"Setup runs once per schema: tenant '{tenant}'");
             }
             finally
             {
