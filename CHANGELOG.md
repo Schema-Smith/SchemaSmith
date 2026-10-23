@@ -309,6 +309,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **MySQL and MariaDB name each event they change.** `Quenching scheduled events` was followed by nothing; the deploy log now says `Create event`, `Replace changed event` or `Drop event … (removed from product)` for each event it touches, and nothing for one that is unchanged.
 - **A table created again is not reported as re-baselined (all engines).** A table dropped outside SchemaSmith left its recorded expressions behind, and the deploy that created it again logged `Re-baselined … recorded expression(s)`, which reads as an engine upgrade. The rows are still refreshed; only the message is gone.
 - **A target database that cannot be connected to is named.** A connect that stalled failed with only `The operation has timed out` under `Begin Quench`; it now reads `Unable to connect to PostgreSQL at <server> [Database: <name>] with user <user>: …` on every engine, as the server-level connection failures already did.
+- **MariaDB: a redeploy reports the period and `SYSTEM_TIME` partitioning the server cannot hold.** Below MariaDB 10.4.3 an application-time period, and below 10.5 or 10.9.1 a `SYSTEM_TIME` partition count or `AUTO`, is left off the table and recorded as downgraded, but only on the deploy that created the table; system versioning was recorded on every deploy. All three now are, so a redeploy onto an existing table says what it still lacks.
 
 ## [v2.7.3](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.3) — 2026-10-14
 

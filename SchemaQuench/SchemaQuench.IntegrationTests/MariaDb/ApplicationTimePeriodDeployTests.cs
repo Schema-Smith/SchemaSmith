@@ -43,6 +43,44 @@ public class ApplicationTimePeriodDeployTests : BaseTableQuenchTests
         }]
         """;
 
+    // A server without periods dropped the clause and recorded the downgrade only when it created the table, so a
+    // redeploy said nothing about the period the table still lacked, while system versioning was recorded every time.
+    [Test]
+    public void APeriodTheServerCannotHold_IsRecordedOnEveryDeploy()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.MariaDb).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT SchemaSmith_SupportsApplicationTimePeriods()";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) == 1) Assert.Ignore("This server holds periods (MariaDB 10.4.3+).");
+        string Downgrades()
+        {
+            cmd.CommandText = $"SELECT COALESCE(GROUP_CONCAT(ObjectType), '') FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ActionType = 'downgraded' AND ObjectName LIKE '{TableName}.%'";
+            return cmd.ExecuteScalar()?.ToString();
+        }
+        cmd.CommandText = $"DROP TABLE IF EXISTS `{TableName}`; DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+        cmd.ExecuteNonQuery();
+        try
+        {
+            RunTableQuenchProc(cmd, TableJson());
+            var first = Downgrades();
+            cmd.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, TableJson());
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(first, Is.EqualTo("table without its PERIOD FOR clause"));
+                Assert.That(Downgrades(), Is.EqualTo(first), "the redeploy records it again");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{TableName}`";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void ADeclaredPeriodIsCreatedWithTheTable()
     {

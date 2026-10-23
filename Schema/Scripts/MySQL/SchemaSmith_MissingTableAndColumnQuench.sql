@@ -424,15 +424,13 @@ BEGIN
     -- loss stays discoverable afterwards.
     IF SchemaSmith_SupportsApplicationTimePeriods() = 0
        AND EXISTS (SELECT 1 FROM _SchemaSmith_Periods pd
-                   INNER JOIN _SchemaSmith_Tables t ON t.TableName = pd.TableName
-                   WHERE t.NewTable = 1) THEN
+                   INNER JOIN _SchemaSmith_Tables t ON t.TableName = pd.TableName) THEN
         IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail' THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
             SELECT CONNECTION_ID(), CONCAT('  Application-time period requires MariaDB 10.4.3 (MySQL unsupported) (UnsupportedFeaturePolicy=fail): ',
                    SchemaSmith_StripBacktickWrapping(pd.TableName), '.', SchemaSmith_StripBacktickWrapping(pd.PeriodName))
             FROM _SchemaSmith_Periods pd
-            INNER JOIN _SchemaSmith_Tables t ON t.TableName = pd.TableName
-            WHERE t.NewTable = 1;
+            INNER JOIN _SchemaSmith_Tables t ON t.TableName = pd.TableName;
             SET @ss_msg = 'Application-time period needs MariaDB 10.4.3 (UnsupportedFeaturePolicy=fail). See the run log.';
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         ELSE
@@ -440,14 +438,12 @@ BEGIN
             SELECT CONNECTION_ID(), CONCAT('  Application-time period not created (requires MariaDB 10.4.3, MySQL unsupported - downgraded): ',
                    SchemaSmith_StripBacktickWrapping(pd.TableName), '.', SchemaSmith_StripBacktickWrapping(pd.PeriodName))
             FROM _SchemaSmith_Periods pd
-            INNER JOIN _SchemaSmith_Tables t ON t.TableName = pd.TableName
-            WHERE t.NewTable = 1;
+            INNER JOIN _SchemaSmith_Tables t ON t.TableName = pd.TableName;
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
             SELECT CONNECTION_ID(), 'table without its PERIOD FOR clause',
                    CONCAT(SchemaSmith_StripBacktickWrapping(pd.TableName), '.', SchemaSmith_StripBacktickWrapping(pd.PeriodName)), 'downgraded'
             FROM _SchemaSmith_Periods pd
-            INNER JOIN _SchemaSmith_Tables t ON t.TableName = pd.TableName
-            WHERE t.NewTable = 1;
+            INNER JOIN _SchemaSmith_Tables t ON t.TableName = pd.TableName;
         END IF;
     END IF;
 
@@ -560,7 +556,7 @@ BEGIN
     -- is left off the CREATE above, and AUTO below 10.9.1. A versioned table without its history partitioning is still a
     -- correct table, so each is a downgrade rather than a failure, unless the policy says fail.
     IF EXISTS (SELECT 1 FROM _SchemaSmith_Tables t
-               WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+               WHERE t.PartitionMethod = 'SYSTEM_TIME'
                  AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
                       OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0))) THEN
         IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail' THEN
@@ -568,7 +564,7 @@ BEGIN
             SELECT CONNECTION_ID(), CONCAT('  SYSTEM_TIME partitioning this server cannot create (UnsupportedFeaturePolicy=fail): ',
                    SchemaSmith_StripBacktickWrapping(t.TableName))
             FROM _SchemaSmith_Tables t
-            WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+            WHERE t.PartitionMethod = 'SYSTEM_TIME'
               AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
                    OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0));
             SET @ss_msg = 'SYSTEM_TIME partitioning needs a newer MariaDB (UnsupportedFeaturePolicy=fail). See the run log.';
@@ -581,7 +577,7 @@ BEGIN
                              '  SYSTEM_TIME partitioning deployed without AUTO (requires MariaDB 10.9.1 - downgraded): '),
                           SchemaSmith_StripBacktickWrapping(t.TableName))
             FROM _SchemaSmith_Tables t
-            WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+            WHERE t.PartitionMethod = 'SYSTEM_TIME'
               AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
                    OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0));
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -590,7 +586,7 @@ BEGIN
                       'table without its SYSTEM_TIME partitioning', 'SYSTEM_TIME partitioning without AUTO'),
                    SchemaSmith_StripBacktickWrapping(t.TableName), 'downgraded'
             FROM _SchemaSmith_Tables t
-            WHERE t.NewTable = 1 AND t.PartitionMethod = 'SYSTEM_TIME'
+            WHERE t.PartitionMethod = 'SYSTEM_TIME'
               AND (SchemaSmith_SystemTimePartitionable(t.HasPartitionList, t.SystemTimeStarts IS NOT NULL) = 0
                    OR (t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 0));
         END IF;
