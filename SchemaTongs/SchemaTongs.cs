@@ -4343,7 +4343,6 @@ SELECT TABLE_SCHEMA, TABLE_NAME
 
             _progressLog.Info($"Casting Table Structures ({filteredCount} of {totalTables} tables)");
 
-            var currentTable = 0;
             // MySQL stored procedures take no default parameter values, so the ordering choice travels
             // as a session variable rather than an argument -- see the proc for why. Set once for the
             // connection, not per table: it is session state, and a SET per table would add a round
@@ -4356,8 +4355,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
             {
                 if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(table.ToLower()) && !_objectsToCast.Contains($"{schema}.{table}".ToLower())) continue;
 
-                currentTable++;
-                _progressLog.Info($"  [{currentTable}/{filteredCount}] Extracting {table}...");
+                _progressLog.Info($"  Cast Json for {table}");
 
                 try
                 {

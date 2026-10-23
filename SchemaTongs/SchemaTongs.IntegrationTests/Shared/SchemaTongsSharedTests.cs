@@ -548,6 +548,9 @@ public abstract class SchemaTongsSharedTests
             // Verify progress was logged
             progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Kindling The Forge")));
             progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Table Structures")));
+            // Each table on its own line in one form on every engine; MySQL and MariaDB printed "[1/7] Extracting Album...".
+            progressLog.Received().Info(Arg.Is<string>(s => s.StartsWith("  Cast Json for ")));
+            progressLog.DidNotReceive().Info(Arg.Is<string>(s => s.Contains("] Extracting ")));
             progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Summary")));
 
             FactoryContainer.Clear();
