@@ -1,5 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System;
 using System.IO;
 using System.Linq;
 using NUnit.Framework;
@@ -82,6 +83,35 @@ public abstract class SetupSlotSharedTests : ObjectScriptDeployFixture
             Assert.That(run.Log, Has.Some.Contains("Invalid baseline"), "the baseline refused the database: " + string.Join(" | ", run.Log));
             Assert.That(Steps("setup"), Is.Zero, "and no Setup script ran");
         });
+    }
+
+    // A resumed run skips the Setup scripts that succeeded before the failure and runs the rest.
+    [Test]
+    public void AResumedRun_SkipsTheSetupScriptsThatSucceeded_AndRunsTheRest()
+    {
+        Exec("DROP TABLE IF EXISTS setup_later");
+        var checkpointDir = Path.Join(Path.GetTempPath(), $"SetupResume_{Guid.NewGuid():N}");
+        try
+        {
+            WritePackage(Folders, "Setup", "Early Objects", "Before Scripts");
+            WriteFile("Setup", "01-first.sql", "INSERT INTO setup_log (step) VALUES ('first');");
+            WriteFile("Setup", "02-second.sql", "INSERT INTO setup_later (step) VALUES ('second');");
+
+            Deploy(expectSuccess: false, checkpointDir: checkpointDir);
+            Exec("CREATE TABLE setup_later (step VARCHAR(40) NOT NULL)");
+            Deploy(checkpointDir: checkpointDir, resume: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Steps("first"), Is.EqualTo(1), "the script that succeeded before the failure is not run again");
+                Assert.That(Count("SELECT COUNT(*) FROM setup_later WHERE step = 'second'"), Is.EqualTo(1), "the one that failed runs on the resume");
+            });
+        }
+        finally
+        {
+            Exec("DROP TABLE IF EXISTS setup_later");
+            if (Directory.Exists(checkpointDir)) Directory.Delete(checkpointDir, true);
+        }
     }
 
     [Test]
