@@ -90,6 +90,10 @@ Write the test first. The test should fail for the right reason, then implementa
 
 PRs that add behavior without corresponding tests will be sent back. If you genuinely cannot test something (rare — usually means an isolator is missing), call it out in the PR description so we can discuss; don't quietly skip the tests.
 
+**Assert the outcome, not the mechanism.** Ask of every test: if this broke the way a user would notice, would the test fail? A test that checks a function was called, or that a message contains a fragment, passes over the defect it was written to catch. Assert what the user gets — the data that survived, the value that arrived, the exact line that was logged. If a fix makes you change an existing test, check whether that test was pinning the defect, and strengthen it rather than relax it.
+
+**Prove the test bites.** A test written after the code passes for reasons that have nothing to do with the bug surprisingly often: a filter that selects no tests, an assertion that is always true. Before calling a fix done, revert the fix, watch the test fail with a message that says what is wrong, then restore it. Check the test count too — a run that selects nothing is not a pass. Say in the PR that you did.
+
 ### Code Coverage
 
 - **Target:** >85% line coverage, aiming close to 100% on new code.
@@ -216,6 +220,8 @@ Before you click "Ready for review," walk through this list against your own dif
 - [ ] No unused usings, dead code, or commented-out blocks left behind.
 - [ ] Comments explain *why*, not *what*; new identifiers are descriptive enough that the comment isn't needed.
 - [ ] Copyright header on any new `.cs` or `Schema/Scripts/*.sql` files.
+- [ ] If the domain model or its JSON-schema attributes changed, the committed `.json-schemas/` files under `Demos/`, `TestProducts/` and the `--Validate` test fixtures are regenerated with `--WriteSchemasOnly`; stale ones fail the `SS-STALE-001` check.
+- [ ] A new or moved top-level path is listed on the right side of `.github/ci-tested-paths.txt` (does CI build, run or read it?), and the workflow trigger copies match.
 - [ ] CHANGELOG updated for any user-visible change (feature, fix, breaking change, removal).
 - [ ] End-user docs (under `docs/end-user/`) updated for any user-visible behavior change.
 - [ ] README updated if the build process, project structure, or getting-started experience changed.
