@@ -19,7 +19,21 @@ CREATE OR REPLACE PROCEDURE "SchemaSmith"."ValidateTableOwnership"
 AS $$
 DECLARE
   sql_script TEXT = '';
+  missing_tablespaces TEXT;
 BEGIN
+    -- #571: a declared tablespace that does not exist failed mid-deploy with the engine's 42704. Refused here, before any
+    -- DDL and on every path that deploys tables, naming what declares it, as SQL Server refuses a missing filegroup.
+    missing_tablespaces := (SELECT STRING_AGG(d.what || ' declares tablespace ' || d.ts, '; ' ORDER BY d.what)
+                              FROM (SELECT 'table ' || t."Schema" || '.' || t."Name" AS what, t."Tablespace" AS ts FROM temp_tables t
+                                  UNION ALL SELECT 'index ' || i."TableSchema" || '.' || i."TableName" || '.' || i."Name", i."Tablespace"
+                                    FROM temp_indexes i JOIN temp_tables t ON t."Schema" = i."TableSchema" AND t."Name" = i."TableName"
+                                  UNION ALL SELECT 'exclude constraint ' || x."TableSchema" || '.' || x."TableName" || '.' || x."Name", x."Tablespace"
+                                    FROM temp_excludes x JOIN temp_tables t ON t."Schema" = x."TableSchema" AND t."Name" = x."TableName") d
+                             WHERE d.ts <> '' AND NOT EXISTS (SELECT 1 FROM pg_tablespace s WHERE s.spcname IN (d.ts, LOWER(d.ts))));
+    IF missing_tablespaces IS NOT NULL THEN
+      RAISE EXCEPTION 'Tablespace not found: %. Create it, or remove Tablespace from the declaration.', missing_tablespaces;
+    END IF;
+
     RAISE NOTICE 'Validate Table Ownership';
     SELECT STRING_AGG('RAISE NOTICE ''  Table ' || tp."Schema" || '.' || tp."TableName" || ' owned by different product. [' || tp."ProductName" || '] <> [' || p_ProductName || ']'';', CHR(10))
       INTO sql_script
