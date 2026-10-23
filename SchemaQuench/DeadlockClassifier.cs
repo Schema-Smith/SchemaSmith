@@ -112,6 +112,9 @@ internal static class DeadlockClassifier
                     return true;
                 case PostgresException pg when IsPostgresLockTimeoutState(pg.SqlState):
                     return true;
+                // A procedure's CATCH re-raises with RAISERROR, which keeps the text and not the number.
+                case SqlServerErrorException sql when sql.Message.Contains("Lock request time out period exceeded", StringComparison.OrdinalIgnoreCase):
+                    return true;
             }
         return false;
     }
