@@ -1,8 +1,8 @@
 # Course 6, Module 6 — Lint before you deploy: the `--Validate` semantic linter (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (SS-STALE-001 on 2.7.x boards): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (SS-STALE-001 on 2.7.x boards; MariaDB CheckExpression): delete the "On 2.7.x" callouts -->
 
-**Goal:** catch the cross-object errors JSON Schema can't express — a dangling foreign key, an ungated duplicate column, an undefined token, a stale editor schema, a drifted file name — with a single static command that needs no database, no credentials, and no running engine. Read a broken package's findings board, fix each error to green, prove the linter is *semantic* (not dumb), surface a misnamed-file warning that never gates the exit code, clear an induced staleness finding, then wire it in as a CI gate. SQL Server, PostgreSQL, MySQL, and MariaDB.
+**Goal:** catch the cross-object errors JSON Schema can't express — a dangling foreign key, an ungated duplicate column, an undefined token, a stale editor schema, a drifted file name — with a single static command that needs no database, no credentials, and no running engine. Read a broken package's findings board, fix each error to green, prove the linter is *semantic* (not dumb), surface a misnamed-file warning that never gates the exit code, clear an induced staleness finding, see where the engines' own rules give different verdicts, then wire it in as a CI gate. SQL Server, PostgreSQL, MySQL, and MariaDB.
 
 ## The scenario
 
@@ -221,7 +221,157 @@ names the consequence rather than the cause — and why it says so **uncondition
 that authored no governance at all: an unparseable file cannot be inspected to find out whether it
 carried any, and a false reassurance would be worse than a redundant warning.
 
-## Scenario 6 — make it a gate
+## Scenario 6 — the engine decides what is an error
+
+Every finding so far reproduced on all four engines. Some can't, because the engines disagree about what a name
+has to be unique within. Copy a table file as the start of another one, forget to rename its foreign key, and
+`SalesOrder`'s key to `Customer` carries `OrderItem`'s key name. Make that edit in your engine's
+`SalesOrder` file: rename the foreign key `FK_SalesOrder_Customer` (`[FK_SalesOrder_Customer]` on SQL Server,
+`fk_salesorder_customer` on PostgreSQL) to `FK_OrderItem_Product` (`[FK_OrderItem_Product]`,
+`fk_orderitem_product`). Re-run:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/dbo.SalesOrder.json" set 'ForeignKeys[Name=[FK_SalesOrder_Customer]].Name' '"[FK_OrderItem_Product]"' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/salesorder.json" set 'ForeignKeys[Name=fk_salesorder_customer].Name' '"fk_orderitem_product"' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/SalesOrder.json" set 'ForeignKeys[Name=FK_SalesOrder_Customer].Name' '"FK_OrderItem_Product"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/SalesOrder.json" set 'ForeignKeys[Name=FK_SalesOrder_Customer].Name' '"FK_OrderItem_Product"' -->
+```bash
+# from course6-module-06
+schemaquench --Validate --SchemaPackagePath:./<engine>/Package
+```
+
+Four engines, three verdicts:
+
+```
+SQL Server  ERROR [SS-FK-006] Template 'Main': Foreign key 'FK_OrderItem_Product' is declared on tables '[OrderItem]', '[SalesOrder]'. SqlServer names foreign keys per schema, so the second one fails the deploy. Rename one.
+MySQL       ERROR [SS-FK-006] Template 'Main': Foreign key 'FK_OrderItem_Product' is declared on tables '`OrderItem`', '`SalesOrder`'. MySQL names foreign keys per database, so the second one fails the deploy. Rename one.
+MariaDB     WARN [SS-FK-006] Template 'Main': Foreign key 'FK_OrderItem_Product' is declared on tables '`OrderItem`', '`SalesOrder`'. MariaDB names foreign keys per database before 12.1, so the deploy fails on an older server. Rename one, or set the product's MinimumVersion to 12.1 or later.
+PostgreSQL  PASS - no issues found
+```
+
+SQL Server and MySQL exit `2`: a foreign-key name is unique per schema on one and per database on the other, so
+the second `CREATE` fails. PostgreSQL exits `0` with nothing to say, because it names foreign keys per table and
+both keys deploy. MariaDB names them per table from 12.1 and per database before it, so the finding is a
+warning and the exit is `0`. Tell the linter which servers you deploy to and it stops warning. On MariaDB, set
+the product's `MinimumVersion` and re-run:
+
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"12.1"' -->
+```bash
+# from course6-module-06/mariadb
+schemaquench --Validate --SchemaPackagePath:./Package
+```
+
+`PASS - no issues found`, exit `0`. That is the rule behind every engine-specific finding: the linter judges a
+package against the oldest server it says it supports.
+
+PostgreSQL has a rule of its own here. It keeps the first 63 bytes of an identifier and drops the rest, so a
+longer name is stored under a name the package never declared, and the next deploy fails creating it again. On
+PostgreSQL, rename the same foreign key to `fk_salesorder_customer_who_placed_the_order_and_is_billed_for_it` (64 bytes) and re-run:
+
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/salesorder.json" set 'ForeignKeys[Name=fk_orderitem_product].Name' '"fk_salesorder_customer_who_placed_the_order_and_is_billed_for_it"' -->
+```bash
+# from course6-module-06/postgres
+schemaquench --Validate --SchemaPackagePath:./Package
+```
+
+```
+ERROR [SS-IDENT-002] Template 'Main' / Table 'salesorder': Foreign key 'fk_salesorder_customer_who_placed_the_order_and_is_billed_for_it' is 64 bytes long. PostgreSQL truncates identifiers to 63 bytes, so it would be stored under a shorter name and the next deploy, not finding the declared one, would fail creating it again. Shorten it to 63 bytes or fewer.
+```
+
+Exit `2`. Put the key's own name back (`FK_SalesOrder_Customer`, `[FK_SalesOrder_Customer]`,
+`fk_salesorder_customer`), and on MariaDB remove `MinimumVersion` again:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/dbo.SalesOrder.json" set 'ForeignKeys[Name=[FK_OrderItem_Product]].Name' '"[FK_SalesOrder_Customer]"' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/SalesOrder.json" set 'ForeignKeys[Name=FK_OrderItem_Product].Name' '"FK_SalesOrder_Customer"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/SalesOrder.json" set 'ForeignKeys[Name=FK_OrderItem_Product].Name' '"FK_SalesOrder_Customer"' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/salesorder.json" set 'ForeignKeys[Name=fk_salesorder_customer_who_placed_the_order_and_is_billed_for_it].Name' '"fk_salesorder_customer"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" del MinimumVersion -->
+```bash
+# from course6-module-06
+schemaquench --Validate --SchemaPackagePath:./<engine>/Package
+```
+
+`PASS - no issues found` on every engine.
+
+## Scenario 7 — deprecate, warn, retire (MySQL and MariaDB)
+
+A property doesn't disappear in one release. It is deprecated and still works, the linter warns about it, and
+later it stops loading. MySQL and MariaDB have one property at each stage. On MySQL or MariaDB, add the old
+alias for `DatabaseIdentificationScript` to `<engine>/Package/Templates/Main/Template.json`:
+
+```json
+"SchemaIdentificationScript": "SELECT DATABASE()"
+```
+
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set SchemaIdentificationScript '"SELECT DATABASE()"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set SchemaIdentificationScript '"SELECT DATABASE()"' -->
+```bash
+# from course6-module-06/mysql
+schemaquench --Validate --SchemaPackagePath:./Package
+```
+
+```
+WARN [SS-DEP-001] .../Template.json: Template 'Main' uses 'SchemaIdentificationScript', a deprecated alias on MySQL and MariaDB. Rename it to 'DatabaseIdentificationScript' -- the value is identical, and the alias only still works because load migrates it.
+0 error(s), 1 warning(s)
+```
+
+Exit `0`, and the same board from `mariadb/`:
+
+```bash
+# from course6-module-06/mariadb
+schemaquench --Validate --SchemaPackagePath:./Package
+```
+
+The package deploys, which is exactly why the warning matters: nothing else will tell you before the alias goes.
+Remove the line.
+
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" del SchemaIdentificationScript -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" del SchemaIdentificationScript -->
+Now the retired stage. A column-level `CheckExpression` was deprecated on MySQL and MariaDB when it was
+introduced, because `INFORMATION_SCHEMA.CHECK_CONSTRAINTS` has no link from a constraint back to a column, so
+those engines could never extract it the way it was written. Add one to `Product`'s `UnitPrice` column in
+`<engine>/Package/Templates/Main/Tables/Product.json`:
+
+```json
+"CheckExpression": "`UnitPrice` >= 0"
+```
+
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Product.json" set 'Columns[Name=`UnitPrice`].CheckExpression' '"`UnitPrice` >= 0"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Product.json" set 'Columns[Name=`UnitPrice`].CheckExpression' '"`UnitPrice` >= 0"' -->
+```bash
+# from course6-module-06/mysql
+schemaquench --Validate --SchemaPackagePath:./Package
+```
+
+```
+ERROR [SS-JSON-001] .../Product.json: unexpected property 'CheckExpression' at #/Columns[3].CheckExpression
+WARN [SS-FK-002] Template 'Main' / Table '`OrderItem`' / FK 'FK_OrderItem_Product': RelatedTable '`Product`' does not resolve to any table in the package (resolved schema ''). The deploy succeeds only if it already exists on the target.
+1 error(s), 1 warning(s)
+```
+
+Exit `2`. On MySQL the property is retired: the file no longer loads, and the error names the property and the
+file. Read the warning under it as a consequence, not a second problem. `Product.json` didn't load, so for the
+rest of the checks there is no `Product` table, and the foreign key into it looks dangling. Fix the error and
+the warning goes with it. The way to say this on MySQL is a table-level `CheckConstraints` entry.
+
+Run the same edit from `mariadb/`:
+
+```bash
+# from course6-module-06/mariadb
+schemaquench --Validate --SchemaPackagePath:./Package
+```
+
+`PASS - no issues found`, exit `0`. MariaDB gives a column-level check the column's own name, so it can tell
+which column a check belongs to, and 2.8 brought the property back there: it stays column-level through
+extraction and deploys. Same property, two engines, opposite verdicts, and each for a reason in its catalog.
+
+> **On 2.7.x** the property is retired on MariaDB too, and the file does not load there either.
+
+Remove the `CheckExpression` line again.
+
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Product.json" del 'Columns[Name=`UnitPrice`].CheckExpression' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Product.json" del 'Columns[Name=`UnitPrice`].CheckExpression' -->
+
+## Scenario 8 — make it a gate
 
 `ci/validate.yml` is a copy-ready GitHub Actions workflow. Copy it into your repository's `.github/workflows/` and adjust the package path. It runs `--Validate` on every pull request; the exit-2-on-error behavior fails the PR automatically — no database, no credentials, no matrix of engine containers. Because it needs no live engine, it's the cheapest gate you have: run it first, ahead of anything that connects.
 
@@ -231,4 +381,4 @@ The same board — two errors and a warning — reproduces on all four engines. 
 
 `SS-FILE-NAME-003`'s canonical name carries the same schema rule: SQL Server keeps it (`dbo.<table>.json`, from the table's `"Schema": "[dbo]"`), while PostgreSQL, MySQL, and MariaDB are schema-less (`<table>.json`) — PostgreSQL because these packages leave `Schema` empty and rely on the default `public`, MySQL and MariaDB because they have no schemas within a database at all.
 
-The finding codes, the switch names, the exit behavior, and the pass/fail semantics are identical everywhere — a naming warning never flips a pass to a fail, on any engine.
+The switch names, the exit behavior, and the pass/fail semantics are identical everywhere — a naming warning never flips a pass to a fail, on any engine. What differs is where an engine's own rules differ, and Scenarios 6 and 7 are those findings.
