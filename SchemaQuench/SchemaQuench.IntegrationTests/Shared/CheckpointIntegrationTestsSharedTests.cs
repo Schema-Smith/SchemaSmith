@@ -5,6 +5,7 @@ using System.Data;
 using System.IO;
 using log4net;
 using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json.Linq;
 using NSubstitute;
 using Schema.Checkpointing;
 using Schema.DataAccess;
@@ -389,6 +390,10 @@ ModifiedTables
                 // Parity signal: a resumed run that skipped ModifiedTables must not crash on missing
                 // session temp state — the run converges to a clean (zero) exit.
                 _environment.DidNotReceive().Exit(Arg.Is<int>(c => c != 0));
+
+                // And its summary says it resumed: the training certification saw false on a run where every unit resumed.
+                var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+                Assert.That(summary.SelectToken("run.resumedFromCheckpoint")?.Value<bool>(), Is.True);
             }
             finally
             {
