@@ -80,7 +80,7 @@ namespace Schema.UnitTests.Utility
         [TestCase(Platform.SqlServer, "2008 (major 10)")]
         [TestCase(Platform.PostgreSQL, "12")]
         [TestCase(Platform.MySQL, "5.7.22 / 8.0.23")]
-        [TestCase(Platform.MariaDb, "10.2.7")]
+        [TestCase(Platform.MariaDb, "10.2.9")]
         public void HardFloorDisplay_MatchesSupportedFloorsTable(Platform platform, string expected)
         {
             Assert.That(VersionHelper.HardFloorDisplay(platform), Is.EqualTo(expected));
@@ -158,7 +158,9 @@ namespace Schema.UnitTests.Utility
 
         [TestCase(Platform.MariaDb, "10.1.48-MariaDB", true)]
         [TestCase(Platform.MariaDb, "10.2.6-MariaDB", true)]
-        [TestCase(Platform.MariaDb, "10.2.7-MariaDB", false)]
+        [TestCase(Platform.MariaDb, "10.2.7-MariaDB", true)]
+        [TestCase(Platform.MariaDb, "10.2.8-MariaDB", true)]
+        [TestCase(Platform.MariaDb, "10.2.9-MariaDB", false)]
         [TestCase(Platform.MariaDb, "10.2.44-MariaDB-1:10.2.44+maria~bionic", false)]
         [TestCase(Platform.SqlServer, "9.0.5000.0", true)]
         [TestCase(Platform.SqlServer, "10.50.4000.0", false)]
