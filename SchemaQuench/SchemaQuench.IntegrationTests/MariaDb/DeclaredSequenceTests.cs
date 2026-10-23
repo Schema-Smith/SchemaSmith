@@ -93,4 +93,22 @@ public class DeclaredSequenceTests : ObjectScriptDeployFixture
             Assert.That(Count("SELECT NEXTVAL(`order_seq`)"), Is.GreaterThan(15), "converging the start value never restarts the sequence");
         });
     }
+
+    // The engine stores a declared "integer" as "int", so the compare saw a change on every deploy.
+    [Test]
+    public void ASequenceDeclaredInteger_RedeploysWithoutAnAlter()
+    {
+        if (Convert.ToInt32(Scalar("SELECT SchemaSmith_ServerVersionNum()")) < 1105) Assert.Ignore("A sequence's data type is MariaDB 11.5.");
+        WritePackage("""{ "FolderPath": "Procedures", "QuenchSlot": "Objects", "ObjectType": "Procedures" }""", "Procedures", "Sequences");
+        WriteFile("Sequences", "order_seq.json", """{ "Name": "order_seq", "DataType": "integer", "Start": 1, "Increment": 1 }""");
+        Deploy();
+
+        var second = Deploy();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Scalar("SELECT LOWER(DATA_TYPE) FROM INFORMATION_SCHEMA.SEQUENCES WHERE SEQUENCE_SCHEMA = DATABASE() AND SEQUENCE_NAME = 'order_seq'")?.ToString(), Is.EqualTo("int"));
+            Assert.That(second.Audit.Any(r => r.ObjectType == "sequence" && r.Action is "created" or "modified"), Is.False, "integer and int are one type; audit: " + second.DescribeAudit());
+        });
+    }
 }
