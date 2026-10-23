@@ -67,6 +67,9 @@ public abstract class WhatIfDropsOnceSharedTests : ObjectScriptDeployFixture
             : !l.Contains("INDEX", StringComparison.OrdinalIgnoreCase)
               && (l.Contains("DROP CONSTRAINT", StringComparison.OrdinalIgnoreCase) || l.Contains("DROP FOREIGN KEY", StringComparison.OrdinalIgnoreCase))));
 
+    private static int Audited(DeployResult run, string action) =>
+        run.Audit.Count(r => r.ObjectType == "foreignKey" && r.Action == action && Names(r.ObjectName));
+
     private static bool Names(string line) => line != null && line.Contains(ForeignKey, StringComparison.OrdinalIgnoreCase);
 
     private static string Drops(DeployResult run) =>
@@ -88,6 +91,9 @@ public abstract class WhatIfDropsOnceSharedTests : ObjectScriptDeployFixture
             Assert.That(Previewed(preview, ofItsIndex: false), Is.EqualTo(1), "and WhatIf previews it once:\n" + Drops(preview));
             Assert.That(Previewed(preview, ofItsIndex: true), Is.EqualTo(Logged(real, ofItsIndex: true)),
                 "the key's index is previewed as often as the real run drops it:\n" + Drops(preview) + "\n--- real:\n" + Drops(real));
+            // The summary counts the change audit, so the key is counted once in each, and the real run records its drop.
+            Assert.That(Audited(preview, "wouldDrop"), Is.EqualTo(1), "the WhatIf summary counts the key once: " + preview.DescribeAudit());
+            Assert.That(Audited(real, "dropped"), Is.EqualTo(1), "the real run records the key's drop once: " + real.DescribeAudit());
         });
     }
 }
