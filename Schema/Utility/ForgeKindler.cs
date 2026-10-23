@@ -1319,6 +1319,8 @@ public static class ForgeKindler
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"MissingIndexesAndConstraintsQuench\"(boolean)",
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ForeignKeyQuench\"(boolean)",
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ConstraintStateQuench\"(boolean)",
+            // Took the column's sequence; it now takes the column's schema, table and name, and the old one is left unused.
+            "DROP FUNCTION IF EXISTS \"SchemaSmith\".\"IdentityOptionChanges\"(text, regclass)",
         ];
         foreach (var sql in drops)
         {
