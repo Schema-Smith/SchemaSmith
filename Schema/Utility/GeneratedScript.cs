@@ -4,6 +4,7 @@ using System;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using Schema.Isolators;
 
 namespace Schema.Utility;
 
@@ -30,6 +31,18 @@ public static class GeneratedScript
     }
 
     public static bool IsGenerated(string text) => text.StartsWith(MarkerPrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Writes a generated script, stamped, unless the file there is the user's: one whose marker line was removed, as
+    /// SS-GEN-001 advises to make it theirs, is left alone. Returns whether it wrote.
+    /// </summary>
+    public static bool WriteUnlessOwned(string path, string body)
+    {
+        var files = FileWrapper.GetFromFactory();
+        if (files.Exists(path) && !IsGenerated(files.ReadAllText(path))) return false;
+        files.WriteAllText(path, Stamp(body));
+        return true;
+    }
 
     private static string Hash(string body)
     {

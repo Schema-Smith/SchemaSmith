@@ -2017,7 +2017,8 @@ SELECT k.[name], m.[name], v.encryption_algorithm_name, v.encrypted_value
         DirectoryWrapper.GetFromFactory().CreateDirectory(folder);
         EnsurePrerequisitesFolder();
         _progressLog.Info($"  Casting {file}");
-        files.WriteAllText(file, GeneratedScript.Stamp(sb.ToString()));
+        if (!GeneratedScript.WriteUnlessOwned(file, sb.ToString()))
+            _progressLog.Info($"  Keeping {file}: its generated marker was removed, so it is yours and is not overwritten");
     }
 
     internal const string PartitionSchemesScript = "PartitionSchemes.sql";
@@ -2123,7 +2124,8 @@ SELECT ps.[name], pf.[name], fg.[name]
         DirectoryWrapper.GetFromFactory().CreateDirectory(folder);
         EnsurePrerequisitesFolder();
         _progressLog.Info($"  Casting {file}");
-        files.WriteAllText(file, GeneratedScript.Stamp(sb.ToString()));
+        if (!GeneratedScript.WriteUnlessOwned(file, sb.ToString()))
+            _progressLog.Info($"  Keeping {file}: its generated marker was removed, so it is yours and is not overwritten");
     }
 
     // A template that lists its folders runs only those, so one extracted before the Prerequisites folder existed gets it
