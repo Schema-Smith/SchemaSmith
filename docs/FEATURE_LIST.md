@@ -17,7 +17,7 @@ SchemaSmith ships three CLI tools. All three work against all four supported dat
 | SchemaTongs  | Extract a live database into a schema package     | ✓          | ✓          | ✓     | ✓     |
 | DataTongs    | Generate platform-aware data MERGE/upsert scripts | ✓          | ✓          | ✓     | ✓     |
 
-**Database engines:** SQL Server 2008+ (database compatibility level 100+); PostgreSQL 12+; MySQL 5.7+; MariaDB 10.2+. CI runs SQL Server 2019, PostgreSQL 12 through latest, MySQL 5.7 and 8.0, and MariaDB 10.2, 10.6 and 11.4.
+**Database engines:** SQL Server 2008+ (database compatibility level 100+); PostgreSQL 12+; MySQL 5.7.22+ on the 5.7 line and 8.0.23+ on the 8.0 line; MariaDB 10.2.7+. CI runs SQL Server 2017, 2019, 2022 and 2025; PostgreSQL 12 through 18; MySQL 5.7.22, 5.7, 8.0.23, 8.0, 8.4, 9.7 and 26; and MariaDB 10.2, 10.6, 11.4, 11.8, 12.3 and 13.
 **Operating systems:** Windows, Linux, macOS — on both x64 and ARM64.
 **Runtime:** Self-contained .NET 10 executables. No .NET runtime install required on target machines.
 
