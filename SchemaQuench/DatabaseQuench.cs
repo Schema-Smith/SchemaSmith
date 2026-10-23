@@ -3479,12 +3479,18 @@ SET NOCOUNT ON
         }
         catch (DbException ex)
         {
-            throw new RunFailedException($"Cannot read which {slot} scripts have already run ({ex.Message}). Nothing in the slot was run, because a run-once script "
-                                         + $"would run again. Grant the deploy login SELECT, INSERT and DELETE on {TrackingTableName()}.");
+            throw new RunFailedException(RunOnceReadFailure(slot, TrackingTableName(), ex.Message));
         }
 
         return entries;
     }
+
+    // The engine's own text follows the sentence rather than sitting inside it: PostgreSQL's carries a blank line and a
+    // POSITION detail, which split the instruction across three log lines.
+    internal static string RunOnceReadFailure(string slot, string trackingTable, string engineError) =>
+        $"Cannot read which {slot} scripts have already run from {trackingTable}. Nothing in the slot was run, because a run-once "
+        + $"script would run again. Grant the deploy login SELECT, INSERT and DELETE on {trackingTable}.{Environment.NewLine}"
+        + $"  {engineError.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0)}";
 
     private void MarkScriptCompleted(IDbCommand destCmd, SqlScript script, string slot)
     {

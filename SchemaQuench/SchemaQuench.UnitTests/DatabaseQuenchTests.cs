@@ -3108,6 +3108,22 @@ public class DatabaseQuenchTests
         };
         Assert.That(DatabaseQuench.DeclaresATimestampTheServerWouldDefault(tables), Is.EqualTo(expected));
     }
+
+    // PostgreSQL's error carries its own blank line and POSITION detail, and it was spliced into the middle of the
+    // sentence, so the instruction arrived split across three log lines. The sentence comes whole, the engine error after.
+    [Test]
+    public void RunOnceReadFailure_StatesTheStopAndTheGrantInOneLine_ThenTheEngineError()
+    {
+        var lines = DatabaseQuench.RunOnceReadFailure("Before", "\"SchemaSmith\".\"CompletedMigrationScripts\"",
+            "42501: permission denied for schema SchemaSmith\n\nPOSITION: 26").Split(Environment.NewLine);
+
+        Assert.That(lines, Is.EqualTo(new[]
+        {
+            "Cannot read which Before scripts have already run from \"SchemaSmith\".\"CompletedMigrationScripts\". Nothing in the slot was " +
+            "run, because a run-once script would run again. Grant the deploy login SELECT, INSERT and DELETE on \"SchemaSmith\".\"CompletedMigrationScripts\".",
+            "  42501: permission denied for schema SchemaSmith"
+        }));
+    }
 }
 
 
