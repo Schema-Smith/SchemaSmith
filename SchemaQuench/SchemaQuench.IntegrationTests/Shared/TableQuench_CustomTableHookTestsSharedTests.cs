@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -53,11 +54,15 @@ END");
             Quench(cmd, db, "[{\"Name\":\"Gadget\",\"Columns\":[{\"Name\":\"`Id`\",\"DataType\":\"int\",\"Nullable\":false}],\"Indexes\":[{\"Name\":\"PRIMARY\",\"PrimaryKey\":true,\"Unique\":true,\"IndexColumns\":\"`Id`\"}]}]", false);
             Quench(cmd, db, "[{\"Name\":\"Keeper\",\"Columns\":[{\"Name\":\"`Id`\",\"DataType\":\"int\",\"Nullable\":false}],\"Indexes\":[{\"Name\":\"PRIMARY\",\"PrimaryKey\":true,\"Unique\":true,\"IndexColumns\":\"`Id`\"}]}]", true);
 
+            var messages = StatusMessages(cmd);
             Assert.Multiple(() =>
             {
                 Assert.That(ScalarInt(cmd, $"SELECT COUNT(*) FROM `{db}`.`HookLog` WHERE Action='DROP' AND ObjName='Gadget'"), Is.EqualTo(1),
                     "CustomTableDrop hook should have been invoked for the removed table.");
                 Assert.That(TableExists(cmd, db, "Gadget"), Is.False, "Removed table should be gone (hook dropped it).");
+                Assert.That(messages, Has.Some.StartsWith("  Handing table ").And.Contains("Gadget").And.Contains("CustomTableDrop"),
+                    "a hooked drop says the hook has the table: " + string.Join(" | ", messages));
+                Assert.That(messages, Has.None.Contains("Dropping table").And.None.Contains("Drop table:"), "it is not logged as a drop");
             });
         }
         finally
@@ -98,6 +103,7 @@ END");
             // or error on an existing table).
             Quench(cmd, db, "[{\"Name\":\"Widget\",\"Columns\":[{\"Name\":\"`Id`\",\"DataType\":\"int\",\"Nullable\":false}],\"Indexes\":[{\"Name\":\"PRIMARY\",\"PrimaryKey\":true,\"Unique\":true,\"IndexColumns\":\"`Id`\"}]}]", false);
 
+            var messages = StatusMessages(cmd);
             Assert.Multiple(() =>
             {
                 Assert.That(ScalarInt(cmd, $"SELECT COUNT(*) FROM `{db}`.`HookLog` WHERE Action='RESTORE' AND ObjName='Widget'"), Is.EqualTo(1),
@@ -105,6 +111,7 @@ END");
                 Assert.That(TableExists(cmd, db, "Widget"), Is.True, "Restored table should exist.");
                 Assert.That(ScalarInt(cmd, $"SELECT COUNT(*) FROM `{db}`.`Widget` WHERE Id = 42"), Is.EqualTo(1),
                     "Restored sentinel row must survive — the engine must not recreate the table empty.");
+                Assert.That(messages, Has.Some.EndsWith(" Restored").And.Contains("Widget"), "the restore's outcome is logged: " + string.Join(" | ", messages));
             });
         }
         finally
@@ -185,6 +192,16 @@ END");
     {
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
+    }
+
+    // The procedure's log lines, which SchemaQuench reads from this table while it runs.
+    private static List<string> StatusMessages(IDbCommand cmd)
+    {
+        cmd.CommandText = "SELECT Message FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+        var messages = new List<string>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read()) messages.Add(reader.GetString(0));
+        return messages;
     }
 
     private static int ScalarInt(IDbCommand cmd, string sql)

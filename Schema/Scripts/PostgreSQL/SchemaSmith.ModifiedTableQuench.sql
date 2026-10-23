@@ -166,9 +166,9 @@ BEGIN
       -- so this pass only considers tables owned by the current (template, schema)
       -- iteration. No additional restriction needed here; the predicate already excludes
       -- other templates' tables AND other tenants' tables of the same template.
-      -- A plain drop says so, as SQL Server's and MySQL's do; a hooked one keeps saying only that the table left the product.
+      -- A plain drop says so, and a hooked one names the hook that has the table, as on SQL Server and MySQL.
       SELECT STRING_AGG(CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'CustomTableDrop' AND n.nspname = 'SchemaSmith' )
-                             THEN 'RAISE NOTICE ''  Table ' || tp."Schema" || '.' || tp."TableName" || ' no longer in product'';' || CHR(10) ||
+                             THEN 'RAISE NOTICE ''  Handing table ' || tp."Schema" || '.' || tp."TableName" || ' to SchemaSmith.CustomTableDrop (no longer in product)'';' || CHR(10) ||
                                   'CALL "SchemaSmith"."CustomTableDrop"(''' || tp."Schema" || ''', ''' || tp."TableName" || ''');'
                              ELSE 'RAISE NOTICE ''  Dropping table ' || tp."Schema" || '.' || tp."TableName" || ' (no longer in product)'';' || CHR(10) ||
                                   'DROP TABLE IF EXISTS ' || "SchemaSmith"."QuoteName"(tp."Schema") || '.' || "SchemaSmith"."QuoteName"(tp."TableName") || ';'

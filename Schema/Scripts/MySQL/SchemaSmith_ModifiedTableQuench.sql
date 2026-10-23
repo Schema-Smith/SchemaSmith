@@ -3604,7 +3604,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop tables removed from product');
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Drop table: ', TableName)
+            SELECT CONNECTION_ID(), IF(@has_custom_drop = 1, CONCAT('  Handing table ', TableName, ' to SchemaSmith_CustomTableDrop (no longer in product)'), CONCAT('  Drop table: ', TableName))
             FROM _SchemaSmith_TablesToDrop;
 
             -- Object-change audit (#243 E5): one row per table about to be dropped (set-based over the

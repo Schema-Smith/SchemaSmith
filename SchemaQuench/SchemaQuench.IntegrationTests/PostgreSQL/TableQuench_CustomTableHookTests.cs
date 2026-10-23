@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
@@ -45,6 +46,8 @@ BEGIN
 END $$");
 
             Quench(cmd, "[{\"Schema\":\"public\",\"Name\":\"Gadget\",\"Columns\":[{\"Name\":\"Id\",\"DataType\":\"integer\",\"Nullable\":false}],\"Indexes\":[{\"Name\":\"PK_Gadget\",\"PrimaryKey\":true,\"Unique\":true,\"IndexColumns\":\"Id\"}]}]", false);
+            var messages = new List<string>();
+            conn.Notice += (_, e) => messages.Add(e.Notice.MessageText);
             Quench(cmd, "[{\"Schema\":\"public\",\"Name\":\"Keeper\",\"Columns\":[{\"Name\":\"Id\",\"DataType\":\"integer\",\"Nullable\":false}],\"Indexes\":[{\"Name\":\"PK_Keeper\",\"PrimaryKey\":true,\"Unique\":true,\"IndexColumns\":\"Id\"}]}]", true);
 
             Assert.Multiple(() =>
@@ -53,6 +56,9 @@ END $$");
                     "CustomTableDrop hook should have been invoked for the removed table.");
                 Assert.That(ScalarBool(cmd, "SELECT to_regclass('public.\"Gadget\"') IS NULL"), Is.True,
                     "Removed table should be gone (hook dropped it).");
+                Assert.That(messages, Has.Some.StartsWith("  Handing table ").And.Contains("Gadget").And.Contains("CustomTableDrop"),
+                    "a hooked drop says the hook has the table: " + string.Join(" | ", messages));
+                Assert.That(messages, Has.None.Contains("Dropping table").And.None.Contains("Drop table:"), "it is not logged as a drop");
             });
             conn.Close();
         }
@@ -86,6 +92,8 @@ BEGIN
   END IF;
 END $$");
 
+            var messages = new List<string>();
+            conn.Notice += (_, e) => messages.Add(e.Notice.MessageText);
             Quench(cmd, "[{\"Schema\":\"public\",\"Name\":\"Widget\",\"Columns\":[{\"Name\":\"Id\",\"DataType\":\"integer\",\"Nullable\":false}],\"Indexes\":[{\"Name\":\"PK_Widget\",\"PrimaryKey\":true,\"Unique\":true,\"IndexColumns\":\"Id\"}]}]", false);
 
             Assert.Multiple(() =>
@@ -96,6 +104,7 @@ END $$");
                     "Restored table should exist.");
                 Assert.That(ScalarLong(cmd, "SELECT COUNT(*) FROM public.\"Widget\" WHERE \"Id\" = 42"), Is.EqualTo(1),
                     "Restored sentinel row must survive — the engine must not recreate the table empty.");
+                Assert.That(messages, Has.Some.EndsWith(" Restored").And.Contains("Widget"), "the restore's outcome is logged: " + string.Join(" | ", messages));
             });
             conn.Close();
         }

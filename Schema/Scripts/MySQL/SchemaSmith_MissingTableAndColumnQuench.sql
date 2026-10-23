@@ -1018,6 +1018,12 @@ BEGIN
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RestoreStmts;
 
             CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
+            -- Which of them the hook brought back, as SQL Server says.
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), CONCAT('  ', SchemaSmith_StripBacktickWrapping(t.TableName), ' Restored')
+            FROM _SchemaSmith_Tables t
+            WHERE t.NewTable = 1
+              AND EXISTS (SELECT 1 FROM _SchemaSmith_CatTables ist WHERE ist.TableKey = t.TableKey);
             UPDATE _SchemaSmith_Tables t
             SET t.NewTable = 0
             WHERE t.NewTable = 1
