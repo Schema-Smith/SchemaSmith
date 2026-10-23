@@ -629,7 +629,10 @@ BEGIN
        SET CompareDataType = CASE WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON' THEN 'LONGTEXT'
                                   WHEN VERSION() NOT LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'VECTOR' THEN 'VECTOR(2048)'
                                   ELSE DataType END,
-           CompareCheckExpression = CASE WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON'
+           -- Below MariaDB 10.2.22 a check cannot be read back, so a column's own check is skipped (and reported by the
+           -- constraints step) like a table's; compared as declared, it re-applied the column on every deploy.
+           CompareCheckExpression = CASE WHEN VERSION() LIKE '%MariaDB%' AND SchemaSmith_SupportsCheckConstraints() = 0 THEN NULL
+                                         WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON'
                                           AND (CheckExpression IS NULL OR TRIM(CheckExpression) = '')
                                          THEN SchemaSmith_JsonAliasCheck(SchemaSmith_StripBacktickWrapping(ColumnName))
                                          ELSE CheckExpression END;
@@ -717,6 +720,7 @@ BEGIN
         -- MariaDB's column-level check rides the column definition, so CREATE, ADD and MODIFY all carry it and a
         -- MODIFY without it removes it. MySQL has no column-level check and its model never supplies one.
         CASE WHEN CheckExpression IS NOT NULL AND TRIM(CheckExpression) != '' AND VERSION() LIKE '%MariaDB%'
+                  AND SchemaSmith_SupportsCheckConstraints() = 1
              THEN CONCAT(' CHECK (', CheckExpression, ')') ELSE '' END
     );
 

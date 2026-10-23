@@ -6,6 +6,7 @@ using Newtonsoft.Json;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
+using Schema.Domain.MariaDb;
 using Schema.Domain.MySQL;
 
 namespace Schema.IntegrationTests.MariaDb;
@@ -72,7 +73,11 @@ public class CheckConstraintGatingTests
         return result == null || result == DBNull.Value ? 0 : Convert.ToInt64(result);
     }
 
-    private void Deploy()
+    private void Deploy() => DeployTable(columnCheck: false);
+
+    private void DeployColumnCheck() => DeployTable(columnCheck: true);
+
+    private void DeployTable(bool columnCheck)
     {
         var table = new MySqlTable
         {
@@ -81,10 +86,10 @@ public class CheckConstraintGatingTests
             Columns =
             [
                 new MySqlColumn { Name = "`id`", DataType = "INT", Nullable = false },
-                new MySqlColumn { Name = "`qty`", DataType = "INT", Nullable = true }
+                new MariaDbColumn { Name = "`qty`", DataType = "INT", Nullable = true, CheckExpression = columnCheck ? "`qty` >= 0" : null }
             ],
             Indexes = [new Schema.Domain.Index { Name = $"`pk_{TableName}`", PrimaryKey = true, Unique = true, IndexColumns = "`id`" }],
-            CheckConstraints = [new CheckConstraint { Name = $"`CK_{TableName}_pos`", Expression = "`qty` >= 0" }]
+            CheckConstraints = columnCheck ? [] : [new CheckConstraint { Name = $"`CK_{TableName}_pos`", Expression = "`qty` >= 0" }]
         };
         var json = ("[" + JsonConvert.SerializeObject(table) + "]").Replace("'", "''");
         Exec($"CALL SchemaSmith_TableQuench('CheckGatingMaria', '{_testDb}', '{json}', 0, 0, 0)");
@@ -112,6 +117,37 @@ public class CheckConstraintGatingTests
             Assert.That(CheckAuditCount("downgraded"), Is.GreaterThanOrEqualTo(1), "the skip must be recorded as a downgrade");
             Assert.That(CheckAuditCount("created"), Is.Zero);
         });
+    }
+
+    private long ColumnAuditCount(string actionType) => Scalar(
+        $"SELECT COUNT(*) FROM SchemaSmith_ChangeAudit WHERE ActionType = '{actionType}' AND ObjectName LIKE '%{TableName}%qty%'");
+
+    // A column's own check rides its definition. Below 10.2.22 it cannot be read back, so it is skipped as a table's check
+    // is; carried in the definition, it re-applied the column on every deploy against a live check it could not see.
+    [Test]
+    public void Below10222_Warn_AColumnCheck_IsSkippedAndRecorded_AndARedeployLeavesTheColumn()
+    {
+        Exec("SET @schemasmith_version_patch_override = 100221");
+
+        DeployColumnCheck();
+        Exec($"DELETE FROM SchemaSmith_ChangeAudit WHERE ObjectName LIKE '%{TableName}%'");
+        DeployColumnCheck();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(LiveCheckCount(), Is.Zero, "the column's check must be skipped below 10.2.22");
+            Assert.That(ColumnAuditCount("downgraded"), Is.EqualTo(1), "the skip must be recorded as a downgrade on each deploy");
+            Assert.That(ColumnAuditCount("modified"), Is.Zero, "a redeploy must leave the column alone");
+        });
+    }
+
+    [Test]
+    public void Below10222_Fail_AColumnCheck_AbortsNamingTheMariaDbVersion()
+    {
+        Exec("SET @schemasmith_version_patch_override = 100221");
+        Exec("SET @schemasmith_unsupported_policy = 'fail'");
+
+        Assert.That(DeployColumnCheck, Throws.Exception.With.Message.Contains("MariaDB 10.2.22"));
     }
 
     [Test]
