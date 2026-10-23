@@ -397,6 +397,13 @@ public sealed class CoherenceCheck : ISchemaCheck
                 yield break;
             }
 
+            // A table whose file failed to load is declared, and SS-JSON-001 or SS-LOAD-001 already names the file. Matched on
+            // the name alone: the file that failed is the one place its schema could be read from.
+            if (tablesByTemplate.Keys.Where(t => t == owningTemplate || SameDatabases(t, owningTemplate))
+                .SelectMany(t => t.ComponentLoadErrors)
+                .Any(e => e.TableName != null && IdentityKey(e.TableName, ComparesExactly(table)) == name))
+                yield break;
+
             // A warning, not an error: the deploy creates a foreign key to any table that exists on the target,
             // declared or not, so an unresolved reference is only a likely mistake. Never silenced -- not even for
             // a partial deployment such as a SchemaShears patch, where it is expected: DropTablesRemovedFromProduct

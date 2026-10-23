@@ -1114,7 +1114,7 @@ namespace Schema.Domain
                     // Recorded either way (see RecordComponentLoadError). An unparseable file surfaces as
                     // SS-LOAD-001; a parseable-but-wrong one is classified and left for JsonSchemaCheck's
                     // on-disk pass to report precisely as SS-JSON-001.
-                    RecordComponentLoadError(f, e);
+                    RecordComponentLoadError(f, e, isTable: true);
                 }
             }
         }
@@ -1154,8 +1154,13 @@ namespace Schema.Domain
         // with a guard like that in place, and that contract is the only thing a consumer can build on.
         // Parseability is kept as CLASSIFICATION (see ComponentLoadError.IsValidJson) so `--Validate` can
         // still report only the unparseable ones as SS-LOAD-001 and leave the rest to JsonSchemaCheck.
-        private void RecordComponentLoadError(string filePath, Exception e) =>
-            ComponentLoadErrors.Add(new ComponentLoadError(filePath, e.Message, IsParseableJson(filePath)));
+        private void RecordComponentLoadError(string filePath, Exception e, bool isTable = false)
+        {
+            var parsed = ParseOrNull(filePath);
+            var name = isTable ? (parsed as JObject)?["Name"] : null;
+            ComponentLoadErrors.Add(new ComponentLoadError(filePath, e.Message, parsed != null,
+                name?.Type == JTokenType.String ? (string)name : null));
+        }
 
         // Deliberately does NOT infer parseability from the CLR exception type that surfaced out of
         // Table.Load / PlatformDeserializer — that inference is unsound. MissingMemberHandling.Error
@@ -1166,17 +1171,15 @@ namespace Schema.Domain
         // the two cases apart. Re-parsing the raw text directly answers the actual question ("is this
         // valid JSON at all?") and stays correct regardless of which exception type Newtonsoft raises
         // for a given malformation, or whether a future deserialization setting changes that shape.
-        private static bool IsParseableJson(string filePath)
+        private static JToken ParseOrNull(string filePath)
         {
             try
             {
-                var text = ProductFileWrapper.GetFromFactory().ReadAllText(filePath);
-                JsonText.Parse(text);
-                return true;
+                return JsonText.Parse(ProductFileWrapper.GetFromFactory().ReadAllText(filePath));
             }
             catch
             {
-                return false;
+                return null;
             }
         }
 

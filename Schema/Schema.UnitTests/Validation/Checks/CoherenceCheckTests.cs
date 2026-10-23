@@ -1647,6 +1647,31 @@ public class CoherenceCheckTests
         Assert.That(findings.Select(f => (f.Code, f.Severity)), Is.EqualTo(new[] { ("SS-FK-002", Severity.Warning) }));
     }
 
+    // #589: a table file that fails to load (SS-JSON-001 reports it) is missing from the template, so a key into it looked
+    // dangling too, and the user chased a second finding about a table that is declared.
+    [TestCase("NoSuchTable")]
+    [TestCase("[nosuchtable]")]
+    public void FkRelatedTable_DeclaredInAFileThatFailedToLoad_IsNotReportedAsMissing(string declaredName)
+    {
+        var template = TemplateWithTables("Main", OrderReferencingMissingTable());
+        template.ComponentLoadErrors.Add(new ComponentLoadError("Tables/dbo.NoSuchTable.json", "unknown member", true, declaredName));
+
+        var findings = new CoherenceCheck().Run(new ValidationContext(Product(), new[] { template }, "pkg")).ToArray();
+
+        Assert.That(findings, Is.Empty, string.Join("; ", findings.Select(f => f.Code + " " + f.Message)));
+    }
+
+    [Test]
+    public void FkRelatedTable_StillReportedWhenTheFileThatFailedDeclaresAnotherTable()
+    {
+        var template = TemplateWithTables("Main", OrderReferencingMissingTable());
+        template.ComponentLoadErrors.Add(new ComponentLoadError("Tables/dbo.Other.json", "unknown member", true, "Other"));
+
+        var findings = new CoherenceCheck().Run(new ValidationContext(Product(), new[] { template }, "pkg")).ToArray();
+
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-FK-002" }));
+    }
+
     [Test]
     public void FkRelatedTableGatedVariants_NotAmbiguous()
     {
