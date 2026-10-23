@@ -308,6 +308,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **PostgreSQL says what it skipped under `UnsupportedFeaturePolicy: warn`.** A feature the server is too old for was recorded in the deployment summary but printed nothing; the deploy log now has a `Skipping … (downgraded)` line for each, as SQL Server, MySQL and MariaDB already print.
 - **MySQL and MariaDB name each event they change.** `Quenching scheduled events` was followed by nothing; the deploy log now says `Create event`, `Replace changed event` or `Drop event … (removed from product)` for each event it touches, and nothing for one that is unchanged.
 - **A table created again is not reported as re-baselined (all engines).** A table dropped outside SchemaSmith left its recorded expressions behind, and the deploy that created it again logged `Re-baselined … recorded expression(s)`, which reads as an engine upgrade. The rows are still refreshed; only the message is gone.
+- **A target database that cannot be connected to is named.** A connect that stalled failed with only `The operation has timed out` under `Begin Quench`; it now reads `Unable to connect to PostgreSQL at <server> [Database: <name>] with user <user>: …` on every engine, as the server-level connection failures already did.
 
 ## [v2.7.3](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.3) — 2026-10-14
 

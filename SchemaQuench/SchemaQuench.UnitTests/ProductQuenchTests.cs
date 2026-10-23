@@ -27,6 +27,14 @@ public class ProductQuenchTests
         Assert.That(ProductQuench.ConnectFailure(platform, "localhost", "", user), Is.EqualTo(expected));
     }
 
+    // A target database's connect that stalled said only "The operation has timed out", under "Begin Quench".
+    [Test]
+    public void ADatabaseConnectFailure_NamesTheTargetAndThatItWasTheConnect()
+    {
+        Assert.That(DatabaseQuench.ConnectFailure(Platform.PostgreSQL, "localhost", "Shop_Tenant1", "deployer", "The operation has timed out"),
+            Is.EqualTo("Unable to connect to PostgreSQL at localhost [Database: Shop_Tenant1] with user deployer: The operation has timed out"));
+    }
+
     #region Platform Dispatch - Init Database
 
     [Test]

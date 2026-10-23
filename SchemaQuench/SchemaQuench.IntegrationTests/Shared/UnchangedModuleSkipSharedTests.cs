@@ -44,6 +44,17 @@ public abstract class UnchangedModuleSkipSharedTests : ObjectScriptDeployFixture
         foreach (var drop in DropStatements) Exec(drop);
     }
 
+    // A target database's connect that failed said only the provider's text -- "The operation has timed out" for a stall --
+    // under "Begin Quench", naming neither the target nor that it was the connect. A refused login fails at the same open.
+    [Test]
+    public void AFailedConnect_NamesTheEngineTheTargetAndThatItWasTheConnect()
+    {
+        var result = Deploy(expectSuccess: false, login: ("schemasmith_no_such_user", "not-the-password"));
+        var expected = $"Unable to connect to {Platform.ToDisplayName()} at 127.0.0.1 [Database: {MainDb}] with user schemasmith_no_such_user: ";
+        Assert.That(result.Log.Where(l => l != null && l.StartsWith("ERROR")), Has.Some.Contains(expected),
+            string.Join("\n", result.Log.Where(l => l != null && l.StartsWith("ERROR"))));
+    }
+
     [Test]
     public void SecondDeploy_RunsNoModule_HandChangeAndTextChangeBringTheirScriptBack()
     {

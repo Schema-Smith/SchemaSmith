@@ -2422,6 +2422,11 @@ SET NOCOUNT ON
 
     #region Connection and Execution
 
+    // A connect that stalled said only "The operation has timed out", under "Begin Quench", naming neither the target nor
+    // that it was the connect.
+    internal static string ConnectFailure(Platform platform, string server, string database, string user, string reason) =>
+        $"{ProductQuench.ConnectFailure(platform, server, $" [Database: {database}]", user)}: {reason}";
+
     private IDbConnection GetConnection(bool fireInfoMessageEventOnUserErrors = true, bool ignoreInfoMessages = false)
     {
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
@@ -2447,7 +2452,17 @@ SET NOCOUNT ON
             }
         }
 
-        connection.Open();
+        try
+        {
+            connection.Open();
+        }
+        catch (Exception e) when (e is DbException or TimeoutException or InvalidOperationException)
+        {
+            connection.Dispose();
+            _errorLog.Error($"Could not connect to {_databaseName} on {_server}", e);
+            // Not wrapped: the lost-connection classifier walks inner exceptions and would call a failed connect a mid-run drop.
+            throw new RunFailedException(ConnectFailure(_product.Platform, _server, _databaseName, config[SettingsKeys.Target.User], e.Message));
+        }
 
         // PostgreSQL: set the unsupported-feature policy on every convergence connection (built directly to
         // the target database, so no ChangeDatabase resets the session) via a GUC that works on every PG
