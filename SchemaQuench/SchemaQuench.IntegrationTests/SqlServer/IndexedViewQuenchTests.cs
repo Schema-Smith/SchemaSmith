@@ -1177,8 +1177,13 @@ EXEC sp_addextendedproperty 'MS_Description', 'kept column', 'SCHEMA', '{_schema
         cmd.CommandText = $"SELECT [SchemaSmith].[GenerateIndexedViewJson]('{_schema}', 'vTestSummary')";
         Assert.That(cmd.ExecuteScalar() as string, Does.Contain("\"Description\":\"by name\""), "and extracted");
 
+        var viewIdentity = $"SELECT CONVERT(VARCHAR(20), OBJECT_ID('[{_schema}].[vTestSummary]')) + '/' + CONVERT(VARCHAR(30), create_date, 126) FROM sys.objects WHERE object_id = OBJECT_ID('[{_schema}].[vTestSummary]')";
+        cmd.CommandText = viewIdentity;
+        var viewBefore = cmd.ExecuteScalar() as string;
         RunIndexedViewQuench(cmd, ViewDefinitionWithIndexDescription("by customer name"));
         Assert.That(IndexDescription(cmd), Is.EqualTo("by customer name"), "a change converges");
+        cmd.CommandText = viewIdentity;
+        Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo(viewBefore), "in place: the view and its indexes are not rebuilt for a description");
 
         RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
         Assert.That(IndexDescription(cmd), Is.EqualTo("by customer name"), "omitted means the description is not managed, so the database's stays");

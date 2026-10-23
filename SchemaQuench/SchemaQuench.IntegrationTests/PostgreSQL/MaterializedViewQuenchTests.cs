@@ -939,8 +939,13 @@ ALTER MATERIALIZED VIEW public.mv_test OWNER TO ""{role}"";";
         RunMaterializedViewQuench(cmd, ViewDefinitionWithIndexDescription("by id"));
         Assert.That(IndexComment(cmd), Is.EqualTo("by id"), "set on create");
 
+        const string indexOid = "SELECT 'public.ix_mv_test_id'::regclass::oid::text";
+        cmd.CommandText = indexOid;
+        var indexBefore = cmd.ExecuteScalar() as string;
         RunMaterializedViewQuench(cmd, ViewDefinitionWithIndexDescription("by order id"));
         Assert.That(IndexComment(cmd), Is.EqualTo("by order id"), "a change converges");
+        cmd.CommandText = indexOid;
+        Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo(indexBefore), "in place: neither the view nor its index is rebuilt for a description");
 
         RunMaterializedViewQuench(cmd, ViewDefinitionWithIndex());
         Assert.That(IndexComment(cmd), Is.EqualTo("by order id"), "omitted means the comment is not managed, so the database's stays");
