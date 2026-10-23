@@ -2655,6 +2655,7 @@ SET NOCOUNT ON
         var rows = ChangeAuditReader.ReadAndDrain(_product.Platform, auditCmd);
         if (rows == null) return;
         foreach (var r in rows) ChangeAudit.Record(r.ObjectType, r.ObjectName, r.Action, r.Mode);
+        foreach (var line in DowngradeLog.Lines(_product.Platform, rows)) SafeProgressLog(line);
         ChangeAudit.MarkInstrumented();
     }
 
