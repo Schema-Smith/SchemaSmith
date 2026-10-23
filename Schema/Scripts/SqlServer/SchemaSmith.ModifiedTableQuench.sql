@@ -563,7 +563,7 @@ BEGIN TRY
                   OR (CASE WHEN c.Nullable = 1 THEN 'YES' ELSE 'NO' END <> ic.IS_NULLABLE
                       AND (RTRIM(ISNULL(c.[ComputedExpression], '')) = ''
                            OR (c.[Persisted] = 1 AND c.[NullableDeclared] IS NOT NULL)))
-                  OR (ISNULL(SchemaSmith.fn_StripParenWrapping(cc.[definition]), '') <> ISNULL(c.ComputedExpression, '')
+                  OR (ISNULL(CASE WHEN cc.[definition] IS NULL THEN NULL ELSE SchemaSmith.fn_StripParenWrapping(cc.[definition]) END, '') <> ISNULL(c.ComputedExpression, '')
                       -- #242: same question as the check constraints. A computed column has no normalisation at all, so
                       -- every non-trivial expression was dropped and re-added on every deploy -- a table rewrite when
                       -- the column is PERSISTED.
@@ -2406,7 +2406,9 @@ BEGIN TRY
       AND ic.TABLE_NAME = SchemaSmith.fn_StripBracketWrapping(c.[TableName])
       AND ic.COLUMN_NAME = SchemaSmith.fn_StripBracketWrapping(c.[ColumnName])
   WHERE t.NewTable = 0
-    AND SchemaSmith.fn_StripParenWrapping(ic.COLUMN_DEFAULT) <> ISNULL(c.[Default], 'NULL')
+    -- The function is not inlineable (it loops), so each call is a separate execution: a column with no default, most of
+    -- them, skips it. NULL in either form compares as before.
+    AND CASE WHEN ic.COLUMN_DEFAULT IS NULL THEN NULL ELSE SchemaSmith.fn_StripParenWrapping(ic.COLUMN_DEFAULT) END <> ISNULL(c.[Default], 'NULL')
     -- #242: the texts differ, but a reframed default always differs. Ask what was actually applied.
     AND SchemaSmith.fn_ExpressionMapUnchanged(c.[Schema], c.[TableName], 'COLUMN', c.[ColumnName], 'default',
           c.[Default], ISNULL(ic.COLUMN_DEFAULT, '')) = 0
