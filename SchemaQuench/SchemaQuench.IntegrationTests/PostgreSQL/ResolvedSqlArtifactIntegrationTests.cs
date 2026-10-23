@@ -142,6 +142,13 @@ public class ResolvedSqlArtifactIntegrationTests
             var otherDb = Path.Join(_artifactDir, "SchemaQuench - Other database.sql");
             File.WriteAllText(previous, $"-- SchemaSmith debug SQL | Product: {ProductName} | Server: {server} | Database: {db} | Schema:  | Run: {otherRun}");
             File.WriteAllText(otherDb, $"-- SchemaSmith debug SQL | Product: {ProductName} | Server: {server} | Database: not_{db} | Schema:  | Run: {otherRun}");
+            var otherProduct = Path.Join(_artifactDir, "SchemaQuench - Other product.sql");
+            File.WriteAllText(otherProduct, $"-- SchemaSmith debug SQL | Product: Not{ProductName} | Server: {server} | Database: {db} | Schema:  | Run: {otherRun}");
+            // The product's own scripts run against each engine's initial database; one from another server is not this run's.
+            var otherServer = new[] { "master", "postgres", "mysql", "information_schema", "" }
+                .Select((initDb, i) => (Path: Path.Join(_artifactDir, $"SchemaQuench - Other server {i}.sql"), Owner: initDb)).ToList();
+            foreach (var (path, initDb) in otherServer)
+                File.WriteAllText(path, $"-- SchemaSmith debug SQL | Product: {ProductName} | Server: not-{server} | Database: {initDb} | Schema:  | Run: {otherRun}");
 
             try
             {
@@ -151,6 +158,8 @@ public class ResolvedSqlArtifactIntegrationTests
                 {
                     Assert.That(File.Exists(previous), Is.False, "the previous run's file for this target is deleted");
                     Assert.That(File.Exists(otherDb), Is.True, "another database's file is not this run's to delete");
+                    Assert.That(File.Exists(otherProduct), Is.True, "another product's file is not this run's to delete");
+                    Assert.That(otherServer.Where(f => !File.Exists(f.Path)).Select(f => f.Owner), Is.Empty, "another server's product-script files stay");
                 });
             }
             finally

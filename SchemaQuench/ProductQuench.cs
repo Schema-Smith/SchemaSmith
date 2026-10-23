@@ -1179,8 +1179,9 @@ public class ProductQuench
         if (isBefore)
         {
             var initDb = GetInitDatabase(_product.Platform);
+            var servers = _secondaryServers.Append(_primaryServer).ToHashSet(StringComparer.OrdinalIgnoreCase);
             ResolvedSqlArtifactWriter.DeleteOwned(ResolveArtifactDirectory(), o =>
-                o.Product == _product.Name && o.Database == initDb && o.Schema == "" && o.Run != ResolvedSqlArtifactWriter.RunId);
+                o.Product == _product.Name && servers.Contains(o.Server) && o.Database == initDb && o.Schema == "" && o.Run != ResolvedSqlArtifactWriter.RunId);
         }
 
         if (_product.Platform == Platform.SqlServer && _secondaryServers.Count > 0)
