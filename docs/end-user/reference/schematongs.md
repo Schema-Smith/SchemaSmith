@@ -643,7 +643,7 @@ order explicitly, so the tool's own default is `Physical`.
 
 The `Product:CheckConstraintStyle` setting controls how check constraints are represented in extracted table JSON. It only takes effect when creating a new `Product.json` -- on existing products, the style is read from the product file itself.
 
-**SQL Server and PostgreSQL only.** MySQL and MariaDB always extract check constraints table-level, into the `CheckConstraints` array, whatever this setting says: their catalog cannot attribute a check to a column. A column `CheckExpression` is not accepted on those engines either -- see [Check Constraints](schema-packages.md#check-constraints).
+**SQL Server and PostgreSQL only.** MySQL always extracts check constraints table-level, into the `CheckConstraints` array, whatever this setting says: its catalog cannot attribute a check to a column, and a column `CheckExpression` is not accepted there. MariaDB extracts a column-level check -- the one MariaDB names after its column -- as that column's `CheckExpression`, and every other check table-level, whatever this setting says. See [Check Constraints](schema-packages.md#check-constraints).
 
 ### ColumnLevel (default)
 

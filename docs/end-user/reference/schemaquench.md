@@ -392,7 +392,7 @@ Pre-flight logs the version it detected for every server, and -- **with one exce
 
 Normalizing all four to a bare major would read tidier and tell you less: on three of the four engines it would discard the digits SchemaSmith's own version gates turn on, and a degrade you needed to diagnose would become invisible in the log. **The comparison is unaffected either way** -- the floor check and `MinimumVersion` both parse each engine's form correctly, so a passing or failing verdict never depends on how the string is printed.
 
-What you *declare* is a separate, friendlier grammar: `MinimumVersion` takes `16` or `2022` on SQL Server, `15` on PostgreSQL, `8.0` on MySQL, `10.6` on MariaDB. You never have to match the detected string's shape -- declare the floor you need and SchemaSmith compares it correctly against whatever the server reports.
+What you *declare* is a separate, friendlier grammar: `MinimumVersion` takes `16` or `2022` on SQL Server, `15` on PostgreSQL, `8.0` or `8.0.30` on MySQL, `10.6` or `10.6.4` on MariaDB. You never have to match the detected string's shape -- declare the floor you need and SchemaSmith compares it correctly against whatever the server reports.
 
 ### Version-adaptive code generation
 
@@ -488,7 +488,7 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 
 > **Check the manifest before deploying to a pre-2016 target.** Under the default `warn`, a masked column is created unmasked and an Always Encrypted column is created unencrypted — the deploy succeeds and the downgrade is recorded, but the protection is not there. If a silently-unprotected column is worse for you than a failed deployment, set `Target:UnsupportedFeaturePolicy=fail`.
 
-One further case is compatibility-level gated rather than version gated: a `Json`-encoded [data delivery](schema-packages.md#content-encoding) aimed at a below-130 SQL Server target follows the same policy — `warn` skips just that delivery and delivers the rest, `fail` aborts. Re-encode that delivery as `Xml` to deploy it there.
+One further case is compatibility-level gated rather than version gated: a `Json`-encoded [data delivery](schema-packages.md#content-encoding) aimed at a below-130 SQL Server target is not degraded at all. SchemaQuench converts the content to the XML shape as it reads it and delivers it through the XML merge, which works at every compatibility level, so nothing is skipped and the package needs no change.
 
 **Two are gated on the server's *edition*.** Before SQL Server 2016 SP1, **Data compression** (`CompressionType` `ROW` or `PAGE`) and **columnstore indexes** need Enterprise or Developer edition; Standard, Web and Express refuse them. There, the table or index is created uncompressed and a columnstore index is skipped, each with a downgrade recorded. From 2016 SP1 every edition has both.
 
@@ -590,7 +590,7 @@ scripts (Before, After, Objects, migration scripts and `ValidationScript`) alway
 
 | Server setting | What SchemaSmith does |
 |---|---|
-| `sql_mode` | Creates its procedures and delivers data under your server's mode with the flags that change how SQL text is read taken out: `ANSI_QUOTES`, `PIPES_AS_CONCAT`, `NO_BACKSLASH_ESCAPES`, `IGNORE_SPACE`, the combination modes `ANSI`, `ORACLE`, `MSSQL`, `DB2`, `POSTGRESQL` and `MAXDB`, `NO_KEY_OPTIONS`, `NO_TABLE_OPTIONS`, `NO_FIELD_OPTIONS`, `EMPTY_STRING_IS_NULL` and `SIMULTANEOUS_ASSIGNMENT`. Strictness flags such as `STRICT_TRANS_TABLES`, `NO_ZERO_DATE` and `ONLY_FULL_GROUP_BY` stay as your server has them. When the server's mode changes, the next run re-creates the procedures. |
+| `sql_mode` | Creates its procedures and delivers data under your server's mode with the flags that change how SQL text is read taken out: `ANSI_QUOTES`, `PIPES_AS_CONCAT`, `NO_BACKSLASH_ESCAPES`, `IGNORE_SPACE`, the combination modes `ANSI`, `ORACLE`, `MSSQL`, `DB2`, `POSTGRESQL` and `MAXDB`, `NO_KEY_OPTIONS`, `NO_TABLE_OPTIONS`, `NO_FIELD_OPTIONS`, `EMPTY_STRING_IS_NULL`, `SIMULTANEOUS_ASSIGNMENT`, `HIGH_NOT_PRECEDENCE`, `REAL_AS_FLOAT` and `PAD_CHAR_TO_FULL_LENGTH`. Strictness flags such as `STRICT_TRANS_TABLES`, `NO_ZERO_DATE` and `ONLY_FULL_GROUP_BY` stay as your server has them. When the server's mode changes, the next run re-creates the procedures. |
 | `explicit_defaults_for_timestamp` | Turned on while tables are created and altered, so a `TIMESTAMP` column gets exactly the default it declares. With it off, the default on MySQL 5.7 and MariaDB before 10.10, the server would invent one. A few MariaDB versions (10.2, 10.3 and early 10.4 to 10.6 patches) do not let a session change it, and MySQL 5.7 lets only an account with `SUPER` change it (a managed service's admin user has no `SUPER`); there the deploy logs a note, and a `TIMESTAMP NOT NULL` column needs its default declared. |
 | `time_zone` | DataTongs extracts at `+00:00` and records that on the delivery it configures (`TimeZone`). Delivery uses the recorded zone, so `TIMESTAMP` values arrive unchanged whatever zone either server runs in. A delivery without `TimeZone` runs in the session's zone. |
 | `sql_mode` during data delivery | `NO_AUTO_VALUE_ON_ZERO` is added, so a row whose `AUTO_INCREMENT` key is `0` keeps `0`. |

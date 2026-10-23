@@ -42,7 +42,7 @@ The `Product.json` file sits at the root of the schema package and is the top-le
 
 **DropUnknownIndexes** -- Enforces index alignment, but only when you're ready. Default `false` for good reason: most teams adopting SchemaSmith inherit environments with years of index drift. Turn this on after capturing every needed index in your repository. See [the adoption approach](../guide/11-edge-cases.md#the-adoption-approach) in the guide for the phased rollout pattern.
 
-**MinimumVersion** -- Declares the engine-version floor the product requires. Declare it when the product depends on DDL or behavior that a known-old engine version lacks, or when you want a clean abort rather than a partial deployment against an unsupported server. SchemaQuench detects the version of every resolved target before any deployment work begins. If any target is below the declared floor, the entire run aborts -- no partial deploy, no side effects -- and the diagnostic names each below-floor target with its detected version. SQL Server accepts a major version number (`16`) or a release year (`2022`, `2019`, `2017`, `2016`); PostgreSQL accepts a major number (`15`, `16`, `17`); MySQL accepts `major.minor` (`8.0`, `8.4`); MariaDB accepts `major.minor` (`10.6`, `11.4`). An unparseable value is a configuration error that aborts at startup. If the target version cannot be determined, that is also a hard error -- SchemaSmith never deploys blind. See [SchemaQuench -- Engine Version Compatibility](schemaquench.md#engine-version-compatibility) for the full pre-flight behavior and supported engine floors.
+**MinimumVersion** -- Declares the engine-version floor the product requires. Declare it when the product depends on DDL or behavior that a known-old engine version lacks, or when you want a clean abort rather than a partial deployment against an unsupported server. SchemaQuench detects the version of every resolved target before any deployment work begins. If any target is below the declared floor, the entire run aborts -- no partial deploy, no side effects -- and the diagnostic names each below-floor target with its detected version. SQL Server accepts a major version number (`16`) or a release year (`2022`, `2019`, `2017`, `2016`); PostgreSQL accepts a major number (`15`, `16`, `17`); MySQL accepts `major.minor` (`8.0`, `8.4`) or `major.minor.patch` (`8.0.30`); MariaDB accepts `major.minor` (`10.6`, `11.4`) or `major.minor.patch` (`10.6.4`). A patch is compared patch for patch. A pre-release suffix, such as PostgreSQL `18beta1`, reads as its leading number. An unparseable value is a configuration error that aborts at startup. If the target version cannot be determined, that is also a hard error -- SchemaSmith never deploys blind. See [SchemaQuench -- Engine Version Compatibility](schemaquench.md#engine-version-compatibility) for the full pre-flight behavior and supported engine floors.
 
 ### Example (SQL Server, Northwind demo)
 
@@ -509,7 +509,7 @@ Every table definition file declares exactly one table. The shared properties be
 
 | Property | Type | Default | Required | Description |
 |---|---|---|---|---|
-| `Name` | string | | Yes | Table name. Use the platform's quote style: `[Customer]` (SQL Server), `"customer"` (PostgreSQL), `` `customer` `` (MySQL). Bare names are also accepted. |
+| `Name` | string | | Yes | Table name. SQL Server and MySQL accept the platform's quote style, `[Customer]` or `` `customer` ``, as well as a bare name. On PostgreSQL write it bare, `customer`: PostgreSQL keeps a double quote as part of a name, so a wrapped name is unwrapped with a warning (`SS-IDENT-003`). |
 | `Description` | string | | No | A description stored on the table itself: the `MS_Description` extended property on SQL Server, `COMMENT ON TABLE` on PostgreSQL, the table `COMMENT` on MySQL and MariaDB. See [Descriptions](#descriptions). |
 | `Columns` | array | `[]` | Yes | Column definitions. See [Columns](#columns). |
 | `Indexes` | array | `[]` | No | Index and constraint definitions. See [Indexes](#indexes). |
@@ -517,7 +517,6 @@ Every table definition file declares exactly one table. The shared properties be
 | `CheckConstraints` | array | `[]` | No | Table-level check constraint definitions. See [Check Constraints](#check-constraints). |
 | `ShouldApplyExpression` | string | | No | SQL expression evaluated at quench time. If it returns false (or `0`), the entire table is skipped on this database. Tokens are resolved before evaluation. See [Conditional Application](#conditional-application). |
 | `VariantName` | string | | No | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
-| `TimeZone` | string | | **MySQL, MariaDB.** The session time zone, as an offset such as `+00:00`, that the `ContentFile`'s `TIMESTAMP` values were extracted in. Delivery runs in the same zone, so the values arrive unchanged wherever the target server's zone is. DataTongs sets it to `+00:00`. Without it, delivery reads the values in the target session's zone, which is right for data written in that zone. |
 | `OldName` | string | `""` | No | Previous table name. When set, the table is renamed during quench. Clear after the rename has been deployed everywhere. |
 | `DataDelivery` | object | `null` | No | Declarative data delivery configuration for this table. See [DataDelivery](#datadelivery). |
 | `Extensions` | object | `null` | No | Open metadata bag. See [Custom Properties](custom-properties.md). |
@@ -535,7 +534,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `Schema` | string | `"dbo"` | Database schema. Use bracket notation in extracted files (e.g., `"[Production]"`). |
-| `CompressionType` | string | `"NONE"` | Data compression: `"NONE"`, `"ROW"`, `"PAGE"`. |
+| `CompressionType` | string | `"NONE"` | Data compression: `"NONE"`, `"ROW"`, `"PAGE"`, or `"MIXED"` to leave the live compression as it is. A columnstore index left unset means `"COLUMNSTORE"`. |
 | `XmlCompression` | bool | `false` | **SQL Server 2022+.** Compresses XML column data in place. Independent of `CompressionType` — a table can carry both. **Deployable from 2022; readable where the server reports `sys.partitions.xml_compression`** — SQL Server 2025, and 2022 from CU26 (2022 CU25 does not have the column). Where the server cannot report it, SchemaSmith applies the setting and cannot read it back: SchemaTongs carries the declared value forward from the package it is refreshing rather than dropping it, and drift is not re-evaluated there — the setting is applied at create. Where it can, it round-trips and converges normally. Below 2022 the clause is suppressed and reported through `UnsupportedFeaturePolicy`. |
 | `IsTemporal` | bool | `false` | When `true`, SchemaQuench manages the table as system-versioned temporal: emits `ALTER TABLE ... SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = <Schema>.<Name>_Hist))` and protects the period columns from drop detection. They are `ValidFrom` / `ValidTo` unless the package declares its own (see [SQL Server column extras](#sql-server-column-extras)). When toggled back to `false`, SchemaQuench emits `SET (SYSTEM_VERSIONING = OFF)`. The history table itself (`<Name>_Hist` in the same schema) is not auto-created -- declare it as a sibling table JSON in your package or rely on a Before script that creates it before the `IsTemporal=true` table is quenched. |
 | `XmlIndexes` | array | `[]` | XML index definitions. See [XML Indexes (SQL Server)](#xml-indexes-sql-server). |
@@ -569,7 +568,7 @@ Each platform's table definition extends the shared properties with engine-speci
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `Schema` | string | `"public"` | Database schema. Use double-quote notation in extracted files (e.g., `"\"sales\""`). |
+| `Schema` | string | `"public"` | Database schema, written bare (`"sales"`). |
 | `Statistics` | array | `[]` | Extended statistics definitions. |
 | `ExcludeConstraints` | array | `[]` | Exclusion constraint definitions. See [Exclude Constraints (PostgreSQL)](#exclude-constraints-postgresql). |
 | `RowLevelSecurity` | bool | `false` | Enables row-level security on the table. **On its own this denies everything:** a table with row-level security enabled and no policy returns no rows to anyone but its owner, so pair it with `Policies`.
@@ -1052,7 +1051,7 @@ Where each kind of index is declared. Most are entries in `Indexes`; a kind keye
 
 On a graph table, an index can name the engine's pseudo-columns as key parts: `$node_id` on a node table, `$edge_id`, `$from_id` and `$to_id` on an edge table (`"IndexColumns": "$from_id,$to_id"`, bare, as `CREATE INDEX` takes them). SchemaTongs writes such an index under those names; the GUID-suffixed columns SQL Server stores it over never reach the package, and the engine's own `GRAPH_UNIQUE_INDEX` is neither extracted nor dropped as an unknown index.
 
-`CompressionType` (NONE/ROW/PAGE), `Clustered`, `ColumnStore`, `FillFactor`, `UpdateFillFactor`,
+`CompressionType` (NONE/ROW/PAGE, or MIXED to keep the live compression; unset on a columnstore index means COLUMNSTORE), `Clustered`, `ColumnStore`, `FillFactor`, `UpdateFillFactor`,
 `FileGroup`, `PartitionScheme`, `PartitionColumn`, `IgnoreDuplicateKey`, `PadIndex`, `BucketCount`, `Disabled`.
 
 | Property | Type | Default | Notes |
@@ -1204,6 +1203,7 @@ Tables without a `DataDelivery` block are left alone. Tables that declare one ar
 | `MergeDisableTriggers` | bool | `false` | Wrap the merge with platform-appropriate trigger disable/enable. |
 | `MergeDisableRules` | bool | `false` | **PostgreSQL.** Disable rewrite rules on the table during the merge. |
 | `MergeUpdateDescendents` | bool | `false` | **PostgreSQL.** When `true`, the merge targets descendant partitions as well as the specified table. When `false` (the default), the merge uses `ONLY` so descendant tables are left untouched. |
+| `TimeZone` | string | | **MySQL, MariaDB.** The session time zone, as an offset such as `+00:00`, that the `ContentFile`'s `TIMESTAMP` values were extracted in. Delivery runs in the same zone, so the values arrive unchanged wherever the target server's zone is. DataTongs sets it to `+00:00`. Without it, delivery reads the values in the target session's zone, which is right for data written in that zone. |
 | `ShouldApplyExpression` | string | `""` | Optional SQL predicate evaluated against the target at deploy time. Tokens are resolved before evaluation -- including [`{{ServerMajorVersion}}` and `{{CompatibilityLevel}}`](script-tokens.md#servermajorversion-and-compatibilitylevel), the same version tokens a folder or table gate can reference. Blank or absent always applies -- today's unchanged behavior. When `DataDelivery` is an array of two or more deliveries, every entry must set one. See [Multiple Deliveries](#multiple-deliveries) below. |
 | `VariantName` | string | `""` | Optional label naming the intent behind a delivery's `ShouldApplyExpression`. Appears in the deployment log when that delivery is skipped or when its gate errors. Max 128 characters. |
 
@@ -1551,7 +1551,8 @@ Custom statistics definitions in the `Statistics` array. SQL Server uses traditi
 
 | Property | Type | Description |
 |---|---|---|
-| `Name` | string | Statistics object name. It is created in the table's schema. |
+| `Name` | string | Statistics object name. |
+| `Schema` | string | The statistics object's schema, when it is not its table's. Left out, it is created in the table's schema. |
 | `Kind` | string | Comma-separated kinds: `ndistinct`, `dependencies`, `mcv`, in any case and order. Omit it for all three, which is PostgreSQL's own default. |
 | `StatisticsColumns` | string | Comma-separated columns, or parenthesised expressions for expression statistics (PostgreSQL 14+): `"Status,DateCreated"`, `"(\"Id\" / 1)"`. Compared as a set, not in the order written. |
 | `StatisticsTarget` | int | The statistics target (`ALTER STATISTICS … SET STATISTICS n`, PostgreSQL 13+), the sample size `ANALYZE` uses for this object. Omit it and the target is unmanaged: whatever is set stays. Declared, it is applied when the object is created and converged in place when it changes, without re-creating the object. Below 13 it follows the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). SchemaTongs writes it only when someone set one. |
@@ -1968,6 +1969,7 @@ Sequences live in the `Sequences/` directory of each template, which accepts bot
 | `Cache` | long | `1` | Values pre-allocated per session. Higher is faster but leaves larger gaps after a crash. |
 | `Cycle` | bool | `false` | Wrap to `MinValue` after `MaxValue` instead of erroring. |
 | `Description` | string | `null` | **PostgreSQL.** `COMMENT ON SEQUENCE`. A MariaDB sequence has no comment, so the key is not offered there. See [Descriptions](#descriptions). |
+| `PersistenceType` | string | `null` | **PostgreSQL 15+.** `Unlogged` for a sequence that skips the write-ahead log, or `Logged`. Left out, a new sequence is created logged and an existing one's persistence is not changed. Below 15 the clause is dropped under the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). |
 
 **The current value is never managed.** A sequence's position records which numbers have already been handed out, so it is data rather than schema. If a deploy reset it, the next insert would re-issue keys already in use. `Start` only applies when the sequence is created; SchemaSmith never issues `RESTART`, and extraction never captures the current value.
 
@@ -2156,7 +2158,7 @@ Existing packages need no change. Declaring the same event both ways is reported
 | `ExecuteAt` | string | `null` | For `AT`: when the event runs, once. |
 | `Starts` | string | `null` | Optional start of the recurrence window. **Omit it and the server's own start time is left alone.** MySQL fills in an unspecified `STARTS` with the moment the event was created, so treating that as declared would make every later deploy see a difference and recreate the event — resetting its schedule each time. Set this only if you want a fixed start. SchemaTongs writes it only when the event was created with one. |
 | `Ends` | string | `null` | Optional end of the recurrence window. |
-| `Status` | string | `"ENABLE"` | `"ENABLE"`, `"DISABLE"` or `"DISABLE ON SLAVE"`. Read the same way as `ScheduleType`, and any other value stops the deploy — falling back to `ENABLE` would switch on an event the package meant to leave off. |
+| `Status` | string | `"ENABLE"` | `"ENABLE"`, `"DISABLE"` or `"DISABLE ON SLAVE"`. On MySQL 8.4 and later `DISABLE ON SLAVE` is created as `DISABLE ON REPLICA`, the spelling that release does not deprecate. Read the same way as `ScheduleType`, and any other value stops the deploy — falling back to `ENABLE` would switch on an event the package meant to leave off. |
 | `Preserve` | bool | `false` | When true the event survives its last run instead of dropping itself. Matches the engine default (`NOT PRESERVE`). |
 | `Description` | string | `null` | The event's `COMMENT`. An omitted value clears a comment the server has, as the engine's own DDL does. |
 | `Comment` | string | `null` | **Deprecated** alias of `Description`. Still deploys; `--Validate` reports it (`SS-DESC-002`). |
