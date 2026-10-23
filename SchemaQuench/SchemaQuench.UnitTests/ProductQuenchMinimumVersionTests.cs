@@ -236,7 +236,7 @@ namespace SchemaQuench.UnitTests
                     var quench = new StubDetectProductQuench("150010");
 
                     var ex = Assert.Throws<RunFailedException>(() => quench.ValidateMinimumVersion());
-                    Assert.That(ex!.Message, Does.Contain("is not a valid"));
+                    Assert.That(ex!.Message, Does.Contain("is not a valid PostgreSQL version"));
                 }
                 finally { FactoryContainer.Clear(); }
             }

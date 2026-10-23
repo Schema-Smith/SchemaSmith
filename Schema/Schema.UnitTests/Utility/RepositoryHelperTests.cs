@@ -708,6 +708,6 @@ public class RepositoryHelperTests
         _file.ReadAllText(FakeProductFile).Returns(ExistingProductJson);
 
         Assert.That(() => RepositoryHelper.UpdateOrInitRepository(FakeProductPath, "P", "Main", "db", Platform.PostgreSQL),
-            Throws.Exception.With.Message.Contains("Platform mismatch"));
+            Throws.Exception.With.Message.Contains("Platform mismatch").And.Message.Contains("configured for SQL Server but config specifies PostgreSQL"));
     }
 }

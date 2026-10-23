@@ -110,7 +110,7 @@ public static class RepositoryHelper
         var file = FileWrapper.GetFromFactory();
         var existing = JsonHelper.Load<Product>(productFile) ?? new Product();
         if (existing.Platform != Platform.Unknown && existing.Platform != platform)
-            throw new Exception($"Platform mismatch: Product '{existing.Name}' is configured for {existing.Platform} but config specifies {platform}.");
+            throw new Exception($"Platform mismatch: Product '{existing.Name}' is configured for {existing.Platform.ToDisplayName()} but config specifies {platform.ToDisplayName()}.");
 
         var json = JsonText.ParseObject(file.ReadAllText(productFile));
         var changed = false;
