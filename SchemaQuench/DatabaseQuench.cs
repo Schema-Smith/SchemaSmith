@@ -2438,6 +2438,14 @@ SET NOCOUNT ON
     internal static string ConnectFailure(Platform platform, string server, string database, string user, string reason) =>
         $"{ProductQuench.ConnectFailure(platform, server, $" [Database: {database}]", user)}: {reason}";
 
+    // Not wrapped: the lost-connection classifier walks inner exceptions and would call a failed connect a mid-run drop.
+    private RunFailedException ConnectFailed(IDbConnection connection, Exception e, IConfigurationRoot config)
+    {
+        connection.Dispose();
+        _errorLog.Error($"Could not connect to {_databaseName} on {_server}", e);
+        return new RunFailedException(ConnectFailure(_product.Platform, _server, _databaseName, config[SettingsKeys.Target.User], e.Message));
+    }
+
     private IDbConnection GetConnection(bool fireInfoMessageEventOnUserErrors = true, bool ignoreInfoMessages = false)
     {
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
@@ -2467,12 +2475,17 @@ SET NOCOUNT ON
         {
             connection.Open();
         }
-        catch (Exception e) when (e is DbException or TimeoutException or InvalidOperationException)
+        catch (DbException e)
         {
-            connection.Dispose();
-            _errorLog.Error($"Could not connect to {_databaseName} on {_server}", e);
-            // Not wrapped: the lost-connection classifier walks inner exceptions and would call a failed connect a mid-run drop.
-            throw new RunFailedException(ConnectFailure(_product.Platform, _server, _databaseName, config[SettingsKeys.Target.User], e.Message));
+            throw ConnectFailed(connection, e, config);
+        }
+        catch (TimeoutException e)
+        {
+            throw ConnectFailed(connection, e, config);
+        }
+        catch (InvalidOperationException e)
+        {
+            throw ConnectFailed(connection, e, config);
         }
 
         // PostgreSQL: set the unsupported-feature policy on every convergence connection (built directly to

@@ -35,6 +35,7 @@ internal static class TransientRetry
             {
                 return func();
             }
+            // prepush-allow: generic-catch -- a test helper may have wrapped the engine's exception, so it is matched by message
             catch (Exception e) when (IsTransient(e))
             {
                 // A retried call that had already changed something can explain an assertion that fails only in a full run.
