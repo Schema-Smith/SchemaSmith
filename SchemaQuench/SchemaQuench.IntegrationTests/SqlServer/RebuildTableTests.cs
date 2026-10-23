@@ -435,7 +435,27 @@ IF OBJECT_ID('dbo.RebuildFkParent', 'U') IS NOT NULL DROP TABLE dbo.RebuildFkPar
             conn.ChangeDatabase(db);
             Schema.Utility.ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
             Exec(cmd, "CREATE TABLE dbo.Ledgered (Id INT NOT NULL PRIMARY KEY, Val NVARCHAR(50) NULL) WITH (LEDGER = ON (APPEND_ONLY = ON))");
-            Assert.That(Scalar(cmd, "SELECT SchemaSmith.fn_RebuildBlockedReason(N'dbo', N'Ledgered')")?.ToString(), Is.EqualTo("the table is a ledger table"));
+            Exec(cmd, "INSERT INTO dbo.Ledgered (Id, Val) VALUES (1, 'one'), (2, 'two')");
+            var json = """
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[Ledgered]",
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                        {"Name": "[Val]", "DataType": "NVARCHAR(50)", "Nullable": true}
+                    ]
+                }
+                """;
+
+            var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => Rebuild(cmd, json, "Ledgered"));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain("ledger table").And.Contain("Ledgered"), "the refusal names why and which table");
+                Assert.That(Scalar(cmd, "SELECT ledger_type_desc FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.Ledgered')")?.ToString(),
+                    Is.EqualTo("APPEND_ONLY_LEDGER_TABLE"), "the table is still the ledger table it was");
+                Assert.That(Int(cmd, "SELECT COUNT(*) FROM dbo.Ledgered"), Is.EqualTo(2), "with its rows");
+            });
         }
         finally
         {
