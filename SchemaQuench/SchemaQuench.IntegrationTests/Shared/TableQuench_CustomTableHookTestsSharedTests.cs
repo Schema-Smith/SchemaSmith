@@ -62,7 +62,8 @@ END");
                 Assert.That(TableExists(cmd, db, "Gadget"), Is.False, "Removed table should be gone (hook dropped it).");
                 Assert.That(messages, Has.Some.StartsWith("  Handing table ").And.Contains("Gadget").And.Contains("CustomTableDrop"),
                     "a hooked drop says the hook has the table: " + string.Join(" | ", messages));
-                Assert.That(messages, Has.None.Contains("Dropping table").And.None.Contains("Drop table:"), "it is not logged as a drop");
+                Assert.That(messages, Has.None.Contains("Dropping table"), "it is not logged as a drop");
+                Assert.That(messages, Has.None.Contains("Drop table:"), "it is not logged as a drop");
             });
         }
         finally

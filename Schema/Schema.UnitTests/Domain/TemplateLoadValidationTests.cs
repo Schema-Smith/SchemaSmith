@@ -85,9 +85,9 @@ namespace Schema.UnitTests.Domain
             Assert.That(template.SchemaIdentificationScript, Is.Null.Or.Empty);
         }
 
-        [TestCase(Platform.MySQL)]
-        [TestCase(Platform.MariaDb)]
-        public void SchemaIdentificationScriptAlias_OnMySqlFamily_IsRecordedAsADeprecationNotice(Platform platform)
+        [TestCase(Platform.MySQL, "MySQL")]
+        [TestCase(Platform.MariaDb, "MariaDB")]
+        public void SchemaIdentificationScriptAlias_OnMySqlFamily_IsRecordedAsADeprecationNotice(Platform platform, string engineName)
         {
             var (templateFile, tablesPath) = Paths();
             _mockFile.Exists(templateFile).Returns(true);
@@ -101,7 +101,7 @@ namespace Schema.UnitTests.Domain
             Assert.That(template.DeprecationNotices[0].Location, Is.EqualTo(templateFile));
             Assert.That(template.DeprecationNotices[0].Message, Does.Contain("DatabaseIdentificationScript"));
             // #588: the log line said (MySQL) for a MariaDB product.
-            _mockProgressLog.Received().Warn(Arg.Is<string>(m => m.Contains($"({platform.ToDisplayName()})")));
+            _mockProgressLog.Received().Warn(Arg.Is<string>(m => m.Contains($"({engineName})")));
         }
 
         [TestCase(Platform.SqlServer)]

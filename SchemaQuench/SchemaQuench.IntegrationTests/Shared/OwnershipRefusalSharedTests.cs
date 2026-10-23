@@ -68,6 +68,8 @@ public abstract class OwnershipRefusalSharedTests : ObjectScriptDeployFixture
         WriteTable(Owner, $$""", { "Name": "{{Quote("email")}}", "DataType": "VARCHAR(100)", "Nullable": true }""", ExpressionIndex("email"));
         Deploy();
         var expressionIndexes = ExpressionIndexCount();
+        // Where the engine declares one, it exists before the refused deploy, so "still there" cannot pass as 0 == 0.
+        if (ExpressionIndex("email") != "") Assert.That(expressionIndexes, Is.EqualTo(1), "precondition: the owner's expression index was created");
 
         WriteTable(Intruder,
             $$""", { "Name": "{{Quote("mail")}}", "OldName": "{{Quote("email")}}", "DataType": "VARCHAR(100)", "Nullable": true }""" +
