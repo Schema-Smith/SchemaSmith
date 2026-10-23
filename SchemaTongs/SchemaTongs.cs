@@ -4248,7 +4248,8 @@ SELECT TABLE_NAME
         var type = Regex.Match(createStatement, @"\bas\s+(?<type>\w+(?:\s+unsigned)?)\s+start\b", RegexOptions.IgnoreCase);
         if (type.Success) sequence.DataType = type.Groups["type"].Value.ToLowerInvariant();
         sequence.Increment = Number("increment by", 1);
-        sequence.Cache = Number("cache", 1000);
+        // A cache of 0 is written "nocache", with no number to read.
+        sequence.Cache = Regex.IsMatch(createStatement, @"\bnocache\b", RegexOptions.IgnoreCase) ? 0 : Number("cache", 1000);
         sequence.Cycle = Regex.IsMatch(createStatement, @"\scycle\b", RegexOptions.IgnoreCase);
         var ascending = sequence.Increment > 0;
         var min = Number("minvalue", ascending ? 1 : -9223372036854775807);
