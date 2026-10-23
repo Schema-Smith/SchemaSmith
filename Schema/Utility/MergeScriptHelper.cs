@@ -2126,6 +2126,9 @@ ORDER BY c.ORDINAL_POSITION;
                 .IndexOf("MariaDB", StringComparison.OrdinalIgnoreCase) >= 0 ? "y" : "n";
         });
         if (isMariaDb != "y") return result;
+        // The view arrived in MariaDB 10.2.22; below it every delivery failed reading it.
+        var hasCheckView = Memoized("hasCheckConstraintsView", () => ForgeKindler.ReportsCheckConstraints(cmd) ? "y" : "n");
+        if (hasCheckView != "y") return result;
 
         BindIdentifierParameters(cmd, ("@db", databaseName), ("@table", tableName));
         cmd.CommandText = @"
