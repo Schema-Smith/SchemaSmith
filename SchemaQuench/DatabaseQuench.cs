@@ -690,7 +690,11 @@ public class DatabaseQuench
                         command.CommandText = _iteration.BaselineValidationScript;
                         try
                         {
-                            if (!Convert.ToBoolean(command.ExecuteScalar()))
+                            // On SQL Server the script's own error arrives as a message, leaving a null that read as "no".
+                            _infoMessageException = null;
+                            var isValid = Convert.ToBoolean(command.ExecuteScalar());
+                            if (_infoMessageException != null) throw _infoMessageException;
+                            if (!isValid)
                                 throw new Exception("Invalid baseline for this release");
                         }
                         catch (Exception ex)
