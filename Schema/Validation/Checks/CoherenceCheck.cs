@@ -57,6 +57,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string JsonIndexSameColumnCode = "SS-JSX-002";
     private const string JsonIndexPathCode = "SS-JSX-003";
     private const string JsonIndexKeyCode = "SS-JSX-004";
+    private const string SelectiveXmlNoPathsCode = "SS-XML-001";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RemovedFunctionCode = "SS-COL-004";
@@ -146,6 +147,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         [JsonIndexColumnCode] = ErrorLevel,
         [JsonIndexSameColumnCode] = ErrorLevel,
         [JsonIndexPathCode] = ErrorLevel,
+        [SelectiveXmlNoPathsCode] = ErrorLevel,
         [JsonIndexKeyCode] = ErrorLevel,
         [BackfillWithoutDefaultCode] = WarningLevel,
         [CharsetWithoutCollationCode] = WarningLevel,
@@ -262,6 +264,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckMariaDbPeriodColumns(table, location));
             findings.AddRange(CheckSpatialIndexes(table, location, columnsAreOwnedElsewhere));
             findings.AddRange(CheckJsonIndexes(table, location, columnsAreOwnedElsewhere));
+            findings.AddRange(CheckSelectiveXmlIndexes(table, location));
             findings.AddRange(CheckEdgeConstraints(table, location, tablesByKey));
             findings.AddRange(CheckCharsetWithoutCollation(table, location));
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
@@ -581,6 +584,15 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// paths start at <c>$</c>, have no wildcard, and none contains another. The engine refuses each other shape at create
     /// time, so it is reported here. An index-only template owns no columns, so the column and key checks are skipped there.
     /// </summary>
+    // An empty path list passed the presence check and deployed nothing, reporting success.
+    private static IEnumerable<Finding> CheckSelectiveXmlIndexes(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable sqlTable) yield break;
+        foreach (var index in sqlTable.XmlIndexes.Where(x => x.Selective != null && (x.Selective.Paths == null || x.Selective.Paths.Count == 0)))
+            yield return new Finding(Severity.Error, SelectiveXmlNoPathsCode, Category, $"{tableLocation} / XML index '{index.Name}'",
+                $"Selective XML index '{index.Name}' declares no paths, so there is nothing to index and the deploy would create nothing. Declare at least one path.");
+    }
+
     private static IEnumerable<Finding> CheckJsonIndexes(Table table, string tableLocation, bool columnsAreOwnedElsewhere)
     {
         if (table is not SqlServerTable sqlTable || sqlTable.JsonIndexes.Count == 0) yield break;

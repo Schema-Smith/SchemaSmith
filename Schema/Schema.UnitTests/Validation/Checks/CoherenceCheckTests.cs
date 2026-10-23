@@ -462,6 +462,23 @@ public class CoherenceCheckTests
         return table;
     }
 
+    // A selective XML index with no paths validated clean, and the deploy reported success with no index created.
+    [Test]
+    public void ASelectiveXmlIndexWithNoPaths_IsAnError()
+    {
+        static SqlServerTable WithSelective(params SelectiveXmlPath[] paths)
+        {
+            var table = Documents(true);
+            table.XmlIndexes.Add(new XmlIndex { Name = "SXI_Doc", Column = "Doc", Selective = new SelectiveXmlIndex { Paths = [.. paths] } });
+            return table;
+        }
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunOn(WithSelective()).Where(f => f.Code == "SS-XML-001").Select(f => f.Severity), Is.EqualTo(new[] { Severity.Error }));
+            Assert.That(RunOn(WithSelective(new SelectiveXmlPath { Name = "p", Path = "/a" })).Where(f => f.Code == "SS-XML-001"), Is.Empty);
+        });
+    }
+
     private static string[] JsonIndexCodes(SqlServerTable table) => RunOn(table).Where(f => f.Code.StartsWith("SS-JSX")).Select(f => f.Code).ToArray();
 
     [Test]

@@ -105,6 +105,7 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | `SS-JSX-002` | Error | Two JSON indexes are on the same column, which takes one. |
 | `SS-JSX-003` | Error | A JSON index path does not start at `$`, has a wildcard, or contains or repeats another of its paths. |
 | `SS-JSX-004` | Error | A table declares a JSON index but no clustered primary key. |
+| `SS-XML-001` | Error | A selective XML index declares no `Paths`, so it would index nothing and the deploy would create no index. |
 | `SS-COL-001` | Warning | A column sets `BackfillExistingRows` but has no `Default`, so there is no value to apply to rows that already exist and the setting does nothing. |
 | `SS-COL-002` | Warning | A MySQL or MariaDB column declares a `CharacterSet` other than the table's and no `Collation`, so it gets that character set's default collation, which varies by engine version. A column in the table's own character set gets the table's collation; `utf8` and `utf8mb3` count as one set, and a MariaDB short collation such as `uca1400_ai_ci` belongs to the table's `CharacterSet`. |
 | `SS-COL-003` | Warning | A PostgreSQL check constraint or foreign key is named `<table>_<column>_not_null`, the name PostgreSQL 18 gives the NOT NULL constraint it makes for that column: a collision on 18, and a misleading name everywhere. |
