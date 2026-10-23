@@ -180,7 +180,7 @@ public class ConstraintAttributeTests
 
         Deploy(Package(", \"Enforced\": true"));
         ck = (MySqlCheckConstraint)Extract().CheckConstraints.Single();
-        Assert.That(ck.Enforced, Is.True);
+        Assert.That(ck.Enforced, Is.Null, "enforced is the default, so it is omitted");
     }
 
     private MySqlTable Extract()
