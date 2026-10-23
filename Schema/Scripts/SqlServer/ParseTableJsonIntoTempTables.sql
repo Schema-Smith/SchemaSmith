@@ -424,6 +424,12 @@
     [Value] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
   )
 
+  DROP TABLE IF EXISTS #LedgerColumns
+  -- A ledger table's declared generated columns, by role (sys.columns.generated_always_type 7-10). Above the split, as
+  -- every table LedgerQuench reads after this script must be: below it, the caller's sp_executesql drops it on return.
+  CREATE TABLE #LedgerColumns ([Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
+                               [RoleType] TINYINT NOT NULL, [ColumnName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Hidden] BIT NOT NULL)
+
   -- ===== INGEST SPLIT =====
 
   -- The fill half has to be safe to run twice against the same working set. It is retried on transient
@@ -441,6 +447,7 @@
   TRUNCATE TABLE #Statistics
   TRUNCATE TABLE #FullTextIndexes
   TRUNCATE TABLE #ExtendedProperties
+  TRUNCATE TABLE #LedgerColumns
 
   -- The reset lives inside the region, not with the shared ones above: a client that built these rows
   -- loaded them BEFORE this half ran, and a reset outside the region would wipe them and leave the table
@@ -886,11 +893,7 @@
 
   -- The declared period columns go onto their table row and off #Columns, so no ordinary column pass sees them.
   EXEC SchemaSmith.LiftPeriodColumns
-  -- A ledger table's declared generated columns, by role (sys.columns.generated_always_type 7-10). Filled by
-  -- LiftLedgerColumns; on an existing table they are off #Columns and converge in LedgerQuench.
-  IF OBJECT_ID('tempdb..#LedgerColumns') IS NOT NULL DROP TABLE #LedgerColumns
-  CREATE TABLE #LedgerColumns ([Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL,
-                               [RoleType] TINYINT NOT NULL, [ColumnName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Hidden] BIT NOT NULL)
+  -- A ledger table's declared generated columns, by role; on an existing table they converge in LedgerQuench.
   EXEC SchemaSmith.LiftLedgerColumns
 
   -- Don't try to apply tables without columns
