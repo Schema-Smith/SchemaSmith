@@ -549,7 +549,11 @@ public abstract class SchemaTongsSharedTests
             progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Kindling The Forge")));
             progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Table Structures")));
             // Each table on its own line in one form on every engine; MySQL and MariaDB printed "[1/7] Extracting Album...".
-            progressLog.Received().Info(Arg.Is<string>(s => s.StartsWith("  Cast Json for ")));
+            // One line per table: as many as the table files written.
+            var castLines = progressLog.ReceivedCalls().Count(c => c.GetMethodInfo().Name == "Info" && c.GetArguments()[0] is string m && m.StartsWith("  Cast Json for "));
+            var tableFiles = file.ReceivedCalls().Count(c => c.GetMethodInfo().Name == "WriteAllText" && c.GetArguments()[0] is string path
+                                                          && path.Contains("Tables") && path.EndsWith(".json"));
+            Assert.That(castLines, Is.GreaterThan(0).And.EqualTo(tableFiles), "a progress line for each table written");
             progressLog.DidNotReceive().Info(Arg.Is<string>(s => s.Contains("] Extracting ")));
             progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Summary")));
 
