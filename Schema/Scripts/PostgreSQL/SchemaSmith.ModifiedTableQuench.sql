@@ -123,9 +123,9 @@ BEGIN
       -- Drop any foreign key that REFERENCES a table about to be removed (from any table), so the
       -- table drop below does not fail on a still-present inbound dependency. Same removed-table
       -- predicate as the drop pass; catalog-driven so it is not limited to product-declared parents.
-      SELECT STRING_AGG('RAISE NOTICE ''  Foreign Key ' || pn.nspname || '.' || pc.relname || '.' || con.conname || ' references a table no longer in product'';' || CHR(10) ||
+      SELECT STRING_AGG('RAISE NOTICE ''  Foreign Key ' || REPLACE(REPLACE(pn.nspname || '.' || pc.relname || '.' || con.conname, '''', ''''''), '%', '%%') || ' references a table no longer in product'';' || CHR(10) ||
                         'ALTER TABLE ' || "SchemaSmith"."QuoteName"(pn.nspname) || '.' || "SchemaSmith"."QuoteName"(pc.relname) || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(con.conname) || ';' || CHR(10) ||
-                        'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || pn.nspname || '.' || pc.relname || '.' || con.conname || ''', ''dropped'');', CHR(10))
+                        'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || REPLACE(pn.nspname || '.' || pc.relname || '.' || con.conname, '''', '''''') || ''', ''dropped'');', CHR(10))
         INTO sql_script
         FROM temp_product_ownership tp
         JOIN pg_class fc       ON fc.relname = tp."TableName"
