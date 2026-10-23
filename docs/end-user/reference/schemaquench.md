@@ -347,9 +347,9 @@ These are the minimum versions SchemaSmith supports for deployment:
 | SQL Server | 2008 (major version 10) |
 | PostgreSQL | 12 |
 | MySQL | 5.7.22 on the 5.7 line; 8.0.23 on the 8.0 line |
-| MariaDB | 10.2.9 |
+| MariaDB | 10.2.13 |
 
-**MySQL's floor is a patch, on two lines.** MySQL 5.7.0-5.7.21 lack `JSON_ARRAYAGG`, so DataTongs extracts nothing from them. MySQL 8.0.0-8.0.22 lack, patch by patch, features SchemaSmith reads as "8.0": functional indexes, enforced CHECK constraints, multi-valued indexes and invisible columns. Both bands are refused before anything runs, naming the detected version. MariaDB's floor is a patch too: 10.2.9. The `JSON` type SchemaSmith's helpers declare arrived in 10.2.7, but 10.2.7 and 10.2.8 return NULL from every JSON function that builds a string holding a backtick, and every extracted name holds one.
+**MySQL's floor is a patch, on two lines.** MySQL 5.7.0-5.7.21 lack `JSON_ARRAYAGG`, so DataTongs extracts nothing from them. MySQL 8.0.0-8.0.22 lack, patch by patch, features SchemaSmith reads as "8.0": functional indexes, enforced CHECK constraints, multi-valued indexes and invisible columns. Both bands are refused before anything runs, naming the detected version. MariaDB's floor is a patch too: 10.2.13. The `JSON` type SchemaSmith's helpers declare arrived in 10.2.7, but 10.2.7 and 10.2.8 return NULL from every JSON function that builds a string holding a backtick, and every extracted name holds one; table data delivery arrives altered on 10.2.9 and 10.2.10, and runs the server out of memory on 10.2.11 and 10.2.12.
 
 **And the other end of the range is measured, not assumed — new in v2.7.0.** Every engine also has a
 CI leg pinned to that engine's **`latest`** tag, so each release is exercised against whatever the vendor
@@ -375,7 +375,7 @@ decaying into "current as of whenever someone last looked".
 
 You can raise the floor for a specific product by declaring `MinimumVersion` in `Product.json`. Before any deployment work begins, SchemaQuench detects the version of every resolved target. If any target is below the declared floor, the entire run aborts with a manifest naming each below-floor server and its detected version. Nothing is deployed -- no partial work, no side effects on any target.
 
-See [Schema Packages -- Product.json](schema-packages.md#productjson) for the accepted value formats (`16` or `2022` for SQL Server; `15` for PostgreSQL; `8.0` for MySQL; `10.6` for MariaDB) and configuration details. The declared value may be any supported version — for example `5.7.22` (MySQL) or `10.2.9` (MariaDB) to pin exactly at the floor. On MySQL and MariaDB a value with a patch is compared patch for patch, so `8.0.30` refuses an 8.0.22 server; a value with a pre-release suffix, such as PostgreSQL `18beta1`, reads as its leading number.
+See [Schema Packages -- Product.json](schema-packages.md#productjson) for the accepted value formats (`16` or `2022` for SQL Server; `15` for PostgreSQL; `8.0` for MySQL; `10.6` for MariaDB) and configuration details. The declared value may be any supported version — for example `5.7.22` (MySQL) or `10.2.13` (MariaDB) to pin exactly at the floor. On MySQL and MariaDB a value with a patch is compared patch for patch, so `8.0.30` refuses an 8.0.22 server; a value with a pre-release suffix, such as PostgreSQL `18beta1`, reads as its leading number.
 
 If a target's version cannot be determined, that is a hard error -- SchemaQuench never deploys blind against an unknown version. An unparseable `MinimumVersion` value fails at startup before any connections open.
 
@@ -500,7 +500,7 @@ One further case is compatibility-level gated rather than version gated: a `Json
 
 
 
-The supported range (MySQL 5.7.22 and 8.0.23 through current, MariaDB 10.2.9 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
+The supported range (MySQL 5.7.22 and 8.0.23 through current, MariaDB 10.2.13 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
 
 The schema model itself parses on every supported version — a version-agnostic `JSON_EXTRACT` shred stands in for `JSON_TABLE` (MySQL 8.0 / MariaDB 10.6), so nothing about kindling or ingest depends on the target version. Beyond that, a feature a target lacks is either taken by an equivalent path (same end state) or degraded through the **unsupported-feature policy** (`Target:UnsupportedFeaturePolicy`, default `warn` → emit without the feature + an **Unsupported Feature Downgrades** line; `fail` → abort with a "requires MySQL N" message):
 
@@ -536,7 +536,7 @@ The schema model itself parses on every supported version — a version-agnostic
 
 **One more routes through the same policy but is gated on the server's filesystem, not its version.** **Page compression** (`Compression`, MySQL only) needs a data directory on a filesystem that supports hole punching, and MySQL refuses it anywhere else with error 4029 — a Windows data directory, for one. Under `warn` the table is created without its `COMPRESSION` option and the downgrade is recorded; under `fail` the deploy stops. `Compression` is applied when a table is created, so only new tables are affected.
 
-The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7.22 through current, or MariaDB 10.2.9 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
+The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7.22 through current, or MariaDB 10.2.13 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
 ### MariaDB (MySQL family) — where the native DDL diverges
 

@@ -31,7 +31,7 @@ The CLI tools target:
 
 - **.NET:** `net10.0` (single target, set in `Directory.Build.props`)
 - **IDEs:** Visual Studio 2026 or JetBrains Rider (both with full ReSharper / built-in analyzer support)
-- **Databases tested in CI:** SQL Server 2017, 2019, 2022 and 2025; PostgreSQL 12 through 18; MySQL 5.7.22, 5.7, 8.0.23, 8.0, 8.4, 9.7 and 26; MariaDB 10.2, 10.6, 11.4, 11.8, 12.3 and 13, plus MySQL 8.0 and MariaDB 11.4 with `lower_case_table_names=1`. A pull request runs a subset (the oldest and newest of each); a merge to `main` runs them all. The supported floors are SQL Server 2008 (database compatibility level 100+), PostgreSQL 12, MySQL 5.7.22 and 8.0.23, and MariaDB 10.2.9.
+- **Databases tested in CI:** SQL Server 2017, 2019, 2022 and 2025; PostgreSQL 12 through 18; MySQL 5.7.22, 5.7, 8.0.23, 8.0, 8.4, 9.7 and 26; MariaDB 10.2, 10.6, 11.4, 11.8, 12.3 and 13, plus MySQL 8.0 and MariaDB 11.4 with `lower_case_table_names=1`. A pull request runs a subset (the oldest and newest of each); a merge to `main` runs them all. The supported floors are SQL Server 2008 (database compatibility level 100+), PostgreSQL 12, MySQL 5.7.22 and 8.0.23, and MariaDB 10.2.13.
 
 ### Running Locally with Docker
 

@@ -77,9 +77,10 @@ FAILED=0
 # are the LTS releases in those gaps; both are pinned here and, from 2.8, as CI legs on merge to main.
 FLOORS=(
   "floor-mariadb-102:mariadb:10.2:13402:MariaDb"
-  # The 10.2 tag resolves to 10.2.44. 10.2.9 is the floor (JSON arrives at 10.2.7, but builds no string holding a
-  # backtick until 10.2.9); 10.2.21 is the last patch before the CHECK gate at 10.2.22. Neither runs in CI.
-  "floor-mariadb-1029:mariadb:10.2.9:13429:MariaDb"
+  # The 10.2 tag resolves to 10.2.44. 10.2.13 is the floor (JSON arrives at 10.2.7, builds no string holding a backtick
+  # until 10.2.9, and delivers data correctly from 10.2.13); 10.2.21 is the last patch before the CHECK gate at 10.2.22.
+  # Neither runs in CI.
+  "floor-mariadb-10213:mariadb:10.2.13:13413:MariaDb"
   "band-mariadb-10221:mariadb:10.2.21:13421:MariaDb"
   "floor-mysql-57:mysql:5.7:13457:MySQL"
   # The supported floor patches: the 5.7 and 8.0 tags resolve to each line's newest, past every patch-level gate.
