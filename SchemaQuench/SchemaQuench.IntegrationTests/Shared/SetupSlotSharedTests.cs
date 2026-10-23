@@ -1,5 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System.IO;
 using System.Linq;
 using NUnit.Framework;
 
@@ -62,6 +63,24 @@ public abstract class SetupSlotSharedTests : ObjectScriptDeployFixture
             var setupLine = first.Log.FindIndex(l => l != null && l.Contains("Quenching Setup scripts"));
             var objectsLine = first.Log.FindIndex(l => l != null && l.Contains("Quenching object scripts without unresolved tokens"));
             Assert.That(setupLine, Is.GreaterThanOrEqualTo(0).And.LessThan(objectsLine), "Setup runs before the first object pass");
+        });
+    }
+
+    // Setup changes the database, so it waits for the baseline check: a database the package refuses is left alone.
+    [Test]
+    public void ARefusedBaseline_StopsTheDeploy_BeforeAnySetupScriptRuns()
+    {
+        WritePackage(Folders, "Setup", "Early Objects", "Before Scripts");
+        var templatePath = Path.Join(TemplateDir, "Template.json");
+        File.WriteAllText(templatePath, File.ReadAllText(templatePath).Replace("\"ScriptFolders\"", "\"BaselineValidationScript\": \"SELECT 0\", \"ScriptFolders\""));
+        WriteFile("Setup", "01-setting.sql", "INSERT INTO setup_log (step) VALUES ('setup');");
+
+        var run = Deploy(expectSuccess: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.Log, Has.Some.Contains("Invalid baseline"), "the baseline refused the database: " + string.Join(" | ", run.Log));
+            Assert.That(Steps("setup"), Is.Zero, "and no Setup script ran");
         });
     }
 
