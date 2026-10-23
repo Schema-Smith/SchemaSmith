@@ -167,9 +167,14 @@ public class XmlCompressionTests
 
         Deploy(tableCompressed: true);
 
-        Assert.That(Convert.ToInt32(Scalar(
-            $"SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE ActionType = 'modified' AND ObjectName LIKE '%{TableName}%'")),
-            Is.Zero, "a second identical deploy must not rebuild the table");
+        Assert.Multiple(() =>
+        {
+            Assert.That(Convert.ToInt32(Scalar(
+                $"SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE ActionType = 'modified' AND ObjectName LIKE '%{TableName}%'")),
+                Is.Zero, "a second identical deploy must not rebuild the table");
+            // The clustered key declares no XML compression of its own; compared alone, it was rebuilt off, with no audit row.
+            Assert.That(LiveTableSetting(), Is.Not.False, "and the table keeps its XML compression");
+        });
     }
 
     [Test]

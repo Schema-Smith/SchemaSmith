@@ -1598,13 +1598,14 @@ BEGIN TRY
   BEGIN
     RAISERROR('Fixup Table XML Compression', 10, 100) WITH NOWAIT
     SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering table XML compression for ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                    'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' REBUILD PARTITION=ALL WITH (XML_COMPRESSION=' + CASE WHEN t.[XmlCompression] = 1 THEN 'ON' ELSE 'OFF' END + ');' + CHAR(13) + CHAR(10) +
+                                    'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' REBUILD PARTITION=ALL WITH (XML_COMPRESSION=' + CASE WHEN w.[XmlCompression] = 1 THEN 'ON' ELSE 'OFF' END + ');' + CHAR(13) + CHAR(10) +
                                     'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''table'', ''' + t.[Schema] + '.' + t.[Name] + ''', ''modified'');' AS NVARCHAR(MAX))
                              FROM #Tables t WITH (NOLOCK)
+                             CROSS APPLY (SELECT [XmlCompression] = CONVERT(TINYINT, CASE WHEN ISNULL(t.[XmlCompression], 0) = 1 OR EXISTS (SELECT 1 FROM #Indexes ci WITH (NOLOCK) WHERE ci.[Schema] = t.[Schema] AND ci.[TableName] = t.[Name] AND ci.[Clustered] = 1 AND ISNULL(ci.[XmlCompression], 0) = 1) THEN 1 ELSE 0 END)) w
                              LEFT JOIN sys.partitions AS p ON p.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
                                                                         AND p.index_id < 2
                              WHERE t.NewTable = 0
-                               AND COALESCE(CONVERT(TINYINT, {{XmlCompressionRead}}), 0) <> ISNULL(t.[XmlCompression], 0)
+                               AND COALESCE(CONVERT(TINYINT, {{XmlCompressionRead}}), 0) <> w.[XmlCompression]
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
@@ -1612,19 +1613,25 @@ BEGIN TRY
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'table', t.[Schema] + '.' + t.[Name], 'wouldModify'
           FROM #Tables t WITH (NOLOCK)
+          CROSS APPLY (SELECT [XmlCompression] = CONVERT(TINYINT, CASE WHEN ISNULL(t.[XmlCompression], 0) = 1 OR EXISTS (SELECT 1 FROM #Indexes ci WITH (NOLOCK) WHERE ci.[Schema] = t.[Schema] AND ci.[TableName] = t.[Name] AND ci.[Clustered] = 1 AND ISNULL(ci.[XmlCompression], 0) = 1) THEN 1 ELSE 0 END)) w
           LEFT JOIN sys.partitions AS p ON p.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name]) AND p.index_id < 2
           WHERE t.NewTable = 0
-            AND COALESCE(CONVERT(TINYINT, {{XmlCompressionRead}}), 0) <> ISNULL(t.[XmlCompression], 0)
+            AND COALESCE(CONVERT(TINYINT, {{XmlCompressionRead}}), 0) <> w.[XmlCompression]
 
     RAISERROR('Fixup Index XML Compression', 10, 100) WITH NOWAIT
     SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering index XML compression for ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                    'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD PARTITION=ALL WITH (XML_COMPRESSION=' + CASE WHEN i.[XmlCompression] = 1 THEN 'ON' ELSE 'OFF' END + ');' AS NVARCHAR(MAX))
+                                    'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD PARTITION=ALL WITH (XML_COMPRESSION=' + CASE WHEN w.[XmlCompression] = 1 THEN 'ON' ELSE 'OFF' END + ');' AS NVARCHAR(MAX))
                              FROM #Indexes i WITH (NOLOCK)
                              JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
                                                               AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
+                             -- The clustered index is the table's storage, so the table's setting is its setting too: compared
+                             -- alone, an index that declared none rebuilt the table's XML compression off on every deploy.
+                             LEFT JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = i.[Schema] AND t.[Name] = i.[TableName]
+                             CROSS APPLY (SELECT [XmlCompression] = CONVERT(TINYINT, CASE WHEN ISNULL(i.[XmlCompression], 0) = 1
+                                                                                            OR (si.[index_id] = 1 AND ISNULL(t.[XmlCompression], 0) = 1) THEN 1 ELSE 0 END)) w
                              LEFT JOIN sys.partitions p ON p.[object_id] = si.[object_id]
                                                                      AND p.index_id = si.index_id
-                             WHERE COALESCE(CONVERT(TINYINT, {{XmlCompressionRead}}), 0) <> ISNULL(i.[XmlCompression], 0)
+                             WHERE COALESCE(CONVERT(TINYINT, {{XmlCompressionRead}}), 0) <> w.[XmlCompression]
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
   END
