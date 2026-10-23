@@ -1881,6 +1881,17 @@ EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
             .ToList();
         if (declared.Count == 0) return;
 
+        // Only what applies to this target: the parse has already removed the tables and indexes whose
+        // ShouldApplyExpression is false, and the index step skips them, so one dropped here would stay dropped.
+        if (!MySqlTempTablesExist(cmd))
+            ParseMySqlTableJson(cmd);
+        var applied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        cmd.CommandText = "SELECT TableName, IndexName FROM _SchemaSmith_Indexes WHERE UPPER(IndexType) = 'VECTOR'";
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read()) applied.Add($"{Unquote(reader.GetString(0))}.{Unquote(reader.GetString(1))}");
+        declared = declared.Where(d => applied.Contains($"{d.Table}.{Unquote(d.Index.Name)}")).ToList();
+        if (declared.Count == 0) return;
+
         var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         cmd.CommandText = "SELECT TABLE_NAME, INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_TYPE = 'VECTOR'";
         using (var reader = cmd.ExecuteReader())

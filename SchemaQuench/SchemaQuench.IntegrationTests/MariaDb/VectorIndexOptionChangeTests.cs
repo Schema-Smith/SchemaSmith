@@ -38,12 +38,12 @@ public class VectorIndexOptionChangeTests : ObjectScriptDeployFixture
     [OneTimeTearDown]
     public void DropTable() => Exec($"DROP TABLE IF EXISTS `{Table}`");
 
-    private void WriteTable(string options)
+    private void WriteTable(string options, string tableOptions = "")
     {
         WritePackage("""{ "FolderPath": "Before Scripts", "QuenchSlot": "Before" }""", "Before Scripts");
         File.WriteAllText(Path.Join(TemplateDir, "Tables", $"{Table}.json"), $$"""
             {
-                "Name": "`{{Table}}`",
+                "Name": "`{{Table}}`",{{tableOptions}}
                 "Columns": [
                     { "Name": "`id`", "DataType": "INT", "Nullable": false },
                     { "Name": "`v`", "DataType": "VECTOR(3)", "Nullable": false }
@@ -84,6 +84,25 @@ public class VectorIndexOptionChangeTests : ObjectScriptDeployFixture
 
         var again = Deploy();
         Assert.That(IndexActions(again), Is.Empty, "a redeploy of the same options leaves the index alone: " + again.DescribeAudit());
+    }
+
+    // The rebuild read every declared VECTOR index, gated or not, and dropped one gated off for this target even where
+    // the package keeps indexes it does not declare here (DropIndexesRemovedFromProduct false): the index step then
+    // skipped it, so it was gone.
+    [Test]
+    public void AGatedOffIndex_WhoseOptionsChanged_IsLeftAsItIs()
+    {
+        WriteTable(""", "M": 8, "Distance": "cosine" """);
+        Deploy();
+
+        WriteTable(""", "M": 12, "Distance": "euclidean", "ShouldApplyExpression": "SELECT 0" """, """ "DropIndexesRemovedFromProduct": false,""");
+        var gated = Deploy();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(CreateTable(), Does.Contain("`M`='8'").And.Contain("`DISTANCE`='cosine'"), "the index is still there, as it was");
+            Assert.That(IndexActions(gated), Does.Not.Contain("dropped"), gated.DescribeAudit());
+        });
     }
 
     [Test]
