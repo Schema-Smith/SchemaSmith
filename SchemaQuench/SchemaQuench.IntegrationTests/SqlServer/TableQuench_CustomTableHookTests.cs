@@ -14,25 +14,59 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 // Parity coverage for the recyclebin hooks on SQL Server: ModifiedTableQuench routes a removed
 // table through a user-installed SchemaSmith.CustomTableDrop procedure when present, and
 // MissingTableAndColumnQuench calls SchemaSmith.CustomTableRestore for a table being added and then
-// does not recreate it if the restore brought it back. The hooks are detected per database, so each
-// test runs against its own throwaway database (created, kindled, dropped here).
+// does not recreate it if the restore brought it back. The hooks are detected per database, so the fixture runs against
+// its own database, created and kindled once, and each test starts and ends by removing the hooks and its tables.
 [Category("SqlServer")]
 [Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_CustomTableHookTests : BaseTableQuenchTests
 {
     private const string Product = "Custom Hook Tests";
+    private string _db;
+
+    [OneTimeSetUp]
+    public void CreateHookDatabase()
+    {
+        _db = UniqueDb("hooks");
+        using var conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        CreateAndKindle(conn, cmd, _db);
+    }
+
+    [OneTimeTearDown]
+    public void DropHookDatabase()
+    {
+        using var conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        DropDb(conn, cmd, _db);
+    }
+
+    // The hooks, the tables the tests create and the recycle bin they move tables into.
+    private static void ResetDatabase(IDbCommand cmd) => Exec(cmd, """
+        DROP PROCEDURE IF EXISTS SchemaSmith.CustomTableDrop;
+        DROP PROCEDURE IF EXISTS SchemaSmith.CustomTableRestore;
+        DROP TABLE IF EXISTS dbo.Gadget, dbo.Keeper, dbo.Widget, dbo.HookLog;
+        DECLARE @sql NVARCHAR(MAX) = N'';
+        SELECT @sql = @sql + N'DROP TABLE recyclebin.' + QUOTENAME(name) + N';' FROM sys.tables WHERE SCHEMA_NAME(schema_id) = 'recyclebin';
+        EXEC (@sql);
+        IF SCHEMA_ID('recyclebin') IS NOT NULL DROP SCHEMA recyclebin;
+        """);
+
 
     [Test]
     public void ModifiedTableQuench_RoutesRemovedTableThroughCustomTableDropHook()
     {
-        var db = UniqueDb("hookdrop");
+        var db = _db;
         using var conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
         try
         {
-            CreateAndKindle(conn, cmd, db);
+            conn.ChangeDatabase(db);
+            ResetDatabase(cmd);
 
             Exec(cmd, "CREATE TABLE dbo.HookLog (Action VARCHAR(20), ObjName SYSNAME)");
             Exec(cmd, @"
@@ -61,7 +95,7 @@ END");
         }
         finally
         {
-            DropDb(conn, cmd, db);
+            ResetDatabase(cmd);
         }
         conn.Close();
     }
@@ -72,14 +106,15 @@ END");
     [Test]
     public void ATableTheDropHookMoved_IsNoLongerTheProducts_SoItIsRecycledOnce()
     {
-        var db = UniqueDb("hookonce");
+        var db = _db;
         using var conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
         try
         {
-            CreateAndKindle(conn, cmd, db);
+            conn.ChangeDatabase(db);
+            ResetDatabase(cmd);
 
             Exec(cmd, "CREATE TABLE dbo.HookLog (Action VARCHAR(20), ObjName SYSNAME)");
             Exec(cmd, "CREATE SCHEMA recyclebin");
@@ -127,7 +162,7 @@ END");
         }
         finally
         {
-            DropDb(conn, cmd, db);
+            ResetDatabase(cmd);
         }
         conn.Close();
     }
@@ -135,14 +170,15 @@ END");
     [Test]
     public void MissingTableAndColumnQuench_RestoresThroughCustomTableRestoreHookAndDoesNotRecreate()
     {
-        var db = UniqueDb("hookrestore");
+        var db = _db;
         using var conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
         try
         {
-            CreateAndKindle(conn, cmd, db);
+            conn.ChangeDatabase(db);
+            ResetDatabase(cmd);
 
             Exec(cmd, "CREATE TABLE dbo.HookLog (Action VARCHAR(20), ObjName SYSNAME)");
             Exec(cmd, @"
@@ -173,7 +209,7 @@ END");
         }
         finally
         {
-            DropDb(conn, cmd, db);
+            ResetDatabase(cmd);
         }
         conn.Close();
     }
