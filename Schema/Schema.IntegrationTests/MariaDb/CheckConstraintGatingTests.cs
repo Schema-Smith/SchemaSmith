@@ -162,6 +162,9 @@ public class CheckConstraintGatingTests
     [Test]
     public void At10222_TheCheckIsCreated()
     {
+        // The override steers SchemaSmith's gate, not the catalog: only a real 10.2.22 has the view the check is read from.
+        if (Scalar("SELECT SchemaSmith_ServerVersionPatchNum()") < 100222)
+            Assert.Ignore("Reading a CHECK back needs a real MariaDB 10.2.22 or later.");
         Exec("SET @schemasmith_version_patch_override = 100222");
 
         Deploy();

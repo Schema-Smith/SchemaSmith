@@ -84,6 +84,10 @@ public abstract class TableQuench_DropColumnsSharedTests : BaseTableQuenchTests
     [Test]
     public void TableQuench_ShouldHandleRemovingColumnWithTableLevelCheckConstraint()
     {
+        // Below MariaDB 10.2.22 a CHECK cannot be read, so it is not dropped ahead of a column it reads, and the engine refuses
+        // the column's drop. Documented in the SchemaQuench engine-compatibility notes.
+        if (!TestVersionGates.SupportsCheckConstraints(Platform, _connectionString))
+            Assert.Ignore("A CHECK cannot be read below MariaDB 10.2.22 (or applied below MySQL 8.0.16).");
         using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
@@ -173,6 +177,9 @@ public abstract class TableQuench_DropColumnsSharedTests : BaseTableQuenchTests
         cmd.ExecuteNonQuery();
 
         cmd.CommandTimeout = 300;
+        var check = TestVersionGates.SupportsCheckConstraints(Platform, _connectionString)
+            ? ", CONSTRAINT `CK_DropColumnWithTableCheckConstraint_Dependency` CHECK (`Column2` < `Column1`)"
+            : "";
         cmd.CommandText = $@"
 -- TableQuench_ShouldHandleRemovingColumnUsedInIndex
 CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnInIndex` (`Column1` INT NOT NULL, `Column2` INT);
@@ -185,7 +192,7 @@ ALTER TABLE `{TestSchema}`.`DropColumnInUniqueIndexInFK` ADD CONSTRAINT `FK_Drop
 -- TableQuench_ShouldHandleRemovingColumnWithDefault
 CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnWithDefault` (`Column1` INT NOT NULL, `Column2` INT DEFAULT 0);
 -- TableQuench_ShouldHandleRemovingColumnWithTableLevelCheckConstraint
-CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnWithTableCheckConstraint` (`Column1` INT NOT NULL, `Column2` INT, CONSTRAINT `CK_DropColumnWithTableCheckConstraint_Dependency` CHECK (`Column2` < `Column1`));
+CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnWithTableCheckConstraint` (`Column1` INT NOT NULL, `Column2` INT{check});
 -- TableQuench_ShouldHandleRemovingColumnWithForeignKey
 CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnWithFK` (`Column1` INT NOT NULL, `Column2` INT, PRIMARY KEY (`Column1`));
 CREATE UNIQUE INDEX `UQ_Column2` ON `{TestSchema}`.`DropColumnWithFK` (`Column2`);

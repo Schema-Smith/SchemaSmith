@@ -162,10 +162,9 @@ SELECT UPPER(COLUMN_TYPE)
         return major * 100 + minor;
     }
 
-    /// <summary>Whether the target enforces CHECK constraints + exposes INFORMATION_SCHEMA.CHECK_CONSTRAINTS.
-    /// MySQL: 8.0.16 (major >= 8 here). MariaDB (>= 10.2 floor), SQL Server, PostgreSQL: always.</summary>
+    /// <summary>Whether SchemaSmith deploys and reads CHECK constraints on the target. See <see cref="TestVersionGates"/>.</summary>
     protected bool TargetSupportsCheckConstraints()
-        => Platform != Platform.MySQL || MySqlServerVersion() >= 800;
+        => TestVersionGates.SupportsCheckConstraints(Platform, _connectionString);
 
     /// <summary>Whether SchemaSmith delivers table data on this target. Requires MySQL 8.0 (5.7 lacks JSON_TABLE
     /// AND a recursive-CTE fallback, so delivery is gated); MariaDB 10.2 works via recursive CTE; SS/PG always.</summary>
