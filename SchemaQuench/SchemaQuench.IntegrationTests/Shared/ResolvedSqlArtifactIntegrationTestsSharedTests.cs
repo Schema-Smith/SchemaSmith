@@ -131,6 +131,16 @@ public abstract class ResolvedSqlArtifactIntegrationTestsSharedTests
         }
     }
 
+    // The name the deploy identifies the database by, which is the server's: lowercase under lower_case_table_names=1.
+    private string StoredDatabaseName()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{_mainDb}'";
+        return cmd.ExecuteScalar()?.ToString() ?? _mainDb;
+    }
+
     // #576: a run's start removes the previous run's files for its own product and target, and nothing else.
     [Test]
     public void ARun_DeletesThePreviousRunsFilesForItsTarget_AndLeavesEveryOtherFile()
@@ -143,7 +153,7 @@ public abstract class ResolvedSqlArtifactIntegrationTestsSharedTests
             cfg["ArtifactPath"] = _artifactDir;
             cfg["WriteDebugSql"] = "true";
             var server = cfg["Target:Server"];
-            var db = _mainDb;
+            var db = StoredDatabaseName();
             const string otherRun = "00000000000000000000000000000000";
             var previous = Path.Join(_artifactDir, "SchemaQuench - Previous run.sql");
             var otherDb = Path.Join(_artifactDir, "SchemaQuench - Other database.sql");
