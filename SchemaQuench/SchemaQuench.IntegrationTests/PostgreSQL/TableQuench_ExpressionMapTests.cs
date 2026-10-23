@@ -475,6 +475,32 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         finally { ctx.Drop(); ctx.Dispose(); }
     }
 
+    // A table dropped outside the deploy leaves its map rows behind; the deploy that creates it again reported them as
+    // re-baselined, which reads as an engine upgrade on a table it had just built.
+    [Test]
+    public void ATableCreatedAgain_IsNotReportedAsReBaselined()
+    {
+        var ctx = NewTable(@"""tag"" text NULL");
+        try
+        {
+            var json = CheckJson(ctx, @"starts_with(\""tag\"", 'a')");
+            RunTableQuenchProc(ctx.Cmd, json);
+            ctx.Cmd.CommandText = $@"UPDATE ""SchemaSmith"".""ExpressionMap"" SET ""EngineVersion"" = 'from-another-server' WHERE ""ObjectTable"" = '{ctx.Table}'";
+            Assert.That(ctx.Cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale");
+            ctx.Cmd.CommandText = $@"DROP TABLE public.""{ctx.Table}""";
+            ctx.Cmd.ExecuteNonQuery();
+
+            var notices = new System.Collections.Generic.List<string>();
+            ctx.Conn.Notice += (_, e) => notices.Add(e.Notice.MessageText);
+            RunTableQuenchProc(ctx.Cmd, json);
+
+            Assert.That(notices.FindAll(n => n.Contains("Re-baselined")), Is.Empty, "the table was created by this deploy, not carried across an upgrade");
+            ctx.Cmd.CommandText = $@"SELECT COUNT(*) FROM ""SchemaSmith"".""ExpressionMap"" WHERE ""ObjectTable"" = '{ctx.Table}' AND ""EngineVersion"" = 'from-another-server'";
+            Assert.That(Convert.ToInt32(ctx.Cmd.ExecuteScalar()), Is.Zero, "and the row is still rewritten for the table that exists now");
+        }
+        finally { ctx.Drop(); ctx.Dispose(); }
+    }
+
     [Test]
     public void AStaleContextRow_IsReBaselined_WithoutTouchingTheObject()
     {

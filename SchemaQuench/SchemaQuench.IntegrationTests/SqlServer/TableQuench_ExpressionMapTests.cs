@@ -291,6 +291,30 @@ public class TableQuench_ExpressionMapTests : BaseTableQuenchTests
         });
     }
 
+    // A table dropped outside the deploy leaves its map rows behind; the deploy that creates it again recorded them as
+    // re-baselined, which reads as an engine upgrade on a table it had just built.
+    [Test]
+    public void ATableCreatedAgain_IsNotReportedAsReBaselined()
+    {
+        var table = $"ExprMapNew_{Guid.NewGuid():N}"[..20];
+        WithTable(table, $"CREATE TABLE dbo.[{table}] ([RetentionDays] INT NULL)", cmd =>
+        {
+            var json = CheckJson(table, "RetentionDays <= 365");
+            RunTableQuenchProc(cmd, json);
+            cmd.CommandText = $"UPDATE SchemaSmith.ExpressionMap SET [EngineVersion] = 'from-another-server' WHERE [ObjectTable] = '{table}'";
+            Assert.That(cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale");
+            cmd.CommandText = $"DROP TABLE dbo.[{table}]";
+            cmd.ExecuteNonQuery();
+
+            _messages.Clear();
+            RunTableQuenchProc(cmd, json);
+
+            Assert.That(_messages.FindAll(m => m.Contains("Re-baselined")), Is.Empty, "the table was created by this deploy, not carried across an upgrade");
+            cmd.CommandText = $"SELECT COUNT(*) FROM SchemaSmith.ExpressionMap WHERE [ObjectTable] = '{table}' AND [EngineVersion] = 'from-another-server'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero, "and the row is still rewritten for the table that exists now");
+        });
+    }
+
     [Test]
     public void ApplyingAnExpression_RecordsWhatWasApplied()
     {

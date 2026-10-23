@@ -51,6 +51,10 @@ proc: BEGIN
         SELECT COUNT(*) FROM SchemaSmith_ExpressionMap em
          WHERE CAST(em.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
            AND CAST(em.EngineVersion AS BINARY) != CAST(VERSION() AS BINARY)
+           -- A row left by a table dropped outside the deploy and created again in this one recorded nothing the run kept.
+           AND NOT EXISTS (SELECT 1 FROM SchemaSmith_ChangeAudit a
+                            WHERE a.SessionId = CONNECTION_ID() AND a.ObjectType = 'table' AND a.ActionType = 'created'
+                              AND CAST(SchemaSmith_StripBacktickWrapping(a.ObjectName) AS BINARY) = CAST(em.ObjectTable AS BINARY))
            -- One visit of _SchemaSmith_Columns: a TEMPORARY table cannot be opened twice in a statement (1137), so the
            -- generated-expression branch and the MariaDB column-level check branch share it.
            AND (EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
