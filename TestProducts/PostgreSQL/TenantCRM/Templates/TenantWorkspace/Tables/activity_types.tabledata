@@ -1,0 +1,6 @@
+[
+{"activity_type_id":1,"type_name":"Call"},
+{"activity_type_id":2,"type_name":"Email"},
+{"activity_type_id":3,"type_name":"Meeting"},
+{"activity_type_id":4,"type_name":"Note"}
+]

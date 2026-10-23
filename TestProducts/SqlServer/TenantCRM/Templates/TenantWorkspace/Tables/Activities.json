@@ -1,0 +1,54 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[Activities]",
+  "Columns": [
+    {
+      "Name": "[ActivityID]",
+      "DataType": "BIGINT IDENTITY(1,1)"
+    },
+    {
+      "Name": "[CustomerID]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[ActivityTypeID]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[ActivityTime]",
+      "DataType": "DATETIME2(0)",
+      "Default": "SYSUTCDATETIME()"
+    },
+    {
+      "Name": "[Note]",
+      "DataType": "NVARCHAR(1024)",
+      "Nullable": true
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_Activities]",
+      "PrimaryKey": true,
+      "Clustered": true,
+      "IndexColumns": "[ActivityID]"
+    },
+    {
+      "Name": "[IX_Activities_Customer_Time]",
+      "IndexColumns": "[CustomerID],[ActivityTime] DESC"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "[FK_Activities_Customers]",
+      "Columns": "[CustomerID]",
+      "RelatedTable": "[Customers]",
+      "RelatedColumns": "[CustomerID]"
+    },
+    {
+      "Name": "[FK_Activities_ActivityTypes]",
+      "Columns": "[ActivityTypeID]",
+      "RelatedTable": "[ActivityTypes]",
+      "RelatedColumns": "[ActivityTypeID]"
+    }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "$schema": "../../.json-schemas/templates.postgresql.schema",
+  "Name": "Shared",
+  "DatabaseIdentificationScript": "SELECT datname FROM pg_database WHERE datname = '{{TenantCRMDb}}'",
+  "VersionStampScript": "DO $$\nBEGIN\nRAISE NOTICE 'TenantCRM Shared {{ReleaseVersion}}';\nEND;\n$$;",
+  "ScriptFolders": [
+    { "FolderPath": "Procedures", "QuenchSlot": "Objects", "ObjectType": "Procedures" }
+  ]
+}

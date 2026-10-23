@@ -1,0 +1,37 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[dbo]",
+  "Name": "[Plans]",
+  "Columns": [
+    {
+      "Name": "[PlanID]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[PlanName]",
+      "DataType": "NVARCHAR(32)"
+    },
+    {
+      "Name": "[MonthlyRate]",
+      "DataType": "DECIMAL(9,2)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_Plans]",
+      "PrimaryKey": true,
+      "Clustered": true,
+      "IndexColumns": "[PlanID]"
+    },
+    {
+      "Name": "[UQ_Plans_PlanName]",
+      "Unique": true,
+      "IndexColumns": "[PlanName]"
+    }
+  ],
+  "DataDelivery": {
+    "ContentFile": "data/dbo.Plans.tabledata",
+    "MergeType": "Insert/Update",
+    "MatchColumns": "[PlanID]"
+  }
+}

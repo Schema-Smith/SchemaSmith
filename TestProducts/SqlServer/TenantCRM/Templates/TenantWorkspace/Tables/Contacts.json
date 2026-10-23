@@ -1,0 +1,48 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[Contacts]",
+  "Columns": [
+    {
+      "Name": "[ContactID]",
+      "DataType": "INT IDENTITY(1,1)"
+    },
+    {
+      "Name": "[CustomerID]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[ContactName]",
+      "DataType": "NVARCHAR(128)"
+    },
+    {
+      "Name": "[Email]",
+      "DataType": "NVARCHAR(256)",
+      "Nullable": true
+    },
+    {
+      "Name": "[Phone]",
+      "DataType": "NVARCHAR(32)",
+      "Nullable": true
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_Contacts]",
+      "PrimaryKey": true,
+      "Clustered": true,
+      "IndexColumns": "[ContactID]"
+    },
+    {
+      "Name": "[IX_Contacts_CustomerID]",
+      "IndexColumns": "[CustomerID]"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "[FK_Contacts_Customers]",
+      "Columns": "[CustomerID]",
+      "RelatedTable": "[Customers]",
+      "RelatedColumns": "[CustomerID]"
+    }
+  ]
+}

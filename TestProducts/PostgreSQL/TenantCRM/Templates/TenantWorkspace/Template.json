@@ -1,0 +1,19 @@
+{
+  "$schema": "../../.json-schemas/templates.postgresql.schema",
+  "Name": "TenantWorkspace",
+  "DatabaseIdentificationScript": "SELECT datname FROM pg_database WHERE datname = '{{TenantCRMDb}}'",
+  "SchemaIdentificationScript": "SELECT name FROM public.tenants WHERE status = 'Active' ORDER BY name",
+  "RequireAtLeastOneTarget": false,
+  "CreateSchemaIfMissing": false,
+  "AllowParallel": true,
+  "ContinueOnSchemaFailure": true,
+  "VersionStampScript": "DO $$\nBEGIN\nRAISE NOTICE 'TenantCRM TenantWorkspace [{{SchemaName}}] {{ReleaseVersion}}';\nEND;\n$$;",
+  "ScriptFolders": [
+    { "FolderPath": "Before Scripts", "QuenchSlot": "Before" },
+    { "FolderPath": "Functions", "QuenchSlot": "Objects", "ObjectType": "Functions" },
+    { "FolderPath": "Procedures", "QuenchSlot": "Objects", "ObjectType": "Procedures" },
+    { "FolderPath": "Trigger Functions", "QuenchSlot": "Objects", "ObjectType": "TriggerFunctions" },
+    { "FolderPath": "Triggers", "QuenchSlot": "AfterTablesObjects", "ObjectType": "Triggers" },
+    { "FolderPath": "Views", "QuenchSlot": "AfterTablesObjects", "ObjectType": "Views" }
+  ]
+}

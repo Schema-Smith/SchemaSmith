@@ -1,0 +1,44 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "tenants",
+  "Columns": [
+    {
+      "Name": "name",
+      "DataType": "VARCHAR(64)"
+    },
+    {
+      "Name": "display_name",
+      "DataType": "VARCHAR(128)"
+    },
+    {
+      "Name": "plan_id",
+      "DataType": "INTEGER"
+    },
+    {
+      "Name": "status",
+      "DataType": "VARCHAR(16)",
+      "Default": "'Active'"
+    },
+    {
+      "Name": "created_at",
+      "DataType": "TIMESTAMP",
+      "Default": "now()"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_tenants",
+      "PrimaryKey": true,
+      "IndexColumns": "name"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "fk_tenants_plans",
+      "Columns": "plan_id",
+      "RelatedTable": "plans",
+      "RelatedColumns": "plan_id"
+    }
+  ]
+}

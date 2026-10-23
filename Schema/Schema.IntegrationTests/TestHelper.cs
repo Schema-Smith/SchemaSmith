@@ -15,13 +15,8 @@ public static class TestHelper
 
     public static string TestProductsPath => Path.Combine(SolutionRoot, "TestProducts");
 
-    public static string DemosPath => Path.Combine(SolutionRoot, "Demos");
-
     public static string GetTestProductPath(string platform, string productName) =>
         Path.Combine(TestProductsPath, platform, productName);
-
-    public static string GetDemoProductPath(string platform, string productName) =>
-        Path.Combine(DemosPath, platform, productName);
 
     private static string FindSolutionRoot()
     {

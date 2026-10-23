@@ -15,13 +15,6 @@ on:
       - 'DataTongs/**'
       - 'SchemaShears/**'
       - 'TestProducts/**'
-      - 'Demos/**'
-      - '!Demos/**/*.md'
-      - '!Demos/**/*.ps1'
-      - '!Demos/**/*.sh'
-      - '!Demos/**/*.sql'
-      - 'Demos/**/Templates/**/*.sql'
-      - 'Demos/**/* Product/**/*.sql'
       - '!**/*.md'
       - 'docs/end-user/reference/schemaquench.md'
       - 'docs/development/genuine-sweep-results.md'
@@ -54,13 +47,6 @@ on:
       - 'DataTongs/**'
       - 'SchemaShears/**'
       - 'TestProducts/**'
-      - 'Demos/**'
-      - '!Demos/**/*.md'
-      - '!Demos/**/*.ps1'
-      - '!Demos/**/*.sh'
-      - '!Demos/**/*.sql'
-      - 'Demos/**/Templates/**/*.sql'
-      - 'Demos/**/* Product/**/*.sql'
       - '!**/*.md'
       - 'docs/end-user/reference/schemaquench.md'
       - 'docs/development/genuine-sweep-results.md'
@@ -136,8 +122,9 @@ jobs:
       - name: SchemaQuench --Validate Package Linter Tests
         # The Category=Validate integration tests exercise the offline --Validate package linter and
         # need no database — they run here rather than in an engine job, which each filter Category=<Engine>
-        # and would otherwise never run them (that gap let SS-STALE-001 schema staleness go undetected).
-        run: dotnet test SchemaQuench/SchemaQuench.IntegrationTests/SchemaQuench.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=Validate" --logger trx --results-directory TestResults
+        # and would otherwise never run them (that gap let SS-STALE-001 schema staleness go undetected). The demo
+        # packages are validate-demo-schemas.yml's: this workflow does not run for a change under Demos/.
+        run: dotnet test SchemaQuench/SchemaQuench.IntegrationTests/SchemaQuench.IntegrationTests.csproj --no-build -c Debug --settings coverage.runsettings --collect "XPlat Code Coverage" --filter "Category=Validate&Category!=DemoPackages" --logger trx --results-directory TestResults
 
       - name: Suite Time Summary
         if: ${{ !cancelled() && hashFiles('TestResults/nunit/*.xml') != '' }}

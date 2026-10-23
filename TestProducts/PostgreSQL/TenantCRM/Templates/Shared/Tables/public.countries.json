@@ -1,0 +1,27 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "countries",
+  "Columns": [
+    {
+      "Name": "code",
+      "DataType": "CHAR(2)"
+    },
+    {
+      "Name": "country_name",
+      "DataType": "VARCHAR(64)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_countries",
+      "PrimaryKey": true,
+      "IndexColumns": "code"
+    }
+  ],
+  "DataDelivery": {
+    "ContentFile": "data/public.countries.tabledata",
+    "MergeType": "Insert/Update",
+    "MatchColumns": "code"
+  }
+}

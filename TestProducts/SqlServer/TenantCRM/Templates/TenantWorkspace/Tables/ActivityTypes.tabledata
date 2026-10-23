@@ -1,0 +1,6 @@
+[
+{"ActivityTypeID":1,"TypeName":"Call"},
+{"ActivityTypeID":2,"TypeName":"Email"},
+{"ActivityTypeID":3,"TypeName":"Meeting"},
+{"ActivityTypeID":4,"TypeName":"Note"}
+]

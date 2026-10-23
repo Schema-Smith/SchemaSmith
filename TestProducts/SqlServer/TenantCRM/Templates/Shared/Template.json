@@ -1,0 +1,9 @@
+{
+  "$schema": "../../.json-schemas/templates.sqlserver.schema",
+  "Name": "Shared",
+  "DatabaseIdentificationScript": "SELECT [name] FROM master.sys.databases WHERE [name] = '{{TenantCRMDb}}'",
+  "VersionStampScript": "PRINT 'TenantCRM Shared {{ReleaseVersion}}'",
+  "ScriptFolders": [
+    { "FolderPath": "Procedures", "QuenchSlot": "Objects", "ObjectType": "Procedures" }
+  ]
+}
