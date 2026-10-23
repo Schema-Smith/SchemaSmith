@@ -156,6 +156,11 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | `SS-PART-009` | Error or Warning | MySQL — a column is renamed (`OldName`) from a name the table's partitioning or subpartitioning expression uses. MySQL refuses to rename a partitioning column from 8.0.17 (`3855`); a Warning when the product's `MinimumVersion` is below 8.0. MariaDB renames it. |
 | `SS-PART-010` | Error | MySQL, MariaDB — `PartitionCount` and the named `Partitions` disagree on how many partitions there are; the engine refuses the table. |
 | `SS-PART-011` | Error | MySQL, MariaDB — a `RANGE` or `LIST` partition's `Values` carries its own clause (`LESS THAN ...`, `VALUES ...`, `IN (...)`). `Values` is the boundary alone (`2025`, `MAXVALUE`, `1, 2`); the deploy writes `VALUES LESS THAN` or `VALUES IN` around it. |
+| `SS-PART-012` | Error | MySQL, MariaDB — `Subpartitioning` under a method other than `RANGE` or `LIST`. Only those can be subpartitioned (MySQL refuses it, 1500), and under `SYSTEM_TIME` the clause would be dropped. |
+| `SS-PART-013` | Error | MariaDB — `SYSTEM_TIME` partitioning with both `Interval` and `Limit`. MariaDB takes one or the other. |
+| `SS-PART-014` | Error | MariaDB — `SYSTEM_TIME` partitioning with `Auto` and neither `Interval` nor `Limit`, which `AUTO` adds history partitions by. |
+| `SS-PART-015` | Error | MariaDB — `SYSTEM_TIME` partitions that MariaDB refuses (4128): a `PartitionCount` below 2, or named partitions without one or more `HISTORY` partitions and exactly one `CURRENT` partition, last. Each `Values` is `HISTORY` or `CURRENT`. |
+| `SS-PART-016` | Warning | MySQL, MariaDB — a partitioning value the deploy ignores: `SystemTime` outside `SYSTEM_TIME`, `Expression` under `SYSTEM_TIME`, `KeyAlgorithm` outside `KEY`, or `SystemTime.StartsAt` without an `Interval`. |
 | `SS-PER-001` | Error | MariaDB — a period's `StartColumn` or `EndColumn` names no column of the table; MariaDB refuses the period. |
 | `SS-PER-002` | Error | MariaDB — a table declares more than one period; MariaDB allows one application-time period per table. |
 

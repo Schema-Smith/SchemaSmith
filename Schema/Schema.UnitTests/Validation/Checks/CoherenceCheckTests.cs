@@ -1236,6 +1236,89 @@ public class CoherenceCheckTests
         Assert.That(RunMyTables(Platform.MySQL, null, table).Any(f => f.Code == "SS-PART-010"), Is.EqualTo(expected));
     }
 
+    private static Schema.Domain.MariaDb.MariaDbTable SystemTimeTable(Schema.Domain.MySQL.MariaDbSystemTimePartitioning systemTime, int? count = null,
+        params string[] partitionValues)
+    {
+        var table = new Schema.Domain.MariaDb.MariaDbTable
+        {
+            Name = "h", IsSystemVersioned = true,
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = "SYSTEM_TIME", SystemTime = systemTime, PartitionCount = count },
+            Columns = { new Schema.Domain.MariaDb.MariaDbColumn { Name = "id", DataType = "int" } }
+        };
+        for (var i = 0; i < partitionValues.Length; i++)
+            table.Partitioning.Partitions.Add(new Schema.Domain.MySQL.MySqlPartition { Name = $"p{i}", Values = partitionValues[i] });
+        return table;
+    }
+
+    private static string[] PartCodes(Platform platform, params Schema.Domain.MySQL.MySqlTable[] tables) =>
+        RunMyTables(platform, null, tables).Where(f => f.Code.StartsWith("SS-PART")).Select(f => $"{f.Code} {f.Severity}").ToArray();
+
+    // MySQL refuses subpartitioning outside RANGE and LIST (1500), and the deploy wrote SUBPARTITION BY before PARTITIONS n,
+    // a 1064; under SYSTEM_TIME the clause was dropped without a word.
+    [TestCase("HASH", true)]
+    [TestCase("KEY", true)]
+    [TestCase("RANGE", false)]
+    public void SubpartitioningOutsideRangeOrList_IsAnError(string method, bool expected)
+    {
+        var table = PartTable("t", method: method, count: method == "RANGE" ? null : 2);
+        if (method == "RANGE") table.Partitioning.Partitions.Add(new Schema.Domain.MySQL.MySqlPartition { Name = "p0", Values = "MAXVALUE" });
+        table.Partitioning.Subpartitioning = new Schema.Domain.MySQL.MySqlSubpartitioning { Method = "HASH", Expression = "id", Count = 2 };
+        Assert.That(PartCodes(Platform.MySQL, table).Contains("SS-PART-012 Error"), Is.EqualTo(expected));
+    }
+
+    // MariaDB refuses both together ("wrong value for 'STARTS'"), and AUTO alone writes a bare AUTO, a 1064.
+    [Test]
+    public void SystemTimeIntervalAndLimitTogether_OrAutoWithNeither_IsAnError()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { Interval = "1 MONTH", Limit = 1000 }, count: 3)),
+                Does.Contain("SS-PART-013 Error"));
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { Auto = true }, count: 3)), Does.Contain("SS-PART-014 Error"));
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { Interval = "1 MONTH", Auto = true }, count: 3)), Is.Empty);
+        });
+    }
+
+    // MariaDB needs at least one HISTORY partition and exactly one CURRENT, last (4128); a Values other than CURRENT was
+    // taken as HISTORY.
+    [Test]
+    public void SystemTimePartitions_NeedHistoryAndOneLastCurrent()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { Interval = "1 MONTH" }, count: 1)), Does.Contain("SS-PART-015 Error"), "a count of 1");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(null, null, "CURRENT", "HISTORY")), Does.Contain("SS-PART-015 Error"), "CURRENT not last");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(null, null, "HISTORY", "CURRENT", "CURRENT")), Does.Contain("SS-PART-015 Error"), "two CURRENT");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(null, null, "CURRENT")), Does.Contain("SS-PART-015 Error"), "no HISTORY");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(null, null, "OLD", "CURRENT")), Does.Contain("SS-PART-015 Error"), "neither HISTORY nor CURRENT");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(null, null, "HISTORY", "history", "CURRENT")), Is.Empty);
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { Interval = "1 MONTH" }, count: 2)), Is.Empty);
+        });
+    }
+
+    // Each of these is dropped or ignored by the deploy.
+    [Test]
+    public void PartitioningValuesThatDoNothing_AreWarned()
+    {
+        var keyAlgorithmOnHash = PartTable("a");
+        keyAlgorithmOnHash.Partitioning.KeyAlgorithm = 2;
+        var systemTimeOnHash = PartTable("b");
+        systemTimeOnHash.Partitioning.SystemTime = new() { Interval = "1 MONTH" };
+        var expressionUnderSystemTime = SystemTimeTable(new() { Interval = "1 MONTH" }, count: 2);
+        expressionUnderSystemTime.Partitioning.Expression = "id";
+        Assert.Multiple(() =>
+        {
+            Assert.That(PartCodes(Platform.MySQL, keyAlgorithmOnHash), Does.Contain("SS-PART-016 Warning"), "KeyAlgorithm outside KEY");
+            Assert.That(PartCodes(Platform.MySQL, systemTimeOnHash), Does.Contain("SS-PART-016 Warning"), "SystemTime outside SYSTEM_TIME");
+            Assert.That(PartCodes(Platform.MariaDb, expressionUnderSystemTime), Does.Contain("SS-PART-016 Warning"), "Expression under SYSTEM_TIME");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { StartsAt = "2026-01-01 00:00:00", Limit = 100 }, count: 2)),
+                Does.Contain("SS-PART-016 Warning"), "StartsAt without Interval");
+            var keyAlgorithmOnKey = PartTable("c", method: "KEY");
+            keyAlgorithmOnKey.Partitioning.KeyAlgorithm = 2;
+            Assert.That(PartCodes(Platform.MySQL, keyAlgorithmOnKey), Is.Empty, "KeyAlgorithm under KEY is used");
+        });
+    }
+
     [Test]
     public void BackfillWithoutDefault_IsWarning()
     {

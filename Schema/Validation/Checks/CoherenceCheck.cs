@@ -100,6 +100,11 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string PartitionColumnRenamedCode = "SS-PART-009";
     private const string PartitionCountMismatchCode = "SS-PART-010";
     private const string MyPartitionValuesClauseCode = "SS-PART-011";
+    private const string SubpartitioningMethodCode = "SS-PART-012";
+    private const string SystemTimeIntervalAndLimitCode = "SS-PART-013";
+    private const string SystemTimeAutoAloneCode = "SS-PART-014";
+    private const string SystemTimePartitionShapeCode = "SS-PART-015";
+    private const string PartitioningValueInertCode = "SS-PART-016";
     private const string PeriodColumnMissingCode = "SS-PER-001";
     private const string SecondPeriodCode = "SS-PER-002";
     private const string MemoryOptimizedPlacementCode = "SS-XTP-001";
@@ -190,6 +195,11 @@ public sealed class CoherenceCheck : ISchemaCheck
         [PartitionColumnRenamedCode] = ErrorOrWarningLevel,
         [PartitionCountMismatchCode] = ErrorLevel,
         [MyPartitionValuesClauseCode] = ErrorLevel,
+        [SubpartitioningMethodCode] = ErrorLevel,
+        [SystemTimeIntervalAndLimitCode] = ErrorLevel,
+        [SystemTimeAutoAloneCode] = ErrorLevel,
+        [SystemTimePartitionShapeCode] = ErrorLevel,
+        [PartitioningValueInertCode] = WarningLevel,
         [PeriodColumnMissingCode] = ErrorLevel,
         [SecondPeriodCode] = ErrorLevel,
         [MemoryOptimizedPlacementCode] = ErrorLevel,
@@ -1529,6 +1539,16 @@ public sealed class CoherenceCheck : ISchemaCheck
                 $"Table '{table.Name}' partitions by {method} but declares no Expression: every method but SYSTEM_TIME " +
                 "partitions on an expression or a column list.");
 
+        // MySQL refuses subpartitioning outside RANGE and LIST (1500); the deploy wrote it before PARTITIONS n, a 1064, and
+        // dropped it without a word under SYSTEM_TIME.
+        if (p.Subpartitioning != null && !isRangeList)
+            yield return new Finding(Severity.Error, SubpartitioningMethodCode, Category, tableLocation,
+                $"Table '{table.Name}' subpartitions a table partitioned by {method}: only RANGE and LIST partitions can be " +
+                "subpartitioned. Drop Subpartitioning, or partition by RANGE or LIST.");
+
+        foreach (var finding in CheckSystemTimePartitioning(mySqlTable, method, tableLocation))
+            yield return finding;
+
         // Both engines refuse PARTITIONS n beside a list of a different length (1064).
         if (p.PartitionCount is { } count && hasNamedPartitions && count != p.Partitions.Count)
             yield return new Finding(Severity.Error, PartitionCountMismatchCode, Category, tableLocation,
@@ -1553,6 +1573,46 @@ public sealed class CoherenceCheck : ISchemaCheck
                     "removing the partitioning, or keep the name.");
             }
         }
+    }
+
+    // MariaDB's SYSTEM_TIME rules the schema cannot express, each of which failed the deploy, and the partitioning values
+    // the deploy drops or ignores.
+    private static IEnumerable<Finding> CheckSystemTimePartitioning(MySqlTable table, string method, string tableLocation)
+    {
+        var p = table.Partitioning;
+        var systemTime = p.SystemTime;
+        if (method == "SYSTEM_TIME")
+        {
+            if (systemTime is { Interval: not null and not "", Limit: not null })
+                yield return new Finding(Severity.Error, SystemTimeIntervalAndLimitCode, Category, tableLocation,
+                    $"Table '{table.Name}' partitions its history by both Interval and Limit: MariaDB takes one or the other. Keep one.");
+            if (systemTime is { Auto: true } && string.IsNullOrWhiteSpace(systemTime.Interval) && systemTime.Limit == null)
+                yield return new Finding(Severity.Error, SystemTimeAutoAloneCode, Category, tableLocation,
+                    $"Table '{table.Name}' sets Auto with neither Interval nor Limit: AUTO adds history partitions by one of them. Declare it.");
+            if (p.PartitionCount is < 2)
+                yield return new Finding(Severity.Error, SystemTimePartitionShapeCode, Category, tableLocation,
+                    $"Table '{table.Name}' declares PartitionCount {p.PartitionCount} for SYSTEM_TIME, which counts the history " +
+                    "partitions and the current one together: MariaDB needs at least one of each, so at least 2.");
+            if (p.Partitions is { Count: > 0 })
+            {
+                var values = p.Partitions.Select(pt => (pt.Values ?? "").Trim().ToUpperInvariant()).ToList();
+                var currents = values.Count(v => v == "CURRENT");
+                if (values.Any(v => v is not ("HISTORY" or "CURRENT")) || currents != 1 || values[^1] != "CURRENT" || currents == values.Count)
+                    yield return new Finding(Severity.Error, SystemTimePartitionShapeCode, Category, tableLocation,
+                        $"Table '{table.Name}' names SYSTEM_TIME partitions with Values {string.Join(", ", p.Partitions.Select(pt => pt.Values ?? "(none)"))}: " +
+                        "MariaDB needs one or more HISTORY partitions and exactly one CURRENT partition, last, and each Values is HISTORY or CURRENT.");
+            }
+        }
+
+        var inert = new List<string>();
+        if (systemTime != null && method != "SYSTEM_TIME") inert.Add($"SystemTime, which only SYSTEM_TIME partitioning reads");
+        if (method == "SYSTEM_TIME" && !string.IsNullOrWhiteSpace(p.Expression)) inert.Add("Expression, which SYSTEM_TIME partitioning does not use");
+        if (p.KeyAlgorithm != null && method is not ("KEY" or "LINEAR KEY")) inert.Add("KeyAlgorithm, which only KEY partitioning reads");
+        if (systemTime != null && !string.IsNullOrWhiteSpace(systemTime.StartsAt) && string.IsNullOrWhiteSpace(systemTime.Interval))
+            inert.Add("SystemTime.StartsAt, which applies only with an Interval");
+        foreach (var value in inert)
+            yield return new Finding(Severity.Warning, PartitioningValueInertCode, Category, tableLocation,
+                $"Table '{table.Name}' declares {value}: the deploy ignores it. Remove it.");
     }
 
     private static readonly System.Text.RegularExpressions.Regex ValuesClausePrefix =
