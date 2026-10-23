@@ -1,5 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System.Linq;
 using NUnit.Framework;
 using Schema.Domain;
 using SchemaQuench.IntegrationTests.Shared;
@@ -50,6 +51,34 @@ public class ConstraintStateRedeployTests : ObjectScriptDeployFixture
             {
                 Assert.That(Count("SELECT CAST(is_disabled AS INT) FROM sys.foreign_keys WHERE [name] = 'FK_cs_state_orders_parent'"), Is.EqualTo(1), "the key stays disabled");
                 Assert.That(Count("SELECT CAST(is_disabled AS INT) FROM sys.check_constraints WHERE [name] = 'CK_cs_state_orders_id'"), Is.EqualTo(1), "the check stays disabled");
+            });
+        }
+        finally
+        {
+            CleanUp();
+        }
+    }
+
+    // A key that fails to add stops the step, as it does on PostgreSQL. The four procedures went as one batch, which a
+    // severity-16 error does not end, so the constraint-state and extended-property passes ran and logged after it.
+    [Test]
+    public void AForeignKeyThatFailsToAdd_StopsTheStep()
+    {
+        CleanUp();
+        try
+        {
+            WritePackage("");
+            WriteFile("Tables", "dbo.cs_state_orders.json", TableJson);
+            Deploy();
+            Exec("ALTER TABLE [dbo].[cs_state_orders] DROP CONSTRAINT [FK_cs_state_orders_parent]; " +
+                 "INSERT [dbo].[cs_state_orders] ([id], [parent]) VALUES (1, 999)");
+
+            var log = Deploy(expectSuccess: false).Log.Where(l => l != null).ToList();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(log, Has.Some.Contains("FK_cs_state_orders_parent").And.StartsWith("ERROR"), "the key's failure is reported");
+                Assert.That(log, Has.None.Contains("Converge constraint enforcement and validation"), string.Join("\n", log));
             });
         }
         finally
