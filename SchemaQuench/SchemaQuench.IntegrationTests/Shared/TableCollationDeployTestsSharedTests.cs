@@ -278,6 +278,9 @@ public abstract class TableCollationDeployTestsSharedTests
                 cmd.ExecuteNonQuery();
 
                 config["SchemaPackagePath"] = tempDir;
+                // Early MariaDB patches reject COLLATE on a generated column; there it takes its character set's default.
+                cmd.CommandText = "SELECT SchemaSmith_SupportsGeneratedColumnCollation()";
+                var generatedCollates = Convert.ToInt32(cmd.ExecuteScalar()) == 1;
 
                 for (var deploy = 1; deploy <= 2; deploy++)
                 {
@@ -301,7 +304,11 @@ public abstract class TableCollationDeployTestsSharedTests
                         Assert.That(undeclared, Is.EqualTo("latin1_german1_ci"),
                             $"deploy {deploy}: a column declaring no character set must keep its own through a MODIFY");
                         Assert.That(switched, Is.EqualTo("ascii"), $"deploy {deploy}: a declared character set change must apply");
-                        Assert.That(gen, Is.EqualTo("utf8mb4_bin"), $"deploy {deploy}: a generated column must keep its declared collation");
+                        if (generatedCollates)
+                            Assert.That(gen, Is.EqualTo("utf8mb4_bin"), $"deploy {deploy}: a generated column must keep its declared collation");
+                        else
+                            Assert.That(gen, Does.StartWith("utf8mb4_").And.Not.EqualTo("utf8mb4_bin"),
+                                $"deploy {deploy}: below the fix a generated column keeps its character set, in that set's default");
                     });
                 }
             }

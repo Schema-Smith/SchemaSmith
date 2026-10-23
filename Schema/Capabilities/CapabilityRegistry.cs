@@ -288,6 +288,10 @@ namespace Schema.Capabilities
                 1005, "MariaDB 10.5", null, DegradeKind.Skip, "table without its SYSTEM_TIME partitioning"));
             rows.Add(new("system-time-auto-partitions", "SYSTEM_TIME partitioning with AUTO", Platform.MariaDb,
                 1009, "MariaDB 10.9.1", null, DegradeKind.Reduced, "SYSTEM_TIME partitioning without AUTO", IntroducedInPatchComparable: 100901));
+            // Fixed on each line at once; the row carries the oldest, and the gate holds the other three.
+            rows.Add(new("generated-column-collation", "COLLATE on a generated column", Platform.MariaDb,
+                1002, "MariaDB 10.2.37 / 10.3.28 / 10.4.18 / 10.5.9", null, DegradeKind.Reduced,
+                "column (generated COLLATE, MariaDB 10.2.37)", IntroducedInPatchComparable: 100237));
 
             // Change Data Capture, gated by a DATABASE setting rather than an engine version -- the first
             // row of that kind, which is why Capability gained RequiredDatabaseSetting. IntroducedInComparable

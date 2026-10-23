@@ -985,6 +985,7 @@ public static class ForgeKindler
                 // SYSTEM_TIME partitioning (MariaDB): the count/STARTS and AUTO gates, and whether a declaration can be created.
                 new("SchemaSmith_SupportsSystemTimePartitionCount.sql"),
                 new("SchemaSmith_SupportsSystemTimeAutoPartitions.sql"),
+                new("SchemaSmith_SupportsGeneratedColumnCollation.sql"),
                 new("SchemaSmith_SystemTimePartitionable.sql"),
                 new("SchemaSmith_SnapshotIndexVisibility.sql"),
                 new("SchemaSmith_SnapshotIndexExistence.sql"),

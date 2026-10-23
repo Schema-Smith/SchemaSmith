@@ -72,7 +72,8 @@ namespace Schema.UnitTests.Capabilities
             "table without its SYSTEM_TIME partitioning",
             "columnstore over a (max) or computed column (SQL Server 2017)",
             "columnstore index without its ORDER",
-            "SYSTEM_TIME partitioning without AUTO"
+            "SYSTEM_TIME partitioning without AUTO",
+            "column (generated COLLATE, MariaDB 10.2.37)"
         };
 
         [Test]

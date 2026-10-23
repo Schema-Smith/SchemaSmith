@@ -547,7 +547,8 @@ public class ForgeKindlerTests
         // +2 = SchemaSmith_SupportsVectorIndex + SchemaSmith_DegradeVectorIndexes (MariaDB 11.7's VECTOR index).
         // +1 = SchemaSmith_CleanCheckClause (a check's introducers removed without cutting names that end in one).
         // +1 = SchemaSmith_ValidateTableOwnership (the ownership refusal, before anything is created or renamed).
-        Assert.That(mysql.Length, Is.EqualTo(109));
+        // +1 = SchemaSmith_SupportsGeneratedColumnCollation (a generated column's COLLATE, refused by early MariaDB patches).
+        Assert.That(mysql.Length, Is.EqualTo(110));
     }
 
     [Test]
