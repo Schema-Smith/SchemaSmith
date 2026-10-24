@@ -52,7 +52,8 @@
       "TrackRunOnceMigrations",
       "UpdateTables",
       "VerboseLogging",
-      "WhatIfONLY"
+      "WhatIfONLY",
+      "WriteDebugSql"
     ],
     "SchemaTongs": [
       "ExitNonZeroOnWarning",

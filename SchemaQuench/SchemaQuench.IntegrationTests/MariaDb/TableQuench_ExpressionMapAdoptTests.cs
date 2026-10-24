@@ -10,7 +10,7 @@ namespace SchemaQuench.IntegrationTests.MariaDb;
 /// <summary>MariaDb binding of the shared scratch-copy tests (#508).</summary>
 [Category("MariaDb")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ExpressionMapAdoptTests : TableQuench_ExpressionMapAdoptSharedTests
 {
     protected override Platform Platform => Platform.MariaDb;

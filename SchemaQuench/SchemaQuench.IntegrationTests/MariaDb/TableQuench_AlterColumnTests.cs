@@ -9,7 +9,7 @@ namespace SchemaQuench.IntegrationTests.MariaDb;
 
 [Category("MariaDb")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_AlterColumnTests : TableQuench_AlterColumnSharedTests
 {
     protected override Platform Platform => Platform.MariaDb;

@@ -80,11 +80,11 @@ public abstract class TableQuench_IndexOnlySharedTests
 
         // Parse the JSON to create temp tables
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act - Call IndexOnlyQuench
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - Index should exist
         command.CommandText = $@"
@@ -115,11 +115,11 @@ public abstract class TableQuench_IndexOnlySharedTests
         }}]";
 
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - Unique index should exist
         command.CommandText = $@"
@@ -158,11 +158,11 @@ public abstract class TableQuench_IndexOnlySharedTests
         }}]";
 
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act - IndexOnlyQuench should NOT add the column
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - new_column should NOT exist (IndexOnly doesn't touch columns)
         command.CommandText = $@"
@@ -212,11 +212,11 @@ public abstract class TableQuench_IndexOnlySharedTests
         }}]";
 
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act - Call with DropUnknownIndexes=1
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 1, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - idx_to_drop should be gone
         command.CommandText = $@"
@@ -266,11 +266,11 @@ public abstract class TableQuench_IndexOnlySharedTests
         }}]";
 
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - Old name should be gone, new name should exist
         command.CommandText = $@"
@@ -321,10 +321,10 @@ public abstract class TableQuench_IndexOnlySharedTests
             ]
         }}]";
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = $@"
             SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS
@@ -380,18 +380,18 @@ public abstract class TableQuench_IndexOnlySharedTests
             ]
         }}]";
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act - first pass may legitimately do work. The SECOND pass must do nothing at all -- that
         // convergence is exactly what the prefix mismatch breaks.
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
         command.ExecuteNonQuery();
 
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - no rebuild/rename status line on the re-deploy. These are the exact phrases the
         // non-WhatIf branches log (see STEP 1/2/4 in SchemaSmith_IndexOnlyQuench.sql); a modified
@@ -467,10 +467,10 @@ public abstract class TableQuench_IndexOnlySharedTests
             ]
         }}]";
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - the key part landed as a functional one (NULL COLUMN_NAME, populated EXPRESSION).
         command.CommandText = $@"
@@ -511,10 +511,10 @@ public abstract class TableQuench_IndexOnlySharedTests
             ]
         }}]";
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - both key parts landed, in declared order.
         command.CommandText = $@"
@@ -565,18 +565,18 @@ public abstract class TableQuench_IndexOnlySharedTests
             ]
         }}]";
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act - first pass may legitimately do work. The SECOND pass must do nothing at all -- that
         // convergence is exactly what a four-site representation mismatch breaks.
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
         command.ExecuteNonQuery();
 
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - no rebuild/rename status line on the re-deploy (same phrases the prefix-length
         // idempotency test above checks for).
@@ -631,10 +631,10 @@ public abstract class TableQuench_IndexOnlySharedTests
             ]
         }}]";
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - the key part landed as a multi-valued functional one (NULL COLUMN_NAME, populated
         // EXPRESSION retaining the ARRAY cast).
@@ -693,17 +693,17 @@ public abstract class TableQuench_IndexOnlySharedTests
             ]
         }}]";
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act - first pass may legitimately do work. The SECOND pass must do nothing at all.
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
         command.ExecuteNonQuery();
 
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - no rebuild/rename status line on the re-deploy.
         command.CommandText = $@"
@@ -756,18 +756,18 @@ public abstract class TableQuench_IndexOnlySharedTests
             ]
         }}]";
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act - first pass may legitimately do work. The SECOND pass must do nothing at all -- that
         // convergence is exactly what an unguarded phantom SUB_PART breaks.
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
         command.ExecuteNonQuery();
 
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - no rebuild/rename status line on the re-deploy.
         command.CommandText = $@"
@@ -818,11 +818,11 @@ public abstract class TableQuench_IndexOnlySharedTests
         }}]";
 
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - Index should now have 2 columns
         command.CommandText = $@"
@@ -853,11 +853,11 @@ public abstract class TableQuench_IndexOnlySharedTests
         }}]";
 
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act - Call with WhatIf=1
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 1, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - Index should NOT exist
         command.CommandText = $@"
@@ -888,11 +888,11 @@ public abstract class TableQuench_IndexOnlySharedTests
         }}]";
 
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - Index should be tracked in ProductOwnership
         command.CommandText = $@"
@@ -920,7 +920,7 @@ public abstract class TableQuench_IndexOnlySharedTests
         cmd.CommandTimeout = 300;
         cmd.CommandText = $"CALL `{MainDb}`.SchemaSmith_ParseTableJson('{db}', '{json.Replace("'", "''")}'); " +
                           $"CALL `{MainDb}`.SchemaSmith_IndexOnlyQuench('IdxOnlyFkProduct', '{db}', {(whatIf ? 1 : 0)}, 1, 1);";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static string Scalar(IDbCommand cmd, string sql)

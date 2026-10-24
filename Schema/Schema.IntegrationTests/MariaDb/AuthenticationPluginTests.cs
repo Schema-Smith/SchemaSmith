@@ -73,7 +73,11 @@ public class AuthenticationPluginTests
     public void AnEd25519Account_CanConnect()
     {
         if (Convert.ToInt64(Scalar("SELECT COUNT(*) FROM information_schema.PLUGINS WHERE PLUGIN_NAME = 'ed25519' AND PLUGIN_STATUS = 'ACTIVE'")) == 0)
-            Exec("INSTALL SONAME 'auth_ed25519'");
+        {
+            // Some 10.2 images ship without the plugin's library, so the server cannot offer the account at all.
+            try { Exec("INSTALL SONAME 'auth_ed25519'"); }
+            catch (MySqlConnector.MySqlException e) when (e.Number == 1126) { Assert.Ignore($"The server has no ed25519 library: {e.Message}"); }
+        }
         var version = VersionHelper.ParsePatchComparable(Scalar("SELECT VERSION()")?.ToString(), Platform.MariaDb) ?? 0;
         string createUser;
         if (version >= 100400)

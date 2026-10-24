@@ -1,0 +1,18 @@
+{
+  "$schema": "../../.json-schemas/templates.sqlserver.schema",
+  "Name": "TenantWorkspace",
+  "DatabaseIdentificationScript": "SELECT [name] FROM master.sys.databases WHERE [name] = '{{TenantCRMDb}}'",
+  "SchemaIdentificationScript": "SELECT [Name] FROM dbo.Tenants WHERE [Status] = N'Active' ORDER BY [Name]",
+  "RequireAtLeastOneTarget": false,
+  "CreateSchemaIfMissing": false,
+  "AllowParallel": true,
+  "ContinueOnSchemaFailure": true,
+  "VersionStampScript": "PRINT 'TenantCRM TenantWorkspace [{{SchemaName}}] {{ReleaseVersion}}'",
+  "ScriptFolders": [
+    { "FolderPath": "Before Scripts", "QuenchSlot": "Before" },
+    { "FolderPath": "Functions", "QuenchSlot": "Objects", "ObjectType": "Functions" },
+    { "FolderPath": "Views", "QuenchSlot": "Objects", "ObjectType": "Views" },
+    { "FolderPath": "Procedures", "QuenchSlot": "Objects", "ObjectType": "Procedures" },
+    { "FolderPath": "Triggers", "QuenchSlot": "Objects", "ObjectType": "Triggers" }
+  ]
+}

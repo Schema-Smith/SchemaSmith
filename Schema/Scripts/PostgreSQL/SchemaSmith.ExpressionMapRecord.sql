@@ -144,7 +144,11 @@ BEGIN
       ON m."ObjectSchema" = d."ObjectSchema" AND m."ObjectTable" = d."ObjectTable" AND m."ObjectKind" = d."ObjectKind"
      AND m."ObjectName" = d."ObjectName" AND m."Slot" = d."Slot"
    WHERE m."AuthoredText" = d."AuthoredText"
-     AND m."EngineVersion" != v_version;
+     AND m."EngineVersion" != v_version
+     -- A row left by a table dropped outside the deploy and created again in this one recorded nothing the run kept.
+     AND NOT EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                      WHERE a."SessionId" = pg_backend_pid() AND a."ObjectType" = 'table' AND a."ActionType" = 'created'
+                        AND a."ObjectName" = d."ObjectSchema" || '.' || d."ObjectTable");
   IF v_rebaselined > 0 THEN
     RAISE NOTICE '  Re-baselined % recorded expression(s): they were recorded under a different PostgreSQL version, and their stored canonical text is now refreshed for %. No object was changed.', v_rebaselined, v_version;
   END IF;

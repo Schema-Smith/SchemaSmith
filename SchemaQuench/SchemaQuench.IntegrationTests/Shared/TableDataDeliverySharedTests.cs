@@ -319,6 +319,49 @@ public abstract class TableDataDeliverySharedTests
         }
     }
 
+    // #567, the engines side by side: an object or array value delivered into a text column arrives as its compact JSON
+    // text, and a string as the string.
+    [Test]
+    public void DeliverTableData_AnObjectOrArrayValue_ArrivesAsCompactJsonText()
+    {
+        var table = $"t_jv_{Guid.NewGuid():N}".Substring(0, 20);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{table}` (id INT NOT NULL PRIMARY KEY, doc TEXT NULL, note VARCHAR(200) NULL)";
+            command.ExecuteNonQuery();
+
+            var payload = "[\n  { \"id\": 1, \"doc\": { \"a\": 1, \"b\": [ 1, 2.50 ] }, \"note\": [ 1, 2 ] },\n"
+                          + "  { \"id\": 2, \"doc\": \"plain  text\", \"note\": \"x\" },\n"
+                          + "  { \"id\": 3, \"doc\": null, \"note\": null }\n]";
+            for (var run = 0; run < 2; run++)
+                ExecuteScript(command, BuildMergeScript(command, _testDb, table, payload, "`id`",
+                    mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null));
+
+            string Read(int id, string column)
+            {
+                command.CommandText = $"SELECT `{column}` FROM `{_testDb}`.`{table}` WHERE id = {id}";
+                var value = command.ExecuteScalar();
+                return value is DBNull or null ? null : value.ToString();
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Read(1, "doc"), Is.EqualTo("{\"a\":1,\"b\":[1,2.50]}"));
+                Assert.That(Read(1, "note"), Is.EqualTo("[1,2]"));
+                Assert.That(Read(2, "doc"), Is.EqualTo("plain  text"));
+                Assert.That(Read(2, "note"), Is.EqualTo("x"));
+                Assert.That(Read(3, "doc"), Is.Null);
+                Assert.That(Read(3, "note"), Is.Null);
+            });
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{table}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     // MySQL's JSON parser reads a JSON number as a double, so a DECIMAL with more digits than a double carries arrived
     // rounded (12345678901234567000.000000000000000000), silently. Delivery hands such a column its value as a string.
     [Test]

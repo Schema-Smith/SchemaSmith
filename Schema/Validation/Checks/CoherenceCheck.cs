@@ -57,11 +57,15 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string JsonIndexSameColumnCode = "SS-JSX-002";
     private const string JsonIndexPathCode = "SS-JSX-003";
     private const string JsonIndexKeyCode = "SS-JSX-004";
+    private const string SelectiveXmlNoPathsCode = "SS-XML-001";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RemovedFunctionCode = "SS-COL-004";
     private const string NationalCharacterTypeCode = "SS-COL-005";
     private const string DeprecatedNumericFormCode = "SS-COL-006";
+    private const string QuotedExpressionDefaultCode = "SS-COL-007";
+    private const string NullableKeyColumnCode = "SS-COL-008";
+    private const string WrappedPostgreSqlNameCode = "SS-IDENT-003";
     private const string RebuildThresholdCode = "SS-TBL-001";
     private const string IgnoredThresholdCode = "SS-TBL-002";
     private const string EdgeConstraintTableKindCode = "SS-TBL-003";
@@ -95,6 +99,14 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string PartitionedForeignKeyCode = "SS-PART-008";
     private const string PartitionColumnRenamedCode = "SS-PART-009";
     private const string PartitionCountMismatchCode = "SS-PART-010";
+    private const string MyPartitionValuesClauseCode = "SS-PART-011";
+    private const string SubpartitioningMethodCode = "SS-PART-012";
+    private const string SystemTimeIntervalAndLimitCode = "SS-PART-013";
+    private const string SystemTimeAutoAloneCode = "SS-PART-014";
+    private const string SystemTimePartitionShapeCode = "SS-PART-015";
+    private const string PartitioningValueInertCode = "SS-PART-016";
+    private const string PeriodColumnMissingCode = "SS-PER-001";
+    private const string SecondPeriodCode = "SS-PER-002";
     private const string MemoryOptimizedPlacementCode = "SS-XTP-001";
     private const string Category = "Coherence";
 
@@ -140,12 +152,15 @@ public sealed class CoherenceCheck : ISchemaCheck
         [JsonIndexColumnCode] = ErrorLevel,
         [JsonIndexSameColumnCode] = ErrorLevel,
         [JsonIndexPathCode] = ErrorLevel,
+        [SelectiveXmlNoPathsCode] = ErrorLevel,
         [JsonIndexKeyCode] = ErrorLevel,
         [BackfillWithoutDefaultCode] = WarningLevel,
         [CharsetWithoutCollationCode] = WarningLevel,
         [RemovedFunctionCode] = WarningLevel,
         [NationalCharacterTypeCode] = WarningLevel,
         [DeprecatedNumericFormCode] = WarningLevel,
+        [QuotedExpressionDefaultCode] = WarningLevel,
+        [NullableKeyColumnCode] = WarningLevel,
         [RebuildThresholdCode] = ErrorLevel,
         [IgnoredThresholdCode] = WarningLevel,
         [EdgeConstraintTableKindCode] = ErrorLevel,
@@ -154,6 +169,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         [PoliciesWithoutRlsCode] = WarningLevel,
         [ReplicaIdentityIndexMissingCode] = ErrorLevel,
         [IdentifierTooLongCode] = ErrorLevel,
+        [WrappedPostgreSqlNameCode] = WarningLevel,
         [ReplicaIdentityIndexUnknownCode] = ErrorLevel,
         [ReplicaIdentityIndexNotUniqueCode] = ErrorLevel,
         [ReplicaIdentityIndexIgnoredCode] = WarningLevel,
@@ -178,6 +194,14 @@ public sealed class CoherenceCheck : ISchemaCheck
         [PartitionedForeignKeyCode] = ErrorLevel,
         [PartitionColumnRenamedCode] = ErrorOrWarningLevel,
         [PartitionCountMismatchCode] = ErrorLevel,
+        [MyPartitionValuesClauseCode] = ErrorLevel,
+        [SubpartitioningMethodCode] = ErrorLevel,
+        [SystemTimeIntervalAndLimitCode] = ErrorLevel,
+        [SystemTimeAutoAloneCode] = ErrorLevel,
+        [SystemTimePartitionShapeCode] = ErrorLevel,
+        [PartitioningValueInertCode] = WarningLevel,
+        [PeriodColumnMissingCode] = ErrorLevel,
+        [SecondPeriodCode] = ErrorLevel,
         [MemoryOptimizedPlacementCode] = ErrorLevel,
     };
 
@@ -208,6 +232,10 @@ public sealed class CoherenceCheck : ISchemaCheck
                 $"Template '{template.Name}'"));
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckScheduledEvents(template));
+
+        // Load already changed each of these so it deploys: the declaration is wrong, the package is not.
+        foreach (var template in ctx.Templates)
+            findings.AddRange(template.LoadNotices.Select(n => new Finding(Severity.Warning, n.Code, Category, n.Location, n.Message)));
 
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckForeignKeyNameReuse(template, ctx.Product));
@@ -246,6 +274,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckMariaDbPeriodColumns(table, location));
             findings.AddRange(CheckSpatialIndexes(table, location, columnsAreOwnedElsewhere));
             findings.AddRange(CheckJsonIndexes(table, location, columnsAreOwnedElsewhere));
+            findings.AddRange(CheckSelectiveXmlIndexes(table, location));
             findings.AddRange(CheckEdgeConstraints(table, location, tablesByKey));
             findings.AddRange(CheckCharsetWithoutCollation(table, location));
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
@@ -260,6 +289,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckCompressionOptions(table, location));
             findings.AddRange(CheckPartitionPlacement(table, location));
             findings.AddRange(CheckMyPartitioning(table, location, ctx.Product));
+            findings.AddRange(CheckMariaDbPeriods(table, location));
             findings.AddRange(CheckPartitionedForeignKeys(table, location, tablesByKey));
             findings.AddRange(CheckMemoryOptimizedPlacement(table, location));
         }
@@ -303,7 +333,7 @@ public sealed class CoherenceCheck : ISchemaCheck
                     ? $"Foreign key '{name}' is declared on tables {tables}. MariaDB names foreign keys per database " +
                       "before 12.1, so the deploy fails on an older server. Rename one, or set the product's " +
                       "MinimumVersion to 12.1 or later."
-                    : $"Foreign key '{name}' is declared on tables {tables}. {product.Platform} names foreign keys per " +
+                    : $"Foreign key '{name}' is declared on tables {tables}. {product.Platform.ToDisplayName()} names foreign keys per " +
                       (scopeBySchema ? "schema" : "database") + ", so the second one fails the deploy. Rename one.");
         }
     }
@@ -367,6 +397,13 @@ public sealed class CoherenceCheck : ISchemaCheck
                 yield break;
             }
 
+            // A table whose file failed to load is declared, and SS-JSON-001 or SS-LOAD-001 already names the file. Matched on
+            // the name alone: the file that failed is the one place its schema could be read from.
+            if (tablesByTemplate.Keys.Where(t => t == owningTemplate || SameDatabases(t, owningTemplate))
+                .SelectMany(t => t.ComponentLoadErrors)
+                .Any(e => e.TableName != null && IdentityKey(e.TableName, ComparesExactly(table)) == name))
+                yield break;
+
             // A warning, not an error: the deploy creates a foreign key to any table that exists on the target,
             // declared or not, so an unresolved reference is only a likely mistake. Never silenced -- not even for
             // a partial deployment such as a SchemaShears patch, where it is expected: DropTablesRemovedFromProduct
@@ -425,7 +462,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static IEnumerable<Finding> CheckMySqlFamilyForeignKeys(Table table, string tableLocation,
         IReadOnlyDictionary<(string Schema, string Name), List<Table>> tablesByKey, Platform platform)
     {
-        if (platform.GetBasePlatform() != Platform.MySQL) yield break;
+        if (platform is not (Platform.MySQL or Platform.MariaDb)) yield break;
         foreach (var fk in table.ForeignKeys)
         {
             var location = $"{tableLocation} / FK '{fk.Name}'";
@@ -460,7 +497,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// </summary>
     private static IEnumerable<Finding> CheckMySqlFamilyColumnTypes(Table table, string tableLocation, Platform platform)
     {
-        if (platform.GetBasePlatform() != Platform.MySQL) yield break;
+        if (platform is not (Platform.MySQL or Platform.MariaDb)) yield break;
         var expressions = table.Columns.OfType<MySqlColumn>()
             .SelectMany(c => new[] { ($"Column '{c.Name}'", c.GenerationExpression), ($"Column '{c.Name}'", c.Default) })
             .Concat(table.CheckConstraints.Select(cc => ($"Check constraint '{cc.Name}'", cc.Expression)))
@@ -480,8 +517,16 @@ public sealed class CoherenceCheck : ISchemaCheck
             if (platform == Platform.MySQL && DeprecatedNumericForm.IsMatch(column.DataType ?? ""))
                 yield return new Finding(Severity.Warning, DeprecatedNumericFormCode, Category, location,
                     $"'{column.DataType}' uses a form MySQL 8.0.17 deprecated (FLOAT(M,D), UNSIGNED on FLOAT, DOUBLE or DECIMAL, or ZEROFILL), which a later release will remove.");
+            // D5: a package extracted before 2.8 wrote an expression default as a quoted string, which deploys as that text.
+            if (QuotedFunctionCall.IsMatch(column.Default ?? ""))
+                yield return new Finding(Severity.Warning, QuotedExpressionDefaultCode, Category, location,
+                    $"Default {column.Default.Trim()} is a quoted function call, so it deploys as that text, not as the expression. " +
+                    "A package extracted before 2.8 wrote expression defaults this way: re-extract it, or write the expression in parentheses.");
         }
     }
+
+    private static readonly System.Text.RegularExpressions.Regex QuotedFunctionCall =
+        new(@"^\s*'\s*[A-Za-z_][A-Za-z0-9_$]*\s*\(.*\)\s*'\s*$", System.Text.RegularExpressions.RegexOptions.Singleline);
 
     /// <summary>
     /// A declared <c>MinimumVersion</c> the engine cannot resolve aborts the deploy before any object is
@@ -508,13 +553,13 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         yield return new Finding(Severity.Error, MinimumVersionUnresolvableCode, Category,
             $"Product '{product.Name}'",
-            $"MinimumVersion '{product.MinimumVersion}' is not a valid {product.Platform} version, so the "
+            $"MinimumVersion '{product.MinimumVersion}' is not a valid {product.Platform.ToDisplayName()} version, so the "
             + "deploy will refuse this package before touching any object."
             + (product.Platform == Platform.SqlServer
                 ? " On SQL Server a value of 2000 or more is read as a RELEASE YEAR and must be one of "
                   + "2008, 2012, 2014, 2016, 2017, 2019, 2022 or 2025 — an in-between year such as 2018 or "
                   + "2020 does not resolve. A major version number (13, 16) also works."
-                : " Use a numeric version such as " + (product.Platform.GetBasePlatform() == Platform.MySQL
+                : " Use a numeric version such as " + (product.Platform is Platform.MySQL or Platform.MariaDb
                     ? "'8.0' or '10.6'." : "'12' or '16'.")));
     }
 
@@ -556,6 +601,15 @@ public sealed class CoherenceCheck : ISchemaCheck
     /// paths start at <c>$</c>, have no wildcard, and none contains another. The engine refuses each other shape at create
     /// time, so it is reported here. An index-only template owns no columns, so the column and key checks are skipped there.
     /// </summary>
+    // An empty path list passed the presence check and deployed nothing, reporting success.
+    private static IEnumerable<Finding> CheckSelectiveXmlIndexes(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable sqlTable) yield break;
+        foreach (var index in sqlTable.XmlIndexes.Where(x => x.Selective != null && (x.Selective.Paths == null || x.Selective.Paths.Count == 0)))
+            yield return new Finding(Severity.Error, SelectiveXmlNoPathsCode, Category, $"{tableLocation} / XML index '{index.Name}'",
+                $"Selective XML index '{index.Name}' declares no paths, so there is nothing to index and the deploy would create nothing. Declare at least one path.");
+    }
+
     private static IEnumerable<Finding> CheckJsonIndexes(Table table, string tableLocation, bool columnsAreOwnedElsewhere)
     {
         if (table is not SqlServerTable sqlTable || sqlTable.JsonIndexes.Count == 0) yield break;
@@ -976,9 +1030,9 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static string IdentityKey(string identifier, bool exact = false) =>
         exact ? NormalizeIdentifier(identifier) : NormalizeIdentifier(identifier).ToLowerInvariant();
 
-    private static bool ComparesExactly(Table table) => table is PostgreSqlTable;
+    internal static bool ComparesExactly(Table table) => table is PostgreSqlTable;
 
-    private static StringComparer NameComparer(Table table) =>
+    internal static StringComparer NameComparer(Table table) =>
         ComparesExactly(table) ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
 
     private static (string Schema, string Name) TableKey(Table table) =>
@@ -1000,7 +1054,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static string NormalizeAction(string action) =>
         System.Text.RegularExpressions.Regex.Replace((action ?? "").Trim(), @"\s+", " ").ToUpperInvariant();
 
-    private static string NormalizeIdentifier(string identifier)
+    internal static string NormalizeIdentifier(string identifier)
     {
         var trimmed = (identifier ?? "").Trim();
         if (trimmed.Length < 2)
@@ -1021,7 +1075,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     // outside a backtick-quoted span, so a functional/expression key part's own internal comma (e.g.
     // `(concat(\`a\`,\`b\`))`) isn't mistaken for a key-part boundary. Also used for FK Columns/
     // RelatedColumns — a no-op there, since FK column lists never contain parens or backticks.
-    private static List<string> SplitNames(string csv)
+    internal static List<string> SplitNames(string csv)
     {
         var text = csv ?? "";
         var len = text.Length;
@@ -1146,9 +1200,6 @@ public sealed class CoherenceCheck : ISchemaCheck
             yield return ("Sequence", sequence.Name);
             if (!string.IsNullOrEmpty(sequence.Schema)) yield return ("Sequence schema", sequence.Schema);
         }
-
-        foreach (var sequence in template.MariaDbSequences)
-            yield return ("Sequence", sequence.Name);
 
         foreach (var domain in template.DomainTypes)
         {
@@ -1471,6 +1522,14 @@ public sealed class CoherenceCheck : ISchemaCheck
                     "Values boundary. HASH/KEY assign rows by hashing and have no boundary — drop the Values, " +
                     "or use RANGE/LIST if you meant to define boundaries.");
 
+        // #569: the deploy writes VALUES LESS THAN (...) / VALUES IN (...) around Values, so a Values carrying its own clause
+        // failed with a syntax error.
+        if (isRangeList && hasNamedPartitions)
+            foreach (var part in p.Partitions.Where(pt => ValuesClausePrefix.IsMatch(pt.Values ?? "")))
+                yield return new Finding(Severity.Error, MyPartitionValuesClauseCode, Category, tableLocation,
+                    $"Partition '{part.Name}' of table '{table.Name}' has Values '{part.Values}', which carries its own clause: " +
+                    "Values is the boundary alone (2025, MAXVALUE, 1, 2) and the deploy writes VALUES LESS THAN or VALUES IN around it.");
+
         foreach (var finding in CheckMyPartitionKeys(mySqlTable, method, p.Expression, tableLocation))
             yield return finding;
 
@@ -1486,6 +1545,16 @@ public sealed class CoherenceCheck : ISchemaCheck
             yield return new Finding(Severity.Error, PartitionExpressionMissingCode, Category, tableLocation,
                 $"Table '{table.Name}' partitions by {method} but declares no Expression: every method but SYSTEM_TIME " +
                 "partitions on an expression or a column list.");
+
+        // MySQL refuses subpartitioning outside RANGE and LIST (1500); the deploy wrote it before PARTITIONS n, a 1064, and
+        // dropped it without a word under SYSTEM_TIME.
+        if (p.Subpartitioning != null && !isRangeList)
+            yield return new Finding(Severity.Error, SubpartitioningMethodCode, Category, tableLocation,
+                $"Table '{table.Name}' subpartitions a table partitioned by {method}: only RANGE and LIST partitions can be " +
+                "subpartitioned. Drop Subpartitioning, or partition by RANGE or LIST.");
+
+        foreach (var finding in CheckSystemTimePartitioning(mySqlTable, method, tableLocation))
+            yield return finding;
 
         // Both engines refuse PARTITIONS n beside a list of a different length (1064).
         if (p.PartitionCount is { } count && hasNamedPartitions && count != p.Partitions.Count)
@@ -1511,6 +1580,65 @@ public sealed class CoherenceCheck : ISchemaCheck
                     "removing the partitioning, or keep the name.");
             }
         }
+    }
+
+    // MariaDB's SYSTEM_TIME rules the schema cannot express, each of which failed the deploy, and the partitioning values
+    // the deploy drops or ignores.
+    private static IEnumerable<Finding> CheckSystemTimePartitioning(MySqlTable table, string method, string tableLocation)
+    {
+        var p = table.Partitioning;
+        var systemTime = p.SystemTime;
+        if (method == "SYSTEM_TIME")
+        {
+            if (systemTime is { Interval: not null and not "", Limit: not null })
+                yield return new Finding(Severity.Error, SystemTimeIntervalAndLimitCode, Category, tableLocation,
+                    $"Table '{table.Name}' partitions its history by both Interval and Limit: MariaDB takes one or the other. Keep one.");
+            if (systemTime is { Auto: true } && string.IsNullOrWhiteSpace(systemTime.Interval) && systemTime.Limit == null)
+                yield return new Finding(Severity.Error, SystemTimeAutoAloneCode, Category, tableLocation,
+                    $"Table '{table.Name}' sets Auto with neither Interval nor Limit: AUTO adds history partitions by one of them. Declare it.");
+            if (p.PartitionCount is < 2)
+                yield return new Finding(Severity.Error, SystemTimePartitionShapeCode, Category, tableLocation,
+                    $"Table '{table.Name}' declares PartitionCount {p.PartitionCount} for SYSTEM_TIME, which counts the history " +
+                    "partitions and the current one together: MariaDB needs at least one of each, so at least 2.");
+            if (p.Partitions is { Count: > 0 })
+            {
+                var values = p.Partitions.Select(pt => (pt.Values ?? "").Trim().ToUpperInvariant()).ToList();
+                var currents = values.Count(v => v == "CURRENT");
+                if (values.Any(v => v is not ("HISTORY" or "CURRENT")) || currents != 1 || values[^1] != "CURRENT" || currents == values.Count)
+                    yield return new Finding(Severity.Error, SystemTimePartitionShapeCode, Category, tableLocation,
+                        $"Table '{table.Name}' names SYSTEM_TIME partitions with Values {string.Join(", ", p.Partitions.Select(pt => pt.Values ?? "(none)"))}: " +
+                        "MariaDB needs one or more HISTORY partitions and exactly one CURRENT partition, last, and each Values is HISTORY or CURRENT.");
+            }
+        }
+
+        var inert = new List<string>();
+        if (systemTime != null && method != "SYSTEM_TIME") inert.Add($"SystemTime, which only SYSTEM_TIME partitioning reads");
+        if (method == "SYSTEM_TIME" && !string.IsNullOrWhiteSpace(p.Expression)) inert.Add("Expression, which SYSTEM_TIME partitioning does not use");
+        if (p.KeyAlgorithm != null && method is not ("KEY" or "LINEAR KEY")) inert.Add("KeyAlgorithm, which only KEY partitioning reads");
+        if (systemTime != null && !string.IsNullOrWhiteSpace(systemTime.StartsAt) && string.IsNullOrWhiteSpace(systemTime.Interval))
+            inert.Add("SystemTime.StartsAt, which applies only with an Interval");
+        foreach (var value in inert)
+            yield return new Finding(Severity.Warning, PartitioningValueInertCode, Category, tableLocation,
+                $"Table '{table.Name}' declares {value}: the deploy ignores it. Remove it.");
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex ValuesClausePrefix =
+        new(@"^\s*(LESS\s+THAN\b|VALUES\b|IN\s*\()", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    // #568: MariaDB refuses a period over a column the table does not have, and allows one application-time period per
+    // table; both failed the deploy after --Validate passed them.
+    private static IEnumerable<Finding> CheckMariaDbPeriods(Table table, string tableLocation)
+    {
+        if (table is not MariaDbTable mariaDb || mariaDb.Periods is not { Count: > 0 } periods) yield break;
+        var columns = table.Columns.Select(c => NormalizeIdentifier(c.Name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var period in periods)
+            foreach (var column in new[] { period.StartColumn, period.EndColumn }.Where(c => !columns.Contains(NormalizeIdentifier(c ?? ""))))
+                yield return new Finding(Severity.Error, PeriodColumnMissingCode, Category, tableLocation,
+                    $"Period '{NormalizeIdentifier(period.Name)}' of table '{table.Name}' names column '{NormalizeIdentifier(column ?? "")}', " +
+                    "which the table does not declare: MariaDB refuses the period.");
+        if (periods.Count > 1)
+            yield return new Finding(Severity.Error, SecondPeriodCode, Category, tableLocation,
+                $"Table '{table.Name}' declares {periods.Count} periods: MariaDB allows one application-time period per table.");
     }
 
     // InnoDB has no foreign keys on a partitioned table, on either side: MySQL refuses both with 1506, MariaDB the child
@@ -1673,7 +1801,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     // Mirrors SchemaSmith_NormalizeIndexColumns.sql's DESC/ASC suffix handling (source of truth —
     // keep in sync): a trailing " DESC" or " ASC" (case-insensitive) is ordering, not part of the
     // column name.
-    private static string StripOrderingSuffix(string column)
+    internal static string StripOrderingSuffix(string column)
     {
         if (column.EndsWith(" DESC", StringComparison.OrdinalIgnoreCase))
             return column[..^5].TrimEnd();
@@ -1683,7 +1811,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     // A MySQL/MariaDB prefix key part -- `Email`(20) -- names the column before its length, as extraction writes it.
-    private static string StripPrefixLength(string column)
+    internal static string StripPrefixLength(string column)
     {
         if (!column.EndsWith(')')) return column;
         var open = column.LastIndexOf('(');
@@ -1696,5 +1824,16 @@ public sealed class CoherenceCheck : ISchemaCheck
     // backtick-wraps a plain column name, so this is an unambiguous discriminator (mirrors
     // SchemaSmith_NormalizeIndexColumns.sql). Validating the identifiers inside the expression would
     // need a real SQL parser and is out of scope — skip rather than false-flag.
-    private static bool IsExpressionKeyPart(string column) => column.StartsWith('(');
+    internal static bool IsExpressionKeyPart(string column) => column.StartsWith('(');
+
+    /// <summary>The table's columns an index key names, matched the way the deploy matches them; expression key parts name none.</summary>
+    internal static IEnumerable<Column> KeyColumns(Table table, Index index)
+    {
+        var keyNames = SplitNames(index.IndexColumns).Select(StripOrderingSuffix)
+            .Select(part => table is MySqlTable ? StripPrefixLength(part) : part)
+            .Where(part => !IsExpressionKeyPart(part))
+            .Select(NormalizeIdentifier)
+            .ToHashSet(NameComparer(table));
+        return table.Columns.Where(c => keyNames.Contains(NormalizeIdentifier(c.Name ?? "")));
+    }
 }

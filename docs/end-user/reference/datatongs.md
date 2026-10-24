@@ -78,6 +78,8 @@ Each connection key falls back to its `Target:` twin when the `Source:` key is a
 
 The `--ConnectionString` switch bypasses all `Source` settings and passes the provided value directly to the platform-appropriate driver. `Source:Platform` is still required so the right script generator is used.
 
+A source below the [supported engine floor](schemaquench.md#engine-version-compatibility) is refused before anything is extracted, naming the detected version.
+
 ### Output paths
 
 | Key | Type | Default | Description |

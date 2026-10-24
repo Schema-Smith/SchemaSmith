@@ -102,8 +102,8 @@ public class DatafixLeastPrivilegeTests : ObjectScriptDeployFixture
         Assert.Multiple(() =>
         {
             Assert.That(Count("SELECT price FROM public.df_price WHERE id = 1"), Is.EqualTo(10), "the fix did not run, so it cannot run twice");
-            Assert.That(result.Log.Any(l => l != null && l.Contains("CompletedMigrationScripts") && l.Contains("would run again")), Is.True,
-                "the stop names the table and why; log: " + string.Join(" | ", result.Log.Where(l => l != null && l.StartsWith("ERROR"))));
+            Assert.That(result.Log.Any(l => l != null && l.Split('\n').Any(line => line.Contains("Cannot read which") && line.Contains("would run again") && line.Contains("Grant the deploy login"))), Is.True,
+                "the stop and the grant arrive as one line, not split by the engine error; log: " + string.Join(" | ", result.Log.Where(l => l != null && l.StartsWith("ERROR"))));
         });
     }
 

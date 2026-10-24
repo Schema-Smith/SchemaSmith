@@ -6,6 +6,7 @@ using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer
 {
@@ -826,7 +827,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             p.Value = xml;
             p.DbType = DbType.String;
             cmd.Parameters.Add(p);
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             cmd.Parameters.Clear();
         }
 

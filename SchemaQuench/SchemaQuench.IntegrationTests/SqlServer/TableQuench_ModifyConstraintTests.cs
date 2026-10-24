@@ -6,7 +6,7 @@ using Schema.Domain;
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 internal class TableQuench_ModifyConstraintTests : BaseTableQuenchTests
 {
     [Test]

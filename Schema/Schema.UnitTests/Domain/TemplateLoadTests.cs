@@ -76,6 +76,8 @@ namespace Schema.UnitTests.Domain
                 Assert.That(template.ComponentLoadErrors[0].FilePath, Is.EqualTo(typoFile));
                 Assert.That(template.ComponentLoadErrors[0].IsValidJson, Is.True,
                     "classified as parseable so --Validate can leave it to JsonSchemaCheck's precise SS-JSON-001");
+                Assert.That(template.ComponentLoadErrors[0].TableName, Is.EqualTo("[T]"),
+                    "the declared name, so foreign keys into the table are not reported as dangling as well");
             });
         }
 

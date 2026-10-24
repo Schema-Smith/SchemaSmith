@@ -13,7 +13,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// occupying the clustered slot; declared clustered PK on the same column).
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_PrimaryKeyVsUniqueClusteredTests : BaseTableQuenchTests
 {
     [Test]

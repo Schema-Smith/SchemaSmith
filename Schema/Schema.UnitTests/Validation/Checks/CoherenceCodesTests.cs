@@ -38,6 +38,9 @@ public class CoherenceCodesTests
         ["SS-ENUM-001"] = [Severity.Error],
         ["SS-SEQ-001"] = [Severity.Error],
         ["SS-DOM-001"] = [Severity.Error],
+        // Load records these; the check reports each notice under the code it carries.
+        ["SS-COL-008"] = [Severity.Warning],
+        ["SS-IDENT-003"] = [Severity.Warning],
     };
 
     [Test]

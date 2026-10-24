@@ -22,7 +22,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 // "  Altering Column <schema>.<table>.<column>" RAISERROR (captured via SqlConnection.InfoMessage).
 // A converged table must emit none.
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_TimePrecisionIdempotencyTests : BaseTableQuenchTests
 {
     [TestCase("TIME(3)", TestName = "TableQuench_TimeWithPrecisionIsIdempotent")]

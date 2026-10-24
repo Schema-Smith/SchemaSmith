@@ -675,14 +675,26 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
     -- stays idempotent. MariaDB enters it below 10.2.22, where the CHECK_CONSTRAINTS view does not exist yet.
     IF SchemaSmith_SupportsCheckConstraints() = 0 THEN
         SET @ss_check_floor = IF(VERSION() LIKE '%MariaDB%', 'MariaDB 10.2.22', 'MySQL 8.0.16');
+        -- Every skipped check, a table's and (MariaDB) a column's own, named table.check or table.column.
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_SkippedChecks;
+        CREATE TEMPORARY TABLE _SchemaSmith_SkippedChecks (Id INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+            CheckName VARCHAR(600) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci);
+        INSERT INTO _SchemaSmith_SkippedChecks (CheckName)
+        SELECT CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName))
+          FROM _SchemaSmith_CheckConstraints c;
+        IF VERSION() LIKE '%MariaDB%' THEN
+            INSERT INTO _SchemaSmith_SkippedChecks (CheckName)
+            SELECT CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName))
+              FROM _SchemaSmith_Columns c
+             WHERE IFNULL(TRIM(c.CheckExpression), '') != '';
+        END IF;
         IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail'
-           AND EXISTS (SELECT 1 FROM _SchemaSmith_CheckConstraints) THEN
+           AND EXISTS (SELECT 1 FROM _SchemaSmith_SkippedChecks) THEN
             -- Log the full offending list to the run log first (SIGNAL MESSAGE_TEXT is capped at 128 chars,
             -- so the abort message stays concise + non-truncating and names the detail in the log instead).
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  CHECK constraint unsupported (requires ', @ss_check_floor, '): ',
-                   SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName))
-            FROM _SchemaSmith_CheckConstraints c;
+            SELECT CONNECTION_ID(), CONCAT('  CHECK constraint unsupported (requires ', @ss_check_floor, '): ', s.CheckName)
+            FROM _SchemaSmith_SkippedChecks s;
             -- Keep < 128 chars: MySQL errors ("Data too long for condition item") on an over-long MESSAGE_TEXT.
             -- Only the number: a packaged MariaDB's VERSION() ('10.2.21-MariaDB-1:10.2.21+maria~bionic') overruns it.
             SET @ss_msg = CONCAT('CHECK constraints require ', @ss_check_floor, ' (detected ',
@@ -692,13 +704,12 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
             -- Surface the downgrade in the run log too (not only the ChangeAudit manifest), matching this
             -- proc's per-object status-message convention, so a 5.7 deploy visibly reports skipped checks.
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Skipping check constraint (requires ', @ss_check_floor, ' - downgraded): ',
-                   SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName))
-            FROM _SchemaSmith_CheckConstraints c;
+            SELECT CONNECTION_ID(), CONCAT('  Skipping check constraint (requires ', @ss_check_floor, ' - downgraded): ', s.CheckName)
+            FROM _SchemaSmith_SkippedChecks s;
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
             SELECT CONNECTION_ID(), IF(VERSION() LIKE '%MariaDB%', 'CHECK constraint (MariaDB 10.2.22)', 'CHECK constraint (MySQL 8.0.16)'),
-                   CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ConstraintName)), 'downgraded'
-            FROM _SchemaSmith_CheckConstraints c;
+                   s.CheckName, 'downgraded'
+            FROM _SchemaSmith_SkippedChecks s;
         END IF;
     ELSEIF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing check constraints');

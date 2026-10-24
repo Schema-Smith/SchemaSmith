@@ -14,7 +14,7 @@ namespace SchemaQuench.IntegrationTests.MySQL;
 // MySQL 9's Community server has VECTOR columns but no vector index. A declared one is skipped with a downgrade, and the
 // table deploys; under the fail policy the deploy is refused by name instead.
 [Category("MySQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_VectorIndexDegradeTests : BaseTableQuenchTests
 {
     protected override Platform Platform => Platform.MySQL;

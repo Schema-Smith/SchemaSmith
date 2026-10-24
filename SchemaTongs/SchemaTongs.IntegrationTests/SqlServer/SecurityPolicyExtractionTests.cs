@@ -93,6 +93,9 @@ public class SecurityPolicyExtractionTests
         OnDb(target, cmd =>
         {
             CreateTableAndFunction(cmd);
+            // A deploy runs the scripts on one session, and a module scripted under QUOTED_IDENTIFIER OFF leaves it off;
+            // the script's FOR XML signature query then failed and no policy was created.
+            Run(cmd, "SET QUOTED_IDENTIFIER OFF");
             Run(cmd, script);
             Assert.That(Signature(cmd), Is.EqualTo(Signature(_db)), "created as the source has it");
             var created = PolicyId(cmd);

@@ -14,7 +14,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// re-validation: the key keeps its oid); a match type, which PostgreSQL cannot alter, re-creates the key.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ForeignKeyConvergenceTests : BaseTableQuenchTests
 {
     private static string Json(string t, string fkOptions) => $$"""

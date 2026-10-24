@@ -11,7 +11,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// no query uses) is not the declared index: the deploy drops it and creates the declared one, which is valid.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_InvalidIndexTests : BaseTableQuenchTests
 {
     private const string Json = """

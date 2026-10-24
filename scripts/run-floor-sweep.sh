@@ -77,8 +77,19 @@ FAILED=0
 # are the LTS releases in those gaps; both are pinned here and, from 2.8, as CI legs on merge to main.
 FLOORS=(
   "floor-mariadb-102:mariadb:10.2:13402:MariaDb"
+  # The 10.2 tag resolves to 10.2.44. 10.2.13 is the floor (JSON arrives at 10.2.7, builds no string holding a backtick
+  # until 10.2.9, and delivers data correctly from 10.2.13); 10.2.21 is the last patch before the CHECK gate at 10.2.22.
+  # Neither runs in CI.
+  "floor-mariadb-10213:mariadb:10.2.13:13429:MariaDb"
+  "band-mariadb-10221:mariadb:10.2.21:13421:MariaDb"
   "floor-mysql-57:mysql:5.7:13457:MySQL"
+  # The supported floor patches: the 5.7 and 8.0 tags resolve to each line's newest, past every patch-level gate.
+  "floor-mysql-5722:mysql:5.7.22:13422:MySQL"
+  "floor-mysql-8023:mysql:8.0.23:13423:MySQL"
   "floor-postgres-12:postgres:12:15412:PostgreSQL"
+  # System versioning without the 10.5 SYSTEM_TIME partitioning forms (STARTS, the interval count) and without AUTO:
+  # the only band whose downgrades for them are not empty, and no CI leg runs it.
+  "band-mariadb-104:mariadb:10.4:13404:MariaDb"
   "band-mariadb-106:mariadb:10.6:13406:MariaDb"
   # A patch with the JSON_TABLE bugs SchemaSmith routes around (MDEV-25875 before 10.6.9, MDEV-27412 before 10.6.20):
   # every other leg is past them, so this is the only one that runs the workaround against the engine that needs it.
@@ -195,7 +206,7 @@ for f in "${FLOORS[@]}"; do
   # MySQL 5.7's TLS handshake is incompatible with the modern connector's negotiation on the stock image
   # (SSL Authentication Error / corrupted frame). CI disables SSL for that leg only; mirror it.
   SSL_ENV=""
-  [ "$image:$tag" = "mysql:5.7" ] && SSL_ENV="SmithySettings_MySQL__ConnectionProperties__SslMode=None"
+  case "$image:$tag" in mysql:5.7*) SSL_ENV="SmithySettings_MySQL__ConnectionProperties__SslMode=None" ;; esac
 
   case "$category" in
     MariaDb)    PORT_ENV="SmithySettings_MariaDB__Port=$port" ;;
@@ -218,6 +229,9 @@ for f in "${FLOORS[@]}"; do
       FAILED=1
       echo "  $(basename "$proj" .csproj): ${summary:-NO RESULT} (exit $rc)"
       echo "$out" | grep -aE '  Failed [A-Za-z]|Error occurred while kindling|Unknown column|Unknown system variable|error in your SQL syntax|TearDown failed|SetUp failed' | head -8 | sed 's/^/    /'
+      # The full output, so a failure that does not reproduce alone still has its message.
+      faillog="${TMPDIR:-/tmp}/floor-sweep/${name}-$(basename "$proj" .csproj).log"
+      mkdir -p "$(dirname "$faillog")" && echo "$out" > "$faillog" && echo "    full output: $faillog"
     fi
   done
 

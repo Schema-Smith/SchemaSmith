@@ -31,7 +31,7 @@ namespace Schema.Utility
             Platform.SqlServer => 10,     // SQL Server 2008 (below compat 130 the model is ingested/compared as XML)
             Platform.PostgreSQL => 12,    // PostgreSQL 12 (features above 12 — per-column compression + expression statistics (14), NULLS NOT DISTINCT (15) — are degraded per the unsupported-feature policy)
             Platform.MySQL => 507,        // MySQL 5.7 (JSON_TABLE-free JSON_EXTRACT parse; CHECK degrades below 8.0.16; data delivery requires 8.0)
-            Platform.MariaDb => 1002,     // MariaDB 10.2.7 (patch floor below; recursive-CTE data-delivery shred below 10.6; full support)
+            Platform.MariaDb => 1002,     // MariaDB 10.2.13 (patch floor below; recursive-CTE data-delivery shred below 10.6; full support)
             _ => throw new ArgumentOutOfRangeException(nameof(platform), platform, "No version floor defined for platform")
         };
 
@@ -44,7 +44,7 @@ namespace Schema.Utility
             Platform.SqlServer => "2008 (major 10)",
             Platform.PostgreSQL => "12",
             Platform.MySQL => "5.7.22 / 8.0.23",
-            Platform.MariaDb => "10.2.7",
+            Platform.MariaDb => "10.2.13",
             _ => HardFloorComparable(platform).ToString()
         };
 
@@ -53,10 +53,12 @@ namespace Schema.Utility
         private const int MySqlFloor57 = 50722;
         private const int MySqlFloor80 = 80023;
 
-        // MariaDB 10.2.7 is the first patch with the JSON type alias the kindled helpers declare; 10.2.6 cannot kindle.
-        private const int MariaDbFloor = 100207;
+        // MariaDB 10.2.7 is the first patch with the JSON type alias the kindled helpers declare, but 10.2.7 and 10.2.8 return
+        // NULL from every JSON function that builds a string holding a backtick, which is every extracted name (fixed in
+        // 10.2.9), and data delivery is wrong on 10.2.9-10.2.10 and exhausts the server's memory on 10.2.11-10.2.12.
+        private const int MariaDbFloor = 100213;
 
-        // Major-level only: the MySQL family's floors are patches (5.7.22, 8.0.23, 10.2.7), which a comparable cannot see.
+        // Major-level only: the MySQL family's floors are patches (5.7.22, 8.0.23, 10.2.13), which a comparable cannot see.
         private static bool IsBelowMajorFloor(Platform platform, int serverComparable)
             => serverComparable < HardFloorComparable(platform);
 

@@ -13,6 +13,7 @@ using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Isolators;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer
 {
@@ -110,7 +111,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             p.Value = xml;
             p.DbType = DbType.String;
             cmd.Parameters.Add(p);
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             cmd.Parameters.Clear();
         }
 
@@ -317,7 +318,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             p.DbType = DbType.String;
             cmd.Parameters.Add(p);
 
-            Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(),
+            Assert.DoesNotThrow(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()),
                 "sparse columns + a column set are 2008-floor and must deploy cleanly via the XML ingest path");
             cmd.Parameters.Clear();
 

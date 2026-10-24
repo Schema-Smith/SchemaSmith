@@ -1,0 +1,36 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "plans",
+  "Columns": [
+    {
+      "Name": "plan_id",
+      "DataType": "INTEGER"
+    },
+    {
+      "Name": "plan_name",
+      "DataType": "VARCHAR(32)"
+    },
+    {
+      "Name": "monthly_rate",
+      "DataType": "NUMERIC(9,2)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_plans",
+      "PrimaryKey": true,
+      "IndexColumns": "plan_id"
+    },
+    {
+      "Name": "uq_plans_plan_name",
+      "Unique": true,
+      "IndexColumns": "plan_name"
+    }
+  ],
+  "DataDelivery": {
+    "ContentFile": "data/public.plans.tabledata",
+    "MergeType": "Insert/Update",
+    "MatchColumns": "plan_id"
+  }
+}

@@ -325,6 +325,44 @@ public abstract class EventQuench_DropByAbsenceSharedTests : BaseTableQuenchTest
 ]
 """;
 
+    // The event DDL runs from the caller, which logged "Quenching scheduled events" and then nothing per event, on the
+    // first deploy and every later one alike.
+    [Test]
+    public void EventQuench_SaysWhatItDoesToEachEvent_AndNothingWhenNothingChanges()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"EvtLogProduct_{uid}";
+        var evt = $"evt_log_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        string Deploy(string json)
+        {
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            RunEventQuench(cmd, json, product, dropRemoved: true);
+            cmd.CommandText = $"SELECT COALESCE(GROUP_CONCAT(Message SEPARATOR ' | '), '') FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%{evt}%'";
+            return cmd.ExecuteScalar()?.ToString();
+        }
+        try
+        {
+            Assert.Multiple(() =>
+            {
+                Assert.That(Deploy(OneEvent(evt)), Is.EqualTo($"  Create event `{evt}`"));
+                Assert.That(Deploy(OneEvent(evt).Replace("SET @ss_test = 1", "SET @ss_test = 3")), Is.EqualTo($"  Replace changed event `{evt}`"));
+                Assert.That(Deploy(OneEvent(evt).Replace("SET @ss_test = 1", "SET @ss_test = 3")), Is.Empty, "an unchanged event is not mentioned");
+                Assert.That(Deploy("[]"), Is.EqualTo($"  Drop event `{evt}` (removed from product)"));
+            });
+        }
+        finally
+        {
+            DropEvent(cmd, evt);
+        }
+        conn.Close();
+    }
+
     // ---- drivers and live-state readers ---------------------------------------
 
     /// <summary>
@@ -353,7 +391,7 @@ public abstract class EventQuench_DropByAbsenceSharedTests : BaseTableQuenchTest
         {
             statements.Clear();
             var call = cmd.CommandText;
-            using var reader = cmd.ExecuteReader();
+            using var reader = TransientRetry.Run(() => cmd.ExecuteReader());
             while (reader.Read())
                 if (!reader.IsDBNull(0)) statements.Add(reader.GetString(0));
             reader.Close();

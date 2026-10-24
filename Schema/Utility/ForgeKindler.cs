@@ -75,7 +75,9 @@ public static class ForgeKindler
                 serverMajorVersion = TargetVersionDetector.TryDetect(command, Platform.SqlServer)?.ServerComparable ?? 0;
 
             bool? xmlCompressionReadable = platform == Platform.SqlServer ? ReportsXmlCompression(command) : null;
-            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode, xmlCompressionReadable);
+            bool? checkConstraintsReadable = platform == Platform.MariaDb ? ReportsCheckConstraints(command) : null;
+            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode, xmlCompressionReadable,
+                checkConstraintsReadable);
             var current = ReadStamp(command, platform);
             if (!forceReKindle && string.Equals(current, expected, StringComparison.Ordinal))
             {
@@ -100,7 +102,7 @@ public static class ForgeKindler
             if (platform == Platform.PostgreSQL)
                 DropSupersededPostgreSqlOverloads(command);
 
-            KindleScripts(command, platform, encoding, serverMajorVersion, policy, xmlCompressionReadable);
+            KindleScripts(command, platform, encoding, serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable);
             if (platform.GetBasePlatform() == Platform.MySQL)
                 CleanupMySqlStatusMessages(command);
 
@@ -113,11 +115,11 @@ public static class ForgeKindler
     }
 
     private static void KindleScripts(IDbCommand command, Platform platform, IngestEncoding encoding,
-        int serverMajorVersion, string policy, bool? xmlCompressionReadable)
+        int serverMajorVersion, string policy, bool? xmlCompressionReadable, bool? checkConstraintsReadable)
     {
         foreach (var s in GetKindlingScripts(platform, encoding))
             KindleOneFile(command, s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
-                serverMajorVersion, policy, xmlCompressionReadable);
+                serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable);
     }
 
     // Whether sys.partitions carries xml_compression on this server. COL_LENGTH reads metadata only, so the question is
@@ -132,6 +134,22 @@ public static class ForgeKindler
         catch (DbException)
         {
             return false;
+        }
+    }
+
+    // Whether INFORMATION_SCHEMA carries CHECK_CONSTRAINTS, which MariaDB added in 10.2.22. Asked of the server rather than
+    // read from the version, as for XML compression; a server that cannot answer is treated as having it, the kindle's
+    // behaviour before the question was asked.
+    public static bool ReportsCheckConstraints(IDbCommand command)
+    {
+        try
+        {
+            command.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = 'information_schema' AND TABLE_NAME = 'CHECK_CONSTRAINTS'";
+            return Convert.ToInt64(command.ExecuteScalar(), CultureInfo.InvariantCulture) > 0;
+        }
+        catch (DbException)
+        {
+            return true;
         }
     }
 
@@ -162,9 +180,14 @@ public static class ForgeKindler
     /// </summary>
     internal static string ResolveKindleScript(string fileName, Platform platform,
         bool replaceParseJson, bool replaceTableDef, IngestEncoding encoding = IngestEncoding.Json,
-        int serverMajorVersion = 0, string policy = "warn", bool? xmlCompressionReadable = null)
+        int serverMajorVersion = 0, string policy = "warn", bool? xmlCompressionReadable = null, bool? checkConstraintsReadable = null)
     {
-        var script = ResourceLoader.Load(fileName, platform)
+        // MariaDB's column-level check reads INFORMATION_SCHEMA.CHECK_CONSTRAINTS, and a function naming a view the server
+        // lacks fails to CREATE. Below 10.2.22 it takes the MySQL body, which reads nothing.
+        var source = platform == Platform.MariaDb && checkConstraintsReadable == false && fileName == "SchemaSmith_ColumnLevelCheck.sql"
+            ? Platform.MySQL
+            : platform;
+        var script = ResourceLoader.Load(fileName, source)
             ?? throw new Exception($"Script '{fileName}' not found for platform '{platform}'.");
         if (replaceParseJson)
             script = script.Replace("{{ParseJson}}", encoding == IngestEncoding.Xml
@@ -242,12 +265,12 @@ public static class ForgeKindler
     public static void KindleOneFile(IDbCommand command, string fileName, Platform platform,
         bool replaceParseJsonToken = false, bool replaceTableDefToken = false,
         IngestEncoding encoding = IngestEncoding.Json, int serverMajorVersion = 0, string policy = "warn",
-        bool? xmlCompressionReadable = null)
+        bool? xmlCompressionReadable = null, bool? checkConstraintsReadable = null)
     {
         try
         {
             var script = ResolveKindleScript(fileName, platform, replaceParseJsonToken, replaceTableDefToken,
-                encoding, serverMajorVersion, policy, xmlCompressionReadable);
+                encoding, serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable);
 
             if (platform.GetBasePlatform() == Platform.MySQL)
             {
@@ -688,6 +711,7 @@ public static class ForgeKindler
                 // Must follow fn_RebuildBlockedReason (it calls it to refuse) and PrintWithNoWait (its
                 // WhatIf output), and precede the quench procedures that will elect a rebuild.
                 new("SchemaSmith.RebuildTable.sql"),
+                new("SchemaSmith.ValidateTableOwnership.sql"),
                 new("SchemaSmith.MissingTableAndColumnQuench.sql"),
                 // Must precede ModifiedTableQuench, which CALLs it. Split out of that procedure because
                 // SQL Server compiles a procedure's statements whether or not they run and caches the plan
@@ -961,6 +985,7 @@ public static class ForgeKindler
                 // SYSTEM_TIME partitioning (MariaDB): the count/STARTS and AUTO gates, and whether a declaration can be created.
                 new("SchemaSmith_SupportsSystemTimePartitionCount.sql"),
                 new("SchemaSmith_SupportsSystemTimeAutoPartitions.sql"),
+                new("SchemaSmith_SupportsGeneratedColumnCollation.sql"),
                 new("SchemaSmith_SystemTimePartitionable.sql"),
                 new("SchemaSmith_SnapshotIndexVisibility.sql"),
                 new("SchemaSmith_SnapshotIndexExistence.sql"),
@@ -996,10 +1021,12 @@ public static class ForgeKindler
                 new("SchemaSmith_RefuseUnsupportedIndexes.sql"),
                 // A VECTOR index where the engine has none is skipped with a downgrade; called beside the refusals.
                 new("SchemaSmith_DegradeVectorIndexes.sql"),
+                new("SchemaSmith_DegradeUnsupportedColumnFeatures.sql"),
                 // OnlineApply: each table's mode and its added columns' positions, and the INSTANT / INPLACE, LOCK=NONE
                 // ladder every converted ALTER runs through. Called by the table and index quenches below.
                 new("SchemaSmith_StageOnlineApply.sql"),
                 new("SchemaSmith_ExecuteOnline.sql"),
+                new("SchemaSmith_ValidateTableOwnership.sql"),
                 new("SchemaSmith_MissingTableAndColumnQuench.sql"),
                 // #530: a table's FullTextIndexes, created and re-created by both index paths, not only the index-only one.
                 new("SchemaSmith_DropModifiedFullTextIndexes.sql"),
@@ -1229,7 +1256,8 @@ public static class ForgeKindler
     /// -> the next kindle re-runs automatically (alternating version/policy across runs re-kindles; cheap).
     /// </summary>
     public static string ComputeKindleStamp(Platform platform, IngestEncoding encoding = IngestEncoding.Json,
-        int serverMajorVersion = 0, string policy = "warn", string sqlMode = null, bool? xmlCompressionReadable = null)
+        int serverMajorVersion = 0, string policy = "warn", string sqlMode = null, bool? xmlCompressionReadable = null,
+        bool? checkConstraintsReadable = null)
     {
         var sb = new StringBuilder();
         if (!string.IsNullOrEmpty(sqlMode))
@@ -1238,7 +1266,7 @@ public static class ForgeKindler
         // resolved text — and therefore the stamp — already differs from Json; no extra discriminator needed.
         foreach (var s in GetKindlingScripts(platform, encoding))
             sb.Append(ResolveKindleScript(s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
-                serverMajorVersion, policy, xmlCompressionReadable));
+                serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable));
 
         using var sha = SHA256.Create();
         var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(sb.ToString()));
@@ -1317,6 +1345,8 @@ public static class ForgeKindler
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"MissingIndexesAndConstraintsQuench\"(boolean)",
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ForeignKeyQuench\"(boolean)",
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ConstraintStateQuench\"(boolean)",
+            // Took the column's sequence; it now takes the column's schema, table and name, and the old one is left unused.
+            "DROP FUNCTION IF EXISTS \"SchemaSmith\".\"IdentityOptionChanges\"(text, regclass)",
         ];
         foreach (var sql in drops)
         {

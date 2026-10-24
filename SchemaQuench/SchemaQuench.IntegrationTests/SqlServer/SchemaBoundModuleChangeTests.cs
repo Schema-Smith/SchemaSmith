@@ -51,7 +51,7 @@ public class SchemaBoundModuleChangeTests : ObjectScriptDeployFixture
     private static readonly string[] Drops =
     [
         "IF OBJECT_ID('dbo.sb_filter') IS NOT NULL DROP SECURITY POLICY [dbo].[sb_filter]", "DROP FUNCTION IF EXISTS [dbo].[fn_sb_rep]",
-        "DROP VIEW IF EXISTS [dbo].[vw_sb_hand]", "DROP VIEW IF EXISTS [dbo].[vw_sb_orders]", "DROP VIEW IF EXISTS [dbo].[iv_sb_orders]", "DROP TABLE IF EXISTS [dbo].[sb_orders]",
+        "DROP VIEW IF EXISTS [dbo].[vw_sb_hand]", "DROP VIEW IF EXISTS [dbo].[vw_sb_orders]", "DROP VIEW IF EXISTS [dbo].[vw_sb_const]", "DROP VIEW IF EXISTS [dbo].[iv_sb_orders]", "DROP TABLE IF EXISTS [dbo].[sb_orders]",
         "DROP FUNCTION IF EXISTS [dbo].[fn_sb_price]", "DELETE FROM SchemaSmith.ProductOwnership WHERE ProductName = 'SchemaBoundChangeProduct'"
     ];
 
@@ -154,6 +154,36 @@ public class SchemaBoundModuleChangeTests : ObjectScriptDeployFixture
             Assert.That(FunctionDefinition(), Does.Contain("* 3"), "the changed body must have been applied");
             Assert.That(Count("SELECT COUNT(*) FROM sys.database_permissions WHERE class = 1 AND major_id = OBJECT_ID('dbo.vw_sb_orders') AND grantee_principal_id = USER_ID('sb_perm_user') AND permission_name = 'SELECT'"), Is.EqualTo(1),
                 "the grant the DROP took off the schema-bound view has to come back with it");
+        });
+    }
+
+    // A view the run had already skipped as unchanged, then dropped to change the function it is bound to and put back,
+    // was still counted as unchanged and never as run.
+    [Test]
+    public void ADependentSkippedAsUnchanged_ThenDroppedAndPutBack_IsReportedAsRun()
+    {
+        void Package(int factor)
+        {
+            WritePackage("""
+                { "FolderPath": "Views", "QuenchSlot": "Objects", "ObjectType": "Views" },
+                { "FolderPath": "Functions", "QuenchSlot": "Objects", "ObjectType": "Functions" }
+                """, "Views", "Functions");
+            WriteFile("Functions", "fn_sb_price.sql", FunctionScript(factor));
+            WriteFile("Views", "vw_sb_const.sql",
+                "SET ANSI_NULLS ON\r\nSET QUOTED_IDENTIFIER ON\r\nGO\r\n\r\nCREATE OR ALTER VIEW [dbo].[vw_sb_const] WITH SCHEMABINDING AS SELECT dbo.fn_sb_price(2) AS price\r\nGO\r\n");
+        }
+        Package(factor: 2);
+        Deploy();
+
+        Package(factor: 3);
+        var second = Deploy();
+
+        var view = second.Audit.Where(r => r.ObjectName.Contains("vw_sb_const")).Select(r => r.Action).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(Count("SELECT price FROM dbo.vw_sb_const"), Is.EqualTo(6), "precondition: the view is back, over the new body");
+            Assert.That(view, Does.Not.Contain("unchanged"), "the run put the view back, so it was not unchanged; audit: " + second.DescribeAudit());
+            Assert.That(view, Does.Contain("ran"), "audit: " + second.DescribeAudit());
         });
     }
 

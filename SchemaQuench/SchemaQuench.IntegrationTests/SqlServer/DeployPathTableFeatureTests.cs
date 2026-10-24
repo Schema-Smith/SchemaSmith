@@ -903,7 +903,7 @@ public class DeployPathTableFeatureTests
                 config["SchemaPackagePath"] = savedPath;
                 config["Target:CompatEncoding"] = savedEncoding;
                 if (freshDatabase || contained) DropDatabase(cmd, db);
-                if (contained && containmentWas == 0) { cmd.CommandText = "EXEC sp_configure 'contained database authentication', 0; RECONFIGURE;"; cmd.ExecuteNonQuery(); }
+                // Left on: fixtures in other shard processes create contained databases too, and switching it off under them fails both.
                 conn.Close();
                 LogFactory.Clear();
                 FactoryContainer.Unregister<IEnvironment>();

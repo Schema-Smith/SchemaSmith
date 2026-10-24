@@ -13,7 +13,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// is dropped when the package stops declaring it, while an auto-created statistic on the same table is never touched.
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_StatisticsNameTests : BaseTableQuenchTests
 {
     private static string Json(string table, bool withStatistics) => $$"""

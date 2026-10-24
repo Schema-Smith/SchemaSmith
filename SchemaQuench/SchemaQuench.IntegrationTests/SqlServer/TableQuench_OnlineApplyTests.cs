@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using Microsoft.Data.SqlClient;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -21,7 +22,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// option-only index change (PAD_INDEX, IGNORE_DUP_KEY) is rebuilt in place whatever the setting.
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
 {
     private static string Json(string table, string indexes, string columns = "", string tableOnline = null) => $$"""
@@ -56,7 +57,7 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
         {
             try
             {
-                cmd.ExecuteNonQuery();
+                TransientRetry.Run(() => cmd.ExecuteNonQuery());
                 return;
             }
             catch (SqlException e) when (tries++ < 10 && e.Message.Contains("deadlock victim", StringComparison.OrdinalIgnoreCase))

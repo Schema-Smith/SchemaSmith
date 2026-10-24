@@ -26,7 +26,9 @@ BEGIN
     -- Step 1: Parse JSON into temp tables
     CALL SchemaSmith_ParseTableJson(p_DatabaseName, p_TableDefinitions);
 
-    -- Step 2: Create missing tables and add missing columns
+    -- Step 2: Create missing tables and add missing columns, after the ownership check so a refusal leaves another
+    -- product's table as it was
+    CALL SchemaSmith_ValidateTableOwnership(p_ProductName, p_DatabaseName);
     -- #508: before any table or column is created, so only what already exists is checked on a scratch copy.
     CALL SchemaSmith_ExpressionMapAdopt(p_DatabaseName, p_WhatIf);
     CALL SchemaSmith_MissingTableAndColumnQuench(p_DatabaseName, p_WhatIf);

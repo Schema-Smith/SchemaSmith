@@ -8,6 +8,7 @@ using System.Threading;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -53,7 +54,7 @@ public class RebuildTableTests : BaseTableQuenchTests
     {
         cmd.CommandTimeout = 120;
         cmd.CommandText = RebuildBatch(json, table, whatIf);
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static void Exec(IDbCommand cmd, string sql)
@@ -419,10 +420,12 @@ IF OBJECT_ID('dbo.RebuildFkParent', 'U') IS NOT NULL DROP TABLE dbo.RebuildFkPar
 
     // ---- refusal ------------------------------------------------------------
 
-    // A shadow copy is an ordinary table, so rebuilding a ledger table would leave its ledger behind. Its own database:
-    // a dropped ledger table stays behind in the catalog.
-    [Test]
-    public void Rebuild_OfALedgerTable_IsRefused()
+    // A shadow copy is an ordinary table, so rebuilding a ledger table would leave its ledger behind. An updatable ledger
+    // table keeps its history, but sys.tables does not report it as temporal, so the temporal refusal never met it. Its
+    // own database: a dropped ledger table stays behind in the catalog.
+    [TestCase("LEDGER = ON (APPEND_ONLY = ON)", "APPEND_ONLY_LEDGER_TABLE")]
+    [TestCase("SYSTEM_VERSIONING = ON, LEDGER = ON", "UPDATABLE_LEDGER_TABLE")]
+    public void Rebuild_OfALedgerTable_IsRefused(string tableOptions, string ledgerType)
     {
         using var conn = OpenMainDb();
         using var cmd = conn.CreateCommand();
@@ -433,8 +436,29 @@ IF OBJECT_ID('dbo.RebuildFkParent', 'U') IS NOT NULL DROP TABLE dbo.RebuildFkPar
         {
             conn.ChangeDatabase(db);
             Schema.Utility.ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
-            Exec(cmd, "CREATE TABLE dbo.Ledgered (Id INT NOT NULL PRIMARY KEY, Val NVARCHAR(50) NULL) WITH (LEDGER = ON (APPEND_ONLY = ON))");
-            Assert.That(Scalar(cmd, "SELECT SchemaSmith.fn_RebuildBlockedReason(N'dbo', N'Ledgered')")?.ToString(), Is.EqualTo("the table is a ledger table"));
+            Exec(cmd, $"CREATE TABLE dbo.Ledgered (Id INT NOT NULL PRIMARY KEY, Val NVARCHAR(50) NULL) WITH ({tableOptions})");
+            Exec(cmd, "INSERT INTO dbo.Ledgered (Id, Val) VALUES (1, 'one'), (2, 'two')");
+            var json = """
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[Ledgered]",
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                        {"Name": "[Val]", "DataType": "NVARCHAR(50)", "Nullable": true}
+                    ]
+                }
+                """;
+
+            var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => Rebuild(cmd, json, "Ledgered"));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain("the table is a ledger table").And.Contain("Ledgered"), "the refusal names why and which table");
+                Assert.That(Scalar(cmd, "SELECT ledger_type_desc FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.Ledgered')")?.ToString(),
+                    Is.EqualTo(ledgerType), "the table is still the ledger table it was");
+                Assert.That(Int(cmd, "SELECT COUNT(*) FROM dbo.Ledgered"), Is.EqualTo(2), "with its rows");
+                Assert.That(Int(cmd, "SELECT COUNT(*) FROM sys.tables WHERE name LIKE 'Ledgered[_]SchemaSmith%'"), Is.Zero, "and no shadow or old copy");
+            });
         }
         finally
         {

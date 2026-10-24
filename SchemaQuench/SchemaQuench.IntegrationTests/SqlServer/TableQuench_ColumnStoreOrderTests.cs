@@ -7,6 +7,7 @@ using Newtonsoft.Json.Linq;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -17,7 +18,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// (max) or non-persisted computed column, which the engine refuses below 2017, is skipped there with a downgrade.
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ColumnStoreOrderTests : BaseTableQuenchTests
 {
     private static string Json(string table, string order, string extraColumn = "") => $$"""
@@ -106,7 +107,7 @@ public class TableQuench_ColumnStoreOrderTests : BaseTableQuenchTests
 
             cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
             var json = new System.Text.StringBuilder();
-            using (var reader = cmd.ExecuteReader())
+            using (var reader = TransientRetry.Run(() => cmd.ExecuteReader()))
                 while (reader.Read()) json.Append(reader.GetString(0));
             var index = JObject.Parse(json.ToString())["Indexes"]?[0];
             Assert.That((string)index?["Order"], Is.EqualTo("[B],[A]"), json.ToString());
@@ -198,7 +199,7 @@ public class TableQuench_ColumnStoreOrderTests : BaseTableQuenchTests
 
             cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
             var json = new System.Text.StringBuilder();
-            using (var reader = cmd.ExecuteReader())
+            using (var reader = TransientRetry.Run(() => cmd.ExecuteReader()))
                 while (reader.Read()) json.Append(reader.GetString(0));
             var index = ((JArray)JObject.Parse(json.ToString())["Indexes"])?.First(i => (string)i["Name"] == $"[NCCI_{table}]");
             Assert.That((string)index?["Order"], Is.EqualTo("[B],[A]"), json.ToString());
@@ -240,7 +241,7 @@ public class TableQuench_ColumnStoreOrderTests : BaseTableQuenchTests
                 p.Value = ModelXmlSerializer.ToIngestXml(Json(table, "[B],[A]"), "Tables", "Table");
                 p.DbType = DbType.String;
                 cmd.Parameters.Add(p);
-                cmd.ExecuteNonQuery();
+                TransientRetry.Run(() => cmd.ExecuteNonQuery());
                 cmd.Parameters.Clear();
                 Assert.That(LiveOrder(cmd, table, major), Is.EqualTo("B,A"), "XML tier");
             }

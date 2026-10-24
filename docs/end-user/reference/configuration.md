@@ -341,7 +341,7 @@ When a token name appears in both `AllowTokens` and a scrub rule, `AllowTokens` 
 
 The three lists must be lists, even with one entry (`"ScrubTokens": [ "DeployKey" ]`), and `LogTokens` must be `true` or `false`. A block the tools cannot read -- a single value where a list belongs, a key that is not one of these four, or another `LogTokens` value -- is reported as a warning naming the key, and that part of the block has no effect.
 
-The entries of a list whose name is sensitive are masked as well: `"password": [ "..." ]` logs `***` for each entry.
+The entries of a list whose name is sensitive are masked as well: `"password": [ "..." ]` logs `***` for each entry. The `LogHygiene` block itself is the exception, although `ScrubTokens` and `LogTokens` contain `Token`: its lists and `LogTokens` print as written, so the log shows which names it was asked to scrub.
 
 ---
 
@@ -374,13 +374,13 @@ Both log files are overwritten at the start of each run. Previous runs are prese
 
 The console is a live mirror of the progress log, not a separate channel. Watching the console while a quench runs lets you follow startup, per-object progress, and completion in real time without tailing a file. Log4Net colorizes the console stream by level -- informational entries in green, warnings in yellow, errors in red -- so trouble catches your eye the moment it appears.
 
-When a script fails, you see a short error summary on the console and in the progress log (red, so it's hard to miss): the failing script path and the engine's error message, along with a `Resolved SQL written to:` pointer to the resolved-SQL artifact. That's enough to know what failed and where to look. The **full detail** -- the exception line numbers and the complete SQL batches SchemaSmith submitted -- lands in the error log only, so the console and progress stream don't drown in multi-KB failed-batch text during a rough deployment. When a run fails, the progress log tells you *what* broke; the error log tells you *exactly what SQL was sent* when it broke.
+When a script fails, you see a short error summary on the console and in the progress log (red, so it's hard to miss): the failing script path and the engine's error message, along with a pointer to the resolved SQL: `Resolved SQL written to:` with [`WriteDebugSql`](#writedebugsql) on, or a `Rerun with --WriteDebugSql` hint with it off. That's enough to know what failed and where to look. The **full detail** -- the exception line numbers and the complete SQL batches SchemaSmith submitted -- lands in the error log only, so the console and progress stream don't drown in multi-KB failed-batch text during a rough deployment. When a run fails, the progress log tells you *what* broke; the error log tells you *exactly what SQL was sent* when it broke.
 
 > **Tip:** CI agents that capture stdout get the progress stream for free. If your pipeline step only saves stdout, you still have a readable transcript of successes and error summaries; archive the error log separately to keep the failed-batch detail.
 
 ### Failure triage roll-up
 
-When a run finishes with one or more failures, SchemaQuench writes a third log alongside the progress and error logs — `SchemaQuench - Failures.log` — a consolidated, phase-grouped summary of *which* targets failed, so a single failure among many parallel targets isn't buried in one interleaved stream. Each failure is recorded with its scope, the engine error, the `Resolved SQL written to:` artifact path, and a captured tail of the lines leading up to it; a loud `*** FAILED` banner also marks each failure live on the console. A clean run writes nothing extra. The full behavior is described in [Error Codes & Reporting](error-codes-and-reporting.md#failure-triage-roll-up).
+When a run finishes with one or more failures, SchemaQuench writes a third log alongside the progress and error logs — `SchemaQuench - Failures.log` — a consolidated, phase-grouped summary of *which* targets failed, so a single failure among many parallel targets isn't buried in one interleaved stream. Each failure is recorded with its scope, the engine error, the resolved-SQL artifact path (or, with `WriteDebugSql` off, the hint to rerun with it), and a captured tail of the lines leading up to it; a loud `*** FAILED` banner also marks each failure live on the console. A clean run writes nothing extra. The full behavior is described in [Error Codes & Reporting](error-codes-and-reporting.md#failure-triage-roll-up).
 
 `FailureContextLines` (a SchemaQuench setting, default `25`) controls how many lines of lead-up context each failure captures. Set it to `0` to disable context capture entirely — the roll-up still lists the failed scopes and their errors. Set it in the settings file (`"FailureContextLines": 25`), as an environment variable (`SmithySettings_FailureContextLines=40`), or on the command line (`--FailureContextLines=40`).
 
@@ -432,24 +432,41 @@ C:\Tools\
     SchemaQuench.0003\               (third run backup)
 ```
 
-### Failure artifacts
+### Debug SQL files
 
-When any script fails during a SchemaQuench deployment -- a user or migration script, a generated table-quench procedure, a product-level `Before`/`After` script, a validation script (`BaselineValidationScript`, `VersionStampScript`), or a data-delivery merge -- SchemaQuench writes the exact token-expanded SQL the server rejected to a re-runnable `.sql` artifact file. Every surface reports it the same way in the progress log:
+When a step fails -- a user or migration script, a generated quench procedure, a product-level `Before`/`After` script, a validation script (`BaselineValidationScript`, `VersionStampScript`), or a data-delivery merge -- the log says which step and why. With `WriteDebugSql` on, SchemaQuench also writes the exact token-expanded SQL of each step to a re-runnable `.sql` file, and the failure line points at it:
 
 ```
 Unable to quench 'Before/01-seed-config.sql': Invalid column name 'Region'.
     Resolved SQL written to: C:\deploy\SchemaQuench - Failed 01-seed-config prod-db.TargetDB.sql
 ```
 
-Every artifact is a `.sql` file with a comment header (server/database/schema, the failing script name, the error message), every batch the engine received, separated by `GO`, with the last-attempted batch marked `-- >>> FAILING BATCH (#N) >>>`. The failing-batch marker is a best-effort hint -- the engine marks the last batch it attempted, which is usually the one that caused the error.
+With it off, nothing is written, and that line reads `Rerun with --WriteDebugSql to write the resolved SQL of this step to <ArtifactPath>.` The failure roll-up's `Debug SQL:` line says the same.
 
-**Artifacts are raw by default** -- all token values are already expanded to their real values, so you can open the file, connect to the target, and reproduce the failure immediately without any further substitution.
+A failed script's file has every batch the engine received, separated by `GO`, with the last-attempted batch marked `-- >>> FAILING BATCH (#N) >>>` (a best-effort hint: usually, not always, the batch that caused the error). The generated steps are written as they run, one file each:
 
-> **Note:** Artifacts land in the `ArtifactPath` directory (default: current working directory), not the log directory. This is intentional: raw artifacts may contain expanded sensitive values and should not be automatically swept into log archives or CI artifacts.
+```
+SchemaQuench - Quench Missing Tables And Columns prod-db.NorthwindClone.sql
+SchemaQuench - Quench Modified Tables prod-db.NorthwindClone.sql
+SchemaQuench - Quench Indexes prod-db.NorthwindClone.sql
+SchemaQuench - Parse Table Json prod-db.NorthwindClone.sql
+```
+
+**The files hold the real values.** Every token is expanded, so you can open the file, connect to the target and reproduce the failure. They are for local debugging only: do not attach one to a support ticket or a CI artifact. Every file opens with two comment lines, one naming the product, server, database, schema and the run that wrote it, and one saying it holds real values.
+
+**Only the current failure's files are kept.** When a run starts on a target, it deletes the files an earlier run wrote for the same product, server, database and schema. When it finishes cleanly, it deletes its own. It reads the owner from the file's first line, so it never deletes a file it did not write: your own files, an older version's, another product's or another database's are left alone, even in a shared folder.
+
+#### `WriteDebugSql`
+
+Boolean, default `false`. Also the `--WriteDebugSql` switch.
+
+```json
+{ "WriteDebugSql": true }
+```
 
 #### `ArtifactPath`
 
-Directory where SchemaQuench writes resolved-SQL failure artifacts and generated-SQL debug files.
+Directory where `WriteDebugSql` writes the files.
 
 ```json
 { "ArtifactPath": "C:\\deploy\\debug" }
@@ -457,55 +474,24 @@ Directory where SchemaQuench writes resolved-SQL failure artifacts and generated
 
 | Default | Behavior |
 |---|---|
-| *(not set)* | Artifacts land in the current working directory (where SchemaQuench was launched). |
-| A directory path | Artifacts land in the specified directory. Relative paths are resolved from the current working directory. |
+| *(not set)* | The current working directory (where SchemaQuench was launched). |
+| A directory path | The specified directory. Relative paths are resolved from the current working directory. |
 
-Setting `ArtifactPath` is useful when you want artifacts in a consistent location regardless of where SchemaQuench is invoked -- a CI agent's workspace directory, for example, or a dedicated debug folder outside the log path. The directory is created automatically if it does not exist.
+The directory is created if it does not exist. The files never go to the log directory, so archiving logs never picks them up; `--LogPath` controls the progress and error logs only.
 
 #### `ScrubArtifacts`
 
-Controls whether sensitive values are redacted in failure artifacts before writing.
-
-```json
-{ "ScrubArtifacts": true }
-```
-
-| Value | Behavior |
-|---|---|
-| `false` (default) | Artifacts contain real expanded values. Re-runnable immediately -- open in a query tool and reproduce the failure without restoring secrets. |
-| `true` | Sensitive token values (names matching `*Password*`, `*Secret*`, `*ApiKey*`, `*Token*`, etc., per `LogHygiene` rules) and inline connection-string passwords are redacted to `***`. Safe to attach to a CI artifact or support ticket. To reproduce, restore the real values first. |
-
-Leave `ScrubArtifacts` off for local debugging -- raw artifacts are immediately re-runnable. Turn it on for CI environments or when attaching an artifact to a support ticket. The `LogHygiene` block governs which token names are considered sensitive; see [Sensitive value masking](#sensitive-value-masking) for the full set of rules.
-
-For a step-by-step walkthrough of working a failed deployment from artifact to fix, see [Troubleshooting -- My deployment failed](../guide/12-troubleshooting.md#my-deployment-failed).
-
-### Debug SQL files
-
-When SchemaQuench runs one of its generated procedures against your target database, it dumps the exact SQL it sent to a companion `.sql` file -- honoring `ScrubArtifacts` the same as any other failure artifact. If the procedure throws, the progress log surfaces the file path via the same `Resolved SQL written to:` line described in [Failure artifacts](#failure-artifacts) above. Open it in your query tool of choice, re-run the SQL by hand, and reproduce or narrow the problem without guessing what SchemaSmith actually executed.
-
-Generated procedures cover missing tables and columns, modified tables, indexes, foreign keys, materialized views, indexed views, and the table-JSON parse step. Debug files follow the pattern `SchemaQuench - <operation> <server>.<database>.sql`:
-
-```
-SchemaQuench - Quench Missing Tables And Columns prod-db.NorthwindClone.sql
-SchemaQuench - Quench Modified Tables prod-db.NorthwindClone.sql
-SchemaQuench - Quench Indexes prod-db.NorthwindClone.sql
-SchemaQuench - Quench Foreign Keys prod-db.NorthwindClone.sql
-SchemaQuench - Quench Materialized Views prod-db.NorthwindClone.sql
-SchemaQuench - Quench Indexed Views prod-db.NorthwindClone.sql
-SchemaQuench - Parse Table Json prod-db.NorthwindClone.sql
-```
-
-Each run overwrites the debug files for the operations it actually performed. Operations that don't apply to your platform (for example, `Indexed Views` on PostgreSQL or `Materialized Views` on MySQL) produce no file. Debug files land in the `ArtifactPath` directory (default: current working directory); `--LogPath` controls the progress and error logs, not artifact or debug SQL.
+Deprecated and ignored: a run that sets it logs a warning. It masked sensitive values inside the SQL, which either missed a value or left SQL that still ran and wrote the placeholder (`SET Email = '***'`). The debug files are never masked; share the progress log, which is.
 
 ### Engine notices
 
 SchemaSmith surfaces the database engine's informational output -- notices, prints, and server-side status messages -- into the progress log so you can see what the engine is telling you. The wiring differs per platform because each driver exposes that stream differently:
 
 - **SQL Server** -- `PRINT` output and severity-10-or-lower errors arrive through the `InfoMessage` event. By default SchemaSmith promotes only severity-above-10 errors and `RAISERROR ... WITH STATE 100` notifications to the progress log; set `VerboseLogging: true` to include every `PRINT` and informational message.
-- **PostgreSQL** -- `RAISE NOTICE` and `RAISE WARNING` output arrives through the Npgsql `Notice` event and lands in the progress log. SchemaSmith filters out the `"... does not exist, skipping"` and `"... already exists, skipping"` notices that `DROP ... IF EXISTS` and `CREATE ... IF NOT EXISTS` produce during normal runs, so your log stays readable.
+- **PostgreSQL** -- `RAISE NOTICE` and `RAISE WARNING` output arrives through the Npgsql `Notice` event. SchemaSmith's own routines' notices always land in the progress log; a notice raised by your own script or function lands there only with `VerboseLogging: true`, as `PRINT` does on SQL Server. SchemaSmith filters out the `"... does not exist, skipping"` and `"... already exists, skipping"` notices that `DROP ... IF EXISTS` and `CREATE ... IF NOT EXISTS` produce during normal runs, so your log stays readable.
 - **MySQL and MariaDB** -- the MySQL connector doesn't fire info-message events for long-running stored procedures, so SchemaSmith uses a table-based status channel. A `SchemaSmith_StatusMessages` table in the target database (created automatically during kindling) holds per-session progress rows; the generated quench procedures `INSERT` into it as they work, and a background poller on a separate connection reads the new rows every 200ms and writes them to the progress log. `SessionId` is scoped to `CONNECTION_ID()` so concurrent runs don't cross-talk, and the monitor deletes its rows on shutdown. There's no `VerboseLogging` dial on MySQL or MariaDB -- what you see is whatever the procedures chose to publish.
 
-`VerboseLogging` is a SchemaQuench setting and applies only to SQL Server's `InfoMessage` stream. The PostgreSQL, MySQL, and MariaDB paths already behave the way `VerboseLogging: true` behaves on SQL Server -- SchemaSmith surfaces every engine-side notice (PostgreSQL) or procedure-emitted status message (MySQL and MariaDB) by default.
+`VerboseLogging` is a SchemaQuench setting. It governs informational output from your own scripts: `PRINT` and low-severity messages on SQL Server, `RAISE NOTICE` and `RAISE WARNING` on PostgreSQL. SchemaSmith's own progress messages always appear. MySQL and MariaDB scripts' informational output is not logged, so the setting has no effect there.
 
 ---
 

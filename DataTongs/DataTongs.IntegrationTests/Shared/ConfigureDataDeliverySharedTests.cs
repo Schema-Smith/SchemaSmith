@@ -423,14 +423,20 @@ public abstract class ConfigureDataDeliverySharedTests
     }
 
     // A tokenized MySQL/MariaDB script reads its content file with JSON_TABLE at deploy time, so with DeliveryEncoding
-    // Xml every generated script failed to deploy ("Invalid JSON text"). The script is refused by name and the run fails;
-    // the content file, which delivers fine through DataDelivery, is still written. With ConfigureDataDelivery the table
-    // gets no script at all, so the same run succeeds.
-    [TestCase(false, 2, TestName = "XmlWithTokenizedScripts_WritesNoScriptAndFails")]
-    [TestCase(true, 0, TestName = "XmlWithConfigureDataDelivery_StillSucceeds")]
-    public void XmlOnMySqlFamily(bool configureDataDelivery, int expectedExitCode)
+    // Xml every generated script failed to deploy ("Invalid JSON text"). The settings alone decide it, so the run is
+    // refused before anything is extracted -- no content file, no script. With ConfigureDataDelivery the table gets no
+    // script at all, so the same run succeeds and writes its content file.
+    [TestCase(false, TestName = "XmlWithTokenizedScripts_IsRefusedBeforeExtracting")]
+    [TestCase(true, TestName = "XmlWithConfigureDataDelivery_StillSucceeds")]
+    public void XmlOnMySqlFamily(bool configureDataDelivery)
     {
         EnsureDbConnection();
+        // Below MySQL 8.0 DataTongs writes no merge script for any encoding and warns instead (exit 1), so there is no
+        // Xml script to refuse.
+        bool belowScripts;
+        using (var version = _connection.CreateCommand())
+            belowScripts = Platform == Platform.MySQL && TargetVersionDetector.Detect(version, Platform, _testDb).ServerComparable is > 0 and < 800;
+        var refused = !configureDataDelivery && !belowScripts;
         var tableName = $"xmls_{Guid.NewGuid():N}".Substring(0, 20);
         using (var create = _connection.CreateCommand())
         {
@@ -462,20 +468,18 @@ public abstract class ConfigureDataDeliverySharedTests
             config["ContentPath"] = tableDataDir;
             config["ScriptPath"] = scriptDir;
 
-            _dataTongs.CastData();
+            if (refused)
+                Assert.That(() => _dataTongs.CastData(), Throws.TypeOf<RunFailedException>().With.Message.Contains("JSON_TABLE"));
+            else
+                _dataTongs.CastData();
         }
 
         try
         {
-            // Below MySQL 8.0 DataTongs writes no merge script for any encoding and warns instead, so there is no Xml
-            // script to refuse.
-            using (var version = _connection.CreateCommand())
-                if (!configureDataDelivery && Platform == Platform.MySQL
-                    && TargetVersionDetector.Detect(version, Platform, _testDb).ServerComparable is > 0 and < 800)
-                    expectedExitCode = 1;
-            Assert.That(_dataTongs.ExitCode, Is.EqualTo(expectedExitCode));
+            if (!refused) Assert.That(_dataTongs.ExitCode, Is.EqualTo(belowScripts && !configureDataDelivery ? 1 : 0));
             Assert.That(Directory.Exists(scriptDir) ? Directory.GetFiles(scriptDir) : [], Is.Empty, "no script written");
-            Assert.That(Directory.GetFiles(tableDataDir), Has.Length.EqualTo(1), "the content file is still written");
+            Assert.That(Directory.Exists(tableDataDir) ? Directory.GetFiles(tableDataDir) : [], Has.Length.EqualTo(refused ? 0 : 1),
+                refused ? "refused before anything was extracted" : "the content file is written");
         }
         finally
         {

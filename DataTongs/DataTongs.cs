@@ -302,6 +302,11 @@ public class DataTongs
             ? TargetVersionDetector.Detect(cmd, _platform).ServerComparable
             : 0;
 
+        // When every table gets a script the settings alone decide this, so it is refused before anything is extracted.
+        // With ConfigureDataDelivery only the tables delivery could not be configured for get one; those are checked below.
+        if (outputScripts && !configureDataDelivery && mySqlServerVersionNum is not (> 0 and < 800))
+            RefuseUndeliverableScripts(extractAsXml, _platform, tokenizeScripts);
+
         // A MySQL or MariaDB TIMESTAMP is rendered in the session's time zone. Extract at +00:00 and record it, so the
         // delivery reads the values back in the same zone wherever it runs.
         var extractionTimeZone = _platform.GetBasePlatform() == Platform.MySQL ? "+00:00" : null;
@@ -467,6 +472,8 @@ public class DataTongs
                     continue;
                 }
 
+                RefuseUndeliverableScripts(extractAsXml, _platform, tokenizeScripts);
+
                 // #390: wire the ScriptTokens entry the merge script's {{key}} placeholder needs to
                 // resolve, using the exact key already embedded in the filename (contentFileToken) —
                 // never re-derived. Requires both a written content file and a known template root;
@@ -493,7 +500,6 @@ public class DataTongs
                     }
                 }
 
-                RefuseUndeliverableScripts(extractAsXml, _platform, tokenizeScripts);
                 // A MySQL/MariaDB script names the table alone, so it writes into the database it is deployed to.
                 var destSchemaOverride = schemaTemplateMode ? "{{SchemaName}}" : _platform.GetBasePlatform() == Platform.MySQL ? "" : null;
                 var mergeSQL = MergeScriptHelper.BuildMergeScript(_platform, cmd, querySchema, tableName, tableData,
@@ -722,17 +728,19 @@ SELECT EXISTS (
         };
     }
 
+    // Joined with FOR XML PATH, which every compatibility level parses: STRING_AGG's WITHIN GROUP is parsed only from
+    // level 110, so a level-100 source failed every table (#573).
     private static string GetSelectColumnsSqlServer(IDbCommand cmd, string tableSchema, string tableName)
     {
         cmd.CommandText = $@"
-SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
+SELECT STUFF((SELECT ',' + CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '].STSrid AS [' + c.COLUMN_NAME + '.STSrid]'
                        WHEN c.DATA_TYPE = 'hierarchyid'
                        THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + ']'
                        -- A vector as its text, which SQL Server writes exactly; FOR JSON would write an array delivery cannot read.
                        WHEN c.DATA_TYPE = 'vector'
                        THEN 'CAST([' + c.COLUMN_NAME + '] AS NVARCHAR(MAX)) AS [' + c.COLUMN_NAME + ']'
-                       ELSE '[' + c.COLUMN_NAME + ']' END, ',') WITHIN GROUP (ORDER BY c.COLUMN_NAME)
+                       ELSE '[' + c.COLUMN_NAME + ']' END
   FROM INFORMATION_SCHEMA.COLUMNS c
   JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
@@ -740,6 +748,8 @@ SELECT STRING_AGG(CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
   WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
     {MergeScriptHelper.SqlServerGraphColumnFilter}AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
+  ORDER BY c.COLUMN_NAME
+  FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '')
 ";
         return cmd.ExecuteScalar()?.ToString();
     }

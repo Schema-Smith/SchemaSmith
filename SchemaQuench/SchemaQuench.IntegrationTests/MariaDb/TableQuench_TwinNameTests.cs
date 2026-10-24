@@ -9,7 +9,7 @@ namespace SchemaQuench.IntegrationTests.MariaDb;
 /// <summary>MariaDb binding of the twin-name tests.</summary>
 [Category("MariaDb")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_TwinNameTests : TableQuench_TwinNameSharedTests
 {
     protected override Platform Platform => Schema.Domain.Platform.MariaDb;

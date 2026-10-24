@@ -13,7 +13,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// TableQuench (not just our specific kindling SQL) are covered.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_PrimaryKeyExtensionTests : BaseTableQuenchTests
 {
     [Test]

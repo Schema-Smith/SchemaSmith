@@ -22,7 +22,7 @@ public sealed class ConstraintAttributeCheck : ISchemaCheck
 
     public IEnumerable<Finding> Run(ValidationContext ctx)
     {
-        var platform = ctx.Platform.GetBasePlatform();
+        var platform = ctx.Platform;
         if (ctx.Platform == Platform.MariaDb)
         {
             // MariaDB names a column-level check after its column and, from 10.11.19 / 11.4.13 / 13.0.2, refuses a

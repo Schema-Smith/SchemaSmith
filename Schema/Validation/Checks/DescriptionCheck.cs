@@ -27,8 +27,8 @@ public sealed class DescriptionCheck : ISchemaCheck
 
     public IEnumerable<Finding> Run(ValidationContext ctx)
     {
+        if (ctx.Platform is Platform.Unknown or Platform.PostgreSQL) yield break;
         var basePlatform = ctx.Platform.GetBasePlatform();
-        if (basePlatform == Platform.PostgreSQL) yield break;
         var alias = basePlatform == Platform.MySQL ? MySqlAlias : SqlServerAlias;
 
         foreach (var template in ctx.Templates)

@@ -50,10 +50,11 @@ public static class ConfigHelper
 
     /// <summary>
     /// A folder setting, trimmed, with a blank value meaning the current directory. Untrimmed, a value of spaces made
-    /// SchemaTongs write into a folder named " " (which Windows tools cannot open) and DataTongs throw on it.
+    /// SchemaTongs write into a folder named " " (which Windows tools cannot open) and DataTongs throw on it. Separators
+    /// are the platform's throughout: every path built from the setting adds that one, and a mix is what got printed.
     /// </summary>
     public static string PathSetting(IConfiguration config, string key) =>
-        config?[key]?.Trim() is { Length: > 0 } path ? path : ".";
+        config?[key]?.Trim() is { Length: > 0 } path ? path.Replace(Path.AltDirectorySeparatorChar, Path.DirectorySeparatorChar) : ".";
 
     // Keyed by the configuration it was built for, so a configuration a test registers directly never inherits one.
     private static readonly ConditionalWeakTable<IConfigurationRoot, string> MissingSettingsFiles = new();

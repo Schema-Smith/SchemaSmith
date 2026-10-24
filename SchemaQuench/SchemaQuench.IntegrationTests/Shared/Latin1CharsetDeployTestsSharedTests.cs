@@ -176,7 +176,7 @@ public abstract class Latin1CharsetDeployTestsSharedTests
                 cmd.ExecuteNonQuery();
 
                 cmd.CommandText = $"CALL SchemaSmith_TableQuench('Latin1Names', '{latin1Db}', '{json}', 0, 0, 0)";
-                Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(), "an unmanaged non-Latin table name must not abort the deploy");
+                Assert.DoesNotThrow(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()), "an unmanaged non-Latin table name must not abort the deploy");
                 Assert.That(TableExists(cmd, latin1Db, "AsciiTable"), Is.True, "the declared table must deploy");
             }
             finally
@@ -233,7 +233,7 @@ public abstract class Latin1CharsetDeployTestsSharedTests
                 {
                     cmd.CommandText = $"CALL SchemaSmith_TableQuench('Latin1Decl', '{latin1Db}', '{json.Replace("'", "''")}', 0, 0, 0)";
                     var current = deploy;
-                    Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(), $"deploy {current}");
+                    Assert.DoesNotThrow(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()), $"deploy {current}");
                     Assert.Multiple(() =>
                     {
                         Assert.That(CatalogList(cmd, $"SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '{latin1Db}' AND TABLE_TYPE = 'BASE TABLE' AND TABLE_NAME NOT LIKE 'SchemaSmith%'"),
@@ -312,7 +312,7 @@ public abstract class Latin1CharsetDeployTestsSharedTests
     {
         var statements = new List<string>();
         cmd.CommandText = $"CALL SchemaSmith_EventQuench('Latin1Event', '{db}', '{json.Replace("'", "''")}', 0, 0, 'Main')";
-        using (var reader = cmd.ExecuteReader())
+        using (var reader = TransientRetry.Run(() => cmd.ExecuteReader()))
             while (reader.Read())
                 if (!reader.IsDBNull(0)) statements.Add(reader.GetString(0));
         foreach (var statement in statements)

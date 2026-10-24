@@ -38,6 +38,8 @@ BEGIN TRY
   -- Sanitize the parsed working set for the detected target version BEFORE any emit/detection pass: below a
   -- feature's intro version the declared feature is refused ('fail') or neutralized in place ('warn'), so the
   -- quench procs stay gate-free. See SchemaSmith.DegradeUnsupportedFeatures.
+  -- Before anything is created or renamed, so a refusal leaves another product's table as it was.
+  EXEC SchemaSmith.ValidateTableOwnership @ProductName = @ProductName, @WhatIf = @WhatIf
   EXEC SchemaSmith.DegradeUnsupportedFeatures
   -- Template CDC defaults, and the capture-instance limit refused before any column is added (#427).
   EXEC SchemaSmith.CdcPreflight @CdcFilegroup = @CdcFilegroup, @CdcSupportsNetChanges = @CdcSupportsNetChanges

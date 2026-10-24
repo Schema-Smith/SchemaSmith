@@ -10,7 +10,7 @@ namespace SchemaQuench.IntegrationTests.MySQL;
 /// <summary>MySQL binding of the shared foreign-key referenced-database test (MY-027).</summary>
 [Category("MySQL")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ForeignKeySchemaTests : TableQuench_ForeignKeySchemaSharedTests
 {
     protected override Platform Platform => Platform.MySQL;

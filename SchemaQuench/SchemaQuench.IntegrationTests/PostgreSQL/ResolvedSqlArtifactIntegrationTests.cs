@@ -19,7 +19,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// <summary>
 /// Integration tests verifying the resolved-SQL artifact feature on PostgreSQL.
 /// Three scenarios: artifact written to ArtifactPath (path in log, raw SQL not in log),
-/// ScrubArtifacts=true masks sensitive token values, and the artifact is re-runnable.
+/// ScrubArtifacts is deprecated and ignored, and the artifact is re-runnable.
 /// </summary>
 [Category("PostgreSQL")]
 public class ResolvedSqlArtifactIntegrationTests
@@ -82,6 +82,7 @@ public class ResolvedSqlArtifactIntegrationTests
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
                 TestHelper.GetTestProductPath("PostgreSQL", ProductName);
             FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = "true";
             FactoryContainer.Resolve<IConfigurationRoot>()["ScrubArtifacts"] = null;
 
             try
@@ -116,7 +117,132 @@ public class ResolvedSqlArtifactIntegrationTests
                 FactoryContainer.Unregister<IEnvironment>();
                 var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
                 cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
                 cfg["ScrubArtifacts"] = null;
+                cfg["SchemaPackagePath"] = null;
+            }
+        }
+    }
+
+    // #576: a run's start removes the previous run's files for its own product and target, and nothing else.
+    [Test]
+    public void ARun_DeletesThePreviousRunsFilesForItsTarget_AndLeavesEveryOtherFile()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetupSharedMocks(null, null);
+            var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
+            cfg["SchemaPackagePath"] = TestHelper.GetTestProductPath("PostgreSQL", ProductName);
+            cfg["ArtifactPath"] = _artifactDir;
+            cfg["WriteDebugSql"] = "true";
+            var server = cfg["Target:Server"];
+            var db = _mainDb;
+            const string otherRun = "00000000000000000000000000000000";
+            var previous = Path.Join(_artifactDir, "SchemaQuench - Previous run.sql");
+            var otherDb = Path.Join(_artifactDir, "SchemaQuench - Other database.sql");
+            File.WriteAllText(previous, $"-- SchemaSmith debug SQL | Product: {ProductName} | Server: {server} | Database: {db} | Schema:  | Run: {otherRun}");
+            File.WriteAllText(otherDb, $"-- SchemaSmith debug SQL | Product: {ProductName} | Server: {server} | Database: not_{db} | Schema:  | Run: {otherRun}");
+            var otherProduct = Path.Join(_artifactDir, "SchemaQuench - Other product.sql");
+            File.WriteAllText(otherProduct, $"-- SchemaSmith debug SQL | Product: Not{ProductName} | Server: {server} | Database: {db} | Schema:  | Run: {otherRun}");
+            // The product's own scripts run against each engine's initial database; one from another server is not this run's.
+            var otherServer = new[] { "master", "postgres", "mysql", "information_schema", "" }
+                .Select((initDb, i) => (Path: Path.Join(_artifactDir, $"SchemaQuench - Other server {i}.sql"), Owner: initDb)).ToList();
+            foreach (var (path, initDb) in otherServer)
+                File.WriteAllText(path, $"-- SchemaSmith debug SQL | Product: {ProductName} | Server: not-{server} | Database: {initDb} | Schema:  | Run: {otherRun}");
+
+            try
+            {
+                RunSchemaQuench();
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(File.Exists(previous), Is.False, "the previous run's file for this target is deleted");
+                    Assert.That(File.Exists(otherDb), Is.True, "another database's file is not this run's to delete");
+                    Assert.That(File.Exists(otherProduct), Is.True, "another product's file is not this run's to delete");
+                    Assert.That(otherServer.Where(f => !File.Exists(f.Path)).Select(f => f.Owner), Is.Empty, "another server's product-script files stay");
+                });
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
+                cfg["SchemaPackagePath"] = null;
+            }
+        }
+    }
+
+    // #576: a clean run deletes its own files; another run's, and a file without the owner line, stay.
+    [Test]
+    public void ACleanRun_DeletesItsOwnFiles_AndLeavesEveryOtherFile()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetupSharedMocks(null, null);
+            var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
+            cfg["SchemaPackagePath"] = TestHelper.GetTestProductPath("PostgreSQL", "ValidProduct");
+            cfg["ArtifactPath"] = _artifactDir;
+            cfg["WriteDebugSql"] = "true";
+            var mine = Path.Join(_artifactDir, "SchemaQuench - Mine.sql");
+            var otherRun = Path.Join(_artifactDir, "SchemaQuench - Other run.sql");
+            var unowned = Path.Join(_artifactDir, "SchemaQuench - Hand written.sql");
+            File.WriteAllText(mine, Schema.Utility.ResolvedSqlArtifactWriter.OwnerLine("ValidProduct", "elsewhere", "elsewhere", ""));
+            File.WriteAllText(otherRun, "-- SchemaSmith debug SQL | Product: ValidProduct | Server: elsewhere | Database: elsewhere | Schema:  | Run: 00000000000000000000000000000000");
+            File.WriteAllText(unowned, "SELECT 1;");
+
+            try
+            {
+                RunSchemaQuench();
+
+                _environment.Received(1).Exit(0);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(Directory.GetFiles(_artifactDir, "*.sql").Select(Path.GetFileName).OrderBy(n => n),
+                        Is.EqualTo(new[] { "SchemaQuench - Hand written.sql", "SchemaQuench - Other run.sql" }),
+                        "every file this run wrote is gone, and nothing else is");
+                });
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
+                cfg["SchemaPackagePath"] = null;
+            }
+        }
+    }
+
+    // #576: without WriteDebugSql no .sql file is written -- every deploy used to write one per table pass into the working
+    // folder -- and the failure says how to get it.
+    [Test]
+    public void FailingScript_WithoutWriteDebugSql_WritesNoFile_AndSaysHowToGetIt()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var progressLogLines = new List<string>();
+            SetupSharedMocks(progressLogLines, null);
+
+            FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
+                TestHelper.GetTestProductPath("PostgreSQL", ProductName);
+            FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
+
+            try
+            {
+                RunSchemaQuench();
+
+                _environment.Received(1).Exit(2);
+                Assert.That(Directory.GetFiles(_artifactDir, "*.sql"), Is.Empty, "no file without WriteDebugSql");
+                Assert.That(string.Join("\n", progressLogLines), Does.Contain("Rerun with --WriteDebugSql"),
+                    "the failure says how to get the file");
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
+                cfg["ArtifactPath"] = null;
                 cfg["SchemaPackagePath"] = null;
             }
         }
@@ -144,6 +270,7 @@ public class ResolvedSqlArtifactIntegrationTests
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
                 TestHelper.GetTestProductPath("PostgreSQL", ProductName);
             FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = "true";
 
             try
             {
@@ -169,17 +296,17 @@ public class ResolvedSqlArtifactIntegrationTests
                 FactoryContainer.Unregister<IEnvironment>();
                 var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
                 cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
                 cfg["SchemaPackagePath"] = null;
             }
         }
     }
 
     /// <summary>
-    /// When ScrubArtifacts=true, the sensitive token value (AdminPassword) is masked in the
-    /// written artifact; a non-sensitive token's value (Region) still appears.
+    /// ScrubArtifacts=true is deprecated and ignored (#576): the file holds the real token values.
     /// </summary>
     [Test]
-    public void FailingScript_ScrubArtifacts_MasksSensitiveTokenInArtifact()
+    public void FailingScript_ScrubArtifacts_IsDeprecated_TheFileHoldsTheRealValues()
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -188,6 +315,7 @@ public class ResolvedSqlArtifactIntegrationTests
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
                 TestHelper.GetTestProductPath("PostgreSQL", ProductName);
             FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = "true";
             FactoryContainer.Resolve<IConfigurationRoot>()["ScrubArtifacts"] = "true";
 
             try
@@ -201,8 +329,9 @@ public class ResolvedSqlArtifactIntegrationTests
                     "Artifact file must be written even when ScrubArtifacts=true.");
 
                 var artifactContent = File.ReadAllText(artifactFiles[0]);
-                Assert.That(artifactContent, Does.Not.Contain(SensitiveValue),
-                    "Sensitive token value must be masked in the artifact when ScrubArtifacts=true.");
+                Assert.That(artifactContent, Does.Contain(SensitiveValue),
+                    "#576: a scrubbed file left runnable SQL that wrote the placeholder; the file holds the real values now.");
+                Assert.That(artifactContent, Does.Contain("real values"), "and its header says so");
                 Assert.That(artifactContent, Does.Contain("us-east"),
                     "Non-sensitive token value (Region) must remain visible in the artifact.");
             }
@@ -212,6 +341,7 @@ public class ResolvedSqlArtifactIntegrationTests
                 FactoryContainer.Unregister<IEnvironment>();
                 var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
                 cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
                 cfg["ScrubArtifacts"] = null;
                 cfg["SchemaPackagePath"] = null;
             }
@@ -233,6 +363,7 @@ public class ResolvedSqlArtifactIntegrationTests
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
                 TestHelper.GetTestProductPath("PostgreSQL", ProductName);
             FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = "true";
             FactoryContainer.Resolve<IConfigurationRoot>()["ScrubArtifacts"] = null;
 
             try
@@ -272,6 +403,7 @@ public class ResolvedSqlArtifactIntegrationTests
                 FactoryContainer.Unregister<IEnvironment>();
                 var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
                 cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
                 cfg["ScrubArtifacts"] = null;
                 cfg["SchemaPackagePath"] = null;
             }
@@ -300,6 +432,7 @@ public class ResolvedSqlArtifactIntegrationTests
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
                 TestHelper.GetTestProductPath("PostgreSQL", "DdlArtifactProbeProduct");
             FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = "true";
             FactoryContainer.Resolve<IConfigurationRoot>()["ScrubArtifacts"] = null;
 
             try
@@ -321,6 +454,17 @@ public class ResolvedSqlArtifactIntegrationTests
                 var artifactContent = string.Join("\n", artifactFiles.Select(File.ReadAllText));
                 Assert.That(artifactContent, Does.Contain("sup3rs3cr3t_ddl_probe"),
                     "Without ScrubArtifacts, the generated-DDL artifact must retain the raw resolved SQL.");
+
+                // A table step's file reads the parse step's temp tables, so on its own it failed on a missing one.
+                string[] tableSteps = ["Quench Missing Tables And Columns", "Quench Modified Tables", "Quench Table Features", "Quench Indexes", "Quench Foreign Keys"];
+                var stepFiles = artifactFiles.Where(f => tableSteps.Any(step => Path.GetFileName(f).StartsWith("SchemaQuench - " + step))).ToList();
+                Assert.That(stepFiles, Is.Not.Empty, "the failing index step writes its file; written: " + string.Join(", ", artifactFiles.Select(Path.GetFileName)));
+                foreach (var stepFile in stepFiles)
+                {
+                    var lines = File.ReadAllLines(stepFile);
+                    Assert.That(lines[0], Does.StartWith(ResolvedSqlArtifactWriter.OwnerLinePrefix), "the owner line stays first, for the cleanup that reads it");
+                    Assert.That(lines, Does.Contain(DatabaseQuench.ParsedTablesNote), $"{Path.GetFileName(stepFile)} says what has to run before it");
+                }
             }
             finally
             {
@@ -328,48 +472,7 @@ public class ResolvedSqlArtifactIntegrationTests
                 FactoryContainer.Unregister<IEnvironment>();
                 var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
                 cfg["ArtifactPath"] = null;
-                cfg["ScrubArtifacts"] = null;
-                cfg["SchemaPackagePath"] = null;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Same generated-DDL failure with ScrubArtifacts=true: the sensitive token value embedded in
-    /// the generated p_TableDefinitions JSON must be masked in the written artifact.
-    /// </summary>
-    [Test]
-    public void GeneratedDdlFailure_ScrubArtifacts_MasksSensitiveTokenInArtifact()
-    {
-        lock (FactoryContainer.SharedLockObject)
-        {
-            SetupSharedMocks(null, null);
-
-            FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
-                TestHelper.GetTestProductPath("PostgreSQL", "DdlArtifactProbeProduct");
-            FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
-            FactoryContainer.Resolve<IConfigurationRoot>()["ScrubArtifacts"] = "true";
-
-            try
-            {
-                RunSchemaQuench();
-
-                _environment.Received(1).Exit(2);
-
-                var artifactFiles = Directory.GetFiles(_artifactDir, "*.sql");
-                Assert.That(artifactFiles, Has.Length.GreaterThan(0),
-                    "Artifact file must be written even when ScrubArtifacts=true.");
-
-                var artifactContent = string.Join("\n", artifactFiles.Select(File.ReadAllText));
-                Assert.That(artifactContent, Does.Not.Contain("sup3rs3cr3t_ddl_probe"),
-                    "Sensitive token value must be masked in the generated-DDL artifact when ScrubArtifacts=true.");
-            }
-            finally
-            {
-                LogFactory.Clear();
-                FactoryContainer.Unregister<IEnvironment>();
-                var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
-                cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
                 cfg["ScrubArtifacts"] = null;
                 cfg["SchemaPackagePath"] = null;
             }
@@ -397,6 +500,7 @@ public class ResolvedSqlArtifactIntegrationTests
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
                 TestHelper.GetTestProductPath("PostgreSQL", "ProductScriptArtifactProbe");
             FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = "true";
             FactoryContainer.Resolve<IConfigurationRoot>()["ScrubArtifacts"] = null;
 
             try
@@ -431,51 +535,7 @@ public class ResolvedSqlArtifactIntegrationTests
                 FactoryContainer.Unregister<IEnvironment>();
                 var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
                 cfg["ArtifactPath"] = null;
-                cfg["ScrubArtifacts"] = null;
-                cfg["SchemaPackagePath"] = null;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Same product-level Before script failure with ScrubArtifacts=true: the sensitive product
-    /// token (AdminPassword) embedded in the script must be masked; the non-sensitive token
-    /// (Region) must remain visible.
-    /// </summary>
-    [Test]
-    public void ProductBeforeScriptFailure_ScrubArtifacts_MasksSensitiveTokenInArtifact()
-    {
-        lock (FactoryContainer.SharedLockObject)
-        {
-            SetupSharedMocks(null, null);
-
-            FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
-                TestHelper.GetTestProductPath("PostgreSQL", "ProductScriptArtifactProbe");
-            FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
-            FactoryContainer.Resolve<IConfigurationRoot>()["ScrubArtifacts"] = "true";
-
-            try
-            {
-                RunSchemaQuench();
-                _environment.Received(1).Exit(2);
-                _progressLog.Received(1).Error("FAILED: " + "Product script quench FAILED");
-
-                var artifactFiles = Directory.GetFiles(_artifactDir, "*.sql");
-                Assert.That(artifactFiles, Has.Length.GreaterThan(0),
-                    "Artifact file must be written even when ScrubArtifacts=true.");
-
-                var artifactContent = string.Join("\n", artifactFiles.Select(File.ReadAllText));
-                Assert.That(artifactContent, Does.Not.Contain("sup3rs3cr3t_product_probe"),
-                    "Sensitive product token value must be masked in the artifact when ScrubArtifacts=true.");
-                Assert.That(artifactContent, Does.Contain("us-east"),
-                    "Non-sensitive token value (Region) must remain visible in the artifact.");
-            }
-            finally
-            {
-                LogFactory.Clear();
-                FactoryContainer.Unregister<IEnvironment>();
-                var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
-                cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
                 cfg["ScrubArtifacts"] = null;
                 cfg["SchemaPackagePath"] = null;
             }
@@ -501,6 +561,7 @@ public class ResolvedSqlArtifactIntegrationTests
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
                 TestHelper.GetTestProductPath("PostgreSQL", "BaselineValidationArtifactProbe");
             FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = "true";
             FactoryContainer.Resolve<IConfigurationRoot>()["ScrubArtifacts"] = null;
 
             try
@@ -535,50 +596,7 @@ public class ResolvedSqlArtifactIntegrationTests
                 FactoryContainer.Unregister<IEnvironment>();
                 var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
                 cfg["ArtifactPath"] = null;
-                cfg["ScrubArtifacts"] = null;
-                cfg["SchemaPackagePath"] = null;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Same BaselineValidationScript failure with ScrubArtifacts=true: the sensitive token value
-    /// embedded in the script must be masked; the non-sensitive token (Region) must remain visible.
-    /// </summary>
-    [Test]
-    public void BaselineValidationScriptFailure_ScrubArtifacts_MasksSensitiveTokenInArtifact()
-    {
-        lock (FactoryContainer.SharedLockObject)
-        {
-            SetupSharedMocks(null, null);
-
-            FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
-                TestHelper.GetTestProductPath("PostgreSQL", "BaselineValidationArtifactProbe");
-            FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
-            FactoryContainer.Resolve<IConfigurationRoot>()["ScrubArtifacts"] = "true";
-
-            try
-            {
-                RunSchemaQuench();
-
-                _environment.Received(1).Exit(2);
-
-                var artifactFiles = Directory.GetFiles(_artifactDir, "*.sql");
-                Assert.That(artifactFiles, Has.Length.GreaterThan(0),
-                    "Artifact file must be written even when ScrubArtifacts=true.");
-
-                var artifactContent = string.Join("\n", artifactFiles.Select(File.ReadAllText));
-                Assert.That(artifactContent, Does.Not.Contain("sup3rs3cr3t_baseline_probe"),
-                    "Sensitive token value must be masked in the BaselineValidationScript artifact when ScrubArtifacts=true.");
-                Assert.That(artifactContent, Does.Contain("us-east"),
-                    "Non-sensitive token value (Region) must remain visible in the artifact.");
-            }
-            finally
-            {
-                LogFactory.Clear();
-                FactoryContainer.Unregister<IEnvironment>();
-                var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
-                cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
                 cfg["ScrubArtifacts"] = null;
                 cfg["SchemaPackagePath"] = null;
             }
@@ -601,6 +619,7 @@ public class ResolvedSqlArtifactIntegrationTests
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
                 TestHelper.GetTestProductPath("PostgreSQL", "VersionStampArtifactProbe");
             FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = "true";
             FactoryContainer.Resolve<IConfigurationRoot>()["ScrubArtifacts"] = null;
 
             try
@@ -635,50 +654,7 @@ public class ResolvedSqlArtifactIntegrationTests
                 FactoryContainer.Unregister<IEnvironment>();
                 var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
                 cfg["ArtifactPath"] = null;
-                cfg["ScrubArtifacts"] = null;
-                cfg["SchemaPackagePath"] = null;
-            }
-        }
-    }
-
-    /// <summary>
-    /// Same VersionStampScript failure with ScrubArtifacts=true: the sensitive token value
-    /// embedded in the script must be masked; the non-sensitive token (Region) must remain visible.
-    /// </summary>
-    [Test]
-    public void VersionStampScriptFailure_ScrubArtifacts_MasksSensitiveTokenInArtifact()
-    {
-        lock (FactoryContainer.SharedLockObject)
-        {
-            SetupSharedMocks(null, null);
-
-            FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
-                TestHelper.GetTestProductPath("PostgreSQL", "VersionStampArtifactProbe");
-            FactoryContainer.Resolve<IConfigurationRoot>()["ArtifactPath"] = _artifactDir;
-            FactoryContainer.Resolve<IConfigurationRoot>()["ScrubArtifacts"] = "true";
-
-            try
-            {
-                RunSchemaQuench();
-
-                _environment.Received(1).Exit(2);
-
-                var artifactFiles = Directory.GetFiles(_artifactDir, "*.sql");
-                Assert.That(artifactFiles, Has.Length.GreaterThan(0),
-                    "Artifact file must be written even when ScrubArtifacts=true.");
-
-                var artifactContent = string.Join("\n", artifactFiles.Select(File.ReadAllText));
-                Assert.That(artifactContent, Does.Not.Contain("sup3rs3cr3t_stamp_probe"),
-                    "Sensitive token value must be masked in the VersionStampScript artifact when ScrubArtifacts=true.");
-                Assert.That(artifactContent, Does.Contain("us-east"),
-                    "Non-sensitive token value (Region) must remain visible in the artifact.");
-            }
-            finally
-            {
-                LogFactory.Clear();
-                FactoryContainer.Unregister<IEnvironment>();
-                var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
-                cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
                 cfg["ScrubArtifacts"] = null;
                 cfg["SchemaPackagePath"] = null;
             }

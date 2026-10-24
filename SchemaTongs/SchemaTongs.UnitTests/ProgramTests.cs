@@ -258,6 +258,39 @@ public class ProgramTests
         }
     }
 
+    // Its warnings go to the console, not the log, so --ExitNonZeroOnWarning sees them only through this count.
+    [Test]
+    public void WriteSchemasOnly_ReturnsTheWarningsItPrinted()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var tempDir = Path.Join(Path.GetTempPath(), $"SchemaTongs_WriteSchemasOnly_{Guid.NewGuid():N}");
+            Directory.CreateDirectory(tempDir);
+            try
+            {
+                File.WriteAllText(Path.Join(tempDir, "Product.json"),
+                    """{"Name":"TestProduct","Platform":"SqlServer","ValidationScript":"SELECT 1","TemplateOrder":[]}""");
+                FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder()
+                    .AddInMemoryCollection(new Dictionary<string, string> { ["Product:Path"] = tempDir }).Build());
+
+                var clean = Program.WriteSchemasOnly();
+                File.WriteAllText(Path.Join(tempDir, ".json-schemas", "tables.sqlserver.schema"), "{ not json");
+                var corrupt = Program.WriteSchemasOnly();
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(clean, Is.Zero, "a clean regeneration warns about nothing");
+                    Assert.That(corrupt, Is.EqualTo(1), "the schema that could not be parsed is the one warning");
+                });
+            }
+            finally
+            {
+                Directory.Delete(tempDir, true);
+                FactoryContainer.Clear();
+            }
+        }
+    }
+
     [Test]
     public void WriteSchemasOnly_PostgreSQL_GeneratesMaterializedViewSchema()
     {

@@ -1,7 +1,9 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -195,6 +197,42 @@ CREATE TABLE [dbo].[{tableName}] (
     }
 
     #endregion
+
+    // A NULL spatial value has no SRID, and STGeomFromText refuses a NULL one even for NULL text, so a delivered row with
+    // a NULL geometry or geography failed the delivery -- as did a value from a package written before the SRID was.
+    [TestCase("Json")]
+    [TestCase("Xml")]
+    public void BuildMergeScript_ANullSpatialValue_AndOneWithoutItsSrid_Deliver(string encoding)
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"_test_spnull_{Guid.NewGuid():N}"[..40];
+        try
+        {
+            command.CommandText = $"CREATE TABLE [dbo].[{tableName}] ([Id] INT PRIMARY KEY, [Shape] GEOMETRY NULL, [Location] GEOGRAPHY NULL)";
+            command.ExecuteNonQuery();
+
+            var json = "[{\"Id\":1,\"Shape\":null,\"Location\":null},"
+                       + "{\"Id\":2,\"Shape\":\"POINT (1 2)\",\"Location\":\"POINT (-122.34 47.65)\"},"
+                       + "{\"Id\":3,\"Shape\":\"POINT (3 4)\",\"Shape.STSrid\":32633,\"Location\":\"POINT (1 1)\",\"Location.STSrid\":4269}]";
+            var tableData = encoding == "Xml" ? MergeScriptHelper.JsonPayloadToXml(json) : json;
+            command.CommandText = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, "dbo", tableName, tableData, "[Id]",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null, contentEncoding: encoding);
+            command.ExecuteNonQuery();
+
+            command.CommandText = $"SELECT [Id], [Shape].STAsText(), [Shape].STSrid, [Location].STSrid FROM [dbo].[{tableName}] ORDER BY [Id]";
+            var rows = new List<string>();
+            using (var reader = command.ExecuteReader())
+                while (reader.Read())
+                    rows.Add(string.Join("|", Enumerable.Range(0, 4).Select(k => reader.IsDBNull(k) ? "null" : reader.GetValue(k).ToString())));
+            Assert.That(rows, Is.EqualTo(new[] { "1|null|null|null", "2|POINT (1 2)|0|4326", "3|POINT (3 4)|32633|4269" }),
+                "a NULL arrives NULL; a value without its SRID takes the type's default (0, 4326); one with it keeps it");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [dbo].[{tableName}]";
+            command.ExecuteNonQuery();
+        }
+    }
 
     #region HIERARCHYID Tests
 
@@ -611,4 +649,56 @@ CREATE TABLE [dbo].[{tableName}] (
     }
 
     #endregion
+
+    // #567: an object or array value read through OPENJSON into a plain column was NULL, at exit 0, and below level 130 the
+    // XML path wrote it indented. Both now deliver the value's compact JSON text; a string still arrives as the string.
+    [TestCase("Json")]
+    [TestCase("Xml")]
+    public void BuildMergeScript_AnObjectOrArrayValue_ArrivesAsCompactJsonText(string encoding)
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"_test_jsonval_{Guid.NewGuid():N}"[..40];
+        try
+        {
+            command.CommandText = $"CREATE TABLE [dbo].[{tableName}] ([Id] INT PRIMARY KEY, [Doc] NVARCHAR(MAX) NULL, [Note] VARCHAR(200) NULL)";
+            command.ExecuteNonQuery();
+
+            // Laid out the way a hand-written content file is, with whitespace between tokens and inside a string.
+            var payload = "[\n  { \"Id\": 1, \"Doc\": { \"a\": 1, \"b\": [ 1, 2.50 ] }, \"Note\": [ 1, 2 ] },\n"
+                          + "  { \"Id\": 2, \"Doc\": \"plain  text\", \"Note\": \"x\" },\n"
+                          + "  { \"Id\": 3, \"Doc\": null, \"Note\": null }\n]";
+            var tableData = encoding == "Xml" ? MergeScriptHelper.JsonPayloadToXml(payload) : payload;
+
+            // Twice: the second run goes through the update comparison with the rows already in place.
+            for (var run = 0; run < 2; run++)
+            {
+                command.CommandText = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, "dbo", tableName, tableData, "[Id]",
+                    mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null,
+                    contentEncoding: encoding);
+                command.ExecuteNonQuery();
+            }
+
+            string Read(int id, string column)
+            {
+                command.CommandText = $"SELECT [{column}] FROM [dbo].[{tableName}] WHERE [Id] = {id}";
+                var value = command.ExecuteScalar();
+                return value is DBNull or null ? null : value.ToString();
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Read(1, "Doc"), Is.EqualTo("{\"a\":1,\"b\":[1,2.50]}"), "an object, compact, its number as written");
+                Assert.That(Read(1, "Note"), Is.EqualTo("[1,2]"), "an array into a non-MAX column");
+                Assert.That(Read(2, "Doc"), Is.EqualTo("plain  text"), "a string arrives as the string, spaces kept");
+                Assert.That(Read(2, "Note"), Is.EqualTo("x"));
+                Assert.That(Read(3, "Doc"), Is.Null);
+                Assert.That(Read(3, "Note"), Is.Null);
+            });
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [dbo].[{tableName}]";
+            command.ExecuteNonQuery();
+        }
+    }
 }

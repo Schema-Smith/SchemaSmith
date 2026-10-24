@@ -2,7 +2,7 @@
 
 *Terraform for SQL Server, Postgres, MySQL, and MariaDB databases*
 
-> **SchemaSmith v2.7.3 released.** A dependency fix: the tools now carry `System.Security.Cryptography.Pkcs` 9.0.21, clearing two advisories on the 9.0.18 build that Microsoft.Data.SqlClient pulled in, and building from source passes NuGet's audit again. [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.3) · [CHANGELOG](https://github.com/Schema-Smith/SchemaSmith/blob/main/CHANGELOG.md)
+> **SchemaSmith v2.8.0 released.** Index and column changes without blocking the table (`OnlineApply`), a `Setup` script slot, `Description` on every engine, constraint enforcement and validation state, temporal keys, SQL Server spatial, selective XML and JSON indexes, MariaDB extraction, and patch-level MySQL and MariaDB floors (a breaking change — see the notes). [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) · [CHANGELOG](https://github.com/Schema-Smith/SchemaSmith/blob/main/CHANGELOG.md)
 
 ![Build](https://github.com/Schema-Smith/SchemaSmith/actions/workflows/continuous-integration.yml/badge.svg)
 [![Latest Release](https://img.shields.io/github/v/release/Schema-Smith/SchemaSmith)](https://github.com/Schema-Smith/SchemaSmith/releases/latest)
@@ -46,7 +46,7 @@ These are the minimum engine versions SchemaSmith supports. The floor is enforce
 | SQL Server | 2008 (major version 10) |
 | PostgreSQL | 12 |
 | MySQL | 5.7.22 / 8.0.23 |
-| MariaDB | 10.2.7 |
+| MariaDB | 10.2.13 |
 
 The floor is enforced from the detected server version — below it, the run aborts before any change. SchemaSmith reaches these floors by generating version-correct SQL for each target rather than demanding a uniform version: newer-version features are taken by an equivalent path (or degraded through a policy with a downgrade manifest) instead of refused. For SQL Server the target database's `compatibility_level` is also checked (100+). Full detail — the compatibility-level floor, the per-version feature adaptations, and how to raise the floor per product — is in the [Engine Version Compatibility](docs/end-user/reference/schemaquench.md#engine-version-compatibility) reference.
 

@@ -308,4 +308,15 @@ public class ConfigHelperTests
 
         Assert.That(ConfigHelper.PathSetting(config, "Product:Path"), Is.EqualTo(expected));
     }
+
+    // SchemaTongs printed "./Extracted\Templates\Main\Tables\dbo.Album.json" on Windows: the setting kept its forward
+    // slash and every path built from it added the platform's own.
+    [Test]
+    public void PathSetting_UsesThePlatformsSeparatorThroughout()
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection([new KeyValuePair<string, string>("Product:Path", "./Extracted/Main")]).Build();
+
+        Assert.That(ConfigHelper.PathSetting(config, "Product:Path"),
+            Is.EqualTo(string.Join(Path.DirectorySeparatorChar, ".", "Extracted", "Main")));
+    }
 }

@@ -10,7 +10,7 @@ namespace SchemaQuench.IntegrationTests.MySQL;
 /// <summary>MySQL binding of the shared generated-column kind test (MY-022).</summary>
 [Category("MySQL")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_GeneratedColumnKindTests : TableQuench_GeneratedColumnKindSharedTests
 {
     protected override Platform Platform => Platform.MySQL;

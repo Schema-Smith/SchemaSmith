@@ -18,4 +18,8 @@ namespace Schema.Domain;
 /// reports only the unparseable ones as SS-LOAD-001, because JsonSchemaCheck's independent pass already
 /// describes a parseable-but-wrong file more precisely as SS-JSON-001.
 /// </param>
-public sealed record ComponentLoadError(string FilePath, string Message, bool IsValidJson);
+/// <param name="TableName">
+/// The Name a table file declares, when it parsed far enough to read one: the table is declared, so a foreign key into
+/// it is not dangling, only unloaded.
+/// </param>
+public sealed record ComponentLoadError(string FilePath, string Message, bool IsValidJson, string TableName = null);

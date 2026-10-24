@@ -4,6 +4,7 @@ using System;
 using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -16,7 +17,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 // the policy tests drive that proc; the read-guard smoke drives the normal TableQuench flow, whose
 // ModifiedTableQuench builds the existing-index snapshot that reads pg_index.indnullsnotdistinct.
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class UnsupportedFeaturePolicyTests : BaseTableQuenchTests
 {
     private const string Schema = "UnsupportedFeaturePolicyTests";
@@ -723,7 +724,7 @@ CREATE TABLE ""{Schema}"".""{tableName}"" (""Id"" INT NOT NULL, ""Code"" INT NUL
 }]
 """;
         cmd.CommandText = $@"CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_DropUnknownIndexes := false);";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private bool IndexExists(IDbCommand cmd, string tableName, string indexName)

@@ -387,18 +387,18 @@ CREATE TABLE IF NOT EXISTS `{TestSchema}`.`ModifyColumnCollation` (`Column1` VAR
 
         // Use direct procedure calls for alter column tests
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{json.Replace("'", "''")}')";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingTableAndColumnQuench('{TestSchema}', 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Trailing 0, 1 are DropUnknownIndexes and DropIndexesRemovedFromProduct: index removal now
         // happens here, and the 1 carries over from the MissingIndexesAndConstraintsQuench call below.
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{TestSchema}', 0, 0, 1, 1, 1, 1, 0, 0, 1)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingIndexesAndConstraintsQuench('{_productName}', '{TestSchema}', 0, 1)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         conn.Close();
     }
@@ -476,14 +476,14 @@ CREATE TABLE IF NOT EXISTS `{TestSchema}`.`ModifyColumnCollation` (`Column1` VAR
     private void Deploy(System.Data.IDbCommand cmd, string json)
     {
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{json.Replace("'", "''")}')";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingTableAndColumnQuench('{TestSchema}', 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         // Trailing 0, 0 are DropUnknownIndexes and DropIndexesRemovedFromProduct. Index removal lives
         // in this procedure now, but nothing here recreates an index, so both stay off — and the
         // deployed definition declares no indexes at all, so there is nothing to reconcile.
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{TestSchema}', 0, 0, 1, 1, 1, 1, 0, 0, 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
 }

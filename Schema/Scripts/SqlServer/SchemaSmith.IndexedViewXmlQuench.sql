@@ -508,6 +508,43 @@ BEGIN
             END;
         END;
 
+        -- Each declared index's description, by the same rules as the JSON tier. An empty <Description/> has no text, so
+        -- its presence is what says "remove". An index the view does not have yet (WhatIf) has none.
+        DECLARE @ivIndexName NVARCHAR(500), @ivIndexDescription NVARCHAR(MAX), @ivIndexId INT;
+        DECLARE index_description_cursor CURSOR LOCAL FAST_FORWARD FOR
+            SELECT [SchemaSmith].[fn_StripBracketWrapping](idx.value('(Name/text())[1]', 'NVARCHAR(500)')),
+                   ISNULL(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '')
+              FROM @indexXml.nodes('Indexes') AS Y(idx)
+             WHERE idx.exist('Description') = 1;
+        OPEN index_description_cursor;
+        FETCH NEXT FROM index_description_cursor INTO @ivIndexName, @ivIndexDescription;
+        WHILE @@FETCH_STATUS = 0
+        BEGIN
+            SET @ivIndexId = (SELECT index_id FROM sys.indexes WHERE [object_id] = OBJECT_ID(@ivQualified) AND [name] = @ivIndexName);
+            SET @existingDescription = NULL;
+            SET @descriptionFound = 0;
+            SELECT @existingDescription = CONVERT(NVARCHAR(MAX), ep.[value]), @descriptionFound = 1
+              FROM sys.extended_properties ep
+             WHERE ep.class = 7 AND ep.[name] = 'MS_Description' AND ep.major_id = OBJECT_ID(@ivQualified) AND ep.minor_id = @ivIndexId;
+            IF (@ivIndexDescription = '' AND @descriptionFound = 1)
+               OR (@ivIndexDescription <> '' AND (@descriptionFound = 0 OR @existingDescription <> @ivIndexDescription COLLATE Latin1_General_BIN2))
+            BEGIN
+                SET @sql = CASE WHEN @ivIndexDescription = '' THEN 'EXEC sp_dropextendedproperty @name = N''MS_Description'', '
+                                WHEN @descriptionFound = 1 THEN 'EXEC sp_updateextendedproperty @name = N''MS_Description'', @value = N''' + REPLACE(@ivIndexDescription, '''', '''''') + ''', '
+                                ELSE 'EXEC sp_addextendedproperty @name = N''MS_Description'', @value = N''' + REPLACE(@ivIndexDescription, '''', '''''') + ''', ' END +
+                           '@level0type = N''SCHEMA'', @level0name = N''' + REPLACE(@ivSchema, '''', '''''') + ''', @level1type = N''VIEW'', @level1name = N''' + REPLACE(@ivName, '''', '''''') +
+                           ''', @level2type = N''INDEX'', @level2name = N''' + REPLACE(@ivIndexName, '''', '''''') + '''';
+                SET @msg = N'  ' + CASE WHEN @ivIndexDescription = '' THEN N'Removing' ELSE N'Setting' END + N' the description of index ' + @ivSchema + N'.' + @ivName + N'.' + @ivIndexName;
+                EXEC [SchemaSmith].[PrintWithNoWait] @msg;
+                IF @WhatIf = 0 EXEC sp_executesql @sql;
+                INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+                  VALUES (@@SPID, 'index', @ivSchema + '.' + @ivName + '.' + @ivIndexName, CASE WHEN @WhatIf = 1 THEN 'wouldModify' ELSE 'modified' END);
+            END;
+            FETCH NEXT FROM index_description_cursor INTO @ivIndexName, @ivIndexDescription;
+        END;
+        CLOSE index_description_cursor;
+        DEALLOCATE index_description_cursor;
+
         FETCH NEXT FROM view_cursor INTO @ivSchema, @ivName, @defn, @indexXml, @variantName, @description;
     END;
     CLOSE view_cursor;

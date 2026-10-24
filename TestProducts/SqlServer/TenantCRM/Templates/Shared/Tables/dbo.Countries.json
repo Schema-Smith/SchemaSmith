@@ -1,0 +1,28 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[dbo]",
+  "Name": "[Countries]",
+  "Columns": [
+    {
+      "Name": "[Code]",
+      "DataType": "CHAR(2)"
+    },
+    {
+      "Name": "[CountryName]",
+      "DataType": "NVARCHAR(64)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_Countries]",
+      "PrimaryKey": true,
+      "Clustered": true,
+      "IndexColumns": "[Code]"
+    }
+  ],
+  "DataDelivery": {
+    "ContentFile": "data/dbo.Countries.tabledata",
+    "MergeType": "Insert/Update",
+    "MatchColumns": "[Code]"
+  }
+}

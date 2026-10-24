@@ -17,7 +17,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// asserted on identity: a constraint's and an index's oid, a column's attnum.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ExpressionMapAdoptTests : BaseTableQuenchTests
 {
     private static string Create(string t, string check = "starts_with(tag, 'a')") => $"""

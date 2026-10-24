@@ -20,7 +20,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 // modified, ModifiedTableQuench raises a "Modified columns found in <schema>.<table>(...)"
 // NOTICE (captured here via NpgsqlConnection.Notice). A converged table must emit none.
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_NumericTypeIdempotencyTests : BaseTableQuenchTests
 {
     // declared form differs from canonical "numeric(10, 2)" only by whitespace / synonym.

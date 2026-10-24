@@ -16,7 +16,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// (Index/other component gates embed through the identical fn_StripLeadingSelect wrap.)
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ShouldApplySelectFormTests : BaseTableQuenchTests
 {
     [Test]

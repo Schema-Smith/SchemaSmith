@@ -16,7 +16,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 // (they fixup ownership inside their WhatIf-aware quench procs). Each test owns a unique product
 // name so DropTablesRemovedFromProduct is scoped to its own tables under parallel execution.
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_WhatIfOwnershipTests : BaseTableQuenchTests
 {
     [Test]

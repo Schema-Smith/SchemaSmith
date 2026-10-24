@@ -215,6 +215,8 @@ Boolean. Default `false`. Controls what happens when an entry in `Databases` or 
 
 When `true`, SchemaQuench issues idempotent per-engine DDL (`CREATE SCHEMA IF NOT EXISTS` on PostgreSQL, the `sys.schemas`-guarded `EXEC('CREATE SCHEMA …')` pattern on SQL Server, `CREATE DATABASE IF NOT EXISTS` on MySQL) before deploying into the new target. Database provisioning runs against the engine's admin database (`master` / `postgres` / `information_schema`) by re-targeting the connection -- the credential the user supplied to SchemaQuench must carry `CREATE DATABASE` privilege there. When `false` and a target is missing, the engine emits an info log naming the skipped target and continues with the rest of the override list; no work units run for the missing target, no error.
 
+Under WhatIf nothing is created: a missing database is reported as one it would create, and its units as deploying every object the template declares into the new, empty database. Nothing connects to it, and the run succeeds as the real one would. A schema template that discovers its schemas there reports that they are discovered once the database exists.
+
 > **Warning:** Provisioning requires elevated privileges. `CreateIfMissing: true` on the database axis needs `CREATE DATABASE` on the engine's admin database; on the schema axis it needs `CREATE SCHEMA` on the target database. A permission denial surfaces an actionable diagnostic naming the missing privilege, but the deployment fails fast at that target. If your deployment account is intentionally low-privilege, leave `CreateIfMissing: false` and provision externally; SchemaQuench will pick the targets up as soon as they exist.
 
 ### Validation
@@ -308,26 +310,27 @@ For each work unit dispatched by a template -- one identified database for regul
 
 1. **Kindle the Forge** -- Deploys SchemaSmith helper procedures, functions, and the migration tracking table for the active platform. Skipped if `KindleTheForge` is `false`.
 2. **Validate baseline** -- Executes `Template.BaselineValidationScript` if configured. Aborts if falsy.
-3. **Object scripts (first pass)** -- Executes `Objects`-slot scripts that need no query-token values, using the dependency retry loop. If `RunScriptsTwice` is enabled, runs a complete second pass to verify idempotency.
-4. **Domain types, enum types, sequences** (PostgreSQL) -- Deploys the template's declared domain types, enum types, and sequences, before the tables whose columns can use them.
-5. **MissingTableAndColumnQuench** -- Parses `Tables/*.json` into session staging tables for the later steps, then creates missing tables and adds missing columns.
-6. **Object scripts (second pass)** -- Retries the `Objects`-slot scripts that need no query-token values, now that missing tables exist, then resolves the template's query tokens. Scripts that use them run in step 15.
-7. **Before scripts** -- Executes migration scripts from any folder in the `Before` slot. Sequential and tracked.
-8. **Database-level CDC and Change Tracking check** (SQL Server, when the template has Before scripts) -- Decides whether the database has the Change Data Capture and Change Tracking its tables ask for, after the Before scripts so a Before script can enable them. Without Before scripts this check runs in the pre-flight, before step 1.
-9. **ModifiedTableQuench** -- Alters existing columns (type changes, nullability, defaults, computed/generated columns), drops tables removed from the product, and manages indexes and check constraints.
-10. **AfterTablesObjects scripts** -- Executes `AfterTablesObjects`-slot scripts (triggers, DDL triggers, rules, post-table views) using the dependency retry loop.
-11. **BetweenTablesAndKeys scripts** -- Executes migration scripts from any folder in the `BetweenTablesAndKeys` slot. Sequential and tracked.
-12. **MissingIndexesAndConstraintsQuench** -- Creates missing indexes, check constraints, default constraints, and (where supported) statistics.
-13. **Table features** (SQL Server) -- Applies Change Data Capture, Change Tracking, and FILESTREAM as declared.
-14. **AfterTablesScripts** -- Executes migration scripts from any folder in the `AfterTablesScripts` slot. Sequential and tracked.
-15. **Object scripts (final pass)** -- Runs every `Objects`- or `AfterTablesObjects`-slot script not yet applied, including those that use query tokens.
-16. **Table data delivery** -- Merges table data described by per-table `DataDelivery` blocks, ordered by foreign key dependencies. See [Table Data Delivery](#table-data-delivery). Then executes any hand-written scripts in the `TableData` slot using the dependency retry loop. Skipped when `DeliverData` is `false`.
-17. **ForeignKeyQuench** -- Creates, drops, and modifies foreign keys to match the schema package.
-18. **Materialized views** (PostgreSQL), **scheduled events** (MySQL, MariaDB), **indexed views** (SQL Server) -- Deployed through the platform's procedure when the template declares any.
-19. **After scripts** -- Executes migration scripts from any folder in the `After` slot. Sequential and tracked.
-20. **Stamp version** -- Executes `Template.VersionStampScript` if configured.
+3. **Setup scripts** -- Executes scripts from any folder in the `Setup` slot, before any object or table is touched. Sequential, run on every deploy, and the first error stops the deploy. See [The Setup slot](#the-setup-slot).
+4. **Object scripts (first pass)** -- Executes `Objects`-slot scripts that need no query-token values, using the dependency retry loop. If `RunScriptsTwice` is enabled, runs a complete second pass to verify idempotency.
+5. **Domain types, enum types, sequences** (PostgreSQL) -- Deploys the template's declared domain types, enum types, and sequences, before the tables whose columns can use them.
+6. **MissingTableAndColumnQuench** -- Parses `Tables/*.json` into session staging tables for the later steps, then creates missing tables and adds missing columns.
+7. **Object scripts (second pass)** -- Retries the `Objects`-slot scripts that need no query-token values, now that missing tables exist, then resolves the template's query tokens. Scripts that use them run in step 16.
+8. **Before scripts** -- Executes migration scripts from any folder in the `Before` slot. Sequential and tracked.
+9. **Database-level CDC and Change Tracking check** (SQL Server, when the template has Before scripts) -- Decides whether the database has the Change Data Capture and Change Tracking its tables ask for, after the Setup and Before scripts so either can enable them. Without Before scripts this check runs at the start of step 6, before any table is created, which is still after the Setup scripts.
+10. **ModifiedTableQuench** -- Alters existing columns (type changes, nullability, defaults, computed/generated columns), drops tables removed from the product, and manages indexes and check constraints.
+11. **AfterTablesObjects scripts** -- Executes `AfterTablesObjects`-slot scripts (triggers, DDL triggers, rules, post-table views) using the dependency retry loop.
+12. **BetweenTablesAndKeys scripts** -- Executes migration scripts from any folder in the `BetweenTablesAndKeys` slot. Sequential and tracked.
+13. **MissingIndexesAndConstraintsQuench** -- Creates missing indexes, check constraints, default constraints, and (where supported) statistics.
+14. **Table features** (SQL Server) -- Applies Change Data Capture, Change Tracking, and FILESTREAM as declared.
+15. **AfterTablesScripts** -- Executes migration scripts from any folder in the `AfterTablesScripts` slot. Sequential and tracked.
+16. **Object scripts (final pass)** -- Runs every `Objects`- or `AfterTablesObjects`-slot script not yet applied, including those that use query tokens.
+17. **Table data delivery** -- Merges table data described by per-table `DataDelivery` blocks, ordered by foreign key dependencies. See [Table Data Delivery](#table-data-delivery). Then executes any hand-written scripts in the `TableData` slot using the dependency retry loop. Skipped when `DeliverData` is `false`.
+18. **ForeignKeyQuench** -- Creates, drops, and modifies foreign keys to match the schema package.
+19. **Materialized views** (PostgreSQL), **scheduled events** (MySQL, MariaDB), **indexed views** (SQL Server) -- Deployed through the platform's procedure when the template declares any.
+20. **After scripts** -- Executes migration scripts from any folder in the `After` slot. Sequential and tracked.
+21. **Stamp version** -- Executes `Template.VersionStampScript` if configured.
 
-When `UpdateTables` is `false`, the table steps -- 5, 8, 9, 12, 13 and 17 -- are skipped; scripts, data delivery and step 18 still run. When `IndexOnlyTableQuenches` is enabled on a template, steps 5, 8, 9, 13 and 17 are skipped and step 12 runs the platform's `IndexOnlyQuench` procedure instead, so the template manages only the indexes of tables it does not own.
+When `UpdateTables` is `false`, the table steps -- 6, 9, 10, 13, 14 and 18 -- are skipped; scripts, data delivery and step 19 still run. When `IndexOnlyTableQuenches` is enabled on a template, steps 6, 9, 10, 14 and 18 are skipped and step 13 runs the platform's `IndexOnlyQuench` procedure instead, so the template manages only the indexes of tables it does not own.
 
 ---
 
@@ -344,9 +347,9 @@ These are the minimum versions SchemaSmith supports for deployment:
 | SQL Server | 2008 (major version 10) |
 | PostgreSQL | 12 |
 | MySQL | 5.7.22 on the 5.7 line; 8.0.23 on the 8.0 line |
-| MariaDB | 10.2.7 |
+| MariaDB | 10.2.13 |
 
-**MySQL's floor is a patch, on two lines.** MySQL 5.7.0-5.7.21 lack `JSON_ARRAYAGG`, so DataTongs extracts nothing from them. MySQL 8.0.0-8.0.22 lack, patch by patch, features SchemaSmith reads as "8.0": functional indexes, enforced CHECK constraints, multi-valued indexes and invisible columns. Both bands are refused before anything runs, naming the detected version. MariaDB's floor is a patch too: 10.2.7, the first with the `JSON` type SchemaSmith's helpers declare.
+**MySQL's floor is a patch, on two lines.** MySQL 5.7.0-5.7.21 lack `JSON_ARRAYAGG`, so DataTongs extracts nothing from them. MySQL 8.0.0-8.0.22 lack, patch by patch, features SchemaSmith reads as "8.0": functional indexes, enforced CHECK constraints, multi-valued indexes and invisible columns. Both bands are refused before anything runs, naming the detected version. MariaDB's floor is a patch too: 10.2.13. The `JSON` type SchemaSmith's helpers declare arrived in 10.2.7, but 10.2.7 and 10.2.8 return NULL from every JSON function that builds a string holding a backtick, and every extracted name holds one; table data delivery arrives altered on 10.2.9 and 10.2.10, and runs the server out of memory on 10.2.11 and 10.2.12.
 
 **And the other end of the range is measured, not assumed — new in v2.7.0.** Every engine also has a
 CI leg pinned to that engine's **`latest`** tag, so each release is exercised against whatever the vendor
@@ -372,7 +375,7 @@ decaying into "current as of whenever someone last looked".
 
 You can raise the floor for a specific product by declaring `MinimumVersion` in `Product.json`. Before any deployment work begins, SchemaQuench detects the version of every resolved target. If any target is below the declared floor, the entire run aborts with a manifest naming each below-floor server and its detected version. Nothing is deployed -- no partial work, no side effects on any target.
 
-See [Schema Packages -- Product.json](schema-packages.md#productjson) for the accepted value formats (`16` or `2022` for SQL Server; `15` for PostgreSQL; `8.0` for MySQL; `10.6` for MariaDB) and configuration details. The declared value may be any supported version — for example `5.7` (MySQL) or `10.2` (MariaDB) to pin exactly at the floor.
+See [Schema Packages -- Product.json](schema-packages.md#productjson) for the accepted value formats (`16` or `2022` for SQL Server; `15` for PostgreSQL; `8.0` for MySQL; `10.6` for MariaDB) and configuration details. The declared value may be any supported version — for example `5.7.22` (MySQL) or `10.2.13` (MariaDB) to pin exactly at the floor. On MySQL and MariaDB a value with a patch is compared patch for patch, so `8.0.30` refuses an 8.0.22 server; a value with a pre-release suffix, such as PostgreSQL `18beta1`, reads as its leading number.
 
 If a target's version cannot be determined, that is a hard error -- SchemaQuench never deploys blind against an unknown version. An unparseable `MinimumVersion` value fails at startup before any connections open.
 
@@ -389,7 +392,7 @@ Pre-flight logs the version it detected for every server, and -- **with one exce
 
 Normalizing all four to a bare major would read tidier and tell you less: on three of the four engines it would discard the digits SchemaSmith's own version gates turn on, and a degrade you needed to diagnose would become invisible in the log. **The comparison is unaffected either way** -- the floor check and `MinimumVersion` both parse each engine's form correctly, so a passing or failing verdict never depends on how the string is printed.
 
-What you *declare* is a separate, friendlier grammar: `MinimumVersion` takes `16` or `2022` on SQL Server, `15` on PostgreSQL, `8.0` on MySQL, `10.6` on MariaDB. You never have to match the detected string's shape -- declare the floor you need and SchemaSmith compares it correctly against whatever the server reports.
+What you *declare* is a separate, friendlier grammar: `MinimumVersion` takes `16` or `2022` on SQL Server, `15` on PostgreSQL, `8.0` or `8.0.30` on MySQL, `10.6` or `10.6.4` on MariaDB. You never have to match the detected string's shape -- declare the floor you need and SchemaSmith compares it correctly against whatever the server reports.
 
 ### Version-adaptive code generation
 
@@ -485,7 +488,7 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 
 > **Check the manifest before deploying to a pre-2016 target.** Under the default `warn`, a masked column is created unmasked and an Always Encrypted column is created unencrypted — the deploy succeeds and the downgrade is recorded, but the protection is not there. If a silently-unprotected column is worse for you than a failed deployment, set `Target:UnsupportedFeaturePolicy=fail`.
 
-One further case is compatibility-level gated rather than version gated: a `Json`-encoded [data delivery](schema-packages.md#content-encoding) aimed at a below-130 SQL Server target follows the same policy — `warn` skips just that delivery and delivers the rest, `fail` aborts. Re-encode that delivery as `Xml` to deploy it there.
+One further case is compatibility-level gated rather than version gated: a `Json`-encoded [data delivery](schema-packages.md#content-encoding) aimed at a below-130 SQL Server target is not degraded at all. SchemaQuench converts the content to the XML shape as it reads it and delivers it through the XML merge, which works at every compatibility level, so nothing is skipped and the package needs no change.
 
 **Two are gated on the server's *edition*.** Before SQL Server 2016 SP1, **Data compression** (`CompressionType` `ROW` or `PAGE`) and **columnstore indexes** need Enterprise or Developer edition; Standard, Web and Express refuse them. There, the table or index is created uncompressed and a columnstore index is skipped, each with a downgrade recorded. From 2016 SP1 every edition has both.
 
@@ -497,7 +500,7 @@ One further case is compatibility-level gated rather than version gated: a `Json
 
 
 
-The supported range (MySQL 5.7.22 and 8.0.23 through current, MariaDB 10.2.7 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
+The supported range (MySQL 5.7.22 and 8.0.23 through current, MariaDB 10.2.13 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
 
 The schema model itself parses on every supported version — a version-agnostic `JSON_EXTRACT` shred stands in for `JSON_TABLE` (MySQL 8.0 / MariaDB 10.6), so nothing about kindling or ingest depends on the target version. Beyond that, a feature a target lacks is either taken by an equivalent path (same end state) or degraded through the **unsupported-feature policy** (`Target:UnsupportedFeaturePolicy`, default `warn` → emit without the feature + an **Unsupported Feature Downgrades** line; `fail` → abort with a "requires MySQL N" message):
 
@@ -507,7 +510,7 @@ The schema model itself parses on every supported version — a version-agnostic
 | **Index rename** (`RENAME INDEX`) | MariaDB 10.5.2 (MySQL 5.7 has it) | drops and recreates the index under the new name from its live definition (same end state) |
 | **Instant column add or drop** (`OnlineApply` `Prefer` or `Require`) | MySQL 8.0.29 / MariaDB 10.4 | adds or drops the column with `ALGORITHM=INPLACE, LOCK=NONE` instead, which rebuilds the table without blocking writes, and records `online` as its mode. MySQL 8.0.12–8.0.28 and MariaDB 10.3 add instantly only at the end of the table; MySQL 5.7 and MariaDB 10.2 have no `INSTANT` |
 | **Online table copy** (`OnlineApply` `Prefer`, `ALGORITHM=COPY, LOCK=NONE`) | MariaDB 11.2 | a change `INPLACE` cannot take, such as a column type change, runs as written, blocking writes while it copies, and records `unavailable` as its mode; under `Require` the deploy is refused, naming the statement |
-| **CHECK constraints** | MySQL 8.0.16 / MariaDB 10.2.22 | emits the table *without* the check + records a downgrade (MySQL before 8.0.16 parses and ignores CHECK, so it can neither be created nor detected; MariaDB before 10.2.22 has no `INFORMATION_SCHEMA.CHECK_CONSTRAINTS`, so a deployed check cannot be read back). A check's `Enforced: false` (`NOT ENFORCED`, MySQL only) rides the same gate |
+| **CHECK constraints** | MySQL 8.0.16 / MariaDB 10.2.22 | emits the table *without* the check + records a downgrade (MySQL before 8.0.16 parses and ignores CHECK, so it can neither be created nor detected; MariaDB before 10.2.22 has no `INFORMATION_SCHEMA.CHECK_CONSTRAINTS`, so a deployed check cannot be read back). On MariaDB a column's own `CheckExpression` is skipped and recorded the same way. A check's `Enforced: false` (`NOT ENFORCED`, MySQL only) rides the same gate. Because a check cannot be read on MariaDB before 10.2.22, one created outside SchemaSmith is not dropped ahead of a column it reads, so removing that column fails with the engine's error; drop the check in a `Before` script |
 | **Invisible index** (`INVISIBLE`; MariaDB `IGNORED`) | MySQL 8.0 / MariaDB 10.6 | stores the index *visible* — the visibility clause is suppressed — + records a downgrade. The modified-index compare ignores the visibility difference below the floor, so re-deploys stay idempotent instead of churning the index every run |
 | **Invisible column** (`Column.Invisible`) | MySQL 8.0.23 / MariaDB 10.3 | stores the column *visible* — the `INVISIBLE` clause is suppressed — + records a downgrade. The modified-column compare ignores the visibility difference below the floor, so re-deploys stay idempotent instead of churning the column every run |
 | **Descending index key parts** (`… DESC`) | MySQL 8.0 / MariaDB 10.8 | stores the key part ascending (the engine silently does so anyway) + records a downgrade |
@@ -522,6 +525,7 @@ The schema model itself parses on every supported version — a version-agnostic
 | **Explicit system-time columns** (declared `GeneratedAlways` `RowStart` / `RowEnd` on an existing table that has the implicit pair) | MariaDB 11.7 (MySQL: no system versioning at any version) | keeps the table's hidden `row_start` / `row_end` + records a downgrade. A new table takes the declared columns on every version that has system versioning |
 | **Table-level system versioning** (`WITH SYSTEM VERSIONING`) | MariaDB 10.3 (MySQL: no equivalent) | creates an ordinary, non-versioned table + records a downgrade |
 | **`SYSTEM_TIME` partitioning by count or with `STARTS`** (a `SYSTEM_TIME` table with no partition list, or with `StartsAt`) | MariaDB 10.5 (MySQL: no equivalent) | creates the versioned table without its `SYSTEM_TIME` partitioning + records a downgrade. MariaDB 10.3 and 10.4 accept only a list that names every partition, which deploys there |
+| **`COLLATE` on a generated column** | MariaDB 10.2.37 / 10.3.28 / 10.4.18 / 10.5.9, on each line (MySQL: always) | creates the column in its character set's default collation (the set read from the `Collation` when `CharacterSet` is not declared) + records a downgrade; earlier patches reject the clause, and a redeploy leaves the column as it is |
 | **`SYSTEM_TIME` partitioning with `AUTO`** | MariaDB 10.9.1 (MySQL: no equivalent) | creates the partitioning without `AUTO` + records a downgrade: the history is still partitioned, and new history partitions are added by hand |
 | **Per-column history exclusion** (`WITHOUT SYSTEM VERSIONING`) | MariaDB 10.3.4 (MySQL: no equivalent) | creates the column without the exclusion + records a downgrade — the column survives, the exclusion does not |
 | **Declared sequence** (`Sequences/*.json`) | MariaDB 10.3 (MySQL: no equivalent at any version) | skips the sequence + records a downgrade |
@@ -533,7 +537,7 @@ The schema model itself parses on every supported version — a version-agnostic
 
 **One more routes through the same policy but is gated on the server's filesystem, not its version.** **Page compression** (`Compression`, MySQL only) needs a data directory on a filesystem that supports hole punching, and MySQL refuses it anywhere else with error 4029 — a Windows data directory, for one. Under `warn` the table is created without its `COMPRESSION` option and the downgrade is recorded; under `fail` the deploy stops. `Compression` is applied when a table is created, so only new tables are affected.
 
-The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7.22 through current, or MariaDB 10.2.7 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
+The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7.22 through current, or MariaDB 10.2.13 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
 ### MariaDB (MySQL family) — where the native DDL diverges
 
@@ -587,7 +591,7 @@ scripts (Before, After, Objects, migration scripts and `ValidationScript`) alway
 
 | Server setting | What SchemaSmith does |
 |---|---|
-| `sql_mode` | Creates its procedures and delivers data under your server's mode with the flags that change how SQL text is read taken out: `ANSI_QUOTES`, `PIPES_AS_CONCAT`, `NO_BACKSLASH_ESCAPES`, `IGNORE_SPACE`, the combination modes `ANSI`, `ORACLE`, `MSSQL`, `DB2`, `POSTGRESQL` and `MAXDB`, `NO_KEY_OPTIONS`, `NO_TABLE_OPTIONS`, `NO_FIELD_OPTIONS`, `EMPTY_STRING_IS_NULL` and `SIMULTANEOUS_ASSIGNMENT`. Strictness flags such as `STRICT_TRANS_TABLES`, `NO_ZERO_DATE` and `ONLY_FULL_GROUP_BY` stay as your server has them. When the server's mode changes, the next run re-creates the procedures. |
+| `sql_mode` | Creates its procedures and delivers data under your server's mode with the flags that change how SQL text is read taken out: `ANSI_QUOTES`, `PIPES_AS_CONCAT`, `NO_BACKSLASH_ESCAPES`, `IGNORE_SPACE`, the combination modes `ANSI`, `ORACLE`, `MSSQL`, `DB2`, `POSTGRESQL` and `MAXDB`, `NO_KEY_OPTIONS`, `NO_TABLE_OPTIONS`, `NO_FIELD_OPTIONS`, `EMPTY_STRING_IS_NULL`, `SIMULTANEOUS_ASSIGNMENT`, `HIGH_NOT_PRECEDENCE`, `REAL_AS_FLOAT` and `PAD_CHAR_TO_FULL_LENGTH`. Strictness flags such as `STRICT_TRANS_TABLES`, `NO_ZERO_DATE` and `ONLY_FULL_GROUP_BY` stay as your server has them. When the server's mode changes, the next run re-creates the procedures. |
 | `explicit_defaults_for_timestamp` | Turned on while tables are created and altered, so a `TIMESTAMP` column gets exactly the default it declares. With it off, the default on MySQL 5.7 and MariaDB before 10.10, the server would invent one. A few MariaDB versions (10.2, 10.3 and early 10.4 to 10.6 patches) do not let a session change it, and MySQL 5.7 lets only an account with `SUPER` change it (a managed service's admin user has no `SUPER`); there the deploy logs a note, and a `TIMESTAMP NOT NULL` column needs its default declared. |
 | `time_zone` | DataTongs extracts at `+00:00` and records that on the delivery it configures (`TimeZone`). Delivery uses the recorded zone, so `TIMESTAMP` values arrive unchanged whatever zone either server runs in. A delivery without `TimeZone` runs in the session's zone. |
 | `sql_mode` during data delivery | `NO_AUTO_VALUE_ON_ZERO` is added, so a row whose `AUTO_INCREMENT` key is `0` keeps `0`. |
@@ -640,6 +644,7 @@ SchemaQuench assigns every script folder to a quench slot that determines when t
 
 | Slot | Execution Style |
 |------|-----------------|
+| `Setup` | Sequential, every deploy |
 | `Before` | Sequential, tracked |
 | `Objects` | Dependency retry loop |
 | `BetweenTablesAndKeys` | Sequential, tracked |
@@ -647,6 +652,23 @@ SchemaQuench assigns every script folder to a quench slot that determines when t
 | `AfterTablesObjects` | Dependency retry loop |
 | `TableData` | Dependency retry loop |
 | `After` | Sequential, tracked |
+
+### The Setup slot
+
+`Setup` is for what the objects and the later scripts rely on being in place first: a database option, turning on Change Data Capture or Change Tracking, a setting a view or a migration assumes. It runs after the helpers are deployed and the baseline is validated, and before the first object pass -- so nothing in the template has been touched yet. No default folder uses it; add one to `ScriptFolders` when you need it:
+
+```json
+{ "FolderPath": "Setup", "QuenchSlot": "Setup" }
+```
+
+A setting is state, not a migration, so `Setup` scripts run on **every** deploy: a value someone changed by hand is put back the next time the package deploys. That makes each script responsible for checking before it changes anything. Some changes refuse to repeat, and some are expensive even when the value is already right -- `sp_cdc_enable_db` fails on a database that already has CDC, and setting `READ_COMMITTED_SNAPSHOT` needs exclusive access to the database even to set the value it already has. Guard them:
+
+```sql
+IF (SELECT is_cdc_enabled FROM sys.databases WHERE database_id = DB_ID()) = 0
+    EXEC sys.sp_cdc_enable_db;
+```
+
+`Setup` scripts run once per database, and once per schema in a [schema template](#templatetargets). There is no retry: nothing in the template has run before them, so a script that fails will fail again, and the deploy stops at the first one. WhatIf lists them without running them, and a run resumed from a [checkpoint](#checkpoint-and-resume) skips the ones that already succeeded in it. Query tokens and `{{SchemaName}}` resolve in them as in any other script.
 
 ### Product quench slots
 
@@ -658,6 +680,8 @@ SchemaQuench assigns every script folder to a quench slot that determines when t
 Product scripts run against the administrative connection, outside the per-database template loop.
 
 **Sequential, tracked** -- scripts run in alphabetical order and are recorded in `CompletedMigrationScripts` so they only run once (unless marked `[ALWAYS]`).
+
+**Sequential, every deploy** -- scripts run in alphabetical order on every deploy and are not recorded, so `[ALWAYS]` has nothing to add. The first script that fails stops the deploy; the ones after it do not run.
 
 **Dependency retry loop** -- scripts are retried in rounds until all succeed or no progress is made. See [Dependency Retry Loop](#dependency-retry-loop). An `Objects` or `AfterTablesObjects` script that is unchanged since it last applied, and whose object the server still holds as it was left, is not re-run. See [Unchanged Object Scripts](#unchanged-object-scripts).
 
@@ -683,18 +707,7 @@ See exactly what SchemaQuench would do before it touches a single table. Set `Wh
 
 ### Debug SQL output
 
-During both normal and WhatIf runs, SchemaQuench writes the SQL generated by the table quench process to files in the working directory:
-
-- `SchemaQuench - ParseJson {DatabaseName}.sql`
-- `SchemaQuench - MissingTableAndColumnQuench {DatabaseName}.sql`
-- `SchemaQuench - ModifiedTableQuench {DatabaseName}.sql`
-- `SchemaQuench - MissingIndexesAndConstraintsQuench {DatabaseName}.sql`
-- `SchemaQuench - ForeignKeyQuench {DatabaseName}.sql`
-- `SchemaQuench - IndexedViewQuench {DatabaseName}.sql` (SQL Server)
-- `SchemaQuench - MaterializedViewQuench {DatabaseName}.sql` (PostgreSQL)
-- `SchemaQuench - IndexOnlyQuench {DatabaseName}.sql` (when `IndexOnlyTableQuenches` is enabled)
-
-These files can be reviewed to understand exactly what structural changes were (or would be) made.
+With `WriteDebugSql` on (or the `--WriteDebugSql` switch), SchemaQuench writes the SQL of each step it runs -- the table, index, foreign-key and view quench calls, and any script that fails -- to `.sql` files in `ArtifactPath` (default: the working directory), named `SchemaQuench - <step> <server>.<database>.sql`. It is off by default, and a failure says how to get the file. The files hold real values, for local debugging only; a run removes its own when it finishes cleanly and the previous run's for its targets when it starts. See [Debug SQL files](configuration.md#debug-sql-files).
 
 ### When to use WhatIf
 
@@ -1110,7 +1123,7 @@ Most of a package does not change between two deployments, yet every view, funct
 
 **When a script runs again.** On the next quench the script is skipped only when both hashes still match: the text is as it was, *and* the server still renders the object as the last run left it. Edit the script and it runs. Change the object by hand on the server -- an `ALTER`, a disabled trigger, a dropped and recreated view -- and the rendering no longer matches, so the script runs and puts the declared definition back. Drop the object and it runs. A skipped script is logged as `Unchanged, not re-run`, recorded as `unchanged` in the change audit, and counted as `Unchanged (object scripts)` in the deployment summary, separately from the scripts that ran.
 
-**What is never skipped.** A script with `[ALWAYS]` in its name runs on every quench, as it always has, and so does a script carrying a `-- SchemaSmith: AlwaysRun` comment anywhere in its text -- the opt-out for a script with side effects whose object may well be unchanged. A script from a folder declared without an `ObjectType` (a custom folder) is never stamped. `RunScriptsTwice` runs every script twice, as before: it exists to prove scripts re-run cleanly, which a skipped script cannot. Scripts in the sequential slots (`Before`, `BetweenTablesAndKeys`, `AfterTablesScripts`, `After`) are migration scripts and keep their own run-once tracking. A WhatIf run reads the stamps and reports a script it would skip as `SKIP (unchanged)`, but records nothing; a script that uses query tokens is always previewed as would-apply, because WhatIf does not resolve the tokens and so cannot compare the text. Set `SkipUnchangedObjects: false` to run every object script on every deployment; while it is off nothing is stamped, so the first deploy after turning it back on runs everything once.
+**What is never skipped.** A script with `[ALWAYS]` in its name runs on every quench, as it always has, and so does a script carrying a `-- SchemaSmith: AlwaysRun` comment anywhere in its text -- the opt-out for a script with side effects whose object may well be unchanged. A script from a folder declared without an `ObjectType` (a custom folder) is never stamped. `RunScriptsTwice` runs every script twice, as before: it exists to prove scripts re-run cleanly, which a skipped script cannot. A script is stamped only when it creates exactly one view, function, procedure, trigger or (on MySQL and MariaDB) event; a `CREATE` inside a comment or a string literal does not count, so a header comment showing how to schedule a procedure is harmless. Scripts in the sequential slots (`Before`, `BetweenTablesAndKeys`, `AfterTablesScripts`, `After`) are migration scripts and keep their own run-once tracking. A WhatIf run reads the stamps and reports a script it would skip as `SKIP (unchanged)`, but records nothing; a script that uses query tokens is always previewed as would-apply, because WhatIf does not resolve the tokens and so cannot compare the text. Set `SkipUnchangedObjects: false` to run every object script on every deployment; while it is off nothing is stamped, so the first deploy after turning it back on runs everything once.
 
 > **A module the engine rewrites is still unchanged.** The rendering is compared only with the engine's own earlier rendering of the same object, never with the script text, so an engine that reformats a body, expands a `*` or re-quotes identifiers does not cause a re-run. Only a rendering that differs from the one recorded after the script last applied does.
 
@@ -1412,7 +1425,7 @@ This is distinct from [DropUnknownIndexes](#dropunknownindexes): that flag targe
 
 ## RunScriptsTwice
 
-When `RunScriptsTwice` is `true`, the Objects-slot scripts are executed twice in succession during step 3 of the database quench sequence. On the second pass, all scripts are reset to unquenched and processed through the dependency retry loop again. Both runs must succeed -- if either fails, the deployment fails.
+When `RunScriptsTwice` is `true`, the Objects-slot scripts are executed twice in succession during step 4 of the database quench sequence. On the second pass, all scripts are reset to unquenched and processed through the dependency retry loop again. Both runs must succeed -- if either fails, the deployment fails.
 
 This is an **idempotency testing** tool, not a dependency resolution mechanism. Dependency resolution is already handled by the [retry loop](#dependency-retry-loop), which retries failed scripts as long as progress is being made. RunScriptsTwice answers a different question: "Can my `[ALWAYS]` scripts and object scripts run again safely?"
 

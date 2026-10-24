@@ -7,6 +7,7 @@ using Npgsql;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -26,7 +27,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// table. The decision that elects one lives in ModifiedTableQuench and is covered by RebuildDecisionTests.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class RebuildTableTests : BaseTableQuenchTests
 {
     private static readonly string ParseJsonScript = ForgeKindler.GetParseTableJsonScript(Platform.PostgreSQL);
@@ -69,7 +70,7 @@ public class RebuildTableTests : BaseTableQuenchTests
         cmd.ExecuteNonQuery();
 
         cmd.CommandText = $"CALL \"SchemaSmith\".\"RebuildTable\"({Lit(schema)}, {Lit(table)}, {(whatIf ? "TRUE" : "FALSE")});";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static void Exec(IDbCommand cmd, string sql)

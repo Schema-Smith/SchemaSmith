@@ -317,8 +317,8 @@ public class ConstraintAttributeTests
         var ck = (PostgreSqlCheckConstraint)table.CheckConstraints.Single();
         Assert.Multiple(() =>
         {
-            Assert.That((fk.Validated, fk.Enforced), Is.EqualTo((false, true)));
-            Assert.That((ck.Validated, ck.NoInherit, ck.Enforced), Is.EqualTo((false, true, true)));
+            Assert.That((fk.Validated, fk.Enforced), Is.EqualTo(((bool?)false, (bool?)null)), "only the state that is not the default is written");
+            Assert.That((ck.Validated, ck.NoInherit, ck.Enforced), Is.EqualTo(((bool?)false, (bool?)true, (bool?)null)));
             Assert.That(ck.Expression, Does.Not.Contain("NOT VALID").And.Not.Contain("NO INHERIT"), "the suffixes are attributes now, not expression text: " + ck.Expression);
         });
 
@@ -326,8 +326,8 @@ public class ConstraintAttributeTests
         table = (PostgreSqlTable)PlatformDeserializer.DeserializeTable(Str($"SELECT \"SchemaSmith\".\"GenerateTableJSON\"('public', '{Table}')"), Platform.PostgreSQL);
         Assert.Multiple(() =>
         {
-            Assert.That(((PostgreSqlForeignKey)table.ForeignKeys.Single()).Validated, Is.True);
-            Assert.That(((PostgreSqlCheckConstraint)table.CheckConstraints.Single()).NoInherit, Is.False, "NoInherit is create-time state, so the re-created check reads false");
+            Assert.That(((PostgreSqlForeignKey)table.ForeignKeys.Single()).Validated, Is.Null, "validated is the default, so it is omitted");
+            Assert.That(((PostgreSqlCheckConstraint)table.CheckConstraints.Single()).NoInherit, Is.Null, "NoInherit is create-time state, so the re-created check is inheritable, the default, and omitted");
         });
     }
 

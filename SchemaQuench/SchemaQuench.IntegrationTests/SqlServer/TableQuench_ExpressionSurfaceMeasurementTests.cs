@@ -4,6 +4,7 @@ using System;
 using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -346,7 +347,7 @@ public class TableQuench_ExpressionSurfaceMeasurementTests : BaseTableQuenchTest
             else
             {
                 cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{_productName}', @TableDefinitions = '{renamedJson.Replace("'", "''")}', @WhatIf = 0, @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 1";
-                cmd.ExecuteNonQuery();
+                TransientRetry.Run(() => cmd.ExecuteNonQuery());
             }
 
             cmd.CommandText = $@"SELECT STRING_AGG([name] + ':' + CAST(index_id AS VARCHAR(10)), ',') FROM sys.indexes

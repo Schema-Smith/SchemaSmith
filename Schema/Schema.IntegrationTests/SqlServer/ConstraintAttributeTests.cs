@@ -311,8 +311,9 @@ public class ConstraintAttributeTests
         {
             Assert.That(defaults.Json, Does.Not.Contain("Enforced").And.Not.Contain("Validated").And.Not.Contain("NotForReplication"),
                 "a constraint in its default state carries no attribute keys");
-            Assert.That(((SqlServerForeignKey)defaults.Table.ForeignKeys.Single()).Enforced, Is.True);
-            Assert.That(((SqlServerCheckConstraint)defaults.Table.CheckConstraints.Single()).Validated, Is.True);
+            // Omitted, so a fresh deploy creates them enforced and validated and a redeploy leaves them as they are.
+            Assert.That(((SqlServerForeignKey)defaults.Table.ForeignKeys.Single()).Enforced, Is.Null);
+            Assert.That(((SqlServerCheckConstraint)defaults.Table.CheckConstraints.Single()).Validated, Is.Null);
         });
 
         const string attrs = ", \"Enforced\": false, \"Validated\": false, \"NotForReplication\": true";

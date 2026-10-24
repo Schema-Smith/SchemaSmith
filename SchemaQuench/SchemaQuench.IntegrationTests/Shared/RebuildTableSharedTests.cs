@@ -60,10 +60,10 @@ public abstract class RebuildTableSharedTests : BaseTableQuenchTests
     {
         cmd.CommandTimeout = 300;
         cmd.CommandText = $"CALL SchemaSmith_ParseTableJson({Lit(_mainDb)}, {Lit(json)})";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL SchemaSmith_RebuildTable({Lit(_mainDb)}, {Lit(table)}, {(whatIf ? 1 : 0)})";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static void Exec(IDbCommand cmd, string sql)

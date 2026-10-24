@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../.json-schemas/indexedviews.sqlserver.schema",
+  "Name": "[vw_ActiveCustomerCount]",
+  "Definition": "SELECT [CustomerID], COUNT_BIG(*) AS [ActivityCount] FROM [{{SchemaName}}].[Activities] GROUP BY [CustomerID]",
+  "Indexes": [
+    {
+      "Name": "[CIX_vw_ActiveCustomerCount]",
+      "Unique": true,
+      "Clustered": true,
+      "IndexColumns": "[CustomerID]"
+    }
+  ]
+}

@@ -151,7 +151,11 @@ BEGIN TRY
          ON m.[ObjectSchema] = d.ObjectSchema AND m.[ObjectTable] = d.ObjectTable AND m.[ObjectKind] = d.ObjectKind
         AND m.[ObjectName] = d.ObjectName AND m.[Slot] = d.Slot
       WHERE m.[AuthoredText] = d.AuthoredText
-        AND (m.[EngineVersion] <> @v_Version OR ISNULL(m.[CompatLevel], -1) <> ISNULL(@v_Compat, -1)))
+        AND (m.[EngineVersion] <> @v_Version OR ISNULL(m.[CompatLevel], -1) <> ISNULL(@v_Compat, -1))
+        -- A row left by a table dropped outside the deploy and created again in this one recorded nothing the run kept.
+        AND NOT EXISTS (SELECT 1 FROM SchemaSmith.ChangeAudit a WITH (NOLOCK)
+                         WHERE a.SessionId = @@SPID AND a.ObjectType = 'table' AND a.ActionType = 'created'
+                           AND a.ObjectName IN (QUOTENAME(d.ObjectSchema) + '.' + QUOTENAME(d.ObjectTable), d.ObjectSchema + '.' + d.ObjectTable)))
   IF @v_Rebaselined > 0
     RAISERROR('  Re-baselined %d recorded expression(s): they were recorded under a different SQL Server version or compatibility level, and their stored canonical text is now refreshed for version %s at compatibility level %d. No object was changed.', 10, 100, @v_Rebaselined, @v_Version, @v_Compat) WITH NOWAIT
 

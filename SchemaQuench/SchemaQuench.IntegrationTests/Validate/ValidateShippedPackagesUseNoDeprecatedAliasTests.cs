@@ -19,7 +19,9 @@ namespace SchemaQuench.IntegrationTests.Validate;
 [Category("Validate")]
 public class ValidateShippedPackagesUseNoDeprecatedAliasTests : ValidateFixtureTestBase
 {
-    [TestCase("Demos")]
+    // The demos run in their own workflow (validate-demo-schemas.yml), on every change to them or to the product: the main
+    // CI does not run for a change under Demos/, so a demo it read could break the next unrelated push.
+    [TestCase("Demos", Category = "DemoPackages")]
     [TestCase("TestProducts")]
     public void NoPackage_ReportsADeprecation(string tree)
     {

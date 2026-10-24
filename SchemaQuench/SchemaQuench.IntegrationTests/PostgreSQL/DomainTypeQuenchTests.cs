@@ -5,6 +5,7 @@ using System.Data;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -26,7 +27,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// </summary>
 [Category("PostgreSQL")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class DomainTypeQuenchTests : BaseTableQuenchTests
 {
     // ---- type aliases ---------------------------------------------------------
@@ -382,7 +383,7 @@ public class DomainTypeQuenchTests : BaseTableQuenchTests
     {
         cmd.CommandText =
             $@"CALL ""SchemaSmith"".""DomainTypeQuench""('{_productName}', '{json.Replace("'", "''")}', false);";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private void DropDomain(IDbCommand cmd, string name)

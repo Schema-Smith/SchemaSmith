@@ -51,6 +51,7 @@ A schema package has to load before it can be checked at all -- malformed JSON, 
 |------|----------|---------|
 | `SS-LOAD-001` | Error | Either the whole package failed to load (`Product.json` itself is missing/unparseable, or the configured path doesn't exist -- every other check is skipped when this happens), or one component file (a table/materialized-view/indexed-view JSON) inside an otherwise-loadable template was unparseable and got excluded -- the rest of the package still loads and every other check still runs. |
 | `SS-LOAD-002` | Error | A whole template's own `Template.json` couldn't be loaded (unparseable JSON, or a self-contradictory template configuration such as `CreateSchemaIfMissing` without a `SchemaIdentificationScript`). That template is excluded and every check for it is skipped, but every OTHER template in the package still loads and still gets full check coverage. |
+| `SS-LOAD-003` | Error | `Product.json` does not declare a `Platform`. Every check depends on the target engine, so nothing further is checked. Add `"Platform"`: `SqlServer`, `PostgreSQL`, `MySQL` or `MariaDb`. |
 
 When `SS-LOAD-001` means the whole package failed to load, it's the only finding you'll see on that run. When it (or `SS-LOAD-002`) means one component/template was excluded from an otherwise-loadable package, every other check still runs and you may see it alongside other findings.
 
@@ -63,7 +64,7 @@ Two entries sharing the same name at the same level -- two columns both called `
 | `SS-DUP-001` | Error | Same-name entries exist and at least one isn't gated by `ShouldApplyExpression` -- an accidental duplicate. Checked at every table level, and across each template's declared enum types, domain types, sequences, materialized views, indexed views and events (schema-qualified, so the same name in two schemas is not a duplicate). |
 | `SS-DUP-VAR-002` | Warning | Every entry in the group IS gated (a legitimate variant set), but not every entry declares `VariantName` -- label them for clarity. |
 
-The check runs at every level a name collision could hide: columns, indexes, foreign keys, check constraints, tables (within a template), the product's `TemplateOrder`, the platform-specific collections (SQL Server XML indexes and statistics; PostgreSQL statistics and exclude constraints; MySQL full-text indexes), and each template's declared objects (the enum types, domain types, sequences, materialized views, indexed views and events listed under `SS-DUP-001`).
+The check runs at every level a name collision could hide: columns, indexes, foreign keys, check constraints, tables (within a template), the product's `TemplateOrder`, the platform-specific collections (SQL Server XML indexes and statistics; PostgreSQL statistics, exclude constraints and policies; MySQL full-text indexes), and each template's declared objects (the enum types, domain types, sequences, materialized views, indexed views and events listed under `SS-DUP-001`).
 
 > **Note:** `--Validate` can only confirm that every member of a same-name group is gated -- it can't prove the gates are mutually *exclusive* on any given target. That requires evaluating the predicates against a live database, which is exactly what a real quench does at deploy time. A gated variant set that passes `--Validate` can still fail at deployment if two variants' expressions both resolve true against the same target.
 
@@ -105,12 +106,15 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | `SS-JSX-002` | Error | Two JSON indexes are on the same column, which takes one. |
 | `SS-JSX-003` | Error | A JSON index path does not start at `$`, has a wildcard, or contains or repeats another of its paths. |
 | `SS-JSX-004` | Error | A table declares a JSON index but no clustered primary key. |
+| `SS-XML-001` | Error | A selective XML index declares no `Paths`, so it would index nothing and the deploy would create no index. |
 | `SS-COL-001` | Warning | A column sets `BackfillExistingRows` but has no `Default`, so there is no value to apply to rows that already exist and the setting does nothing. |
 | `SS-COL-002` | Warning | A MySQL or MariaDB column declares a `CharacterSet` other than the table's and no `Collation`, so it gets that character set's default collation, which varies by engine version. A column in the table's own character set gets the table's collation; `utf8` and `utf8mb3` count as one set, and a MariaDB short collation such as `uca1400_ai_ci` belongs to the table's `CharacterSet`. |
 | `SS-COL-003` | Warning | A PostgreSQL check constraint or foreign key is named `<table>_<column>_not_null`, the name PostgreSQL 18 gives the NOT NULL constraint it makes for that column: a collision on 18, and a misleading name everywhere. |
 | `SS-COL-004` | Warning | A MySQL column's generation expression or default, a check constraint, an index key part or the partitioning expression calls `MD5()`, `SHA1()` or `SHA()`, which MySQL 9.6 removed. `SHA2()` is the replacement. |
 | `SS-COL-005` | Warning | A MySQL or MariaDB column is declared `NVARCHAR`, `NCHAR` or `NATIONAL ...`, which creates a `utf8mb3` column. Declare `VARCHAR` or `CHAR` with `CharacterSet: utf8mb4`. |
 | `SS-COL-006` | Warning | A MySQL column uses a form MySQL 8.0.17 deprecated: `FLOAT(M,D)` or `DOUBLE(M,D)`, `UNSIGNED` on `FLOAT`, `DOUBLE` or `DECIMAL`, or `ZEROFILL`. |
+| `SS-COL-007` | Warning | MySQL, MariaDB — a column's `Default` is a quoted function call (`'CONCAT(''A'',''B'')'`, `'uuid()'`), so it deploys as that text, not as the expression. A package extracted before 2.8 wrote expression defaults this way: re-extract it, or write the expression in parentheses (`(CONCAT('A','B'))`). |
+| `SS-COL-008` | Warning | A column in a primary key is declared `"Nullable": true`. A key column cannot hold NULL, so the deploy makes it NOT NULL and warns before the table step; a column that already exists and holds NULLs fails that change. Remove `"Nullable": true` so the declaration says what deploys. A key with a `ShouldApplyExpression` is left as declared. |
 | `SS-TBL-001` | Error | A `RebuildPolicy` — on the product, a template, or a table — uses `Mode: "THRESHOLD"` without a `Threshold` of 1 or more, so the policy cannot be evaluated. Because a policy declared at any level replaces the one it would have inherited, an unusable one also blocks rebuilds an outer level asked for. |
 | `SS-TBL-002` | Warning | A `RebuildPolicy` sets a `Threshold` while its `Mode` is not `"THRESHOLD"`, so the threshold is ignored. An omitted `Mode` defaults to `"NEVER"`, so `{ "Threshold": 50 }` on its own means *never rebuild* — and, replacing the inherited policy, can block rebuilds an outer level asked for. |
 | `SS-TBL-003` | Error | A SQL Server table declares `EdgeConstraints` but its `GraphType` is not `"Edge"`; only an edge table can carry one. |
@@ -139,6 +143,7 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | `SS-SEQ-002` | Warning | MariaDB — a script outside `MigrationScripts` re-creates a sequence with `CREATE OR REPLACE SEQUENCE`. Object scripts run on every deploy, and replacing a sequence resets it to its `START` value, so `NEXTVAL` returns numbers it has already given. Use `CREATE SEQUENCE IF NOT EXISTS`, which is how SchemaTongs extracts sequences; packages extracted by earlier versions carry the replacing form. |
 | `SS-GEN-001` | Warning | A script SchemaTongs generated, such as one in `Prerequisites/`, has been edited since. The next extraction overwrites it, so change the source database instead, or delete the script's first line to make it your own. |
 | `SS-IDENT-002` | Error | PostgreSQL — an object name is longer than 63 bytes. PostgreSQL truncates it, so the object is stored under a shorter name and the next deploy, not finding the declared one, fails creating it again. The limit is in bytes, so names in multi-byte characters reach it sooner. Covers a table, its schema, columns, indexes, keys, constraints, statistics, replica identity index and `OldName`s, and materialized views, enum types, sequences and domain types. |
+| `SS-IDENT-003` | Warning | PostgreSQL — a table or column `Name` is wrapped in double quotes, such as `"\"Users\""`. PostgreSQL keeps a quote as part of a name, so the deploy strips one wrapping pair, as it does from an `OldName`, and deploys `Users`. Remove the quotes so the declaration says what deploys. |
 | `SS-DOM-001` | Error | PostgreSQL — a domain type is declared as JSON *and* scripted as a `.sql` file in the same `Domain Types` folder. There is no `CREATE OR REPLACE DOMAIN`, so the scripted form is a guarded `CREATE DOMAIN` and silently does nothing once the domain exists. |
 | `SS-PART-001` | Error | SQL Server — a table or index declares `PartitionScheme` without `PartitionColumn`, or the reverse. The `ON` clause needs both: the scheme, and the column its partition function is applied to. |
 | `SS-XTP-001` | Error | SQL Server — a table sets `MemoryOptimized` and also declares a placement property (`FileGroup`, `TextImageFileGroup`, `FileStreamFileGroup`, or `PartitionScheme`). A memory-optimized table lives in the `MEMORY_OPTIMIZED_DATA` filegroup and cannot be placed on a regular or FILESTREAM filegroup, nor partitioned. One finding per offending property. |
@@ -151,6 +156,14 @@ The JSON schema can enforce shape, but it can't confirm that a foreign key actua
 | `SS-PART-008` | Error | MySQL, MariaDB — a partitioned table declares a foreign key, or a foreign key references a partitioned table. InnoDB has no foreign keys on a partitioned table on either side, so the engine refuses it (`1506`; MariaDB reports the referencing side as errno 150). |
 | `SS-PART-009` | Error or Warning | MySQL — a column is renamed (`OldName`) from a name the table's partitioning or subpartitioning expression uses. MySQL refuses to rename a partitioning column from 8.0.17 (`3855`); a Warning when the product's `MinimumVersion` is below 8.0. MariaDB renames it. |
 | `SS-PART-010` | Error | MySQL, MariaDB — `PartitionCount` and the named `Partitions` disagree on how many partitions there are; the engine refuses the table. |
+| `SS-PART-011` | Error | MySQL, MariaDB — a `RANGE` or `LIST` partition's `Values` carries its own clause (`LESS THAN ...`, `VALUES ...`, `IN (...)`). `Values` is the boundary alone (`2025`, `MAXVALUE`, `1, 2`); the deploy writes `VALUES LESS THAN` or `VALUES IN` around it. |
+| `SS-PART-012` | Error | MySQL, MariaDB — `Subpartitioning` under a method other than `RANGE` or `LIST`. Only those can be subpartitioned (MySQL refuses it, 1500), and under `SYSTEM_TIME` the clause would be dropped. |
+| `SS-PART-013` | Error | MariaDB — `SYSTEM_TIME` partitioning with both `Interval` and `Limit`. MariaDB takes one or the other. |
+| `SS-PART-014` | Error | MariaDB — `SYSTEM_TIME` partitioning with `Auto` and neither `Interval` nor `Limit`, which `AUTO` adds history partitions by. |
+| `SS-PART-015` | Error | MariaDB — `SYSTEM_TIME` partitions that MariaDB refuses (4128): a `PartitionCount` below 2, or named partitions without one or more `HISTORY` partitions and exactly one `CURRENT` partition, last. Each `Values` is `HISTORY` or `CURRENT`. |
+| `SS-PART-016` | Warning | MySQL, MariaDB — a partitioning value the deploy ignores: `SystemTime` outside `SYSTEM_TIME`, `Expression` under `SYSTEM_TIME`, `KeyAlgorithm` outside `KEY`, or `SystemTime.StartsAt` without an `Interval`. |
+| `SS-PER-001` | Error | MariaDB — a period's `StartColumn` or `EndColumn` names no column of the table; MariaDB refuses the period. |
+| `SS-PER-002` | Error | MariaDB — a table declares more than one period; MariaDB allows one application-time period per table. |
 
 Related-table resolution honors the same schema defaulting a real deployment uses -- an explicit `RelatedTableSchema`, a `schema.table` prefix on `RelatedTable`, or (falling back) the owning table's own schema. Because every foreign key target resolves to a concrete schema one way or another, there's no such thing as an "ambiguous target" here -- a `RelatedTable` either resolves to a real table or it doesn't.
 
@@ -179,11 +192,14 @@ Every package ships committed `.json-schemas/*.schema` files -- generated by Sch
 |------|----------|---------|
 | `SS-STALE-001` | Error | The committed schema no longer matches what the current domain model would generate -- regenerate it. |
 | `SS-STALE-002` | Error | A committed schema file could not be parsed. It is unusable, so any `Extensions` governance authored in it was **not** applied this run. |
+| `SS-STALE-003` | Warning | The committed schema was written by a newer SchemaSmith: it holds everything this version generates and more. The finding names what this version does not know. Do not regenerate it with this version -- that would remove them; upgrade instead. |
 | `SS-JSON-001` | Error | A package JSON file violates its schema -- a misnamed property, a missing required field, a value outside a declared enum, or a violation of a hand-authored `Extensions` governance fragment. |
 
 **Pass 1 (staleness) runs first.** `--Validate` regenerates each committed schema type in memory from the current domain model, merges the committed file's hand-authored `Extensions` fragment back in, and compares the result to what's actually committed. A mismatch means the domain model moved on since someone last ran `--WriteSchemasOnly` -- `SS-STALE-001`.
 
 **A stale type is still validated in Pass 2**, against that merged schema. Out of date is not the same as meaningless: the governance authored into the file is still what you asked for, so skipping the type would quietly stop enforcing it while reporting only the staleness. Expect Pass 2 findings a stale schema was previously hiding -- those files really are invalid against what will be deployed.
+
+**A schema written by a newer SchemaSmith is not stale** -- `SS-STALE-003`, a warning. When the committed file holds everything this version generates plus more -- new properties, new values in a list of allowed values, a reworded description -- a teammate has upgraded and regenerated. The finding names what this version does not know, and does not advise regenerating, which would write the file back in the older shape. Pass 2 still validates against this version's model, so a file that actually uses something newer is reported, as this version's deploy would refuse it.
 
 **A schema that cannot be parsed is a different case** -- `SS-STALE-002`. There is no fragment to recover from an unreadable file, so that type falls back to a freshly generated schema and the governance the file carried is **not** enforced on that run. The finding says so rather than only naming the file. Regenerate it with `--WriteSchemasOnly`: the malformed file is replaced and you are warned, by name, that its authored `Extensions` fragment could not be preserved and must be re-applied.
 
@@ -244,7 +260,7 @@ The exit code is what makes `--Validate` a real CI gate rather than just a log y
 | `0` | No findings, or warnings only. |
 | `2` | At least one Error-severity finding (including a load failure). |
 
-Warnings never fail the run on their own -- they're advisory (a missing `VariantName` label, an unused token). Only Error-severity findings, or a package that fails to load at all, trip the exit code CI cares about.
+Warnings do not fail the run on their own -- they're advisory (a missing `VariantName` label, an unused token). Only Error-severity findings, or a package that fails to load at all, trip the exit code CI cares about. To treat warnings as failures, pass `--ExitNonZeroOnWarning` (or set `ExitNonZeroOnWarning` to `true`): a board with warnings and no errors then exits `1`.
 
 ---
 

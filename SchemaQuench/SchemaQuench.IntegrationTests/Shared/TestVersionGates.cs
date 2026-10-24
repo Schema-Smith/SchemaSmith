@@ -2,6 +2,7 @@
 
 using Schema.DataAccess;
 using Schema.Domain;
+using Schema.Utility;
 
 namespace SchemaQuench.IntegrationTests.Shared;
 
@@ -11,17 +12,16 @@ namespace SchemaQuench.IntegrationTests.Shared;
 /// </summary>
 internal static class TestVersionGates
 {
-    /// <summary>Whether the target enforces CHECK constraints + exposes INFORMATION_SCHEMA.CHECK_CONSTRAINTS.
-    /// MySQL: 8.0.16 (major >= 8). MariaDB (>= 10.2 floor), SQL Server, PostgreSQL: always.</summary>
+    /// <summary>Whether SchemaSmith deploys and reads CHECK constraints on the target: MySQL 8.0.16 and MariaDB 10.2.22, where
+    /// INFORMATION_SCHEMA.CHECK_CONSTRAINTS arrived (SchemaSmith_SupportsCheckConstraints); SQL Server and PostgreSQL always.</summary>
     public static bool SupportsCheckConstraints(Platform platform, string connectionString)
     {
-        if (platform != Platform.MySQL) return true;
+        if (platform.GetBasePlatform() != Platform.MySQL) return true;
         using var conn = DbConnectionFactory.ForPlatform(platform).GetDbConnection(connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT VERSION()";
-        var parts = (cmd.ExecuteScalar()?.ToString() ?? "").Split('.');
-        return !(parts.Length >= 2 && int.TryParse(parts[0], out var major) && int.TryParse(parts[1], out var minor))
-               || major * 100 + minor >= 800;
+        var patch = VersionHelper.ParsePatchComparable(cmd.ExecuteScalar()?.ToString(), platform);
+        return patch == null || patch >= (platform == Platform.MariaDb ? 100222 : 80016);
     }
 }

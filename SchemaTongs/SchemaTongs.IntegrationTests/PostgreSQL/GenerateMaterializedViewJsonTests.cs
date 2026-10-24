@@ -50,6 +50,7 @@ GROUP BY customer_id
 WITH DATA;
 
 CREATE UNIQUE INDEX ix_mv_order_summary_customer ON public.mv_order_summary (customer_id);
+COMMENT ON INDEX public.ix_mv_order_summary_customer IS 'by customer';
 ";
         cmd.ExecuteNonQuery();
 
@@ -73,6 +74,7 @@ CREATE UNIQUE INDEX ix_mv_order_summary_customer ON public.mv_order_summary (cus
         Assert.That(view.Indexes[0].Name, Is.EqualTo("ix_mv_order_summary_customer"));
         Assert.That(view.Indexes[0].Unique, Is.True);
         Assert.That(view.Indexes[0].IndexColumns, Is.EqualTo("customer_id"));
+        Assert.That(view.Indexes[0].Description, Is.EqualTo("by customer"), "an index's comment is its Description");
 
         conn.Close();
     }

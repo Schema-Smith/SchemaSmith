@@ -312,8 +312,10 @@ TRUNCATE TABLE SchemaSmith.TestLog";
             SetupSharedMocks();
 
             FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "TemplateObjectsScriptError");
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = "true";
 
             RunSchemaQuench();
+            FactoryContainer.Resolve<IConfigurationRoot>()["WriteDebugSql"] = null;
 
             _progressLog.Received(1).Error(Arg.Is<string>(s => s.EndsWith("Unable to quench all scripts")));
             _progressLog.Received(1).Error(Arg.Is<string>(s => s.EndsWith("One or more database quenches FAILED")));
@@ -350,7 +352,10 @@ TRUNCATE TABLE SchemaSmith.TestLog";
 
             _progressLog.Received(1).Error(Arg.Is<string>(s => s.EndsWith("KABOOM!") && !s.Contains("Unable to quench")));
             _progressLog.Received(1).Error(Arg.Is<string>(s => s.EndsWith("KABOOM!") && s.Contains("Unable to quench")));
-            _progressLog.Received(1).Error(Arg.Is<string>(s => s.Contains("Resolved SQL written to:") && s.Contains("MigrationScripts")));
+            // #585: this used to expect the package's own script named as the resolved SQL. Without WriteDebugSql no file is
+            // written, so the failure says how to get one, and nothing names the script as resolved SQL.
+            _progressLog.DidNotReceive().Error(Arg.Is<string>(s => s.Contains("Resolved SQL written to:")));
+            _progressLog.Received().Error(Arg.Is<string>(s => s.Contains("Rerun with --WriteDebugSql")));
             _environment.Received(1).Exit(2);
             _environment.DidNotReceive().Exit(3);
 

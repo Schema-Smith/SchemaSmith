@@ -42,7 +42,7 @@ public static class Program
 
         if (CommandLineParser.ContainsSwitch("WriteSchemasOnly"))
         {
-            WriteSchemasOnly();
+            LogBackup.BackupLogsAndExit("SchemaTongs", 0, WriteSchemasOnly());
             return;
         }
 
@@ -72,10 +72,18 @@ public static class Program
     /// <summary>
     /// Regenerates the .json-schemas/*.schema validation files for an existing product
     /// without connecting to a database. Reads the platform from Product.json and writes
-    /// the schemas on the fly from the current C# domain types.
+    /// the schemas on the fly from the current C# domain types. Returns how many warnings it printed, which go to the
+    /// console rather than the log and so count toward ExitNonZeroOnWarning only through the exit call.
     /// </summary>
-    internal static void WriteSchemasOnly()
+    internal static int WriteSchemasOnly()
     {
+        var warnings = 0;
+        void Warn(string warning)
+        {
+            warnings++;
+            Console.WriteLine($"WARNING: {warning}");
+        }
+
         var config = FactoryContainer.ResolveOrCreate<Microsoft.Extensions.Configuration.IConfigurationRoot>();
         var productPath = config[SettingsKeys.ProductKeys.Path] ?? ".";
         var productFile = Path.Combine(productPath, "Product.json");
@@ -85,8 +93,7 @@ public static class Program
 
         var product = Product.LoadForDisplay(productFile);
         Console.WriteLine($"Regenerating .json-schemas for {product.Name} ({product.Platform})...");
-        var results = RepositoryHelper.WriteSchemaFilesWithResults(productPath, product.Platform,
-            warning => Console.WriteLine($"WARNING: {warning}"));
+        var results = RepositoryHelper.WriteSchemaFilesWithResults(productPath, product.Platform, Warn);
 
         // Say which of the three things happened. "Done." was true of every outcome, including the one
         // where nothing needed doing and the one where every schema in the package was rewritten -- on a
@@ -100,11 +107,11 @@ public static class Program
 
         // Generating the schemas is only half of what makes an editor validate: without a $schema
         // reference in each package file, the .json-schemas folder sits there and nothing reads it.
-        var stamped = RepositoryHelper.StampSchemaRefs(productPath, product.Platform,
-            warning => Console.WriteLine($"WARNING: {warning}"));
+        var stamped = RepositoryHelper.StampSchemaRefs(productPath, product.Platform, Warn);
         Console.WriteLine(stamped == 0
             ? "All package files already reference their schema."
             : $"Added a $schema reference to {stamped} package file(s).");
+        return warnings;
     }
 
     internal static Platform ResolvePlatform()

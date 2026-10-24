@@ -96,6 +96,51 @@ public class LogBackupTests
         }
     }
 
+    // --Validate prints its board as plain lines, so a board of warnings logged nothing at Warn and exited 0 with the
+    // switch on. Its Warning findings are passed in and count the same.
+    [TestCase(true, 2, 0, 1)]
+    [TestCase(false, 2, 0, 0)]
+    [TestCase(true, 0, 0, 0)]
+    [TestCase(true, 2, 2, 2)]
+    public void BackupLogsAndExit_CountsWarningsTheRunReportedWithoutLoggingThem(bool switchOn, int warnings, int runCode, int expected)
+    {
+        if (switchOn) _mockEnvironment.CommandLine.Returns("app.exe --Validate --ExitNonZeroOnWarning");
+        FactoryContainer.Register<Microsoft.Extensions.Configuration.IConfigurationRoot>(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
+        _mockDirectory.GetFiles(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<SearchOption>()).Returns(Array.Empty<string>());
+        lock (FactoryContainer.SharedLockObject)
+        {
+            WarningCounter.Reset();
+            try
+            {
+                LogBackup.BackupLogsAndExit("TestApp", runCode, warnings);
+
+                _mockEnvironment.Received(1).Exit(expected);
+            }
+            finally { WarningCounter.Reset(); }
+        }
+    }
+
+    [Test]
+    public void BackupLogsAndExit_SaysWhyItExitsOne()
+    {
+        _mockEnvironment.CommandLine.Returns("app.exe --ExitNonZeroOnWarning");
+        FactoryContainer.Register<Microsoft.Extensions.Configuration.IConfigurationRoot>(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
+        _mockDirectory.GetFiles(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<SearchOption>()).Returns(Array.Empty<string>());
+        var progressLog = Substitute.For<log4net.ILog>();
+        LogFactory.Register("ProgressLog", progressLog);
+        lock (FactoryContainer.SharedLockObject)
+        {
+            WarningCounter.Reset();
+            try
+            {
+                LogBackup.BackupLogsAndExit("TestApp", 0, unloggedWarnings: 2);
+
+                progressLog.Received(1).Info("Exit code 1: 2 warning(s) and ExitNonZeroOnWarning is on.");
+            }
+            finally { WarningCounter.Reset(); }
+        }
+    }
+
     [Test]
     public void BackupLogsAndExit_ExitNonZeroOnWarning_AsABareSwitch()
     {

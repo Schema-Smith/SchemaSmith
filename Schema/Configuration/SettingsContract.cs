@@ -75,7 +75,7 @@ public static class SettingsContract
             SettingsKeys.DeliverData, SettingsKeys.VerboseLogging, SettingsKeys.FailureContextLines,
             SettingsKeys.BottleneckThresholdMs, SettingsKeys.TrackRunOnceMigrations,
             SettingsKeys.PruneObsoleteMigrationTracking,
-            SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.ScriptTokens,
+            SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.WriteDebugSql, SettingsKeys.ScriptTokens,
             SettingsKeys.LogHygiene, SettingsKeys.ExitNonZeroOnWarning
         ]), StringComparer.OrdinalIgnoreCase),
 

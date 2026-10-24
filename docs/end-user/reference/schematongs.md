@@ -67,7 +67,7 @@ Source SqlServer version 16.0.4260.1 (compatibility level 160)
 
 The compatibility level is appended on SQL Server only; the other engines have no such concept. The version string is whatever the engine itself publishes — see [SchemaQuench — The detected version is reported in each engine's own form](schemaquench.md#the-detected-version-is-reported-in-each-engines-own-form) for why the four differ.
 
-**The floor is structural, not opt-in.** You declare nothing. It is the version below which the engine scripts do not run at all — SQL Server 2008, PostgreSQL 12, MySQL 5.7.22 (8.0.23 on the 8.0 line), MariaDB 10.2.7. A below-floor source aborts before extraction starts:
+**The floor is structural, not opt-in.** You declare nothing. It is the version below which the engine scripts do not run at all — SQL Server 2008, PostgreSQL 12, MySQL 5.7.22 (8.0.23 on the 8.0 line), MariaDB 10.2.13. A below-floor source aborts before extraction starts:
 
 ```
 srv01: detected SqlServer version 9.00.5000.00 is below the minimum supported version
@@ -561,7 +561,7 @@ The first extraction is where your schema package is born. When SchemaTongs runs
 6. Creates a `.json-schemas/` directory with JSON Schema validation files generated **on the fly** from the live engine types.
 7. Writes a `$schema` reference into each package JSON, pointing at the matching file from step 6, so editors validate the package with no per-user configuration.
 
-On subsequent runs against an existing package, SchemaTongs overwrites object scripts and table definitions with the current database state. It does not modify the content of `Product.json` or `Template.json` -- if you change `Platform`, `Name`, or `TemplateOrder` after the first extraction, those edits stick. The one exception is the `$schema` reference from step 7: it is added if absent and otherwise left alone, which means **a reference you deleted on purpose is written again on the next run** -- there is no record distinguishing it from one that was never there.
+On subsequent runs against an existing package, SchemaTongs overwrites object scripts and table definitions with the current database state. It does not modify the content of `Product.json` or `Template.json` -- if you change `Platform`, `Name`, or `TemplateOrder` after the first extraction, or add keys of your own, those edits stick. Extracting a template the product does not list yet adds it to `TemplateOrder` and adds its `<Template>Db` script token, and nothing else. The one exception is the `$schema` reference from step 7: it is added if absent and otherwise left alone, which means **a reference you deleted on purpose is written again on the next run** -- there is no record distinguishing it from one that was never there.
 
 ### Helper procedures
 
@@ -643,7 +643,7 @@ order explicitly, so the tool's own default is `Physical`.
 
 The `Product:CheckConstraintStyle` setting controls how check constraints are represented in extracted table JSON. It only takes effect when creating a new `Product.json` -- on existing products, the style is read from the product file itself.
 
-**SQL Server and PostgreSQL only.** MySQL and MariaDB always extract check constraints table-level, into the `CheckConstraints` array, whatever this setting says: their catalog cannot attribute a check to a column. A column `CheckExpression` is not accepted on those engines either -- see [Check Constraints](schema-packages.md#check-constraints).
+**SQL Server and PostgreSQL only.** MySQL always extracts check constraints table-level, into the `CheckConstraints` array, whatever this setting says: its catalog cannot attribute a check to a column, and a column `CheckExpression` is not accepted there. MariaDB extracts a column-level check -- the one MariaDB names after its column -- as that column's `CheckExpression`, and every other check table-level, whatever this setting says. See [Check Constraints](schema-packages.md#check-constraints).
 
 ### ColumnLevel (default)
 

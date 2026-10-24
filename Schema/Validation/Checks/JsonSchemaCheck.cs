@@ -64,12 +64,15 @@ public sealed class JsonSchemaCheck : ISchemaCheck
 {
     private const string StaleCode = "SS-STALE-001";
     private const string MalformedCommittedCode = "SS-STALE-002";
+    private const string NewerCommittedCode = "SS-STALE-003";
     private const string StaleCategory = "Staleness";
     private const string JsonCode = "SS-JSON-001";
     private const string JsonCategory = "JsonSchema";
 
     public IEnumerable<Finding> Run(ValidationContext ctx)
     {
+        // The schemas are per platform, so without one there is nothing to compare against.
+        if (ctx.Platform == Platform.Unknown) return [];
         var dir = ProductDirectoryWrapper.GetFromFactory();
         var file = ProductFileWrapper.GetFromFactory();
         var schemaDir = Path.Combine(ctx.PackagePath, ".json-schemas");
@@ -99,10 +102,18 @@ public sealed class JsonSchemaCheck : ISchemaCheck
 
             if (!JToken.DeepEquals(merged, committed))
             {
-                findings.Add(new Finding(Severity.Error, StaleCode, StaleCategory, schemaPath,
-                    $"Committed .json-schemas are stale — regenerate via --WriteSchemasOnly. " +
-                    $"Structural validation used the current model merged with this file's authored " +
-                    $"custom-property governance."));
+                var unknown = new List<string>();
+                if (Describes(committed, merged, "", unknown) && unknown.Count > 0)
+                    findings.Add(new Finding(Severity.Warning, NewerCommittedCode, StaleCategory, schemaPath,
+                        $"Committed .json-schemas were written by a newer SchemaSmith: they describe {string.Join(", ", unknown)}, " +
+                        "which this version does not know. Do not regenerate with this version -- that would remove them; " +
+                        "upgrade to match. Structural validation used this version's model, so a file that uses them is " +
+                        "reported, as this version's deploy would refuse it."));
+                else
+                    findings.Add(new Finding(Severity.Error, StaleCode, StaleCategory, schemaPath,
+                        $"Committed .json-schemas are stale — regenerate via --WriteSchemasOnly. " +
+                        $"Structural validation used the current model merged with this file's authored " +
+                        $"custom-property governance."));
 
                 // A STALE FILE IS STILL A VALID GOVERNANCE SOURCE, even though it is not a valid
                 // structural one. `merged` is the CURRENT model carrying the Extensions fragment
@@ -129,7 +140,7 @@ public sealed class JsonSchemaCheck : ISchemaCheck
 
         foreach (var jsonFile in jsonFiles)
         {
-            var typeName = MapFileToType(jsonFile);
+            var typeName = MapFileToType(ctx.PackagePath, jsonFile);
             if (typeName == null) continue;
             if (!schemaByType.TryGetValue(typeName, out var schema)) continue;
 
@@ -274,6 +285,88 @@ public sealed class JsonSchemaCheck : ISchemaCheck
         };
     }
 
+    // Whether `committed` holds everything `current` does, collecting what it holds beyond that (#560): a newer
+    // SchemaSmith's file, rather than an out-of-date one. A newer release adds properties, adds values to an enum-like
+    // pattern, adds members to a oneOf, and rewords descriptions; none of that is a difference. A required list moves
+    // both ways between releases (2.8 made the MySQL partition Expression optional), so it decides nothing.
+    private static bool Describes(JToken committed, JToken current, string path, List<string> unknown)
+    {
+        switch (current)
+        {
+            case JObject currentObject when committed is JObject committedObject:
+                foreach (var property in currentObject.Properties())
+                {
+                    if (property.Name is "description" or "required") continue;
+                    if (committedObject[property.Name] is not { } inCommitted) return false;
+                    if (property.Name == "pattern" && property.Value.Type == JTokenType.String && inCommitted.Type == JTokenType.String)
+                    {
+                        if (!PatternCovers((string)inCommitted, (string)property.Value, path, unknown)) return false;
+                        continue;
+                    }
+                    if (!Describes(inCommitted, property.Value, Join(path, property.Name), unknown)) return false;
+                }
+                foreach (var property in committedObject.Properties().Where(p => p.Name is not ("description" or "required") && currentObject[p.Name] == null))
+                    unknown.Add(Join(path, property.Name));
+                return true;
+            case JArray currentArray when committed is JArray committedArray:
+                // Each element this version generates must be held by a distinct element of the committed array.
+                var matched = new HashSet<int>();
+                foreach (var element in currentArray)
+                {
+                    var match = Enumerable.Range(0, committedArray.Count)
+                        .FirstOrDefault(k => !matched.Contains(k) && Describes(committedArray[k], element, path, []), -1);
+                    if (match < 0) return false;
+                    matched.Add(match);
+                    Describes(committedArray[match], element, path, unknown);
+                }
+                unknown.AddRange(Enumerable.Range(0, committedArray.Count).Where(k => !matched.Contains(k))
+                    .Select(k => $"{path} {committedArray[k].ToString(Newtonsoft.Json.Formatting.None)}"));
+                return true;
+            default:
+                return JToken.DeepEquals(committed, current);
+        }
+    }
+
+    // An enum-like value list is generated as ^(?:A|B|C)$, case-insensitive ones with [Aa] classes. The committed pattern
+    // covers this version's when it accepts every alternative this one does.
+    private static bool PatternCovers(string committed, string current, string path, List<string> unknown)
+    {
+        if (committed == current) return true;
+        var committedAlternatives = Alternatives(committed);
+        var currentAlternatives = Alternatives(current);
+        if (committedAlternatives == null || currentAlternatives == null || !currentAlternatives.IsSubsetOf(committedAlternatives)) return false;
+        unknown.AddRange(committedAlternatives.Except(currentAlternatives).Select(a => $"{path} '{a}'"));
+        return true;
+    }
+
+    private static HashSet<string> Alternatives(string pattern)
+    {
+        if (!pattern.StartsWith("^(?:") || !pattern.EndsWith(")$")) return null;
+        var body = pattern[4..^2];
+        var alternatives = new HashSet<string>(StringComparer.Ordinal);
+        var depth = 0;
+        var start = 0;
+        for (var k = 0; k <= body.Length; k++)
+        {
+            if (k < body.Length && body[k] == '(') depth++;
+            else if (k < body.Length && body[k] == ')') depth--;
+            else if (k == body.Length || (body[k] == '|' && depth == 0))
+            {
+                alternatives.Add(CaseFoldedAlternative.Replace(body[start..k], m =>
+                    char.ToLowerInvariant(m.Groups[1].Value[0]) == char.ToLowerInvariant(m.Groups[2].Value[0]) ? m.Groups[1].Value : m.Value).ToLowerInvariant());
+                start = k + 1;
+            }
+        }
+        return alternatives;
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex CaseFoldedAlternative = new(@"\[([A-Za-z])([A-Za-z])\]");
+
+    // The schema keywords between property names carry no meaning for a reader: Columns.items.AnsiPadding, not
+    // properties.Columns.items.properties.AnsiPadding.
+    private static string Join(string path, string name) =>
+        name == "properties" ? path : string.IsNullOrEmpty(path) ? name : $"{path}.{name}";
+
     private static bool IsUnderJsonSchemasDir(string path) =>
         path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             .Any(segment => segment.Equals(".json-schemas", StringComparison.OrdinalIgnoreCase));
@@ -286,16 +379,23 @@ public sealed class JsonSchemaCheck : ISchemaCheck
     // classified by that folder even if it happens to be named Product.json/Template.json (e.g.
     // MySQL's schema-less <table>.json layout can produce Tables/Product.json for a table
     // literally named "Product") — otherwise it would be misread as the manifest.
-    private static string MapFileToType(string jsonFilePath)
+    // The NEAREST component folder between the package root and the file decides, so a subfolder that organises tables
+    // (Tables/Core/product.json) is still read as tables (#563). Folders above the package root never count.
+    private static readonly (string Folder, string Type)[] ComponentFolders =
+    [
+        ("Tables", "tables"), ("Indexed Views", "indexedviews"), ("Materialized Views", "materializedviews"),
+        ("Events", "events"), ("Domain Types", "domaintypes"), ("Enum Types", "enumtypes"), ("Sequences", "sequences"),
+    ];
+
+    internal static string MapFileToType(string packagePath, string jsonFilePath)
     {
-        var parent = Path.GetFileName(Path.GetDirectoryName(jsonFilePath) ?? "");
-        if (parent.Equals("Tables", StringComparison.OrdinalIgnoreCase)) return "tables";
-        if (parent.Equals("Indexed Views", StringComparison.OrdinalIgnoreCase)) return "indexedviews";
-        if (parent.Equals("Materialized Views", StringComparison.OrdinalIgnoreCase)) return "materializedviews";
-        if (parent.Equals("Events", StringComparison.OrdinalIgnoreCase)) return "events";
-        if (parent.Equals("Domain Types", StringComparison.OrdinalIgnoreCase)) return "domaintypes";
-        if (parent.Equals("Enum Types", StringComparison.OrdinalIgnoreCase)) return "enumtypes";
-        if (parent.Equals("Sequences", StringComparison.OrdinalIgnoreCase)) return "sequences";
+        var folders = Path.GetRelativePath(packagePath, Path.GetDirectoryName(jsonFilePath) ?? "")
+            .Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        foreach (var folder in folders.Reverse())
+        {
+            var match = ComponentFolders.FirstOrDefault(c => c.Folder.Equals(folder, StringComparison.OrdinalIgnoreCase));
+            if (match.Type != null) return match.Type;
+        }
 
         var fileName = Path.GetFileName(jsonFilePath);
         if (fileName.Equals("Product.json", StringComparison.OrdinalIgnoreCase)) return "products";

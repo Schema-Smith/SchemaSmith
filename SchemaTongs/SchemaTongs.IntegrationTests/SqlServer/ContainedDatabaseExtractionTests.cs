@@ -48,7 +48,7 @@ public class ContainedDatabaseExtractionTests
         using var conn = Open("master");
         using var cmd = conn.CreateCommand();
         Run(cmd, $"IF DB_ID('{_sourceDb}') IS NOT NULL BEGIN ALTER DATABASE [{_sourceDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_sourceDb}]; END");
-        if (_containmentWas == 0) Run(cmd, "EXEC sp_configure 'contained database authentication', 0; RECONFIGURE;");
+        // Left on: fixtures in other shard processes create contained databases too, and switching it off under them fails both.
     }
 
     [Test]

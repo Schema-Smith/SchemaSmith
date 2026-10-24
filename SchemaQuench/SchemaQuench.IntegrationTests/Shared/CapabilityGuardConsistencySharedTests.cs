@@ -30,7 +30,8 @@ public abstract class CapabilityGuardConsistencySharedTests : BaseTableQuenchTes
         ["default-expression"] = "SchemaSmith_SupportsDefaultExpression",
         ["invisible-column"] = "SchemaSmith_SupportsInvisibleColumn",
         ["column-srid"] = "SchemaSmith_SupportsColumnSrid",
-        ["functional-index"] = "SchemaSmith_SupportsFunctionalIndex"
+        ["functional-index"] = "SchemaSmith_SupportsFunctionalIndex",
+        ["generated-column-collation"] = "SchemaSmith_SupportsGeneratedColumnCollation"
     };
 
     [Test]
@@ -56,6 +57,12 @@ public abstract class CapabilityGuardConsistencySharedTests : BaseTableQuenchTes
                         $"{fn}() must be 0 just below {cap.IntroducedInDisplay} ({at}) on {Platform}");
                     Assert.That(Probe(cmd, fn, at, patched), Is.EqualTo(1),
                         $"{fn}() must be 1 at {cap.IntroducedInDisplay} ({at}) on {Platform}");
+                    // A fix shipped on several lines flips at each line's own patch.
+                    foreach (var line in cap.IntroducedInPatchByLine ?? [])
+                    {
+                        Assert.That(Probe(cmd, fn, line - 1, true), Is.EqualTo(0), $"{fn}() must be 0 just below {line} on {Platform}");
+                        Assert.That(Probe(cmd, fn, line, true), Is.EqualTo(1), $"{fn}() must be 1 at {line} on {Platform}");
+                    }
                 }
             });
         }

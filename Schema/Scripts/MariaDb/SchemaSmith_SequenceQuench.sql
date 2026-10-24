@@ -41,6 +41,8 @@ BEGIN
     WHILE v_idx < v_count DO
         SET v_Name = TRIM(BOTH '`' FROM SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_Sequences, CONCAT('$[', v_idx, '].Name'))));
         SET v_DataType = LOWER(COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_Sequences, CONCAT('$[', v_idx, '].DataType')))), ''), 'bigint'));
+        -- The engine stores integer as int, so the declared spelling is compared, and created, as int.
+        IF v_DataType LIKE 'integer%' THEN SET v_DataType = CONCAT('int', SUBSTRING(v_DataType, 8)); END IF;
         -- A JSON number comes back as its text; a missing or null property as NULL.
         SET @ss_seq_raw = NULLIF(JSON_EXTRACT(p_Sequences, CONCAT('$[', v_idx, '].Start')), 'null');
         SET v_Start = IF(@ss_seq_raw IS NULL, NULL, CAST(@ss_seq_raw AS SIGNED));

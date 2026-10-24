@@ -8,7 +8,7 @@ using SchemaQuench.IntegrationTests.Shared;
 namespace SchemaQuench.IntegrationTests.MariaDb;
 
 [Category("MariaDb")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_DropCompositeFkIndexTests : TableQuench_DropCompositeFkIndexSharedTests
 {
     protected override Platform Platform => Platform.MariaDb;

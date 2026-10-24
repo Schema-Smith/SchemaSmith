@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
@@ -42,6 +43,35 @@ public abstract class UnchangedModuleSkipSharedTests : ObjectScriptDeployFixture
     {
         Exec(DropOverView);
         foreach (var drop in DropStatements) Exec(drop);
+    }
+
+    // A target database's connect that failed said only the provider's text -- "The operation has timed out" for a stall --
+    // under "Begin Quench", naming neither the target nor that it was the connect. A refused login fails at the same open.
+    [Test]
+    public void AFailedConnect_NamesTheEngineTheTargetAndThatItWasTheConnect()
+    {
+        var result = Deploy(expectSuccess: false, login: ("schemasmith_no_such_user", "not-the-password"));
+        var expected = $"Unable to connect to {Platform.ToDisplayName()} at 127.0.0.1 [Database: {MainDb}] with user schemasmith_no_such_user: ";
+        Assert.That(result.Log.Where(l => l != null && l.StartsWith("ERROR")), Has.Some.Contains(expected),
+            string.Join("\n", result.Log.Where(l => l != null && l.StartsWith("ERROR"))));
+    }
+
+    // SQL Server took a baseline script's error as the answer "no": the engine error was logged, then "Invalid baseline for
+    // this release", which reads as a refusal of a database that was never checked. The other engines surfaced the error.
+    [Test]
+    public void ABaselineScriptThatFails_ReportsTheEngineError_NotAnInvalidBaseline()
+    {
+        var templatePath = Path.Join(TemplateDir, "Template.json");
+        File.WriteAllText(templatePath, File.ReadAllText(templatePath).Replace("\"ScriptFolders\"",
+            "\"BaselineValidationScript\": \"SELECT COUNT(*) FROM schemasmith_no_such_version_table\", \"ScriptFolders\""));
+
+        var errors = Deploy(expectSuccess: false).Log.Where(l => l != null && l.StartsWith("ERROR")).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(errors, Has.Some.Contains("schemasmith_no_such_version_table"), "the engine's error is reported");
+            Assert.That(errors, Has.None.Contains("Invalid baseline"), string.Join("\n", errors));
+        });
     }
 
     [Test]

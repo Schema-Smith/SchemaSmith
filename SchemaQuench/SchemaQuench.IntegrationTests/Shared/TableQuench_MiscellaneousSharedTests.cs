@@ -135,14 +135,12 @@ public abstract class TableQuench_MiscellaneousSharedTests : BaseTableQuenchTest
             """;
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{json.Replace("'", "''")}')";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         var ex = Assert.Throws<MySqlException>(() =>
         {
-            // Index-drop flags (trailing 0, 0) are irrelevant here: the call must fail at the
-            // ownership check long before any index work.
-            cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{TestSchema}', 0, 0, 1, 1, 1, 1, 0, 0, 0)";
-            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ValidateTableOwnership('{_productName}', '{TestSchema}')";
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         });
         Assert.That(ex!.Message, Does.Contain("already owned by another product").IgnoreCase);
 
@@ -222,15 +220,15 @@ VALUES ('{uniqueProductName}', '', '{TestSchema}', 'TABLE', 'TableToBeDropped');
             """;
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{json.Replace("'", "''")}')";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingTableAndColumnQuench('{TestSchema}', 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // DropTables=1; index-drop flags (trailing 0, 0) off — this test is about table removal, and
         // nothing here recreates an index.
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{uniqueProductName}', '{TestSchema}', 0, 1, 1, 1, 1, 1, 0, 0, 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Table should be dropped
         cmd.CommandText = $@"
@@ -362,23 +360,23 @@ VALUES ('OtherProduct', '', '{TestSchema}', 'TABLE', 'TableOwnedByOtherProduct')
             """;
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{json.Replace("'", "''")}')";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingTableAndColumnQuench('{TestSchema}', 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Trailing 1, 1 are DropUnknownIndexes and DropIndexesRemovedFromProduct — the flags
         // MissingIndexesAndConstraintsQuench used to carry. Index removal happens HERE, so this is the
         // call that drops IDX_DropMe (owned, removed from the definition) and IDX_Custom (out-of-band)
         // for ShouldDropIndexNoLongerPartOfProduct, and that renames IDX_WrongName / UQ_OldName.
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{TestSchema}', 0, 0, 1, 1, 1, 1, 0, 1, 1)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingIndexesAndConstraintsQuench('{_productName}', '{TestSchema}', 0, 1)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ForeignKeyQuench('{_productName}', '{TestSchema}', 0, 1, 1)"; // DropUnknown=1
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Index Only
         var jsonIO = """
@@ -396,10 +394,10 @@ VALUES ('OtherProduct', '', '{TestSchema}', 'TABLE', 'TableOwnedByOtherProduct')
             """;
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{jsonIO.Replace("'", "''")}')";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_IndexOnlyQuench('{_productName}', '{TestSchema}', 0, 1, 1)"; // DropUnknown=1
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         conn.Close();
     }
@@ -456,7 +454,7 @@ INSERT INTO `{_mainDb}`.`{tableName}` (id, price) VALUES (1, 100.00);
 
         cmd.CommandText = $"CALL SchemaSmith_TableQuench('{Guid.NewGuid()}', '{_mainDb}', '{json.Replace("'", "''")}', 0, 0, 0)";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify both generated columns exist
         cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{tableName}' AND COLUMN_NAME = 'tax' AND GENERATION_EXPRESSION != ''";
@@ -503,7 +501,7 @@ INSERT INTO `{_mainDb}`.`{tableName}` (id, price) VALUES (1, 100.00);
         // Call SchemaSmith_TableQuench with p_WhatIf = 1
         cmd.CommandText = $"CALL SchemaSmith_TableQuench('{productName}', '{_mainDb}', '{json.Replace("'", "''")}', 1, 0, 0)";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify the table was NOT created
         cmd.CommandText = $@"
@@ -545,7 +543,7 @@ INSERT INTO `{_mainDb}`.`{tableName}` (id, price) VALUES (1, 100.00);
         }]
         """;
         cmd.CommandText = $"CALL SchemaSmith_TableQuench('{productName}', '{_mainDb}', '{jsonV1.Replace("'", "''")}', 0, 0, 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"INSERT INTO `{_mainDb}`.`{oldTableName}` (id, val) VALUES (1, 42)";
         cmd.ExecuteNonQuery();
@@ -565,7 +563,7 @@ INSERT INTO `{_mainDb}`.`{tableName}` (id, price) VALUES (1, 100.00);
         }]
         """;
         cmd.CommandText = $"CALL SchemaSmith_TableQuench('{productName}', '{_mainDb}', '{jsonV2.Replace("'", "''")}', 0, 0, 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{oldTableName}'";
         Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(0), "Old table should no longer exist after rename");
@@ -606,7 +604,7 @@ INSERT INTO `{_mainDb}`.`{tableName}` (id, price) VALUES (1, 100.00);
         }]
         """;
         cmd.CommandText = $"CALL SchemaSmith_TableQuench('{productName}', '{_mainDb}', '{jsonV1.Replace("'", "''")}', 0, 0, 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.CommandText = $"INSERT INTO `{_mainDb}`.`{tableName}` (id, old_col) VALUES (1, 99)";
         cmd.ExecuteNonQuery();
 
@@ -623,7 +621,7 @@ INSERT INTO `{_mainDb}`.`{tableName}` (id, price) VALUES (1, 100.00);
         }]
         """;
         cmd.CommandText = $"CALL SchemaSmith_TableQuench('{productName}', '{_mainDb}', '{jsonV2.Replace("'", "''")}', 0, 0, 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{tableName}' AND COLUMN_NAME = 'old_col'";
         Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(0), "Old column name should no longer exist");
@@ -667,7 +665,7 @@ INSERT INTO `{_mainDb}`.`{tableName}` (id, price) VALUES (1, 100.00);
         }]
         """;
         cmd.CommandText = $"CALL SchemaSmith_TableQuench('{productName}', '{_mainDb}', '{jsonV1.Replace("'", "''")}', 0, 0, 1)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.CommandText = $"INSERT INTO `{_mainDb}`.`{oldTableName}` (code) VALUES (5)";
         cmd.ExecuteNonQuery();
 
@@ -687,7 +685,7 @@ INSERT INTO `{_mainDb}`.`{tableName}` (id, price) VALUES (1, 100.00);
         }]
         """;
         cmd.CommandText = $"CALL SchemaSmith_TableQuench('{productName}', '{_mainDb}', '{jsonV2.Replace("'", "''")}', 0, 0, 1)";
-        Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(), "Renaming a table and its unique index via OldName should not error");
+        Assert.DoesNotThrow(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()), "Renaming a table and its unique index via OldName should not error");
 
         cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{oldTableName}'";
         Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(0), "Old table should no longer exist");
@@ -732,7 +730,7 @@ INSERT INTO `{_mainDb}`.`{tableName}` (id, price) VALUES (1, 100.00);
         }]
         """;
         cmd.CommandText = $"CALL SchemaSmith_TableQuench('{productName}', '{_mainDb}', '{jsonV1.Replace("'", "''")}', 0, 0, 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.CommandText = $"INSERT INTO `{_mainDb}`.`{oldTableName}` (id, val) VALUES (1, 42)";
         cmd.ExecuteNonQuery();
 
@@ -752,7 +750,7 @@ INSERT INTO `{_mainDb}`.`{tableName}` (id, price) VALUES (1, 100.00);
         }]
         """;
         cmd.CommandText = $"CALL SchemaSmith_TableQuench('{productName}', '{_mainDb}', '{jsonV2.Replace("'", "''")}', 0, 0, 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{newTableName}'";
         Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(1), "Renamed table should exist");

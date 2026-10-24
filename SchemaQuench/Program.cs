@@ -39,6 +39,10 @@ public static class Program
             return;
         }
         SettingsContract.WarnOnUnrecognizedKeys(config, SettingsTool.SchemaQuench, LogFactory.GetLogger("ProgressLog").Warn);
+        // TRANSITIONAL (ScrubArtifacts, deprecated in 2.8, #576): delete two releases past 2.8 GA with SettingsKeys.ScrubArtifacts.
+        if (!string.IsNullOrWhiteSpace(config[SettingsKeys.ScrubArtifacts]))
+            LogFactory.GetLogger("ProgressLog").Warn("ScrubArtifacts is deprecated and does nothing: debug SQL is written only with WriteDebugSql, " +
+                                                     "and holds the real values. Remove the setting.");
 
         RegisterCheckpointing();
 
@@ -52,7 +56,8 @@ public static class Program
             var result = validator.Validate(config[SettingsKeys.SchemaPackagePath] ?? ".");
             foreach (var line in ValidationReporter.Render(result.Findings))
                 LogFactory.GetLogger("ProgressLog").Info(line);
-            LogBackup.BackupLogsAndExit("SchemaQuench", result.HasErrors ? 2 : 0);
+            LogBackup.BackupLogsAndExit("SchemaQuench", result.HasErrors ? 2 : 0,
+                System.Linq.Enumerable.Count(result.Findings, f => f.Severity == Schema.Validation.Severity.Warning));
             return;
         }
 
@@ -117,6 +122,8 @@ public static class Program
         if (!productQuench.Failed)
         {
             CleanupCheckpoints();
+            // #576: a clean run leaves none of its debug files behind.
+            ResolvedSqlArtifactWriter.DeleteOwned(DebugSql.ArtifactDirectory, o => o.Run == ResolvedSqlArtifactWriter.RunId);
             // 1 when a feature was downgraded on a target that lacks it: the deploy finished, but not everything the
             // package declares is in place. The summary lists each downgrade.
             LogBackup.BackupLogsAndExit("SchemaQuench", productQuench.Incomplete ? 1 : 0);
@@ -163,7 +170,7 @@ public static class Program
 
     private static readonly string[] KnownArguments =
     {
-        "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle", "WhatIf"
+        "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle", "WhatIf", "WriteDebugSql"
     };
 
     private static void ToolSpecificSwitches()
@@ -177,5 +184,6 @@ public static class Program
         Console.WriteLine("  --WhatIf                         Dry run: report what would change and change nothing of yours (same as the WhatIfONLY setting).");
         Console.WriteLine("  --WhatIfDetail:<mode>            WhatIf console verbosity: concise | normal (default) | verbose. Concise collapses each section's per-script lines into per-category counts. Does not affect the WhatIf summary file.");
         Console.WriteLine("  --report:<basepath>              Write the deployment summary to <basepath>.json and <basepath>.md instead of the log directory. Give the path without an extension.");
+        Console.WriteLine("  --WriteDebugSql                  Write the resolved SQL of each step to ArtifactPath (same as the WriteDebugSql setting). Holds real values; local debugging only.");
     }
 }

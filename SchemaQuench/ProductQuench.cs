@@ -95,6 +95,7 @@ public class ProductQuench
 
     /// <summary>Snapshot of every work unit's captured outcome so far. Used by a later slice (E4d).</summary>
     internal IReadOnlyCollection<TargetResult> TargetResults => _targetResults.ToArray();
+    internal IReadOnlyCollection<FailureRecord> FailureRecords => _failureRecords.ToArray();
 
     internal MigrationScriptCapture MigrationScripts => _migrationScripts;
 
@@ -398,7 +399,7 @@ public class ProductQuench
 
         var required = VersionHelper.ParseDeclaredVersion(_product.MinimumVersion, _product.Platform);
         if (required == null)
-            throw new RunFailedException($"Product MinimumVersion '{_product.MinimumVersion}' is not a valid {_product.Platform} version.");
+            throw new RunFailedException($"Product MinimumVersion '{_product.MinimumVersion}' is not a valid {_product.Platform.ToDisplayName()} version.");
 
         _progressLog.Info("Validate Minimum Version");
         var detected = new List<(string Server, TargetVersionInfo Info)>();
@@ -495,6 +496,11 @@ public class ProductQuench
         ? _whatIfOnly == "true"
         : _whatIfOnly == "1";
 
+    // The engine is named because a package run with another engine's settings fails here, and "unable to connect"
+    // alone reads as a server that is down.
+    internal static string ConnectFailure(Platform platform, string server, string detail, string user) =>
+        $"Unable to connect to {platform.ToDisplayName()} at {server}{detail}{(string.IsNullOrWhiteSpace(user) ? "" : $" with user {user}")}";
+
     internal virtual IDbCommand GetCommand(string server)
     {
         var initDb = GetInitDatabase(_product.Platform);
@@ -522,7 +528,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new RunFailedException($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User]), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -571,7 +577,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new RunFailedException($"Unable to connect to {server} [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, $" [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]", _config[SettingsKeys.Target.User]), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -619,7 +625,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new RunFailedException($"Unable to connect to {server}{(!string.IsNullOrWhiteSpace(_config[SettingsKeys.Target.User]) ? $" with user {_config[SettingsKeys.Target.User]}" : "")}", e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User]), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -1169,6 +1175,14 @@ public class ProductQuench
     internal void QuenchProductScriptsWithCheckpoint(List<ProductFolder> folders, string msg, bool isBefore)
     {
         _updateFailed = false;
+        // #576: the previous run's debug files for the product's own scripts go, as each target's do in DatabaseQuench.
+        if (isBefore)
+        {
+            var initDb = GetInitDatabase(_product.Platform);
+            var servers = _secondaryServers.Append(_primaryServer).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            ResolvedSqlArtifactWriter.DeleteOwned(ResolveArtifactDirectory(), o =>
+                o.Product == _product.Name && servers.Contains(o.Server) && o.Database == initDb && o.Schema == "" && o.Run != ResolvedSqlArtifactWriter.RunId);
+        }
 
         if (_product.Platform == Platform.SqlServer && _secondaryServers.Count > 0)
         {
@@ -1634,7 +1648,19 @@ public class ProductQuench
                 wouldCreateThisDb = gate.WouldCreate;
             }
 
-            if (template.IsSchemaTemplate)
+            if (template.IsSchemaTemplate && wouldCreateThisDb && !schemasOverride && !previewOnly)
+            {
+                _progressLog.Info($"[{server}].[{db}] [WhatIf] Schemas are discovered once the database exists; template '{template.Name}' would deploy to each.");
+                workUnits.Add(new WorkUnit(server, db, template.Name, "")
+                {
+                    DatabaseSource = databaseSource,
+                    SchemaSource = "SchemaIdentificationScript",
+                    DatabaseFromOverride = databasesOverride,
+                    ProvisionDatabaseIfMissing = true,
+                    WouldCreateDatabase = true
+                });
+            }
+            else if (template.IsSchemaTemplate)
             {
                 List<string> schemas;
                 string schemaSource;
@@ -1752,6 +1778,7 @@ public class ProductQuench
             _errorLog.Error(
                 $"[{server}] Database existence check failed for '{databaseName}' (template '{template.Name}'):\r\n{e}");
             _updateFailed = true;
+            RecordDatabaseGateFailure(server, databaseName, template, "Database existence check failed", e.Message);
             return new DbAxisGate(false, false);
         }
 
@@ -1789,9 +1816,11 @@ public class ProductQuench
                 _errorLog.Error(
                     $"[{server}] Database provisioning failed for '{databaseName}' (template '{template.Name}'):\r\n{ex}");
                 _updateFailed = true;
+                RecordDatabaseGateFailure(server, databaseName, template, "Database provisioning failed", ex.Message);
                 return new DbAxisGate(false, false);
             }
-            return new DbAxisGate(true, false);
+            // #550: under WhatIf the database was only reported, so it does not exist for the unit to open.
+            return new DbAxisGate(true, IsWhatIfOnly);
         }
 
         // Skip-missing on the DB axis. Mirror the schema-axis log shape so a grep for
@@ -1806,6 +1835,17 @@ public class ProductQuench
             _targetResults.Add(new TargetResult($"[{server}].[{databaseName}]", server, databaseName, "", template.Name,
                 TargetOutcome.Skipped, 0, $"TemplateTargets:{template.Name}:Databases"));
         return new DbAxisGate(false, false);
+    }
+
+    // #562: a database that could not be checked or created has no work unit, so it reached neither the summary's targets
+    // and failures nor the console's failure manifest -- a PartialFailure with no failing target. Both are written here.
+    private void RecordDatabaseGateFailure(string server, string databaseName, Template template, string what, string error)
+    {
+        var scope = $"[{server}].[{databaseName}]";
+        _failureRecords.Add(new FailureRecord($"Template:{template.Name}", scope, error,
+            new[] { $"{what} for '{databaseName}' (template '{template.Name}')" }, null));
+        _targetResults.Add(new TargetResult(scope, server, databaseName, "", template.Name, TargetOutcome.Failed, 0,
+            $"TemplateTargets:{template.Name}:Databases"));
     }
 
     /// <summary>
@@ -2019,6 +2059,17 @@ public class ProductQuench
     /// </summary>
     private void RunOneWorkUnit(WorkUnit unit, Template template, bool suppressKindling)
     {
+        // #550: a database WhatIf would create does not exist, so there is nothing to open or compare. Every object in the
+        // template would be created in it, which is the preview; the unit succeeds, as the real run would.
+        if (IsWhatIfOnly && unit.WouldCreateDatabase)
+        {
+            var scope = string.IsNullOrEmpty(unit.SchemaName) ? $"[{unit.Server}].[{unit.DatabaseName}]" : $"[{unit.Server}].[{unit.DatabaseName}].[{unit.SchemaName}]";
+            _progressLog.Info($"{scope} [WhatIf] Would deploy template '{template.Name}' into the new, empty database '{unit.DatabaseName}': every object it declares would be created.");
+            _targetResults.Add(new TargetResult(scope, unit.Server, unit.DatabaseName, unit.SchemaName ?? "", unit.TemplateName,
+                TargetOutcome.Success, 0, unit.DatabaseSource, unit.SchemaSource));
+            return;
+        }
+
         var dropRemovedTables = FormatBooleanFlag(ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropTablesRemovedFromProduct), _product.DropTablesRemovedFromProduct,
             template.DropTablesRemovedFromProduct, defaultValue: true));
@@ -2172,8 +2223,6 @@ public class ProductQuench
         if (scriptList.Any(x => !x.HasBeenQuenched))
         {
             var directory = ResolveArtifactDirectory();
-            var scrub = ScrubArtifactsEnabled;
-            var sensitiveValues = SensitiveTokenValues();
 
             foreach (var sqlScript in scriptList.Where(s => !s.HasBeenQuenched))
             {
@@ -2200,9 +2249,15 @@ public class ProductQuench
                     var header = $"Failed: {serverMsg}[{initDb}] [{sqlScript.LogPath}] — {sqlScript.Error?.Message}";
                     var fileName = GetProductDebugFileName($"Failed {Path.GetFileNameWithoutExtension(sqlScript.Name)}", server);
                     var failingBatchIndex = failingBatchIndexes.GetValueOrDefault(sqlScript, sqlScript.Batches.Count - 1);
-                    artifactPath = ResolvedSqlArtifactWriter.WriteFailureArtifact(directory, scrub, sensitiveValues,
-                        header, sqlScript.Batches, failingBatchIndex, fileName);
-                    _progressLog.Error($"{serverMsg}[{initDb}]    Resolved SQL written to: {artifactPath}");
+                    if (DebugSql.Enabled)
+                    {
+                        artifactPath = ResolvedSqlArtifactWriter.WriteFailureArtifact(directory,
+                            ResolvedSqlArtifactWriter.OwnerLine(_product.Name, server, initDb, ""), header, sqlScript.Batches,
+                            failingBatchIndex, fileName);
+                        _progressLog.Error($"{serverMsg}[{initDb}]    Resolved SQL written to: {artifactPath}");
+                    }
+                    else
+                        _progressLog.Error($"{serverMsg}[{initDb}]    {DebugSql.HowToGetIt(directory)}");
                 }
                 catch (Exception artifactEx)
                 {
@@ -2224,7 +2279,7 @@ public class ProductQuench
 
     /// <summary>
     /// Config resolution for the product-level resolved-SQL artifact surface (#327 S4.3), mirroring
-    /// <c>DatabaseQuench.ResolveArtifactDirectory</c> / <c>ScrubArtifactsEnabled</c> / <c>SensitiveTokenValues</c>.
+    /// <c>DatabaseQuench.ResolveArtifactDirectory</c>.
     /// ProductQuench cannot call those (internal to DatabaseQuench, a different class) so it resolves
     /// config itself. Product-scoped only: template tokens don't apply to product-level Before/After scripts.
     /// </summary>
@@ -2233,13 +2288,6 @@ public class ProductQuench
         var configured = _config[SettingsKeys.ArtifactPath];
         return string.IsNullOrWhiteSpace(configured) ? Directory.GetCurrentDirectory() : configured;
     }
-
-    private bool ScrubArtifactsEnabled => _config[SettingsKeys.ScrubArtifacts]?.ToLower() == "true";
-
-    private IReadOnlyList<KeyValuePair<string, string>> SensitiveTokenValues() =>
-        _product.ScriptTokens
-            .Where(kv => LogScrubber.ShouldScrubName(kv.Key, _logHygiene))
-            .ToList();
 
     /// <summary>
     /// Debug filename for a product-level script failure artifact. There is no database/schema scope

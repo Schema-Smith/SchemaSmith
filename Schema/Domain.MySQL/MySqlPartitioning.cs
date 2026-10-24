@@ -48,7 +48,7 @@ namespace Schema.Domain.MySQL
         /// individually in <see cref="Partitions"/> instead, because each one carries its own boundary.
         /// </summary>
         [SchemaProperty(Minimum = 1,
-            Description = "Number of partitions for HASH and KEY. Not used by RANGE or LIST, which name each partition and its boundary explicitly. A HASH or KEY table may name its partitions in Partitions instead, and then the count is how many it names.")]
+            Description = "Number of partitions for HASH and KEY and their LINEAR forms, and for MariaDB SYSTEM_TIME, where it counts the history partitions and the current one together. Not used by RANGE or LIST, which name each partition and its boundary explicitly. A HASH, KEY or SYSTEM_TIME table may name its partitions in Partitions instead, and then the count is how many it names.")]
         [JsonProperty(Order = 3, NullValueHandling = NullValueHandling.Ignore)]
         public int? PartitionCount { get; set; }
 

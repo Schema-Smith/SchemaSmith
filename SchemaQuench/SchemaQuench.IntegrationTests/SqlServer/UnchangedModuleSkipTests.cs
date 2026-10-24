@@ -28,7 +28,7 @@ public class UnchangedModuleSkipTests : UnchangedModuleSkipSharedTests
         ["Views"] = "SET ANSI_NULLS ON\r\nSET QUOTED_IDENTIFIER ON\r\nGO\r\n\r\nCREATE OR ALTER VIEW [dbo].[v_unchanged] AS SELECT x FROM dbo.unchanged_t\r\n\r\nGO\r\n",
         ["Functions"] = "SET ANSI_NULLS ON\r\nSET QUOTED_IDENTIFIER ON\r\nGO\r\n\r\nCREATE OR ALTER FUNCTION [dbo].[f_unchanged](@a INT) RETURNS INT AS BEGIN RETURN @a + 1 END\r\n\r\nGO\r\n",
         // The legacy form SchemaTongs writes under ModuleSyntax: Legacy is stamped like any other module.
-        ["Procedures"] = "SET ANSI_NULLS ON\r\nSET QUOTED_IDENTIFIER ON\r\nGO\r\n\r\nIF OBJECT_ID(N'[dbo].[p_unchanged]') IS NULL EXEC('CREATE PROCEDURE [dbo].[p_unchanged] AS RETURN')\r\nGO\r\n\r\nALTER PROCEDURE [dbo].[p_unchanged] AS SELECT 1\r\n\r\nGO\r\n",
+        ["Procedures"] = "-- Call it from an agent job, e.g. CREATE VIEW dbo.v_doc AS SELECT 1\r\nSET ANSI_NULLS ON\r\nSET QUOTED_IDENTIFIER ON\r\nGO\r\n\r\nIF OBJECT_ID(N'[dbo].[p_unchanged]') IS NULL EXEC('CREATE PROCEDURE [dbo].[p_unchanged] AS RETURN')\r\nGO\r\n\r\nALTER PROCEDURE [dbo].[p_unchanged] AS SELECT 1\r\n\r\nGO\r\n",
         ["Triggers"] = "SET ANSI_NULLS ON\r\nSET QUOTED_IDENTIFIER ON\r\nGO\r\n\r\nCREATE OR ALTER TRIGGER [dbo].[tr_unchanged] ON [dbo].[unchanged_t] AFTER INSERT AS SELECT 1\r\n\r\nGO\r\n"
     };
 

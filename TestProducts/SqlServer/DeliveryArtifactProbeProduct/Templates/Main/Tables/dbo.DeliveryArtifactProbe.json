@@ -1,0 +1,16 @@
+{
+    "Schema": "[dbo]",
+    "Name": "[DeliveryArtifactProbe]",
+    "Columns": [
+        { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+        { "Name": "[Code]", "DataType": "NVARCHAR(10)", "Nullable": true }
+    ],
+    "Indexes": [
+        { "Name": "[PK_DeliveryArtifactProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" }
+    ],
+    "DataDelivery": {
+        "ContentFile": "Tables/dbo.DeliveryArtifactProbe.tabledata",
+        "MergeType": "Insert/Update",
+        "MatchColumns": "[Id]"
+    }
+}

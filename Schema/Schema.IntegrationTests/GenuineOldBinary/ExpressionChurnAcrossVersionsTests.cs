@@ -117,6 +117,10 @@ public class ExpressionChurnAcrossVersionsTests
 
         // The legacy encoding was chosen for compat 100; production re-selects after the upgrade, and so does this.
         var upgraded = Kindle(cmd, _defaultCompat);
+        // A deploy starts by discarding its session's earlier audit rows (ChangeAuditReader.DiscardStale). Both deploys here
+        // share one connection, and the first one's "table created" row would read as this deploy having created the table.
+        cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+        cmd.ExecuteNonQuery();
         _messages.Clear();
         Deploy(cmd, upgraded, indexOnly: false);
 

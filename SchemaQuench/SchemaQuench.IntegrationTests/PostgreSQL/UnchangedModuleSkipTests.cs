@@ -26,7 +26,7 @@ public class UnchangedModuleSkipTests : UnchangedModuleSkipSharedTests
     {
         ["Views"] = "CREATE OR REPLACE VIEW public.v_unchanged AS\n SELECT x FROM public.unchanged_t;",
         ["Functions"] = "CREATE OR REPLACE FUNCTION public.f_unchanged(a integer) RETURNS integer LANGUAGE sql IMMUTABLE AS $$ SELECT a + 1 $$;",
-        ["Procedures"] = "CREATE OR REPLACE PROCEDURE public.p_unchanged() LANGUAGE sql AS $$ SELECT 1 $$;",
+        ["Procedures"] = "-- Call it from a job, e.g. CREATE VIEW v_doc AS SELECT 1\n/* CREATE FUNCTION f_doc() ... */\nCREATE OR REPLACE PROCEDURE public.p_unchanged() LANGUAGE sql AS $$ SELECT 1 $$;",
         ["Triggers"] = "DROP TRIGGER IF EXISTS tr_unchanged ON public.unchanged_t;\nCREATE TRIGGER tr_unchanged BEFORE INSERT ON public.unchanged_t FOR EACH ROW EXECUTE FUNCTION public.tf_unchanged();"
     };
 

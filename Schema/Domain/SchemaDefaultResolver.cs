@@ -187,7 +187,9 @@ namespace Schema.Domain
             var (prefix, name) = Identifier.SplitQualifiedName(relatedTable, platform);
             if (prefix == null) return (relatedTableSchema, relatedTable);
             if (string.IsNullOrWhiteSpace(relatedTableSchema)) return (prefix, name);
-            if (Identifier.Unwrap(relatedTableSchema, platform).Equals(prefix, StringComparison.OrdinalIgnoreCase))
+            // PostgreSQL schema names are case-sensitive: Public and public are two schemas, not one spelled twice.
+            var comparison = platform == Platform.PostgreSQL ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+            if (Identifier.Unwrap(relatedTableSchema, platform).Equals(prefix, comparison))
                 return (relatedTableSchema, name);
             throw new PackageException($"Foreign key '{fkName}' names RelatedTable '{relatedTable}', in schema '{prefix}', " +
                 $"but RelatedTableSchema '{relatedTableSchema}'. Give the schema once, in RelatedTableSchema.");

@@ -8,18 +8,25 @@ For background on how the tools work, see the individual reference pages: [Schem
 
 ## My deployment failed
 
-A failed quench leaves two things for you: a log entry telling you what broke, and a `.sql` artifact file holding the exact SQL that the server rejected. Here is how to move from "deployment failed" to "I know what's wrong and I can fix it."
+A failed quench leaves a log entry telling you what broke and, when you ask for it, a `.sql` file holding the exact SQL that the server rejected. Here is how to move from "deployment failed" to "I know what's wrong and I can fix it."
 
-### 1. Find the artifact
+### 1. Get the failing SQL
 
-Open the progress log (`SchemaQuench - Progress.log`) and search for `Resolved SQL written to:`. Every script surface -- user and migration scripts, generated quench DDL (table, index, foreign-key, view, and table-JSON steps), product-level `Before`/`After` scripts, validation scripts, and data-delivery merges -- reports its failure the same way, so one search string finds every kind of failure in the log.
+The log says which step failed and why. To see the exact SQL the server rejected, run again with `--WriteDebugSql` (or `"WriteDebugSql": true` in your settings). SchemaQuench then writes the token-expanded SQL of each step to a `.sql` file, and the failure points at it. Every script surface -- user and migration scripts, generated quench DDL (table, index, foreign-key, view, and table-JSON steps), product-level `Before`/`After` scripts, validation scripts, and data-delivery merges -- reports it the same way, so search the progress log for `Resolved SQL written to:`:
 
 ```
 Unable to quench 'Before/01-seed-config.sql': Invalid column name 'Region'.
     Resolved SQL written to: C:\deploy\SchemaQuench - Failed 01-seed-config prod-db.TargetDB.sql
 ```
 
-> **Note:** Artifacts land in the `ArtifactPath` directory (default: the working directory you ran SchemaQuench from), not the log directory. That is deliberate — so zipping your logs for a support ticket does not sweep up raw SQL that may contain expanded sensitive values.
+Without the switch, no file is written, and the same place in the log says how to get one:
+
+```
+Unable to quench 'Before/01-seed-config.sql': Invalid column name 'Region'.
+    Rerun with --WriteDebugSql to write the resolved SQL of this step to C:\deploy.
+```
+
+> **Note:** The files land in the `ArtifactPath` directory (default: the working directory you ran SchemaQuench from), not the log directory, so zipping your logs never sweeps them up. A run deletes the previous run's files for the same targets when it starts, and its own files when it finishes cleanly, so after a failure only that failure's files are there. It deletes nothing else: not your own files, not another product's, not another database's.
 
 ### 2. Open and read it
 
@@ -48,9 +55,17 @@ Most deployment failures fall into one of these categories:
 - **Permission.** The deploy login lacks the right to create or alter the object. Check the login's rights against the target database and grant what is needed.
 - **Delivery constraint.** A merge script hit a FK, unique, or check constraint. Open the artifact and look at the VALUES being inserted or the JOIN logic — the data being delivered conflicts with existing rows or references a row that doesn't exist. Fix the source data, adjust the delivery filter, or reorder your delivery scripts.
 
-### 5. Safe to attach?
+**PostgreSQL hides the failing row by default.** Its driver redacts an error's detail line, so a constraint failure reads `DETAIL: Detail redacted as it may contain sensitive data.` To see the row, add the driver's own switch to the connection properties for the run you are debugging:
 
-If you need to attach the artifact to a support ticket or CI build artifact, turn on `ScrubArtifacts: true` in your settings before re-running. With scrubbing on, the artifact file redacts sensitive token values (names matching password, secret, API key, token, etc.) and inline connection-string passwords, producing a variant you can share safely. See `ScrubArtifacts` in the [Configuration Reference](../reference/configuration.md#failure-artifacts) for details.
+```json
+"Target": { "ConnectionProperties": { "Include Error Detail": "true" } }
+```
+
+The same failure then reads `DETAIL: Failing row contains (1, null).` The detail is real data, so it lands in the logs; turn the switch off again before the logs go anywhere shared.
+
+### 5. Do not share it
+
+The file holds the real values, and says so in its header. It is for reproducing the failure on your own machine. Do not attach it to a support ticket or a CI build artifact: share the progress log instead, where sensitive values are masked. (`ScrubArtifacts` is deprecated and does nothing. Masking values inside SQL either leaves a value in place or leaves SQL that runs and writes the placeholder.)
 
 ---
 
@@ -153,7 +168,7 @@ If `KindleTheForge` is already `true` but the helper objects look wrong (someone
 
 **Symptom:** The progress log shows `**CONNECTION FAILED**` and the error log contains a connection exception.
 
-**Cause:** SchemaQuench couldn't connect to the target server.
+**Cause:** SchemaQuench couldn't connect to the target server. The line names the engine the package targets -- `Unable to connect to SQL Server at localhost with user postgres` -- so if that is not the engine your settings point at, the package's `Platform` and the settings disagree, and no setting below will fix it.
 
 **Fix:** Walk through the connection settings:
 

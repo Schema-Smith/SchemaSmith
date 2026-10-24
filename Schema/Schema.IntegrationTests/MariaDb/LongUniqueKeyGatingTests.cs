@@ -67,6 +67,18 @@ public class LongUniqueKeyGatingTests
         return Convert.ToInt64(cmd.ExecuteScalar());
     }
 
+    // The override steers SchemaSmith's gates on a newer server. A real server below 10.4 is already there, and telling it
+    // 10.3 would claim catalog it lacks: below 10.2.22 the gates would then read CHECK_CONSTRAINTS.
+    private void SimulateBelow104()
+    {
+        if (RealVersion() >= 100400)
+            Exec("SET @schemasmith_version_override = 1003");
+    }
+
+    private long RealVersion() =>
+        Scalar("SELECT CAST(SUBSTRING_INDEX(VERSION(), '.', 1) AS UNSIGNED) * 10000 "
+               + "+ CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(VERSION(), '.', 2), '.', -1) AS UNSIGNED) * 100");
+
     private static string TableJson(string engine, string dataType, bool withLongUniqueKey = true) =>
         $$"""
         [{ "Name": "`{{TableName}}`", "Engine": "{{engine}}",
@@ -86,7 +98,7 @@ public class LongUniqueKeyGatingTests
     [TestCase("fail")]
     public void Below104_ALongUniqueKey_IsRefusedByName_BeforeAnythingIsCreated(string policy)
     {
-        Exec("SET @schemasmith_version_override = 1003");
+        SimulateBelow104();
         if (policy != null) Exec($"SET @schemasmith_unsupported_policy = '{policy}'");
 
         var ex = Assert.Catch(() => Deploy());
@@ -101,7 +113,7 @@ public class LongUniqueKeyGatingTests
     [TestCase("VARCHAR(768)")]
     public void Below104_ANarrowUniqueHashKey_IsCreated(string dataType)
     {
-        Exec("SET @schemasmith_version_override = 1003");
+        SimulateBelow104();
 
         Assert.DoesNotThrow(() => Deploy(dataType: dataType));
 
@@ -113,7 +125,7 @@ public class LongUniqueKeyGatingTests
     [Test]
     public void Below104_AWideVarcharUniqueHashKey_IsRefused()
     {
-        Exec("SET @schemasmith_version_override = 1003");
+        SimulateBelow104();
 
         var ex = Assert.Catch(() => Deploy(dataType: "VARCHAR(2000)"));
 
@@ -123,7 +135,7 @@ public class LongUniqueKeyGatingTests
     [Test]
     public void Below104_AUniqueHashOnAMemoryTable_IsCreated()
     {
-        Exec("SET @schemasmith_version_override = 1003");
+        SimulateBelow104();
 
         Deploy("MEMORY", "VARCHAR(20)");
 
@@ -136,7 +148,7 @@ public class LongUniqueKeyGatingTests
     {
         var withoutKey = TableJson("InnoDB", "TEXT", withLongUniqueKey: false);
         Exec($"CALL SchemaSmith_TableQuench('LongUniqueGateProduct', '{_testDb}', '{withoutKey.Replace("'", "''")}', 0, 0, 0)");
-        Exec("SET @schemasmith_version_override = 1003");
+        SimulateBelow104();
 
         Exec($"CALL SchemaSmith_ParseTableJson('{_testDb}', '{TableJson("InnoDB", "TEXT").Replace("'", "''")}')");
         var ex = Assert.Catch(() => Exec($"CALL SchemaSmith_IndexOnlyQuench('LongUniqueGateProduct', '{_testDb}', 0, 0, 0)"));
@@ -150,9 +162,7 @@ public class LongUniqueKeyGatingTests
     public void At104_ALongUniqueKey_IsCreated()
     {
         // The override steers SchemaSmith's gate, not the engine: only a real 10.4 or later can build the key.
-        var version = Scalar("SELECT CAST(SUBSTRING_INDEX(VERSION(), '.', 1) AS UNSIGNED) * 10000 "
-                             + "+ CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(VERSION(), '.', 2), '.', -1) AS UNSIGNED) * 100");
-        if (version < 100400)
+        if (RealVersion() < 100400)
             Assert.Ignore("A long unique key needs a real MariaDB 10.4 or later.");
         Exec("SET @schemasmith_version_override = 1004");
 

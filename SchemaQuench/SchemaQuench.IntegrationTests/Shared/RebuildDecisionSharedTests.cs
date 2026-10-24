@@ -53,7 +53,7 @@ public abstract class RebuildDecisionSharedTests : BaseTableQuenchTests
     {
         cmd.CommandTimeout = 300;
         cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     /// <summary>

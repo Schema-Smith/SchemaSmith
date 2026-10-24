@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -27,7 +28,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// test cannot read as a pass.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class RebuildDecisionTests : BaseTableQuenchTests
 {
     private const string MarkerIndex = "ix_rebuild_decision_marker";
@@ -66,14 +67,14 @@ public class RebuildDecisionTests : BaseTableQuenchTests
     {
         cmd.CommandTimeout = 300;
         cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static object Scalar(IDbCommand cmd, string sql)
     {
         cmd.CommandTimeout = 300;
         cmd.CommandText = sql;
-        return cmd.ExecuteScalar();
+        return TransientRetry.Run(() => cmd.ExecuteScalar());
     }
 
     private static long Long(IDbCommand cmd, string sql)

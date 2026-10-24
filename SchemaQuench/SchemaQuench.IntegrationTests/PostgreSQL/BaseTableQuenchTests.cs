@@ -8,6 +8,7 @@ using Schema.Domain;
 using Schema.Isolators;
 using Microsoft.Extensions.Configuration;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -16,10 +17,11 @@ public class BaseTableQuenchTests
 {
     protected readonly string _connectionString;
     protected readonly string _mainDb;
-    protected readonly string _productName = "Quench Table Tests";
+    protected readonly string _productName;
 
     public BaseTableQuenchTests()
     {
+        _productName = FixtureProduct.NameFor(GetType());
         var config = FactoryContainer.Resolve<IConfigurationRoot>();
         var connProps = ConnectionString.ReadProperties(config, "Target:ConnectionProperties");
         _connectionString = ConnectionString.Build(Platform.PostgreSQL, config["Target:Server"], "postgres", config["Target:User"], config["Target:Password"], config["Target:Port"], connProps);
@@ -42,7 +44,7 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{prod}');
         {
             try
             {
-                cmd.ExecuteNonQuery();
+                TransientRetry.Run(() => cmd.ExecuteNonQuery());
                 retry = false;
             }
             catch (Exception e)

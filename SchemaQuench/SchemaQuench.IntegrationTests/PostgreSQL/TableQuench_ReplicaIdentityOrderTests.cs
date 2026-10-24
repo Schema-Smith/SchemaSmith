@@ -12,7 +12,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// was set later. The identity now steps aside before the column changes.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ReplicaIdentityOrderTests : BaseTableQuenchTests
 {
     [Test]

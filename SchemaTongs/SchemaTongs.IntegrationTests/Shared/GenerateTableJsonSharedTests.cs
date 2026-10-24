@@ -29,9 +29,12 @@ public abstract class GenerateTableJsonSharedTests
     // and has no CHECK constraints) where MySQL 8.0 does not.
     protected int ServerVersionNum { get; private set; }
 
-    /// <summary>Whether the source enforces + exposes CHECK constraints: MySQL 8.0.16 (major >= 8); MariaDB
-    /// (>= 10.2 floor) always.</summary>
-    protected bool TargetSupportsCheckConstraints => Platform != Platform.MySQL || ServerVersionNum >= 800;
+    private int? _serverPatchNum;
+
+    /// <summary>Whether CHECK constraints are deployed and read on the source: MySQL 8.0.16 and MariaDB 10.2.22, where
+    /// INFORMATION_SCHEMA.CHECK_CONSTRAINTS arrived.</summary>
+    protected bool TargetSupportsCheckConstraints =>
+        _serverPatchNum == null || _serverPatchNum >= (Platform == Platform.MariaDb ? 100222 : 80016);
 
     protected string _integrationDb = "";
     private string _connectionString;
@@ -53,7 +56,9 @@ public abstract class GenerateTableJsonSharedTests
         vconn.Open();
         using var vcmd = vconn.CreateCommand();
         vcmd.CommandText = "SELECT VERSION()";
-        var vp = (vcmd.ExecuteScalar()?.ToString() ?? "").Split('.');
+        var rawVersion = vcmd.ExecuteScalar()?.ToString() ?? "";
+        _serverPatchNum = VersionHelper.ParsePatchComparable(rawVersion, Platform);
+        var vp = rawVersion.Split('.');
         ServerVersionNum = vp.Length >= 2 && int.TryParse(vp[0], out var mj) && int.TryParse(vp[1], out var mn) ? mj * 100 + mn : int.MaxValue;
         vcmd.CommandText = "SELECT @@lower_case_table_names";
         _lowerCaseTableNames = Convert.ToInt32(vcmd.ExecuteScalar());

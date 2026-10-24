@@ -348,7 +348,8 @@ public class ForgeKindlerTests
         // +1 on SQL Server = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
         // +1 on SQL Server = DegradeUnsupportedSelectiveXmlIndexes (below 2012 SP1 a selective XML index is skipped).
         // +1 on SQL Server = DegradeUnsupportedJsonIndexes (below 2025 a JSON index is skipped).
-        Assert.That(sqlServer.Length, Is.EqualTo(74));
+        // +1 on SQL Server = ValidateTableOwnership (the ownership refusal, before anything is created or renamed).
+        Assert.That(sqlServer.Length, Is.EqualTo(75));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -545,7 +546,10 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_ConvergePrimaryKeys (an existing table's declared primary key, added or replaced).
         // +2 = SchemaSmith_SupportsVectorIndex + SchemaSmith_DegradeVectorIndexes (MariaDB 11.7's VECTOR index).
         // +1 = SchemaSmith_CleanCheckClause (a check's introducers removed without cutting names that end in one).
-        Assert.That(mysql.Length, Is.EqualTo(108));
+        // +1 = SchemaSmith_ValidateTableOwnership (the ownership refusal, before anything is created or renamed).
+        // +1 = SchemaSmith_SupportsGeneratedColumnCollation (a generated column's COLLATE, refused by early MariaDB patches).
+        // +1 = SchemaSmith_DegradeUnsupportedColumnFeatures (column degrades reported once ShouldApply has settled).
+        Assert.That(mysql.Length, Is.EqualTo(111));
     }
 
     [Test]
@@ -602,6 +606,36 @@ public class ForgeKindlerTests
             Assert.That(scan.Contains("column_store_order_ordinal"), Is.EqualTo(readable), "the live read");
             Assert.That(scan, Does.Not.Contain("{{ColumnStoreOrderList}}"));
             Assert.That(degrade, Does.Contain(readable ? "OR 1 = 0)" : "OR 0 = 0)"), "the degrade clears ORDER wherever the read cannot see it");
+        });
+    }
+
+    // INFORMATION_SCHEMA.CHECK_CONSTRAINTS arrived in MariaDB 10.2.22, and a function naming it fails to CREATE on a server
+    // without it, taking the kindle down. Below it the column-level check reads nothing, as on MySQL, and the stamp differs
+    // so an upgraded server re-kindles the reading body.
+    [TestCase(null, true)]
+    [TestCase(true, true)]
+    [TestCase(false, false)]
+    public void ResolveKindleScript_MariaDbColumnLevelCheck_ReadsTheCatalogOnlyWhereItExists(bool? readable, bool reads)
+    {
+        var resolved = ForgeKindler.ResolveKindleScript("SchemaSmith_ColumnLevelCheck.sql", Platform.MariaDb, replaceParseJson: false,
+            replaceTableDef: false, checkConstraintsReadable: readable);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(resolved.Contains("INFORMATION_SCHEMA.CHECK_CONSTRAINTS"), Is.EqualTo(reads));
+            Assert.That(resolved, Does.Contain("CREATE FUNCTION SchemaSmith_ColumnLevelCheck"));
+        });
+    }
+
+    [Test]
+    public void ComputeKindleStamp_MariaDb_DiffersWhenCheckConstraintsCannotBeRead()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ForgeKindler.ComputeKindleStamp(Platform.MariaDb, checkConstraintsReadable: false),
+                Is.Not.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.MariaDb, checkConstraintsReadable: true)));
+            Assert.That(ForgeKindler.ComputeKindleStamp(Platform.MariaDb, checkConstraintsReadable: true),
+                Is.EqualTo(ForgeKindler.ComputeKindleStamp(Platform.MariaDb)), "a server that has the view keeps today's stamp");
         });
     }
 
@@ -1119,8 +1153,10 @@ public class ForgeKindlerTests
 
         ForgeKindler.DropSupersededPostgreSqlOverloads(mockCmd);
 
-        Assert.That(executed, Has.Count.EqualTo(13));
-        Assert.That(executed, Has.All.StartsWith("DROP PROCEDURE IF EXISTS"));
+        Assert.That(executed, Has.Count.EqualTo(14));
+        Assert.That(executed, Has.All.StartsWith("DROP PROCEDURE IF EXISTS").Or.StartsWith("DROP FUNCTION IF EXISTS"));
+        // The function took the column's schema, table and name in place of its sequence; the old one would sit unused.
+        Assert.That(executed, Has.Some.Contains("\"IdentityOptionChanges\"(text, regclass)"));
         Assert.That(executed.Any(s => s.Contains("\"ValidateTableOwnership\"(varchar, boolean)")));
         Assert.That(executed.Any(s => s.Contains("\"FixupTableOwnership\"(varchar)")));
         Assert.That(executed.Any(s => s.Contains("\"ValidateMaterializedViewOwnership\"(varchar, boolean)")));

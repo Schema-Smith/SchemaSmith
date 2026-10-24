@@ -279,6 +279,37 @@ CREATE TABLE public.""TestExclExtras"" (""id"" INT NOT NULL, ""room"" INT NOT NU
         conn.Close();
     }
 
+    // An omitted state attribute leaves a constraint as it is, so extraction writes one only where it is not the default:
+    // a constraint in its ordinary state carries none, and the package does not take over its state.
+    [Test]
+    public void ShouldExtractConstraintState_OnlyWhereItIsNotTheDefault()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE public.""TestConState"" (""id"" INT PRIMARY KEY, ""parent"" INT);
+ALTER TABLE public.""TestConState"" ADD CONSTRAINT ""fk_plain"" FOREIGN KEY (""parent"") REFERENCES public.""TestConState"" (""id"");
+ALTER TABLE public.""TestConState"" ADD CONSTRAINT ""fk_not_valid"" FOREIGN KEY (""parent"") REFERENCES public.""TestConState"" (""id"") NOT VALID;
+ALTER TABLE public.""TestConState"" ADD CONSTRAINT ""ck_plain"" CHECK (""id"" > 0);
+ALTER TABLE public.""TestConState"" ADD CONSTRAINT ""ck_not_valid"" CHECK (""id"" > 1) NOT VALID;
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "public", "TestConState");
+        var keys = result.ForeignKeys.ToDictionary(k => k.Name);
+        var checks = result.CheckConstraints.Cast<Schema.Domain.PostgreSQL.PostgreSqlCheckConstraint>().ToDictionary(c => c.Name);
+        Assert.Multiple(() =>
+        {
+            Assert.That(((Schema.Domain.PostgreSQL.PostgreSqlForeignKey)keys["fk_plain"]).Validated, Is.Null, "an ordinary key carries no state");
+            Assert.That(((Schema.Domain.PostgreSQL.PostgreSqlForeignKey)keys["fk_plain"]).Enforced, Is.Null);
+            Assert.That(((Schema.Domain.PostgreSQL.PostgreSqlForeignKey)keys["fk_not_valid"]).Validated, Is.False);
+            Assert.That(checks["ck_plain"].Validated, Is.Null, "an ordinary check carries no state");
+            Assert.That(checks["ck_plain"].NoInherit, Is.Null);
+            Assert.That(checks["ck_not_valid"].Validated, Is.False);
+        });
+        conn.Close();
+    }
+
     [Test]
     public void ShouldExtractTheStatisticsTarget_OnlyWhenSet()
     {

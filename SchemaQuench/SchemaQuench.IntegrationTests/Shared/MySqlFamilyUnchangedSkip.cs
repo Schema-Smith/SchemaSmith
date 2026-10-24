@@ -16,7 +16,7 @@ public static class MySqlFamilyUnchangedSkip
     {
         ["Views"] = "CREATE OR REPLACE VIEW `v_unchanged` AS select `x` from `unchanged_t`;",
         ["Functions"] = "DROP FUNCTION IF EXISTS `f_unchanged`;\nDELIMITER //\nCREATE FUNCTION `f_unchanged`(a INT) RETURNS INT DETERMINISTIC RETURN a + 1 //\nDELIMITER ;\n",
-        ["Procedures"] = "DROP PROCEDURE IF EXISTS `p_unchanged`;\nDELIMITER //\nCREATE PROCEDURE `p_unchanged`() SELECT 1 //\nDELIMITER ;\n",
+        ["Procedures"] = "-- Schedule it with a CREATE EVENT, e.g.\n--   CREATE EVENT p_unchanged_nightly ON SCHEDULE EVERY 1 DAY DO CALL p_unchanged();\nDROP PROCEDURE IF EXISTS `p_unchanged`;\nDELIMITER //\nCREATE PROCEDURE `p_unchanged`() SELECT 1 //\nDELIMITER ;\n",
         ["Triggers"] = "DROP TRIGGER IF EXISTS `tr_unchanged`;\nDELIMITER //\nCREATE TRIGGER `tr_unchanged` BEFORE INSERT ON `unchanged_t` FOR EACH ROW SET NEW.w = 1 //\nDELIMITER ;\n"
     };
 

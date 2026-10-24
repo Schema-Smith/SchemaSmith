@@ -8,7 +8,7 @@ using SchemaQuench.IntegrationTests.Shared;
 namespace SchemaQuench.IntegrationTests.MariaDb;
 
 [Category("MariaDb")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class RebuildDecisionTests : RebuildDecisionSharedTests
 {
     protected override Platform Platform => Platform.MariaDb;

@@ -16,7 +16,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// object in a non-public schema.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class StripTypeCastTests : BaseTableQuenchTests
 {
     private string Strip(string text)

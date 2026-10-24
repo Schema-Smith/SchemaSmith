@@ -1,0 +1,31 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Name": "activity_types",
+  "Columns": [
+    {
+      "Name": "activity_type_id",
+      "DataType": "INTEGER"
+    },
+    {
+      "Name": "type_name",
+      "DataType": "VARCHAR(32)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_activity_types",
+      "PrimaryKey": true,
+      "IndexColumns": "activity_type_id"
+    },
+    {
+      "Name": "uq_activity_types_type_name",
+      "Unique": true,
+      "IndexColumns": "type_name"
+    }
+  ],
+  "DataDelivery": {
+    "ContentFile": "Tables/activity_types.tabledata",
+    "MergeType": "Insert",
+    "MatchColumns": "activity_type_id"
+  }
+}

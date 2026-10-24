@@ -17,9 +17,9 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
 /// <summary>
 /// Slice-8 end-to-end integration validator for the Schema Templates feature, deploying the
-/// public-facing <c>Demos/PostgreSQL/TenantCRM</c> demo product against a live PostgreSQL.
-/// The demo is what real customers will study; if this test passes, the feature delivers
-/// what the demo claims it does.
+/// <c>TestProducts/PostgreSQL/TenantCRM</c>, a copy of the public-facing <c>Demos/PostgreSQL/TenantCRM</c> demo product,
+/// against a live PostgreSQL. A copy, because CI does not run for a change under <c>Demos/</c>: re-copy the demo
+/// when it changes, so the test keeps proving the feature delivers what the demo claims.
 ///
 /// <para>Test walks the full lifecycle exactly the way the README walks the user through it:
 /// (1) fresh quench against an empty <c>public.tenants</c> deploys the Shared template only;
@@ -79,7 +79,7 @@ public class TenantCRMEndToEndTests
             DropLoadTenants(loadTenants);
 
             var config = FactoryContainer.Resolve<IConfigurationRoot>();
-            config["SchemaPackagePath"] = TestHelper.GetDemoProductPath("PostgreSQL", ProductName);
+            config["SchemaPackagePath"] = TestHelper.GetTestProductPath("PostgreSQL", ProductName);
             config["ScriptTokens:TenantCRMDb"] = _mainDb;
             ClearTargetFilters(config);
 
@@ -150,7 +150,7 @@ public class TenantCRMEndToEndTests
             ResetDemoState();
 
             var config = FactoryContainer.Resolve<IConfigurationRoot>();
-            config["SchemaPackagePath"] = TestHelper.GetDemoProductPath("PostgreSQL", ProductName);
+            config["SchemaPackagePath"] = TestHelper.GetTestProductPath("PostgreSQL", ProductName);
             // Re-point the demo's TenantCRMDb token at the CI-provisioned TestMain database
             // so the demo deploys without creating its own database.
             config["ScriptTokens:TenantCRMDb"] = _mainDb;

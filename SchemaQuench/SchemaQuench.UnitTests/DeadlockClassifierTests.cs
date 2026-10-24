@@ -22,6 +22,16 @@ public class DeadlockClassifierTests
     }
 
     [Test]
+    public void SqlServerLockTimeout_ReRaisedAs50000_IsStillALockTimeout()
+    {
+        // A procedure's CATCH re-raises with RAISERROR, which carries the text but not the number, so the English
+        // message is matched as it is for a deadlock.
+        var ex = new SqlServerErrorException(50000, "Lock request time out period exceeded.");
+        Assert.That(DeadlockClassifier.IsLockTimeout(ex), Is.True);
+        Assert.That(DeadlockClassifier.IsDeadlock(ex), Is.False);
+    }
+
+    [Test]
     public void SqlServerWrappedError_1222_IsNotReportedAsADeadlock()
     {
         // Retryable for the same reason, but it is not a deadlock and must not be described as one --

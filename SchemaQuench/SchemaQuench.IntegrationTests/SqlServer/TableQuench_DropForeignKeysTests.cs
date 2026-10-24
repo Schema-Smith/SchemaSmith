@@ -6,7 +6,7 @@ using Schema.Domain;
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_DropForeignKeysTests : BaseTableQuenchTests
 {
     // Non-vacuous: both tables have their FK removed from the JSON in the SAME quench.

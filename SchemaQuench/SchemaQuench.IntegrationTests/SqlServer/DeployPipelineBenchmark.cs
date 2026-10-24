@@ -12,6 +12,7 @@ using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer
 {
@@ -96,7 +97,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                 var coldMs = Time(() =>
                 {
                     cmd.CommandText = "EXEC SchemaSmith.ModifiedTableQuench @ProductName = 'Cold', @WhatIf = 1, @DropUnknownIndexes = 0, @DropTablesRemovedFromProduct = 0";
-                    cmd.ExecuteNonQuery();
+                    TransientRetry.Run(() => cmd.ExecuteNonQuery());
                 });
                 cmd.CommandText = "SELECT ISNULL(SUM(cp.size_in_bytes)/1024, 0) FROM sys.dm_exec_cached_plans cp CROSS APPLY sys.dm_exec_sql_text(cp.plan_handle) st WHERE OBJECT_NAME(st.objectid, st.dbid) = 'ModifiedTableQuench' AND st.dbid = DB_ID()";
                 TestContext.Out.WriteLine($"Cold compile (empty database): {coldMs:N0} ms, cached plan {Convert.ToInt32(cmd.ExecuteScalar()):N0} KB");
@@ -187,7 +188,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                 cmd.CommandText = "DROP TABLE IF EXISTS ##prof; CREATE TABLE ##prof([Seq] INT IDENTITY, [Label] NVARCHAR(200), [At] DATETIME2(7))";
                 cmd.ExecuteNonQuery();
                 cmd.CommandText = "EXEC SchemaSmith.ZZProfiledModifiedTableQuench @ProductName = 'Benchmark', @WhatIf = 0, @DropUnknownIndexes = 0, @DropTablesRemovedFromProduct = 0";
-                cmd.ExecuteNonQuery();
+                TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
                 cmd.CommandText = @"
 SELECT [Label], [ms] FROM (

@@ -107,11 +107,7 @@ public sealed class TokenCheck : ISchemaCheck
             var root = SafeParseJObject(text);
             if (root == null) continue;
 
-            var fileName = Path.GetFileName(jsonFile);
-            var isProductOrTemplate =
-                !IsUnderComponentFolder(jsonFile) &&
-                (fileName.Equals("Product.json", StringComparison.OrdinalIgnoreCase) ||
-                 fileName.Equals("Template.json", StringComparison.OrdinalIgnoreCase));
+            var isProductOrTemplate = JsonSchemaCheck.MapFileToType(ctx.PackagePath, jsonFile) is "products" or "templates";
 
             if (isProductOrTemplate && root["ScriptTokens"] is JObject scriptTokens)
             {
@@ -198,18 +194,6 @@ public sealed class TokenCheck : ISchemaCheck
     private static bool IsUnderJsonSchemasDir(string path) =>
         path.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
             .Any(segment => segment.Equals(".json-schemas", StringComparison.OrdinalIgnoreCase));
-
-    // A file directly under a component folder (Tables/Indexed Views/Materialized Views) is
-    // never the product/template manifest, even if it happens to be named Product.json/
-    // Template.json (e.g. MySQL's schema-less <table>.json layout for a table named "Product").
-    // Mirrors JsonSchemaCheck.MapFileToType's directory-context precedence.
-    private static bool IsUnderComponentFolder(string path)
-    {
-        var parent = Path.GetFileName(Path.GetDirectoryName(path) ?? "");
-        return parent.Equals("Tables", StringComparison.OrdinalIgnoreCase) ||
-               parent.Equals("Indexed Views", StringComparison.OrdinalIgnoreCase) ||
-               parent.Equals("Materialized Views", StringComparison.OrdinalIgnoreCase);
-    }
 
     // Mirrors TokenHelper.GetTokensFromString's own "{{" / "}}" scan, but flips the "no closing
     // found" case (which GetTokensFromString silently treats as end-of-tokens) into a positive

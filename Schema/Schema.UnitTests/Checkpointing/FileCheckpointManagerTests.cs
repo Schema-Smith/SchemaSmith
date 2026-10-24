@@ -239,6 +239,7 @@ public class FileCheckpointManagerTests
         };
         checkpoint.AddStep("KindleForge");
         checkpoint.AddStep("ValidateBaseline");
+        checkpoint.AddCompletedScript(DatabaseScriptSlot.Setup, "setup/enable-cdc.sql");
         checkpoint.AddCompletedScript(DatabaseScriptSlot.Before, "scripts/init.sql");
         checkpoint.AddCompletedScript(DatabaseScriptSlot.Object, "views/MyView.sql");
 
@@ -247,6 +248,7 @@ public class FileCheckpointManagerTests
 
         Assert.That(parsed.HasCompletedStep("KindleForge"), Is.True);
         Assert.That(parsed.HasCompletedStep("ValidateBaseline"), Is.True);
+        Assert.That(parsed.HasCompletedScript(DatabaseScriptSlot.Setup, "setup/enable-cdc.sql"), Is.True, "D13: a resumed run skips the Setup scripts that succeeded");
         Assert.That(parsed.HasCompletedScript(DatabaseScriptSlot.Before, "scripts/init.sql"), Is.True);
         Assert.That(parsed.HasCompletedScript(DatabaseScriptSlot.Object, "views/MyView.sql"), Is.True);
         Assert.That(parsed.StartedAt, Is.EqualTo(new DateTime(2026, 4, 11, 10, 30, 0)));

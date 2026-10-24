@@ -9,6 +9,7 @@ using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Domain.SqlServer;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -20,7 +21,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 // database (they add ALTER/DROP triggers the engine forbids), and the shared _mainDb has CDC turned on by
 // its own tests. So a clean database is created, kindled, and given a MEMORY_OPTIMIZED_DATA filegroup here.
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_MemoryOptimizedTests : BaseTableQuenchTests
 {
     private string _db = null!;
@@ -707,7 +708,7 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
     private static string GenerateTableJsonText(IDbCommand cmd, string table)
     {
         cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
-        using var reader = cmd.ExecuteReader();
+        using var reader = TransientRetry.Run(() => cmd.ExecuteReader());
         var json = new StringBuilder();
         while (reader.Read()) json.Append(reader.GetString(0)).Append("\r\n");
         return json.ToString();
@@ -716,7 +717,7 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
     private static SqlServerTable GenerateTable(IDbCommand cmd, string table)
     {
         cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
-        using var reader = cmd.ExecuteReader();
+        using var reader = TransientRetry.Run(() => cmd.ExecuteReader());
         var json = string.Empty;
         while (reader.Read()) json += $"{reader.GetString(0)}\r\n";
         return (SqlServerTable)PlatformDeserializer.DeserializeTable(json, Platform.SqlServer);

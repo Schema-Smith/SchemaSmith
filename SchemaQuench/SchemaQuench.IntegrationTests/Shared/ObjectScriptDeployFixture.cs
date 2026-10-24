@@ -70,14 +70,14 @@ public abstract class ObjectScriptDeployFixture
     {
         using var cmd = Connection.CreateCommand();
         cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     protected object Scalar(string sql)
     {
         using var cmd = Connection.CreateCommand();
         cmd.CommandText = sql;
-        return cmd.ExecuteScalar();
+        return TransientRetry.Run(() => cmd.ExecuteScalar());
     }
 
     protected long Count(string sql) => Convert.ToInt64(Scalar(sql));
@@ -101,10 +101,14 @@ public abstract class ObjectScriptDeployFixture
     protected void WriteFile(string folder, string fileName, string text) => File.WriteAllText(Path.Join(TemplateDir, folder, fileName), text);
 
     /// <param name="expectSuccess">False for a deploy that is meant to stop: the result is returned instead of asserted on.</param>
+    /// <param name="checkpointDir">A checkpoint directory the caller owns and keeps between deploys, for a resumed run.</param>
+    /// <param name="resume">Adopt the checkpoint a previous deploy left, as --ResumeQuench does.</param>
     protected DeployResult Deploy(bool skipUnchanged = true, bool whatIf = false, bool runTwice = false, bool expectSuccess = true, bool dropSchemaBoundDependents = false,
-        bool updateTables = true, (string User, string Password)? login = null)
+        bool updateTables = true, (string User, string Password)? login = null, bool dropRemovedTables = false,
+        string checkpointDir = null, bool resume = false)
     {
-        var checkpointDir = Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
+        var ownsCheckpointDir = checkpointDir == null;
+        checkpointDir ??= Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
         lock (FactoryContainer.SharedLockObject)
         {
             var savedConfig = FactoryContainer.Resolve<IConfigurationRoot>();
@@ -143,8 +147,8 @@ public abstract class ObjectScriptDeployFixture
                 var audit = new ChangeAuditCapture();
                 var quench = new DatabaseQuench("127.0.0.1", product, template, MainDb,
                     suppressKindling: login != null, whatIfOnly: whatIf ? yes : no, runScriptsTwice: runTwice,
-                    dropRemovedTables: no, dropRemovedColumns: yes, dropRemovedForeignKeys: yes, dropRemovedCheckConstraints: yes, dropRemovedExcludeConstraints: yes, dropRemovedStatistics: yes, dropRemovedIndexes: yes, dropUnknownIndexes: false, updateTables: updateTables,
-                    deliverData: false, checkpointing: new FileCheckpointManager(checkpointDir)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents };
+                    dropRemovedTables: dropRemovedTables ? yes : no, dropRemovedColumns: yes, dropRemovedForeignKeys: yes, dropRemovedCheckConstraints: yes, dropRemovedExcludeConstraints: yes, dropRemovedStatistics: yes, dropRemovedIndexes: yes, dropUnknownIndexes: false, updateTables: updateTables,
+                    deliverData: false, checkpointing: new FileCheckpointManager(checkpointDir, resume)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents };
                 quench.Execute();
                 var scripts = quench.IterationObjectScripts.Concat(quench.IterationAfterTablesObjectScripts).ToList();
                 var errors = scripts.Where(s => s.Error != null).Select(s => $"{Path.GetFileName(s.LogPath)}: {s.Error.Message}");
@@ -163,7 +167,7 @@ public abstract class ObjectScriptDeployFixture
             {
                 LogFactory.Clear();
                 FactoryContainer.Register<IConfigurationRoot>(savedConfig);
-                if (Directory.Exists(checkpointDir)) Directory.Delete(checkpointDir, true);
+                if (ownsCheckpointDir && Directory.Exists(checkpointDir)) Directory.Delete(checkpointDir, true);
             }
         }
     }

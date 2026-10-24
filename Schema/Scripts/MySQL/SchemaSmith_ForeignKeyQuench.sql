@@ -427,6 +427,11 @@ BEGIN
                           LIMIT 1), 1) = 1;
 
         IF p_WhatIf = 1 THEN
+            -- WhatIf drops nothing, so a key the table step would drop is still in the catalog here; preview it once.
+            DELETE f FROM _SchemaSmith_FKsToDrop f
+             WHERE EXISTS (SELECT 1 FROM SchemaSmith_ChangeAudit a
+                      WHERE a.SessionId = CONNECTION_ID() AND a.ObjectType = 'foreignKey' AND a.ActionType = 'wouldDrop'
+                        AND CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(CONCAT(f.TableName, '.', f.ConstraintName) USING utf8mb4) COLLATE utf8mb4_bin);
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown foreign keys');
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
             SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName,

@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using Schema.Capabilities;
+using Schema.Domain;
 
 namespace Schema.UnitTests.Capabilities
 {
@@ -43,6 +44,7 @@ namespace Schema.UnitTests.Capabilities
             ["SchemaSmith_SupportsSystemTimePartitionCount.sql"] = "system-time-partition-count",
             ["SchemaSmith_SupportsSystemTimeAutoPartitions.sql"] = "system-time-auto-partitions",
             ["SchemaSmith_SupportsVectorIndex.sql"] = "vector-index",
+            ["SchemaSmith_SupportsGeneratedColumnCollation.sql"] = "generated-column-collation",
         };
 
         // Gates whose predicate is real but deliberately carries NO registry row. CapabilityRegistry's own
@@ -90,6 +92,34 @@ namespace Schema.UnitTests.Capabilities
 
                 if (!CapabilityRegistry.All.Any(c => c.Key == key))
                     problems.Add($"{gate}: mapped to registry key '{key}' but CapabilityRegistry.All has no row for it — add one");
+            }
+
+            Assert.That(problems, Is.Empty, string.Join("; ", problems));
+        }
+
+        // A gate that turns on a patch (MariaDB 10.5.3, MySQL 8.0.16) must say so in its registry row, or the row reads the
+        // whole minor as supported and tooling driven from it advises a declaration the server will degrade.
+        [Test]
+        public void EveryPatchLevelGate_HasARegistryRowAtThatPatch()
+        {
+            // Any comparison against a five- or six-digit literal: PatchNum() >= 80016, v_Patch >= 100328, and the like.
+            var patchLiteral = new Regex(@"(?:>=|>|<=|<)\s*(\d{5,6})\b");
+            var problems = new List<string>();
+            foreach (var (gate, key) in GateRegistryKey)
+            {
+                var resource = SchemaAsm.GetManifestResourceNames().First(n => n.EndsWith("." + gate, StringComparison.Ordinal));
+                using var reader = new StreamReader(SchemaAsm.GetManifestResourceStream(resource)!);
+                var sql = reader.ReadToEnd();
+                var rows = CapabilityRegistry.All.Where(c => c.Key == key && c.Platform.GetBasePlatform() == Platform.MySQL).ToList();
+                var patches = rows.Select(c => c.IntroducedInPatchComparable)
+                    .Concat(rows.SelectMany(c => c.IntroducedInPatchByLine ?? []).Select(p => (int?)p))
+                    .ToList();
+                foreach (Match m in patchLiteral.Matches(sql))
+                {
+                    var n = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+                    if (n % 100 != 0 && !patches.Contains(n))
+                        problems.Add($"{gate} turns on patch {n}, but no MySQL-family '{key}' row carries it (IntroducedInPatchComparable or IntroducedInPatchByLine)");
+                }
             }
 
             Assert.That(problems, Is.Empty, string.Join("; ", problems));

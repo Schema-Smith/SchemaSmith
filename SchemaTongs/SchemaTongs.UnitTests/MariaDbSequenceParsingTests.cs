@@ -71,4 +71,13 @@ public class MariaDbSequenceParsingTests
             Assert.That(table.Columns[2].Default, Is.EqualTo("'shop'"));
         });
     }
+
+    // The engine writes a cache of 0 as "nocache", which the number pattern does not match, so it was read as the default
+    // 1000 and deploying the extracted package turned the cache back on.
+    [Test]
+    public void Nocache_IsACacheOfZero()
+    {
+        var s = SchemaTongs.ParseMariaDbSequence("s4", "CREATE SEQUENCE `s4` start with 1 minvalue 1 maxvalue 9223372036854775806 increment by 1 nocache nocycle ENGINE=InnoDB");
+        Assert.That(s.Cache, Is.Zero);
+    }
 }

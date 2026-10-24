@@ -11,6 +11,7 @@ using Schema.Isolators;
 using Schema.Utility;
 using Microsoft.Extensions.Configuration;
 using Npgsql;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -528,7 +529,7 @@ SELECT c.oid FROM pg_class c
             p_DropTablesRemovedFromProduct := true,
             p_DropUnknownIndexes := false
         )";
-        Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(), "TableQuench should not fail when materialized view exists in ProductOwnership");
+        Assert.DoesNotThrow(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()), "TableQuench should not fail when materialized view exists in ProductOwnership");
 
         // Verify materialized view was NOT dropped
         cmd.CommandText = "SELECT COUNT(*) FROM pg_matviews WHERE schemaname = 'public' AND matviewname = 'mv_test'";
@@ -668,7 +669,7 @@ END $$;";
         {
             try
             {
-                cmd.ExecuteNonQuery();
+                TransientRetry.Run(() => cmd.ExecuteNonQuery());
                 retry = false;
             }
             catch (Exception e)
@@ -913,6 +914,44 @@ ALTER MATERIALIZED VIEW public.mv_test OWNER TO ""{role}"";";
 
         RunMaterializedViewQuench(cmd, ViewDefinitionWithDescription(""));
         Assert.That(ViewComment(cmd), Is.Null, "an empty string is the request to remove it");
+        EnsureViewDropped(cmd);
+    }
+
+    private static string ViewDefinitionWithIndexDescription(string description) =>
+        ViewDefinitionWithIndex().Replace("\"Name\":\"ix_mv_test_id\",", "\"Name\":\"ix_mv_test_id\",\"Description\":\"" + description + "\",");
+
+    private static string IndexComment(IDbCommand cmd)
+    {
+        cmd.CommandText = "SELECT obj_description('public.ix_mv_test_id'::regclass, 'pg_class')";
+        return cmd.ExecuteScalar() as string;
+    }
+
+    // An index's Description was in the generated schema and passed --Validate, but nothing deployed it.
+    [Test]
+    public void AnIndexDescription_IsSet_ChangedInPlace_LeftAloneWhenOmitted_AndRemovedByAnEmptyString()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithIndexDescription("by id"));
+        Assert.That(IndexComment(cmd), Is.EqualTo("by id"), "set on create");
+
+        const string indexOid = "SELECT 'public.ix_mv_test_id'::regclass::oid::text";
+        cmd.CommandText = indexOid;
+        var indexBefore = cmd.ExecuteScalar() as string;
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithIndexDescription("by order id"));
+        Assert.That(IndexComment(cmd), Is.EqualTo("by order id"), "a change converges");
+        cmd.CommandText = indexOid;
+        Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo(indexBefore), "in place: neither the view nor its index is rebuilt for a description");
+
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithIndex());
+        Assert.That(IndexComment(cmd), Is.EqualTo("by order id"), "omitted means the comment is not managed, so the database's stays");
+
+        RunMaterializedViewQuench(cmd, ViewDefinitionWithIndexDescription(""));
+        Assert.That(IndexComment(cmd), Is.Null, "an empty string is the request to remove it");
         EnsureViewDropped(cmd);
     }
 }

@@ -166,14 +166,14 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Step 2: Create missing tables and columns
         command.CommandText = "CALL SchemaSmith_MissingTableAndColumnQuench(@databaseName, @whatIf)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify table was created
         command.Parameters.Clear();
@@ -239,14 +239,14 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Step 2: Create missing tables and columns
         command.CommandText = "CALL SchemaSmith_MissingTableAndColumnQuench(@databaseName, @whatIf)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify new column exists
         command.Parameters.Clear();
@@ -285,14 +285,14 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Step 2: Run with WhatIf = 1
         command.CommandText = "CALL SchemaSmith_MissingTableAndColumnQuench(@databaseName, @whatIf)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 1);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify table was NOT created
         command.Parameters.Clear();
@@ -381,14 +381,14 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingIndexesAndConstraintsQuench(@productName, @databaseName, @whatIf, 1)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@productName", "TestProduct");
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify index was created
         command.Parameters.Clear();
@@ -441,14 +441,14 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingIndexesAndConstraintsQuench(@productName, @databaseName, @whatIf, 1)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@productName", "TestProduct");
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify unique index was created
         command.Parameters.Clear();
@@ -522,14 +522,14 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingIndexesAndConstraintsQuench(@productName, @databaseName, @whatIf, 1)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@productName", "TestProduct");
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_ForeignKeyQuench(@productName, @databaseName, @whatIf, @dropUnknown, @dropRemovedFks)";
         command.Parameters.Clear();
@@ -538,7 +538,7 @@ public abstract class TableQuenchTestsSharedTests
         command.AddParameterWithValue("@whatIf", 0);
         command.AddParameterWithValue("@dropUnknown", 0);
         command.AddParameterWithValue("@dropRemovedFks", 1);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify FK was created
         command.Parameters.Clear();
@@ -601,14 +601,14 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingIndexesAndConstraintsQuench(@productName, @databaseName, @whatIf, 1)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@productName", "TestProduct");
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify check constraint was created
         command.Parameters.Clear();
@@ -662,14 +662,14 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingIndexesAndConstraintsQuench(@productName, @databaseName, @whatIf, 1)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@productName", "TestProduct");
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 1);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify index was NOT created
         command.Parameters.Clear();
@@ -739,7 +739,7 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Index removal lives in ModifiedTableQuench, so THIS is the call that drops idx_email —
         // the trailing @dropUnknown, 1 are DropUnknownIndexes and DropIndexesRemovedFromProduct,
@@ -751,14 +751,14 @@ public abstract class TableQuenchTestsSharedTests
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
         command.AddParameterWithValue("@dropUnknown", 1);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingIndexesAndConstraintsQuench(@productName, @databaseName, @whatIf, 1)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@productName", "TestProduct");
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify index was dropped
         command.Parameters.Clear();
@@ -823,7 +823,7 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Index removal lives in ModifiedTableQuench, so THIS is the call that must run for the
         // assertion below to mean anything — the trailing @dropUnknown, 1 are DropUnknownIndexes
@@ -835,14 +835,14 @@ public abstract class TableQuenchTestsSharedTests
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
         command.AddParameterWithValue("@dropUnknown", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingIndexesAndConstraintsQuench(@productName, @databaseName, @whatIf, 1)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@productName", "TestProduct");
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify index was NOT dropped
         command.Parameters.Clear();
@@ -895,7 +895,7 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Trailing 0, 0 are DropUnknownIndexes and DropIndexesRemovedFromProduct: index removal now
         // lives in this procedure, and this test does not exercise it, so both stay off.
@@ -906,7 +906,7 @@ public abstract class TableQuenchTestsSharedTests
         command.AddParameterWithValue("@whatIf", 0);
         command.AddParameterWithValue("@dropTables", 0);
         command.AddParameterWithValue("@dropRemovedCols", 1);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify engine was changed
         command.Parameters.Clear();
@@ -958,7 +958,7 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Trailing 0, 0 are DropUnknownIndexes and DropIndexesRemovedFromProduct: index removal now
         // lives in this procedure, and this test does not exercise it, so both stay off.
@@ -969,7 +969,7 @@ public abstract class TableQuenchTestsSharedTests
         command.AddParameterWithValue("@whatIf", 0);
         command.AddParameterWithValue("@dropTables", 0);
         command.AddParameterWithValue("@dropRemovedCols", 1);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify collation was changed
         command.Parameters.Clear();
@@ -1021,7 +1021,7 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Trailing 0, 0 are DropUnknownIndexes and DropIndexesRemovedFromProduct: index removal now
         // lives in this procedure, and this test does not exercise it, so both stay off.
@@ -1032,7 +1032,7 @@ public abstract class TableQuenchTestsSharedTests
         command.AddParameterWithValue("@whatIf", 1);
         command.AddParameterWithValue("@dropTables", 0);
         command.AddParameterWithValue("@dropRemovedCols", 1);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify engine was NOT changed
         command.Parameters.Clear();
@@ -1104,7 +1104,7 @@ public abstract class TableQuenchTestsSharedTests
         command.AddParameterWithValue("@whatIf", 0);
         command.AddParameterWithValue("@dropUnknown", 0);
         command.AddParameterWithValue("@dropRemoved", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify generated column was created
         command.Parameters.Clear();
@@ -1194,7 +1194,7 @@ public abstract class TableQuenchTestsSharedTests
         command.AddParameterWithValue("@whatIf", 0);
         command.AddParameterWithValue("@dropUnknown", 0);
         command.AddParameterWithValue("@dropRemoved", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify both generated columns exist
         command.Parameters.Clear();
@@ -1269,7 +1269,7 @@ public abstract class TableQuenchTestsSharedTests
         command.AddParameterWithValue("@whatIf", 0);
         command.AddParameterWithValue("@dropUnknown", 0);
         command.AddParameterWithValue("@dropRemoved", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify generated column was added
         command.Parameters.Clear();
@@ -1313,13 +1313,13 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingTableAndColumnQuench(@databaseName, @whatIf)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify columns are in the correct order
         command.Parameters.Clear();
@@ -1375,7 +1375,7 @@ public abstract class TableQuenchTestsSharedTests
         command.AddParameterWithValue("@whatIf", 0);
         command.AddParameterWithValue("@dropUnknown", 0);
         command.AddParameterWithValue("@dropRemoved", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify stored generated column
         command.Parameters.Clear();
@@ -1429,7 +1429,7 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Table renames now run in MissingTableAndColumnQuench (before add-columns), so drive the
         // rename through that proc rather than ModifiedTableQuench.
@@ -1437,7 +1437,7 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify old table doesn't exist
         command.Parameters.Clear();
@@ -1495,7 +1495,7 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Column renames now run in MissingTableAndColumnQuench (before add-columns), so drive the
         // rename through that proc rather than ModifiedTableQuench.
@@ -1503,7 +1503,7 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify old column doesn't exist
         command.Parameters.Clear();
@@ -1553,13 +1553,13 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingTableAndColumnQuench(@databaseName, @whatIf)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify table was NOT created
         command.Parameters.Clear();
@@ -1598,13 +1598,13 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingTableAndColumnQuench(@databaseName, @whatIf)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.Parameters.Clear();
         command.CommandText = $@"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{tableName}'";
@@ -1641,13 +1641,13 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingTableAndColumnQuench(@databaseName, @whatIf)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify included column exists
         command.Parameters.Clear();
@@ -1701,20 +1701,20 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingTableAndColumnQuench(@databaseName, @whatIf)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingIndexesAndConstraintsQuench(@productName, @databaseName, @whatIf, 1)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@productName", "TestProduct");
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify included index exists
         command.Parameters.Clear();
@@ -1764,13 +1764,13 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingTableAndColumnQuench(@databaseName, @whatIf)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify table was NOT created
         command.Parameters.Clear();
@@ -1807,13 +1807,13 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingTableAndColumnQuench(@databaseName, @whatIf)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify table WAS created
         command.Parameters.Clear();
@@ -1851,13 +1851,13 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingTableAndColumnQuench(@databaseName, @whatIf)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify always_here column exists
         command.Parameters.Clear();
@@ -1936,14 +1936,14 @@ public abstract class TableQuenchTestsSharedTests
         command.Parameters.Clear();
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@tableJson", tableJson);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_MissingIndexesAndConstraintsQuench(@productName, @databaseName, @whatIf, 1)";
         command.Parameters.Clear();
         command.AddParameterWithValue("@productName", "TestProduct");
         command.AddParameterWithValue("@databaseName", _testDb);
         command.AddParameterWithValue("@whatIf", 0);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         command.CommandText = "CALL SchemaSmith_ForeignKeyQuench(@productName, @databaseName, @whatIf, @dropUnknown, @dropRemovedFks)";
         command.Parameters.Clear();
@@ -1952,7 +1952,7 @@ public abstract class TableQuenchTestsSharedTests
         command.AddParameterWithValue("@whatIf", 0);
         command.AddParameterWithValue("@dropUnknown", 0);
         command.AddParameterWithValue("@dropRemovedFks", 1);
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Verify FK was created
         command.Parameters.Clear();

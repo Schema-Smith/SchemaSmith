@@ -15,7 +15,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 // put back none, so a key created outside the package was lost. A deploy now never drops a key it will not re-create:
 // an index such a key references is kept as it is.
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ForeignKeySafetyTests : BaseTableQuenchTests
 {
     private sealed record Tables(string Parent, string ByCode, string ById, string UqCode, string UqOther, string PkName);

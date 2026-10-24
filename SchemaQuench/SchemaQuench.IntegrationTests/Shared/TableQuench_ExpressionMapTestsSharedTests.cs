@@ -386,11 +386,11 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
                 """;
 
             cmd.CommandText = $"CALL SchemaSmith_TableQuench('{_productName}', '{_mainDb}', '{Json("IX_Tag_Old").Replace("'", "''")}', 0, 1, 0)";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             ClearMessages(cmd);
 
             cmd.CommandText = $"CALL SchemaSmith_TableQuench('{_productName}', '{_mainDb}', '{Json("IX_Tag_New").Replace("'", "''")}', 0, 1, 0)";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
             cmd.CommandText = $@"SELECT GROUP_CONCAT(DISTINCT INDEX_NAME ORDER BY INDEX_NAME) FROM INFORMATION_SCHEMA.STATISTICS
                                   WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}'";
@@ -407,6 +407,37 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
     // The SQL Server and PostgreSQL fixtures both pin this; the MySQL family did not. A row written under a
     // different server version cannot vouch for today's canonical text: stale, not wrong. The column must be left
     // alone, the row rewritten with the current version, and the re-baseline reported.
+    // A table dropped outside the deploy leaves its map rows behind; the deploy that creates it again reported them as
+    // re-baselined, which reads as an engine upgrade on a table it had just built.
+    [Test]
+    public void ATableCreatedAgain_IsNotReportedAsReBaselined()
+    {
+        var table = $"ExprMapNew_{Guid.NewGuid():N}"[..20];
+        WithConnection(table, cmd =>
+        {
+            cmd.CommandText = $@"DROP TABLE IF EXISTS `{_mainDb}`.`{table}`;
+                                 CREATE TABLE `{_mainDb}`.`{table}` (`Id` INT NOT NULL, `Tag` VARCHAR(50) NULL, PRIMARY KEY (`Id`));";
+            cmd.ExecuteNonQuery();
+            var json = GeneratedJson(table, "concat(`Tag`, 'x')");
+            RunTableQuenchProc(cmd, json);
+            cmd.CommandText = $"UPDATE SchemaSmith_ExpressionMap SET EngineVersion = 'from-another-server' WHERE ObjectTable = '{table}'";
+            Assert.That(cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale");
+            cmd.CommandText = $"DROP TABLE `{_mainDb}`.`{table}`";
+            cmd.ExecuteNonQuery();
+
+            ClearMessages(cmd);
+            RunTableQuenchProc(cmd, json);
+
+            cmd.CommandText = $"SELECT COUNT(*) FROM SchemaSmith_ExpressionMap WHERE ObjectTable = '{table}' AND EngineVersion = 'from-another-server'";
+            var staleLeft = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Multiple(() =>
+            {
+                Assert.That(CountMessages(cmd, "Re-baselined", ""), Is.Zero, "the table was created by this deploy, not carried across an upgrade");
+                Assert.That(staleLeft, Is.Zero, "and the row is still rewritten for the table that exists now");
+            });
+        });
+    }
+
     [Test]
     public void AStaleContextRow_IsReBaselined_WithoutTouchingTheObject_AndIsReported()
     {

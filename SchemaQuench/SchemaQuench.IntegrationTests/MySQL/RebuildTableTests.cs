@@ -8,7 +8,7 @@ using SchemaQuench.IntegrationTests.Shared;
 namespace SchemaQuench.IntegrationTests.MySQL;
 
 [Category("MySQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class RebuildTableTests : RebuildTableSharedTests
 {
     protected override Platform Platform => Platform.MySQL;
