@@ -513,7 +513,9 @@ jobs:
 
       - name: Grant TestUser full privileges and increase max connections
         run: |
-          mysql -h 127.0.0.1 -u root -p"$TEST_PASSWORD" -e "
+          # MySQL 5.7.22 offers only TLS 1.0/1.1, which the runner's client (OpenSSL 3) refuses; the tests already run
+          # with SslMode=None on the 5.7 legs.
+          mysql -h 127.0.0.1 -u root -p"$TEST_PASSWORD" ${{ startsWith(matrix.mysql, '5.7') && '--ssl-mode=DISABLED' || '' }} -e "
             GRANT ALL PRIVILEGES ON *.* TO '$TEST_USER'@'%' WITH GRANT OPTION;
             FLUSH PRIVILEGES;
             SET GLOBAL max_connections = 2000;
