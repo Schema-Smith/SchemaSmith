@@ -608,7 +608,7 @@ namespace Schema.Domain
         /// </summary>
         private void MigrateMySqlSchemaIdentificationScriptAlias()
         {
-            if (Product?.Platform.GetBasePlatform() != Platform.MySQL) return;
+            if (Product is not { } product || product.Platform.GetBasePlatform() != Platform.MySQL) return;
             if (string.IsNullOrWhiteSpace(SchemaIdentificationScript)) return;
 
             DatabaseIdentificationScript ??= SchemaIdentificationScript;
@@ -616,7 +616,7 @@ namespace Schema.Domain
                 $"Template '{Name}' uses 'SchemaIdentificationScript', a deprecated alias on MySQL and MariaDB. " +
                 "Rename it to 'DatabaseIdentificationScript' -- the value is identical, and the alias only still works because load migrates it."));
             LogFactory.GetLogger("ProgressLog").Warn(
-                $"Template '{Name}' ({Product.Platform.ToDisplayName()}) uses the legacy 'SchemaIdentificationScript' alias. " +
+                $"Template '{Name}' ({product.Platform.ToDisplayName()}) uses the legacy 'SchemaIdentificationScript' alias. " +
                 $"Rename the field to 'DatabaseIdentificationScript' in {FilePath}. " +
                 $"The alias is preserved for backward compatibility and migrates the value silently.");
             SchemaIdentificationScript = null;
