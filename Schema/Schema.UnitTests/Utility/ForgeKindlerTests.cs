@@ -548,7 +548,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_CleanCheckClause (a check's introducers removed without cutting names that end in one).
         // +1 = SchemaSmith_ValidateTableOwnership (the ownership refusal, before anything is created or renamed).
         // +1 = SchemaSmith_SupportsGeneratedColumnCollation (a generated column's COLLATE, refused by early MariaDB patches).
-        Assert.That(mysql.Length, Is.EqualTo(110));
+        // +1 = SchemaSmith_DegradeUnsupportedColumnFeatures (column degrades reported once ShouldApply has settled).
+        Assert.That(mysql.Length, Is.EqualTo(111));
     }
 
     [Test]

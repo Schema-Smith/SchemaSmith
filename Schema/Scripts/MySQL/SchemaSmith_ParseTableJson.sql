@@ -291,6 +291,8 @@ BEGIN
         CompareCheckExpression TEXT DEFAULT NULL,
         CharacterSet VARCHAR(50) DEFAULT NULL,
         Collation VARCHAR(100) DEFAULT NULL,
+        -- 1 when a generated column's declared collation was dropped because the server rejects COLLATE there.
+        CollateSkipped TINYINT DEFAULT 0,
         IsInvisible TINYINT DEFAULT 0,
         IsWithoutSystemVersioning TINYINT DEFAULT 0,
         -- MariaDB: a declared system-time period column, 'ROWSTART' or 'ROWEND' (GeneratedAlways). NULL otherwise.
@@ -638,31 +640,15 @@ BEGIN
                                          ELSE CheckExpression END;
 
     -- A generated column's COLLATE is a syntax error on MariaDB before 10.2.37, 10.3.28, 10.4.18 and 10.5.9. There the column
-    -- keeps its character set (read from the collation when only that is declared) in that set's default collation, and
-    -- the comparison follows the character set alone, so a redeploy leaves it.
-    IF SchemaSmith_SupportsGeneratedColumnCollation() = 0
-       AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns
-                    WHERE IFNULL(TRIM(GeneratedExpression), '') != '' AND IFNULL(TRIM(Collation), '') != '') THEN
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(),
-               CONCAT(IF(SchemaSmith_UnsupportedFeaturePolicy() = 'fail',
-                         '  Generated column COLLATE this server cannot create (UnsupportedFeaturePolicy=fail): ',
-                         '  Generated column created in its character set''s default collation (COLLATE requires MariaDB 10.2.37, 10.3.28, 10.4.18 or 10.5.9 - downgraded): '),
-                      SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName))
-          FROM _SchemaSmith_Columns c
-         WHERE IFNULL(TRIM(c.GeneratedExpression), '') != '' AND IFNULL(TRIM(c.Collation), '') != '';
-        IF SchemaSmith_UnsupportedFeaturePolicy() = 'fail' THEN
-            SET @ss_msg = 'Generated column COLLATE needs MariaDB 10.2.37/10.3.28/10.4.18/10.5.9 (UnsupportedFeaturePolicy=fail); see the log.';
-            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
-        END IF;
-        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT CONNECTION_ID(), 'column (generated COLLATE, MariaDB 10.2.37)',
-               CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName)), 'downgraded'
-          FROM _SchemaSmith_Columns c
-         WHERE IFNULL(TRIM(c.GeneratedExpression), '') != '' AND IFNULL(TRIM(c.Collation), '') != '';
+    -- keeps its character set (read from the collation when only that is declared, and the collation names one) in that
+    -- set's default collation, and the comparison follows the character set alone, so a redeploy leaves it. The column is
+    -- marked here and reported by SchemaSmith_DegradeUnsupportedColumnFeatures once ShouldApply has settled the working set.
+    IF SchemaSmith_SupportsGeneratedColumnCollation() = 0 THEN
         UPDATE _SchemaSmith_Columns
-           SET CharacterSet = COALESCE(NULLIF(TRIM(CharacterSet), ''), SUBSTRING_INDEX(TRIM(Collation), '_', 1)),
-               Collation = NULL
+           SET CharacterSet = COALESCE(NULLIF(TRIM(CharacterSet), ''),
+                                       IF(TRIM(Collation) LIKE '%\\_%', SUBSTRING_INDEX(TRIM(Collation), '_', 1), NULL)),
+               Collation = NULL,
+               CollateSkipped = 1
          WHERE IFNULL(TRIM(GeneratedExpression), '') != '' AND IFNULL(TRIM(Collation), '') != '';
     END IF;
 

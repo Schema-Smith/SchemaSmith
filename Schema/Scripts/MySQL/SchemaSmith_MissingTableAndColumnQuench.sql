@@ -227,6 +227,7 @@ BEGIN
     -- Declarations no degrade can rescue are refused before anything is created.
     CALL SchemaSmith_RefuseUnsupportedIndexes();
     CALL SchemaSmith_DegradeVectorIndexes();
+    CALL SchemaSmith_DegradeUnsupportedColumnFeatures();
 
     -- IDEMPOTENCY REFRESH -- this proc is re-CALLed on retryable contention, and it must survive that.
     --
