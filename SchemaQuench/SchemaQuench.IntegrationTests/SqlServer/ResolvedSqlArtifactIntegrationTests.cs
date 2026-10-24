@@ -104,6 +104,10 @@ public class ResolvedSqlArtifactIntegrationTests
                     "Progress log must contain the 'Resolved SQL written to:' reference.");
                 Assert.That(progressOutput, Does.Contain(_artifactDir),
                     "Progress log must contain the artifact directory path.");
+                // #585: SQL Server also named the package's own script as the resolved SQL, a file that holds no token values.
+                var resolvedLines = progressLogLines.Where(l => l.Contains("Resolved SQL written to:")).ToList();
+                Assert.That(resolvedLines, Has.All.Contains(_artifactDir),
+                    "every 'Resolved SQL written to:' line names the artifact, never the package's script: " + string.Join(" | ", resolvedLines));
                 Assert.That(progressOutput, Does.Not.Contain(Marker),
                     "Progress log must NOT contain the raw SQL marker — SQL must stay in the file, not the log.");
 

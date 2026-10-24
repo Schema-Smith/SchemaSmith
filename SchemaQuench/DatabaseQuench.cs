@@ -2738,10 +2738,8 @@ SET NOCOUNT ON
 
     internal void QuenchOneScript(IDbCommand destCmd, SqlScript script, bool runTwice, bool showErrors = true)
     {
-        if (_product.Platform == Platform.SqlServer)
-            _debugFileLocation = (destCmd.Connection as SqlConnection)?.FireInfoMessageEventOnUserErrors ?? false ? script.LogPath : "";
-        else
-            _debugFileLocation = showErrors ? script.LogPath : "";
+        // The script's own file is not resolved SQL: its artifact, when one is written, is reported with the failure.
+        _debugFileLocation = "";
 
         if (showErrors) SafeProgressLog($"    Quenching {script.LogPath}");
         var needDBReset = false;
