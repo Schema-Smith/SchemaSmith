@@ -66,7 +66,13 @@ for l in "${LEGS[@]}"; do
     FAILED=1; continue
   fi
 
-  lctn=$(docker exec "$name" sh -c "$CLI -e \"GRANT ALL PRIVILEGES ON *.* TO '$TEST_USER'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES; SET GLOBAL max_connections = 2000; SELECT @@lower_case_table_names;\"" 2>/dev/null | tail -1)
+  # The image's init runs a temporary server that answers SELECT 1 and then restarts, so retry until the real one answers.
+  lctn=""
+  for _ in $(seq 1 30); do
+    lctn=$(docker exec "$name" sh -c "$CLI -e \"GRANT ALL PRIVILEGES ON *.* TO '$TEST_USER'@'%' WITH GRANT OPTION; FLUSH PRIVILEGES; SET GLOBAL max_connections = 2000; SELECT @@lower_case_table_names;\"" 2>/dev/null | tail -1)
+    [ -n "$lctn" ] && break
+    sleep 2
+  done
   if [ "$lctn" != "1" ]; then
     echo "  FAIL: the server reports lower_case_table_names=${lctn:-?}, not 1 -- this leg would test nothing."
     FAILED=1; continue
