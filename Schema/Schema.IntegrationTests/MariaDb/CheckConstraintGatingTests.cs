@@ -14,8 +14,8 @@ namespace Schema.IntegrationTests.MariaDb;
 /// <summary>
 /// MariaDB enforces CHECK constraints from 10.2.1, but INFORMATION_SCHEMA.CHECK_CONSTRAINTS, which every read of a
 /// deployed check needs, arrived in 10.2.22. Below it a declared CHECK degrades through the unsupported-feature policy,
-/// as it does on MySQL before 8.0.16. 10.2.21 and 10.2.22 are simulated with the patch override on the modern container;
-/// the floor sweep's MariaDB 10.2 leg is 10.2.44.
+/// as it does on MySQL before 8.0.16. On a server that has the view, 10.2.21 and 10.2.22 are simulated with the patch
+/// override; the floor sweep's 10.2.13 and 10.2.21 bands are genuinely below it, so they run without one.
 /// </summary>
 [Category("MariaDb")]
 [Category("Integration")]
@@ -56,6 +56,13 @@ public class CheckConstraintGatingTests
         Exec("SET @schemasmith_version_patch_override = NULL");
         Exec("SET @schemasmith_unsupported_policy = NULL");
         Exec($"DROP TABLE IF EXISTS `{_testDb}`.`{TableName}`");
+    }
+
+    // A real server below 10.2.22 is already there; telling it 10.2.21 would claim a patch it may not be.
+    private void SimulateBelow10222()
+    {
+        if (Scalar("SELECT SchemaSmith_ServerVersionPatchNum()") >= 100222)
+            Exec("SET @schemasmith_version_patch_override = 100221");
     }
 
     private void Exec(string sql)
@@ -104,7 +111,7 @@ public class CheckConstraintGatingTests
     [Test]
     public void Below10222_Warn_DeploysTheTableWithoutTheCheck_AndRedeploysQuietly()
     {
-        Exec("SET @schemasmith_version_patch_override = 100221");
+        SimulateBelow10222();
 
         Deploy();
         Assert.DoesNotThrow(Deploy, "a redeploy below 10.2.22 must not read the CHECK_CONSTRAINTS view");
@@ -127,7 +134,7 @@ public class CheckConstraintGatingTests
     [Test]
     public void Below10222_Warn_AColumnCheck_IsSkippedAndRecorded_AndARedeployLeavesTheColumn()
     {
-        Exec("SET @schemasmith_version_patch_override = 100221");
+        SimulateBelow10222();
 
         DeployColumnCheck();
         Exec($"DELETE FROM SchemaSmith_ChangeAudit WHERE ObjectName LIKE '%{TableName}%'");
@@ -144,16 +151,18 @@ public class CheckConstraintGatingTests
     [Test]
     public void Below10222_Fail_AColumnCheck_AbortsNamingTheMariaDbVersion()
     {
-        Exec("SET @schemasmith_version_patch_override = 100221");
+        SimulateBelow10222();
         Exec("SET @schemasmith_unsupported_policy = 'fail'");
 
         Assert.That(DeployColumnCheck, Throws.Exception.With.Message.Contains("MariaDB 10.2.22"));
+        Assert.That(Scalar($"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{TableName}'"),
+            Is.Zero, "the refusal comes before anything is created");
     }
 
     [Test]
     public void Below10222_Fail_AbortsNamingTheMariaDbVersion()
     {
-        Exec("SET @schemasmith_version_patch_override = 100221");
+        SimulateBelow10222();
         Exec("SET @schemasmith_unsupported_policy = 'fail'");
 
         Assert.That(Deploy, Throws.Exception.With.Message.Contains("MariaDB 10.2.22"));
