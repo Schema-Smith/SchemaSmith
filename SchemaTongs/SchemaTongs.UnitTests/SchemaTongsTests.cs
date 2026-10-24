@@ -2078,7 +2078,7 @@ public class SchemaTongsTests
             var tongs = new SchemaTongs(Platform.MySQL);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
-            _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Extracting users")));
+            _progressLog.Received().Info(Arg.Is<string>(s => s == "  Cast Json for users"));
             _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("users.json")), Arg.Any<string>());
 
             FactoryContainer.Clear();

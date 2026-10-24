@@ -13,6 +13,7 @@ using Schema.Domain.PostgreSQL;
 using Schema.Domain.SqlServer;
 using Schema.Isolators;
 using Schema.Utility;
+using Schema.Validation.Checks;
 
 namespace Schema.Domain
 {
@@ -217,6 +218,8 @@ namespace Schema.Domain
         [JsonIgnore]
         public List<Table> Tables { get; } = [];
 
+        private readonly List<(Table Table, string File)> _tableFiles = [];
+
         /// <summary>
         /// Component files (tables / materialized views / indexed views) that
         /// <see cref="InstanceLoad"/> skipped because they could not be parsed as JSON at all —
@@ -243,6 +246,9 @@ namespace Schema.Domain
         /// </summary>
         [JsonIgnore]
         public List<DeprecationNotice> DeprecationNotices { get; } = [];
+
+        [JsonIgnore]
+        public List<LoadNotice> LoadNotices { get; } = [];
 
         [JsonIgnore]
         public string TableSchema { get; set; } = "";
@@ -358,6 +364,9 @@ namespace Schema.Domain
         // accessors below flatten these, and the folder-gate path (#260) filters these per target
         // before flattening, so gating and dispatch always agree on which folder feeds which slot.
         [JsonIgnore]
+        public List<TemplateFolder> SetupFolders => FoldersInSlots(TemplateQuenchSlot.Setup);
+
+        [JsonIgnore]
         public List<TemplateFolder> BeforeFolders => FoldersInSlots(TemplateQuenchSlot.Before);
 
         [JsonIgnore]
@@ -380,6 +389,9 @@ namespace Schema.Domain
 
         private List<TemplateFolder> FoldersInSlots(params TemplateQuenchSlot[] slots) =>
             ScriptFolders.Where(f => slots.Contains(f.QuenchSlot)).ToList();
+
+        [JsonIgnore]
+        public List<SqlScript> SetupScripts => SetupFolders.SelectMany(f => f.Scripts).ToList();
 
         [JsonIgnore]
         public List<SqlScript> BeforeScripts => BeforeFolders.SelectMany(f => f.Scripts).ToList();
@@ -596,7 +608,7 @@ namespace Schema.Domain
         /// </summary>
         private void MigrateMySqlSchemaIdentificationScriptAlias()
         {
-            if (Product?.Platform.GetBasePlatform() != Platform.MySQL) return;
+            if (Product is not { } product || product.Platform.GetBasePlatform() != Platform.MySQL) return;
             if (string.IsNullOrWhiteSpace(SchemaIdentificationScript)) return;
 
             DatabaseIdentificationScript ??= SchemaIdentificationScript;
@@ -604,7 +616,7 @@ namespace Schema.Domain
                 $"Template '{Name}' uses 'SchemaIdentificationScript', a deprecated alias on MySQL and MariaDB. " +
                 "Rename it to 'DatabaseIdentificationScript' -- the value is identical, and the alias only still works because load migrates it."));
             LogFactory.GetLogger("ProgressLog").Warn(
-                $"Template '{Name}' (MySQL) uses the legacy 'SchemaIdentificationScript' alias. " +
+                $"Template '{Name}' ({product.Platform.ToDisplayName()}) uses the legacy 'SchemaIdentificationScript' alias. " +
                 $"Rename the field to 'DatabaseIdentificationScript' in {FilePath}. " +
                 $"The alias is preserved for backward compatibility and migrates the value silently.");
             SchemaIdentificationScript = null;
@@ -633,6 +645,7 @@ namespace Schema.Domain
             // resolved values rather than the pre-resolver nulls (which NullValueHandling.Ignore
             // would silently omit from the JSON, leaving user scripts with no Schema field).
             SchemaDefaultResolver.Resolve(this);
+            if (!tolerateComponentLoadErrors) RefuseTablesDeclaredTwice();
 
             QueryTokens = TokenHelper.SplitOutQueryTokens(scriptTokens);
             TokenHelper.ResolveSpecificTableTokens(scriptTokens, Tables, platform);
@@ -645,6 +658,8 @@ namespace Schema.Domain
             var tableQueue = new TaskQueueManager<Table>(Environment.ProcessorCount * 2);
             Tables.ForEach(table => tableQueue.AddToQueue(table, t => t.ResolveScriptTokensInTableComponentScripts(tokens)));
             tableQueue.WaitForAll();
+            UnwrapQuotedPostgreSqlNames();
+            MakePrimaryKeyColumnsNotNull();
 
             MaterializedViews.ForEach(mv =>
             {
@@ -1087,7 +1102,9 @@ namespace Schema.Domain
             {
                 try
                 {
-                    Tables.Add(Table.Load(f, platform));
+                    var table = Table.Load(f, platform);
+                    Tables.Add(table);
+                    _tableFiles.Add((table, f));
                 }
                 // prepush-allow: generic-catch -- --Validate must record ANY component failure, and Table.Load rewraps its own into plain Exception (Table.cs:99)
                 catch (Exception e) when (tolerateComponentLoadErrors)
@@ -1097,9 +1114,27 @@ namespace Schema.Domain
                     // Recorded either way (see RecordComponentLoadError). An unparseable file surfaces as
                     // SS-LOAD-001; a parseable-but-wrong one is classified and left for JsonSchemaCheck's
                     // on-disk pass to report precisely as SS-JSON-001.
-                    RecordComponentLoadError(f, e);
+                    RecordComponentLoadError(f, e, isTable: true);
                 }
             }
+        }
+
+        // #566: a deploy that loaded both declarations failed partway through with an engine error naming neither. Refused
+        // here instead, by SS-DUP-001's rule, before anything is deployed; --Validate keeps both and reports the finding.
+        // Names compare exactly: two that differ only in case are two tables wherever the engine is case-sensitive, and the
+        // servers that fold case refuse the pair later, with the server's setting in hand.
+        private void RefuseTablesDeclaredTwice()
+        {
+            var duplicates = _tableFiles
+                .GroupBy(t => DuplicationCheck.TableIdentity(t.Table), StringComparer.Ordinal)
+                .Where(g => g.Count() > 1 && g.Any(t => string.IsNullOrWhiteSpace(t.Table.ShouldApplyExpression)))
+                .Select(g => $"{g.Key} ({string.Join(", ", g.Select(t => Path.GetFileName(t.File)))})")
+                .ToList();
+            if (duplicates.Count == 0) return;
+            throw new PackageException(
+                $"Template '{Name}' declares {(duplicates.Count == 1 ? "a table" : "tables")} in more than one file: " +
+                $"{string.Join("; ", duplicates)}. Keep one file per table, or gate every declaration with ShouldApplyExpression " +
+                "to make them variants (--Validate reports this as SS-DUP-001).");
         }
 
         /// <summary>
@@ -1119,8 +1154,13 @@ namespace Schema.Domain
         // with a guard like that in place, and that contract is the only thing a consumer can build on.
         // Parseability is kept as CLASSIFICATION (see ComponentLoadError.IsValidJson) so `--Validate` can
         // still report only the unparseable ones as SS-LOAD-001 and leave the rest to JsonSchemaCheck.
-        private void RecordComponentLoadError(string filePath, Exception e) =>
-            ComponentLoadErrors.Add(new ComponentLoadError(filePath, e.Message, IsParseableJson(filePath)));
+        private void RecordComponentLoadError(string filePath, Exception e, bool isTable = false)
+        {
+            var parsed = ParseOrNull(filePath);
+            var name = isTable ? (parsed as JObject)?["Name"] : null;
+            ComponentLoadErrors.Add(new ComponentLoadError(filePath, e.Message, parsed != null,
+                name?.Type == JTokenType.String ? (string)name : null));
+        }
 
         // Deliberately does NOT infer parseability from the CLR exception type that surfaced out of
         // Table.Load / PlatformDeserializer — that inference is unsound. MissingMemberHandling.Error
@@ -1131,17 +1171,15 @@ namespace Schema.Domain
         // the two cases apart. Re-parsing the raw text directly answers the actual question ("is this
         // valid JSON at all?") and stays correct regardless of which exception type Newtonsoft raises
         // for a given malformation, or whether a future deserialization setting changes that shape.
-        private static bool IsParseableJson(string filePath)
+        private static JToken ParseOrNull(string filePath)
         {
             try
             {
-                var text = ProductFileWrapper.GetFromFactory().ReadAllText(filePath);
-                JsonText.Parse(text);
-                return true;
+                return JsonText.Parse(ProductFileWrapper.GetFromFactory().ReadAllText(filePath));
             }
             catch
             {
-                return false;
+                return null;
             }
         }
 
@@ -1168,7 +1206,7 @@ namespace Schema.Domain
             if (CreateSchemaIfMissing && Product is { } product && product.Platform.GetBasePlatform() == Platform.MySQL)
                 throw new PackageException(
                     $"Template '{Name}' (file: {FilePath}) sets CreateSchemaIfMissing=true, which does not apply on " +
-                    $"{product.Platform}: a schema is a database there, and templates do not fan out per schema. " +
+                    $"{product.Platform.ToDisplayName()}: a schema is a database there, and templates do not fan out per schema. " +
                     $"Remove CreateSchemaIfMissing; use DatabaseIdentificationScript to target tenant databases.");
 
             if (CreateSchemaIfMissing && !IsSchemaTemplate)
@@ -1263,6 +1301,52 @@ namespace Schema.Domain
         /// through the progress log so the user can correct it. <see cref="ContinueOnDatabaseFailure"/>
         /// is excluded: it is the regular template's own setting.
         /// </summary>
+        // Every engine refuses a nullable primary-key column (PostgreSQL on every deploy after the first), and nobody
+        // who puts a column in the key means it to hold NULL. A conditional key may not deploy, so its columns stay as declared.
+        private void MakePrimaryKeyColumnsNotNull()
+        {
+            foreach (var table in Tables)
+            foreach (var key in table.Indexes.Where(i => i.PrimaryKey && string.IsNullOrWhiteSpace(i.ShouldApplyExpression)))
+            foreach (var column in CoherenceCheck.KeyColumns(table, key).Where(c => c.Nullable))
+            {
+                column.Nullable = false;
+                LoadNotices.Add(new LoadNotice("SS-COL-008", $"Template '{Name}' / Table '{table.Name}' / Column '{column.Name}'",
+                    $"Column '{column.Name}' of table '{table.Name}' is declared Nullable but is in primary key '{key.Name}', so it is deployed NOT NULL. " +
+                    "If the column already exists and holds NULLs, that change fails; remove \"Nullable\": true so the declaration says what deploys."));
+            }
+        }
+
+        // PostgreSQL keeps a quote inside a name, so a table or column Name still wrapped in double quotes (the form
+        // SS-IDENT-001 used to refuse) would deploy under a different name, quotes included. One wrapper pair is stripped,
+        // as it is from an OldName.
+        private void UnwrapQuotedPostgreSqlNames()
+        {
+            foreach (var table in Tables.OfType<PostgreSqlTable>())
+            {
+                var tableName = table.Name;
+                if (Unwrap(tableName) is { } bareTable)
+                {
+                    table.Name = bareTable;
+                    LoadNotices.Add(WrappedNameNotice($"Template '{Name}' / Table '{bareTable}'", "Table", tableName, bareTable));
+                }
+                foreach (var column in table.Columns)
+                {
+                    var columnName = column.Name;
+                    if (Unwrap(columnName) is not { } bareColumn) continue;
+                    column.Name = bareColumn;
+                    LoadNotices.Add(WrappedNameNotice($"Template '{Name}' / Table '{table.Name}' / Column '{bareColumn}'", "Column", columnName, bareColumn));
+                }
+            }
+
+            static string Unwrap(string name) =>
+                name is { Length: > 2 } && name[0] == '"' && name[^1] == '"' ? name[1..^1].Replace("\"\"", "\"") : null;
+
+            static LoadNotice WrappedNameNotice(string location, string kind, string declared, string bare) =>
+                new("SS-IDENT-003", location,
+                    $"{kind} name '{declared}' is wrapped in double quotes, which PostgreSQL would keep as part of the name, so it deploys as '{bare}'. " +
+                    "Remove the quotes so the declaration says what deploys.");
+        }
+
         private void WarnIfSchemaOnlyFieldsSetOnRegularTemplate()
         {
             if (IsSchemaTemplate) return;

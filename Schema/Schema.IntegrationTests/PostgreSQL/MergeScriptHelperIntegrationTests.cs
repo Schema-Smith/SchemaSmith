@@ -167,6 +167,52 @@ public class MergeScriptHelperIntegrationTests
 
     #endregion
 
+    // #567, the engines side by side: an object or array value delivered into a text column arrives as its compact JSON
+    // text, and a string as the string.
+    [Test]
+    public void BuildMergeScript_AnObjectOrArrayValue_ArrivesAsCompactJsonText()
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"_test_jsonval_{Guid.NewGuid():N}"[..40];
+        try
+        {
+            command.CommandText = $@"CREATE TABLE ""public"".""{tableName}"" (""id"" INT PRIMARY KEY, ""doc"" TEXT NULL, ""note"" VARCHAR(200) NULL)";
+            command.ExecuteNonQuery();
+
+            var payload = "[\n  { \"id\": 1, \"doc\": { \"a\": 1, \"b\": [ 1, 2.50 ] }, \"note\": [ 1, 2 ] },\n"
+                          + "  { \"id\": 2, \"doc\": \"plain  text\", \"note\": \"x\" },\n"
+                          + "  { \"id\": 3, \"doc\": null, \"note\": null }\n]";
+            for (var run = 0; run < 2; run++)
+            {
+                command.CommandText = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, command, "public", tableName, payload, @"""id""",
+                    mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+                command.ExecuteNonQuery();
+            }
+
+            string Read(int id, string column)
+            {
+                command.CommandText = $@"SELECT ""{column}"" FROM ""public"".""{tableName}"" WHERE ""id"" = {id}";
+                var value = command.ExecuteScalar();
+                return value is DBNull or null ? null : value.ToString();
+            }
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Read(1, "doc"), Is.EqualTo("{\"a\":1,\"b\":[1,2.50]}"));
+                Assert.That(Read(1, "note"), Is.EqualTo("[1,2]"));
+                Assert.That(Read(2, "doc"), Is.EqualTo("plain  text"));
+                Assert.That(Read(2, "note"), Is.EqualTo("x"));
+                Assert.That(Read(3, "doc"), Is.Null);
+                Assert.That(Read(3, "note"), Is.Null);
+            });
+        }
+        finally
+        {
+            command.CommandText = $@"DROP TABLE IF EXISTS ""public"".""{tableName}""";
+            command.ExecuteNonQuery();
+        }
+    }
+
     #region Quoted Identifier Tests
 
     [Test]

@@ -46,6 +46,24 @@ public static class MariaDbVectorIndexOptions
         return options;
     }
 
+    /// <summary>
+    /// Whether a deployed VECTOR index was built with a different <c>M</c> or <c>DISTANCE</c> than it declares, so it has
+    /// to be rebuilt: MariaDB has no ALTER for either. An option left undeclared, on either side, is the server's default.
+    /// </summary>
+    public static bool NeedsRebuild(MariaDbIndex declared, string createTable, int serverDefaultM, string serverDefaultDistance)
+    {
+        if (!string.Equals(declared.IndexType, "VECTOR", StringComparison.OrdinalIgnoreCase)) return false;
+        if (!Read(createTable).TryGetValue(Unquote(declared.Name), out var live)) return false;
+        return (declared.M ?? serverDefaultM) != (live.M ?? serverDefaultM)
+               || !string.Equals(declared.Distance ?? serverDefaultDistance, live.Distance ?? serverDefaultDistance, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string Unquote(string name)
+    {
+        name = name?.Trim();
+        return name is { Length: > 1 } && name[0] == '`' && name[^1] == '`' ? name[1..^1].Replace("``", "`") : name ?? "";
+    }
+
     /// <summary>Sets each VECTOR index's <see cref="MariaDbIndex.M"/> and <see cref="MariaDbIndex.Distance"/>.</summary>
     public static void Apply(IEnumerable<Schema.Domain.Index> indexes, string createTable)
     {
@@ -53,10 +71,7 @@ public static class MariaDbVectorIndexOptions
         if (options.Count == 0) return;
         foreach (var index in indexes.OfType<MariaDbIndex>())
         {
-            var name = index.Name?.Trim();
-            if (name is { Length: > 1 } && name[0] == '`' && name[^1] == '`')
-                name = name[1..^1].Replace("``", "`");
-            if (name == null || !options.TryGetValue(name, out var found)) continue;
+            if (!options.TryGetValue(Unquote(index.Name), out var found)) continue;
             index.M ??= found.M;
             index.Distance ??= found.Distance;
         }

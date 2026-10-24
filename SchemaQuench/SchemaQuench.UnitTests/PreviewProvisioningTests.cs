@@ -61,8 +61,9 @@ public class PreviewProvisioningTests
     [Test]
     public void NonPreview_MissingDbWithCreateIfMissing_DoesProvision_AndDoesNotFlagWouldCreate()
     {
-        // Non-preview behavior must be byte-for-byte unchanged.
-        WithPreviewProbe("db_missing", createIfMissing: true, dbExists: false, (pq, template) =>
+        // Non-preview behavior must be byte-for-byte unchanged. A real run, not WhatIf: under WhatIf nothing is created,
+        // which the next test covers.
+        WithPreviewProbe("db_missing", createIfMissing: true, dbExists: false, whatIf: false, body: (pq, template) =>
         {
             var units = pq.CallEnumerate(template, previewOnly: false);
             Assert.Multiple(() =>
@@ -72,6 +73,62 @@ public class PreviewProvisioningTests
                 Assert.That(units.Single().WouldCreateDatabase, Is.False,
                     "Actually-provisioned DB must NOT carry WouldCreateDatabase=true.");
             });
+        });
+    }
+
+    // #550: a WhatIf run only reports the database it would create, so its unit must not try to open it.
+    [Test]
+    public void WhatIf_MissingDbWithCreateIfMissing_FlagsWouldCreate_SoTheUnitDoesNotOpenIt()
+    {
+        WithPreviewProbe("db_missing", createIfMissing: true, dbExists: false, whatIf: true, body: (pq, template) =>
+        {
+            var units = pq.CallEnumerate(template, previewOnly: false);
+            Assert.That(units.Single().WouldCreateDatabase, Is.True,
+                "under WhatIf the database is only reported, so it does not exist for the unit to open");
+        });
+    }
+
+    // #562: a database CreateIfMissing could not create had no work unit, so the summary's failures and targets, and the
+    // console's failure manifest, said nothing about the PartialFailure.
+    [Test]
+    public void ADatabaseThatCouldNotBeCreated_IsAFailedTarget_AndAFailure()
+    {
+        WithPreviewProbe("db_denied", createIfMissing: true, dbExists: false, whatIf: false, provisionThrows: true, body: (pq, template) =>
+        {
+            var units = pq.CallEnumerate(template, previewOnly: false);
+            Assert.Multiple(() =>
+            {
+                Assert.That(units, Is.Empty, "nothing is deployed to a database that does not exist");
+                var target = pq.TargetResults.SingleOrDefault(t => t.Database == "db_denied");
+                Assert.That(target?.Outcome, Is.EqualTo(SchemaQuench.Reporting.TargetOutcome.Failed), "targets[] lists it as failed");
+                var failure = pq.FailureRecords.SingleOrDefault(f => f.ScopeKey.Contains("db_denied"));
+                Assert.That(failure?.Error, Does.Contain("CREATE DATABASE permission denied"), "failures[] carries the provisioning message");
+            });
+        });
+    }
+
+    // The same for a database whose existence could not be checked: the check failing is not "it is missing".
+    [Test]
+    public void ADatabaseWhoseExistenceCheckFailed_IsAFailedTarget_AndAFailure()
+    {
+        WithPreviewProbe("db_unreadable", createIfMissing: true, dbExists: false, whatIf: false, existsThrows: true, body: (pq, template) =>
+        {
+            var units = pq.CallEnumerate(template, previewOnly: false);
+            Assert.Multiple(() =>
+            {
+                Assert.That(units, Is.Empty, "nothing is deployed to a database that could not be checked");
+                Assert.That(pq.ProvisionCalls, Is.Empty, "and nothing tries to create it");
+                var target = pq.TargetResults.SingleOrDefault(t => t.Database == "db_unreadable");
+                Assert.That(target?.Outcome, Is.EqualTo(SchemaQuench.Reporting.TargetOutcome.Failed), "targets[] lists it as failed");
+                var failure = pq.FailureRecords.SingleOrDefault(f => f.ScopeKey.Contains("db_unreadable"));
+                Assert.That(failure?.Error, Does.Contain("VIEW ANY DATABASE permission denied"), "failures[] carries the engine's message");
+            });
+
+            // The console's failure manifest renders the same records, so it names the database too.
+            var failureLog = Substitute.For<log4net.ILog>();
+            Schema.Utility.LogFactory.Register("FailureLog", failureLog);
+            pq.EmitFailureRollup();
+            failureLog.Received().Info(Arg.Is<object>(m => m.ToString().Contains("db_unreadable")));
         });
     }
 
@@ -86,7 +143,7 @@ public class PreviewProvisioningTests
     /// </summary>
     private static void WithPreviewProbe(
         string databaseName, bool createIfMissing, bool dbExists,
-        System.Action<PreviewProbe, Template> body)
+        System.Action<PreviewProbe, Template> body, bool whatIf = true, bool provisionThrows = false, bool existsThrows = false)
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -114,7 +171,7 @@ public class PreviewProvisioningTests
                 {
                     ["SchemaPackagePath"] = schemaPackagePath,
                     ["Target:Server"] = "primary",
-                    ["WhatIfONLY"] = "true",
+                    ["WhatIfONLY"] = whatIf ? "true" : "false",
                     ["Target:TemplateTargets:PreviewTemplate:Databases:0"] = databaseName,
                     ["Target:TemplateTargets:PreviewTemplate:CreateIfMissing"] = createIfMissing ? "true" : "false"
                 })
@@ -130,7 +187,7 @@ public class PreviewProvisioningTests
 
             try
             {
-                var probe = new PreviewProbe(dbExists);
+                var probe = new PreviewProbe(dbExists) { ProvisionThrows = provisionThrows, ExistsThrows = existsThrows };
                 var template = new Template
                 {
                     Name = "PreviewTemplate",
@@ -157,16 +214,21 @@ public class PreviewProvisioningTests
     {
         private readonly bool _dbExists;
         public List<string> ProvisionCalls { get; } = [];
+        public bool ProvisionThrows { get; init; }
+        public bool ExistsThrows { get; init; }
 
         public PreviewProbe(bool dbExists = false) { _dbExists = dbExists; }
 
         public List<WorkUnit> CallEnumerate(Template template, bool previewOnly)
             => EnumerateWorkUnitsForTemplate(template, previewOnly);
 
-        internal override bool DatabaseExistsOnServer(string server, string databaseName)
-            => _dbExists;
+        internal override bool DatabaseExistsOnServer(string server, string databaseName) =>
+            ExistsThrows ? throw new System.InvalidOperationException("VIEW ANY DATABASE permission denied in database 'master'.") : _dbExists;
 
         internal override void ProvisionDatabaseViaAdminConnection(string server, string databaseName)
-            => ProvisionCalls.Add(databaseName);
+        {
+            ProvisionCalls.Add(databaseName);
+            if (ProvisionThrows) throw new System.InvalidOperationException("CREATE DATABASE permission denied in database 'master'.");
+        }
     }
 }

@@ -143,6 +143,59 @@ INSERT INTO [dbo].[Src] VALUES
         }
     }
 
+    // #573: the column list was built with STRING_AGG ... WITHIN GROUP, which SQL Server parses only from level 110, so a
+    // JSON extraction from a level-100 database failed for every table -- and JSON is the default encoding on 2017+.
+    [Test]
+    public void JsonExtraction_FromACompat100Database_ExtractsEveryColumn_AndRoundTrips()
+    {
+        var db = "dt_json100_" + Guid.NewGuid().ToString("N").Substring(0, 8);
+        using (var master = _connection.CreateCommand())
+        {
+            master.CommandText = $"CREATE DATABASE [{db}]; ALTER DATABASE [{db}] SET COMPATIBILITY_LEVEL = 100;";
+            master.ExecuteNonQuery();
+        }
+        try
+        {
+            _connection.ChangeDatabase(db);
+            using (var c = _connection.CreateCommand())
+            {
+                c.CommandText = @"
+CREATE TABLE [dbo].[Src] ([code] VARCHAR(20) NOT NULL PRIMARY KEY, [amount] DECIMAL(10,2) NULL, [note] NVARCHAR(100) NULL, [geo] GEOMETRY NULL);
+INSERT INTO [dbo].[Src] VALUES ('A001', 7.25, N'a & b', geometry::Point(1, 2, 4326)), ('B002', NULL, NULL, NULL);
+CREATE TABLE [dbo].[Dst] ([code] VARCHAR(20) NOT NULL PRIMARY KEY, [amount] DECIMAL(10,2) NULL, [note] NVARCHAR(100) NULL, [geo] GEOMETRY NULL);";
+                c.ExecuteNonQuery();
+            }
+
+            string columns, json;
+            using (var c = _connection.CreateCommand())
+            {
+                columns = _dataTongs.GetSelectColumns(c, "dbo", "Src");
+                json = _dataTongs.GetTableDataJson(c, columns, "dbo", "Src", "[code]", null);
+            }
+            Assert.That(columns, Is.EqualTo("[amount],[code],[geo].ToString() AS [geo], [geo].STSrid AS [geo.STSrid],[note]"),
+                "every column, in name order, as the level-110+ query built it");
+            Assert.That(json, Does.Contain("A001").And.Contain("B002"));
+
+            // OPENJSON needs level 130, so a JSON delivery here goes through the XML shred, as the deploy does.
+            using (var c = _connection.CreateCommand())
+            {
+                c.CommandText = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, c, "dbo", "Dst", MergeScriptHelper.JsonPayloadToXml(json), "[code]",
+                    mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null, contentEncoding: "Xml");
+                c.ExecuteNonQuery();
+                c.CommandText = @"SELECT COUNT(*) FROM [dbo].[Src] s JOIN [dbo].[Dst] d ON d.[code] = s.[code]
+  WHERE ISNULL(CAST(d.[amount] AS VARCHAR(20)), '~') = ISNULL(CAST(s.[amount] AS VARCHAR(20)), '~') AND ISNULL(d.[note], N'~') = ISNULL(s.[note], N'~')
+    AND ISNULL(d.[geo].STAsText() + '/' + CAST(d.[geo].STSrid AS VARCHAR(10)), '~') = ISNULL(s.[geo].STAsText() + '/' + CAST(s.[geo].STSrid AS VARCHAR(10)), '~')";
+                Assert.That(Convert.ToInt32(c.ExecuteScalar()), Is.EqualTo(2), "both rows arrive with every value");
+            }
+        }
+        finally
+        {
+            _connection.ChangeDatabase(_integrationDb);
+            using var master = _connection.CreateCommand();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(master, db);
+        }
+    }
+
     // The XML producer converted with CONVERT's default style -- 6 significant digits of a float, 2 decimals of money --
     // and wrote geometry with STAsText, which drops Z and M. Every value is compared with its source after delivery, a
     // float bit for bit.

@@ -462,6 +462,23 @@ public class CoherenceCheckTests
         return table;
     }
 
+    // A selective XML index with no paths validated clean, and the deploy reported success with no index created.
+    [Test]
+    public void ASelectiveXmlIndexWithNoPaths_IsAnError()
+    {
+        static SqlServerTable WithSelective(params SelectiveXmlPath[] paths)
+        {
+            var table = Documents(true);
+            table.XmlIndexes.Add(new XmlIndex { Name = "SXI_Doc", Column = "Doc", Selective = new SelectiveXmlIndex { Paths = [.. paths] } });
+            return table;
+        }
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunOn(WithSelective()).Where(f => f.Code == "SS-XML-001").Select(f => f.Severity), Is.EqualTo(new[] { Severity.Error }));
+            Assert.That(RunOn(WithSelective(new SelectiveXmlPath { Name = "p", Path = "/a" })).Where(f => f.Code == "SS-XML-001"), Is.Empty);
+        });
+    }
+
     private static string[] JsonIndexCodes(SqlServerTable table) => RunOn(table).Where(f => f.Code.StartsWith("SS-JSX")).Select(f => f.Code).ToArray();
 
     [Test]
@@ -1219,6 +1236,89 @@ public class CoherenceCheckTests
         Assert.That(RunMyTables(Platform.MySQL, null, table).Any(f => f.Code == "SS-PART-010"), Is.EqualTo(expected));
     }
 
+    private static Schema.Domain.MariaDb.MariaDbTable SystemTimeTable(Schema.Domain.MySQL.MariaDbSystemTimePartitioning systemTime, int? count = null,
+        params string[] partitionValues)
+    {
+        var table = new Schema.Domain.MariaDb.MariaDbTable
+        {
+            Name = "h", IsSystemVersioned = true,
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = "SYSTEM_TIME", SystemTime = systemTime, PartitionCount = count },
+            Columns = { new Schema.Domain.MariaDb.MariaDbColumn { Name = "id", DataType = "int" } }
+        };
+        for (var i = 0; i < partitionValues.Length; i++)
+            table.Partitioning.Partitions.Add(new Schema.Domain.MySQL.MySqlPartition { Name = $"p{i}", Values = partitionValues[i] });
+        return table;
+    }
+
+    private static string[] PartCodes(Platform platform, params Schema.Domain.MySQL.MySqlTable[] tables) =>
+        RunMyTables(platform, null, tables).Where(f => f.Code.StartsWith("SS-PART")).Select(f => $"{f.Code} {f.Severity}").ToArray();
+
+    // MySQL refuses subpartitioning outside RANGE and LIST (1500), and the deploy wrote SUBPARTITION BY before PARTITIONS n,
+    // a 1064; under SYSTEM_TIME the clause was dropped without a word.
+    [TestCase("HASH", true)]
+    [TestCase("KEY", true)]
+    [TestCase("RANGE", false)]
+    public void SubpartitioningOutsideRangeOrList_IsAnError(string method, bool expected)
+    {
+        var table = PartTable("t", method: method, count: method == "RANGE" ? null : 2);
+        if (method == "RANGE") table.Partitioning.Partitions.Add(new Schema.Domain.MySQL.MySqlPartition { Name = "p0", Values = "MAXVALUE" });
+        table.Partitioning.Subpartitioning = new Schema.Domain.MySQL.MySqlSubpartitioning { Method = "HASH", Expression = "id", Count = 2 };
+        Assert.That(PartCodes(Platform.MySQL, table).Contains("SS-PART-012 Error"), Is.EqualTo(expected));
+    }
+
+    // MariaDB refuses both together ("wrong value for 'STARTS'"), and AUTO alone writes a bare AUTO, a 1064.
+    [Test]
+    public void SystemTimeIntervalAndLimitTogether_OrAutoWithNeither_IsAnError()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { Interval = "1 MONTH", Limit = 1000 }, count: 3)),
+                Does.Contain("SS-PART-013 Error"));
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { Auto = true }, count: 3)), Does.Contain("SS-PART-014 Error"));
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { Interval = "1 MONTH", Auto = true }, count: 3)), Is.Empty);
+        });
+    }
+
+    // MariaDB needs at least one HISTORY partition and exactly one CURRENT, last (4128); a Values other than CURRENT was
+    // taken as HISTORY.
+    [Test]
+    public void SystemTimePartitions_NeedHistoryAndOneLastCurrent()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { Interval = "1 MONTH" }, count: 1)), Does.Contain("SS-PART-015 Error"), "a count of 1");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(null, null, "CURRENT", "HISTORY")), Does.Contain("SS-PART-015 Error"), "CURRENT not last");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(null, null, "HISTORY", "CURRENT", "CURRENT")), Does.Contain("SS-PART-015 Error"), "two CURRENT");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(null, null, "CURRENT")), Does.Contain("SS-PART-015 Error"), "no HISTORY");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(null, null, "OLD", "CURRENT")), Does.Contain("SS-PART-015 Error"), "neither HISTORY nor CURRENT");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(null, null, "HISTORY", "history", "CURRENT")), Is.Empty);
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { Interval = "1 MONTH" }, count: 2)), Is.Empty);
+        });
+    }
+
+    // Each of these is dropped or ignored by the deploy.
+    [Test]
+    public void PartitioningValuesThatDoNothing_AreWarned()
+    {
+        var keyAlgorithmOnHash = PartTable("a");
+        keyAlgorithmOnHash.Partitioning.KeyAlgorithm = 2;
+        var systemTimeOnHash = PartTable("b");
+        systemTimeOnHash.Partitioning.SystemTime = new() { Interval = "1 MONTH" };
+        var expressionUnderSystemTime = SystemTimeTable(new() { Interval = "1 MONTH" }, count: 2);
+        expressionUnderSystemTime.Partitioning.Expression = "id";
+        Assert.Multiple(() =>
+        {
+            Assert.That(PartCodes(Platform.MySQL, keyAlgorithmOnHash), Does.Contain("SS-PART-016 Warning"), "KeyAlgorithm outside KEY");
+            Assert.That(PartCodes(Platform.MySQL, systemTimeOnHash), Does.Contain("SS-PART-016 Warning"), "SystemTime outside SYSTEM_TIME");
+            Assert.That(PartCodes(Platform.MariaDb, expressionUnderSystemTime), Does.Contain("SS-PART-016 Warning"), "Expression under SYSTEM_TIME");
+            Assert.That(PartCodes(Platform.MariaDb, SystemTimeTable(new() { StartsAt = "2026-01-01 00:00:00", Limit = 100 }, count: 2)),
+                Does.Contain("SS-PART-016 Warning"), "StartsAt without Interval");
+            var keyAlgorithmOnKey = PartTable("c", method: "KEY");
+            keyAlgorithmOnKey.Partitioning.KeyAlgorithm = 2;
+            Assert.That(PartCodes(Platform.MySQL, keyAlgorithmOnKey), Is.Empty, "KeyAlgorithm under KEY is used");
+        });
+    }
+
     [Test]
     public void BackfillWithoutDefault_IsWarning()
     {
@@ -1545,6 +1645,31 @@ public class CoherenceCheckTests
         var findings = RunDanglingFk(productDropsTables, templateDropsTables);
 
         Assert.That(findings.Select(f => (f.Code, f.Severity)), Is.EqualTo(new[] { ("SS-FK-002", Severity.Warning) }));
+    }
+
+    // #589: a table file that fails to load (SS-JSON-001 reports it) is missing from the template, so a key into it looked
+    // dangling too, and the user chased a second finding about a table that is declared.
+    [TestCase("NoSuchTable")]
+    [TestCase("[nosuchtable]")]
+    public void FkRelatedTable_DeclaredInAFileThatFailedToLoad_IsNotReportedAsMissing(string declaredName)
+    {
+        var template = TemplateWithTables("Main", OrderReferencingMissingTable());
+        template.ComponentLoadErrors.Add(new ComponentLoadError("Tables/dbo.NoSuchTable.json", "unknown member", true, declaredName));
+
+        var findings = new CoherenceCheck().Run(new ValidationContext(Product(), new[] { template }, "pkg")).ToArray();
+
+        Assert.That(findings, Is.Empty, string.Join("; ", findings.Select(f => f.Code + " " + f.Message)));
+    }
+
+    [Test]
+    public void FkRelatedTable_StillReportedWhenTheFileThatFailedDeclaresAnotherTable()
+    {
+        var template = TemplateWithTables("Main", OrderReferencingMissingTable());
+        template.ComponentLoadErrors.Add(new ComponentLoadError("Tables/dbo.Other.json", "unknown member", true, "Other"));
+
+        var findings = new CoherenceCheck().Run(new ValidationContext(Product(), new[] { template }, "pkg")).ToArray();
+
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-FK-002" }));
     }
 
     [Test]
@@ -2814,6 +2939,17 @@ public class CoherenceCheckTests
         Assert.That(findings.Where(f => f.Code == "SS-IDENT-002"), Is.Not.Empty);
     }
 
+    // MariaDB allows 64 characters, and refuses a longer name itself rather than truncating it.
+    [Test]
+    public void ALongMariaDbSequenceName_IsNotThisCheck()
+    {
+        var template = new Template { Name = "Main" };
+        template.MariaDbSequences.Add(new MariaDbSequence { Name = new string('s', 40) + new string('é', 12) });
+        var product = new Product { Name = "Acme", Platform = Platform.MariaDb, TemplateOrder = [] };
+        var findings = new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg")).ToList();
+        Assert.That(findings.Where(f => f.Code == "SS-IDENT-002"), Is.Empty);
+    }
+
     [Test]
     public void ALongNameOnAnotherEngine_IsNotThisCheck()
     {
@@ -3023,6 +3159,14 @@ public class CoherenceCheckTests
     // deploy. MariaDB names them per table from 12.1, so there it fails only on an older server -- a warning, unless
     // MinimumVersion already rules older servers out. PostgreSQL names them per table on every version.
 
+    // #588: the message printed the enum value, "SqlServer names foreign keys per schema".
+    [Test]
+    public void AReusedForeignKeyName_NamesTheEngineAsItIsWritten()
+    {
+        Assert.That(RunFkReuse(Platform.SqlServer, null, ("dbo", "A", "FK_X"), ("dbo", "B", "FK_X")).Single().Message,
+            Does.Contain("SQL Server names foreign keys per schema"));
+    }
+
     private static ForeignKey ParentFk(string name) =>
         new() { Name = name, Columns = "ParentId", RelatedTable = "Parent", RelatedColumns = "Id" };
 
@@ -3091,4 +3235,101 @@ public class CoherenceCheckTests
     [Test]
     public void DistinctFkNames_AreNotReported() =>
         Assert.That(RunFkReuse(Platform.MySQL, null!, ("", "Orders", "fk_orders_parent"), ("", "Invoices", "fk_invoices_parent")), Is.Empty);
+
+    // #569: a partition's Values is the boundary alone -- the deploy writes VALUES LESS THAN (...) / VALUES IN (...) itself,
+    // so a Values carrying its own clause passed --Validate and failed the deploy with a syntax error.
+    [TestCase("RANGE", "LESS THAN (2025)", true)]
+    [TestCase("RANGE", "less than maxvalue", true)]
+    [TestCase("RANGE", "VALUES LESS THAN (2025)", true)]
+    [TestCase("LIST", "IN (1, 2)", true)]
+    [TestCase("LIST", "in(1,2)", true)]
+    [TestCase("RANGE", "2025", false)]
+    [TestCase("RANGE", "MAXVALUE", false)]
+    [TestCase("LIST", "1, 2", false)]
+    [TestCase("RANGE COLUMNS", "'2025-01-01', MAXVALUE", false)]
+    public void APartitionValuesCarryingItsOwnClause_IsError(string method, string values, bool expected)
+    {
+        var table = new Schema.Domain.MySQL.MySqlTable
+        {
+            Name = "Sales",
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning
+            {
+                Method = method, Expression = "id",
+                Partitions = { new Schema.Domain.MySQL.MySqlPartition { Name = "p0", Values = values } }
+            },
+            Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "id", DataType = "int" } }
+        };
+
+        var finding = RunOnMy(table).SingleOrDefault(f => f.Code == "SS-PART-011");
+
+        Assert.That(finding?.Severity, Is.EqualTo(expected ? Severity.Error : (Severity?)null));
+        if (expected) Assert.That(finding!.Message, Does.Contain("p0").And.Contain(values));
+    }
+
+    // #568: MariaDB refuses a period over a column the table does not have, and a second application-time period; both
+    // passed --Validate and failed the deploy.
+    [Test]
+    public void AMariaDbPeriodOverAMissingColumn_IsError()
+    {
+        var table = MariaRates("`id`", withoutOverlaps: false, withPeriod: false);
+        table.Periods.Add(new Schema.Domain.MariaDb.TablePeriod { Name = "`app_time`", StartColumn = "`s`", EndColumn = "`NoSuchCol`" });
+
+        var finding = RunOnMaria(table).Single(f => f.Code == "SS-PER-001");
+
+        Assert.That(finding.Severity, Is.EqualTo(Severity.Error));
+        Assert.That(finding.Message, Does.Contain("NoSuchCol").And.Contain("app_time"));
+    }
+
+    [Test]
+    public void TwoMariaDbPeriods_IsError_AndOneOverExistingColumns_IsClean()
+    {
+        var two = MariaRates("`id`", withoutOverlaps: false);
+        two.Periods.Add(new Schema.Domain.MariaDb.TablePeriod { Name = "`q`", StartColumn = "`s`", EndColumn = "`e`" });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(RunOnMaria(two).Single(f => f.Code == "SS-PER-002").Severity, Is.EqualTo(Severity.Error));
+            Assert.That(RunOnMaria(MariaRates("`id`", withoutOverlaps: false)).Where(f => f.Code.StartsWith("SS-PER")), Is.Empty);
+        });
+    }
+
+    // D5: a package extracted before 2.8 wrote an expression default as a quoted string -- MariaDB upper-cased,
+    // 'CONCAT(''A'',''B'')', and MySQL the expression's text -- which deploys as that text, not as the expression.
+    [TestCase("'CONCAT(''A'',''B'')'", true)]
+    [TestCase("'uuid()'", true)]
+    [TestCase(" 'DATE_FORMAT(NOW(), ''%Y'')' ", true)]
+    [TestCase("(CONCAT('A','B'))", false)]
+    [TestCase("'n/a (unknown)'", false)]
+    [TestCase("'abc'", false)]
+    [TestCase("CURRENT_TIMESTAMP", false)]
+    [TestCase(null, false)]
+    public void AQuotedFunctionCallDefault_IsAStalePackageWarning(string defaultValue, bool expected)
+    {
+        foreach (var findings in new[]
+                 {
+                     RunOnMy(new Schema.Domain.MySQL.MySqlTable { Name = "`t`", Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "`c`", DataType = "VARCHAR(20)", Default = defaultValue } } }),
+                     RunOnMaria(new Schema.Domain.MariaDb.MariaDbTable { Name = "`t`", Columns = { new Schema.Domain.MariaDb.MariaDbColumn { Name = "`c`", DataType = "VARCHAR(20)", Default = defaultValue } } })
+                 })
+        {
+            var finding = findings.SingleOrDefault(f => f.Code == "SS-COL-007");
+            Assert.That(finding?.Severity, Is.EqualTo(expected ? Severity.Warning : (Severity?)null), defaultValue);
+            if (expected) Assert.That(finding!.Message, Does.Contain("re-extract"));
+        }
+    }
+
+    [Test]
+    public void ANullableKeyColumnLoadMadeNotNull_IsAWarning_NotAnError()
+    {
+        // The deploy makes the column NOT NULL and works, so the contradiction warns rather than refusing the package.
+        var template = new Template { Name = "Main" };
+        template.LoadNotices.Add(new LoadNotice("SS-COL-008", "Template 'Main' / Table 'Widget' / Column 'Id'", "deployed NOT NULL"));
+
+        var findings = new CoherenceCheck().Run(new ValidationContext(new Product { Name = "P", Platform = Platform.SqlServer }, new[] { template }, "pkg")).ToArray();
+
+        Assert.That(findings.Select(f => (f.Severity, f.Code, f.Location, f.Message)), Is.EqualTo(new[]
+        {
+            (Severity.Warning, "SS-COL-008", "Template 'Main' / Table 'Widget' / Column 'Id'", "deployed NOT NULL"),
+        }));
+        Assert.That(CoherenceCheck.Codes["SS-COL-008"], Is.EqualTo(new[] { Severity.Warning }));
+    }
 }

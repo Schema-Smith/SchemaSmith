@@ -10,22 +10,72 @@ using Schema.Isolators;
 namespace Schema.Utility;
 
 /// <summary>
-/// Writes the fully token-expanded SQL of a failed script to a re-runnable artifact file. Raw by
-/// default (the local operator already holds the secrets and needs the real SQL to reproduce); an
-/// opt-in scrubbed variant redacts sensitive token values + inline connection-string credentials for
-/// safe ticket/CI attachment. The shippable log carries only the returned path, never the SQL itself.
+/// Writes the fully token-expanded SQL of a step to a re-runnable debug file. Always the real SQL: the file exists to
+/// reproduce a failure, and scrubbing SQL text either leaks a value or leaves runnable SQL that writes the placeholder
+/// (#576). The shippable log carries only the returned path, never the SQL itself. Every file opens with an owner line
+/// naming product, server, database, schema and this run, which is how a later run knows which files it may delete.
 /// </summary>
 public static class ResolvedSqlArtifactWriter
 {
-    private const int MinRedactLength = 4; // avoid over-redacting trivial values that collide with common SQL text
+    /// <summary>One per process: the files a run wrote are the ones carrying its id.</summary>
+    public static string RunId { get; } = Guid.NewGuid().ToString("N");
 
-    public static string BuildArtifact(string header, IReadOnlyList<string> batches, int failingBatchIndex)
+    public const string OwnerLinePrefix = "-- SchemaSmith debug SQL";
+    private const string RealValuesLine = "-- Holds real values: local debugging only. Do not attach it to a ticket or a CI artifact.";
+
+    public static string OwnerLine(string product, string server, string database, string schema) =>
+        $"{OwnerLinePrefix} | Product: {product} | Server: {server} | Database: {database} | Schema: {schema ?? ""} | Run: {RunId}";
+
+    /// <summary>The fields of a file's owner line, or null when the file does not open with one.</summary>
+    public sealed record Owner(string Product, string Server, string Database, string Schema, string Run);
+
+    public static Owner ReadOwner(string firstLine)
+    {
+        if (firstLine == null || !firstLine.StartsWith(OwnerLinePrefix + " | ", StringComparison.Ordinal)) return null;
+        var fields = firstLine[(OwnerLinePrefix.Length + 3)..].Split(" | ")
+            .Select(f => f.Split(": ", 2)).Where(kv => kv.Length == 2)
+            .ToDictionary(kv => kv[0], kv => kv[1].TrimEnd('\r'), StringComparer.Ordinal);
+        return fields.TryGetValue("Product", out var product) && fields.TryGetValue("Server", out var server)
+               && fields.TryGetValue("Database", out var database) && fields.TryGetValue("Run", out var run)
+            ? new Owner(product, server, database, fields.GetValueOrDefault("Schema", ""), run)
+            : null;
+    }
+
+    /// <summary>
+    /// Deletes the debug files in <paramref name="directory"/> whose owner line <paramref name="matches"/>. A file without
+    /// an owner line -- an older version's, or the user's own -- is never touched (#576).
+    /// </summary>
+    public static void DeleteOwned(string directory, Func<Owner, bool> matches)
+    {
+        var dir = DirectoryWrapper.GetFromFactory();
+        var file = FileWrapper.GetFromFactory();
+        if (string.IsNullOrWhiteSpace(directory) || !dir.Exists(directory)) return;
+        foreach (var path in dir.GetFiles(directory, "SchemaQuench - *.sql", SearchOption.TopDirectoryOnly))
+        {
+            try
+            {
+                var text = file.ReadAllText(path);
+                var end = text.IndexOf('\n');
+                var owner = ReadOwner(end < 0 ? text : text[..end]);
+                if (owner != null && matches(owner)) file.Delete(path);
+            }
+            catch (IOException) { /* in use or gone: leave it */ }
+            catch (UnauthorizedAccessException) { /* not ours to delete */ }
+        }
+    }
+
+    /// <summary>A generated step's SQL with the owner and real-values lines in front of it.</summary>
+    public static string WithOwner(string owner, string sql) =>
+        owner + Environment.NewLine + RealValuesLine + Environment.NewLine + sql;
+
+    public static string BuildArtifact(string owner, string header, IReadOnlyList<string> batches, int failingBatchIndex)
     {
         var sb = new StringBuilder();
         var singleLineHeader = (header ?? "").Replace("\r", " ").Replace("\n", " ");
+        sb.AppendLine(owner);
+        sb.AppendLine(RealValuesLine);
         sb.AppendLine("-- ============================================================");
         sb.AppendLine($"-- {singleLineHeader}");
-        sb.AppendLine("-- Contains expanded values — may be sensitive. Local debugging; scrub before sharing.");
         sb.AppendLine("-- ============================================================");
         for (var i = 0; i < batches.Count; i++)
         {
@@ -34,14 +84,6 @@ public static class ResolvedSqlArtifactWriter
             sb.AppendLine("GO");
         }
         return sb.ToString();
-    }
-
-    public static string Scrub(string sql, IReadOnlyList<KeyValuePair<string, string>> sensitiveTokenValues)
-    {
-        var scrubbed = sql;
-        foreach (var kv in sensitiveTokenValues.Where(kv => kv.Value is { Length: >= MinRedactLength }))
-            scrubbed = scrubbed.Replace(kv.Value, LogScrubber.Mask);
-        return LogScrubber.ScrubConnectionStringSubfields(scrubbed);
     }
 
     /// <returns>The full path written, for surfacing in the log.</returns>
@@ -56,21 +98,11 @@ public static class ResolvedSqlArtifactWriter
         return path;
     }
 
-    /// <summary>
-    /// Composition helper for script-failure surfaces: builds the artifact, optionally scrubs it, then
-    /// writes it to disk. Shared by every surface that needs the same BuildArtifact→Scrub→Write sequence
-    /// (DatabaseQuench today; ProductQuench and others in later Slice-4 tasks).
-    /// </summary>
+    /// <summary>Builds a failing script's artifact and writes it to disk.</summary>
     /// <returns>The full path written, for surfacing in the log.</returns>
-    public static string WriteFailureArtifact(string directory, bool scrub,
-        IReadOnlyList<KeyValuePair<string, string>> sensitiveValues, string header, IReadOnlyList<string> batches,
-        int failingBatchIndex, string fileName)
-    {
-        var content = BuildArtifact(header, batches, failingBatchIndex);
-        if (scrub)
-            content = Scrub(content, sensitiveValues);
-        return Write(directory, fileName, content);
-    }
+    public static string WriteFailureArtifact(string directory, string owner, string header, IReadOnlyList<string> batches,
+        int failingBatchIndex, string fileName) =>
+        Write(directory, fileName, BuildArtifact(owner, header, batches, failingBatchIndex));
 
     /// <summary>
     /// Label-sanitizing overload: callers pass a raw <paramref name="label"/> (e.g. a
@@ -80,14 +112,12 @@ public static class ResolvedSqlArtifactWriter
     /// BuildArtifact→Scrub→Write sequence runs.
     /// </summary>
     /// <returns>The full path written, for surfacing in the log.</returns>
-    public static string WriteFailureArtifact(string directory, bool scrub,
-        IReadOnlyList<KeyValuePair<string, string>> sensitiveValues, string header,
+    public static string WriteFailureArtifact(string directory, string owner, string header,
         IReadOnlyList<string> batches, int failingBatchIndex, string label,
         Func<string, string> fileNameFromSafeLabel)
     {
         var safeLabel = string.Concat((label ?? "").Select(c =>
             Path.GetInvalidFileNameChars().Contains(c) ? '_' : c));
-        return WriteFailureArtifact(directory, scrub, sensitiveValues, header, batches,
-            failingBatchIndex, fileNameFromSafeLabel(safeLabel));
+        return WriteFailureArtifact(directory, owner, header, batches, failingBatchIndex, fileNameFromSafeLabel(safeLabel));
     }
 }

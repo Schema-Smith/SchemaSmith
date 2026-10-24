@@ -13,7 +13,7 @@ namespace SchemaQuench.IntegrationTests.MariaDb;
 // A declared VECTOR index (MariaDB 11.7) used to deploy as a plain B-tree over the vector column, which then compared
 // unequal on every redeploy. It is created as a vector index with the M and DISTANCE it declares, on both index paths.
 [Category("MariaDb")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_VectorIndexTests : BaseTableQuenchTests
 {
     protected override Platform Platform => Platform.MariaDb;

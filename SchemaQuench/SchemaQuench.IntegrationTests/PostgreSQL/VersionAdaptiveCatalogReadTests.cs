@@ -18,7 +18,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 // PG14+-only test proves the >=14 branch returns actual catalog values, so 'DEFAULT' is a real read, not
 // a fallback that happens to match.
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class VersionAdaptiveCatalogReadTests : BaseTableQuenchTests
 {
     private const string Schema = "VersionAdaptiveCatalogReadTests";

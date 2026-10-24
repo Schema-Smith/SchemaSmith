@@ -3,11 +3,12 @@
 using System;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_FilteredIndexTests : BaseTableQuenchTests
 {
     [Test]
@@ -52,7 +53,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify filtered index exists
         cmd.CommandText = $@"
@@ -111,7 +112,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify index exists with filter
         cmd.CommandText = $@"
@@ -168,7 +169,7 @@ CREATE NONCLUSTERED INDEX IDX_Filtered ON dbo.{tableName} ([Status]) WHERE [Stat
 
         cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify filter expression was updated
         cmd.CommandText = $@"

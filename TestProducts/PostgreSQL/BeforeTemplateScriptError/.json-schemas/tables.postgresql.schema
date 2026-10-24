@@ -205,11 +205,11 @@
           },
           "Enforced": {
             "type": "boolean",
-            "description": "false declares the key NOT ENFORCED (PostgreSQL 18): it is kept but not checked. Below 18 it deploys enforced under UnsupportedFeaturePolicy. Omitted means enforced, and a deploy enforces a key someone stopped enforcing."
+            "description": "false declares the key NOT ENFORCED (PostgreSQL 18): it is kept but not checked. Below 18 it deploys enforced under UnsupportedFeaturePolicy. Omitted leaves an existing key as it is, and a new one is enforced."
           },
           "Validated": {
             "type": "boolean",
-            "description": "false creates the key NOT VALID, so the rows already in the table are not checked. true over a NOT VALID key validates it, which fails when any row violates it. Omitted means validated."
+            "description": "false creates the key NOT VALID, so the rows already in the table are not checked. true over a NOT VALID key validates it, which fails when any row violates it. Omitted leaves an existing key as it is, and a new one is validated."
           },
           "SetNullColumns": {
             "type": "string",
@@ -255,11 +255,11 @@
           },
           "Enforced": {
             "type": "boolean",
-            "description": "false declares the constraint NOT ENFORCED (PostgreSQL 18): it is kept but not checked. Below 18 it deploys enforced under UnsupportedFeaturePolicy. Omitted means enforced. PostgreSQL cannot alter a check constraint's enforceability, so a change drops and re-creates it."
+            "description": "false declares the constraint NOT ENFORCED (PostgreSQL 18): it is kept but not checked. Below 18 it deploys enforced under UnsupportedFeaturePolicy. Omitted leaves an existing constraint as it is, and a new one is enforced. PostgreSQL cannot alter a check constraint's enforceability, so a change drops and re-creates it."
           },
           "Validated": {
             "type": "boolean",
-            "description": "false creates the constraint NOT VALID, so the rows already in the table are not checked. true over a NOT VALID constraint validates it, which fails when any row violates it. Omitted means validated."
+            "description": "false creates the constraint NOT VALID, so the rows already in the table are not checked. true over a NOT VALID constraint validates it, which fails when any row violates it. Omitted leaves an existing constraint as it is, and a new one is validated."
           },
           "NoInherit": {
             "type": "boolean",
@@ -610,7 +610,7 @@
     },
     "ReplicaIdentityIndex": {
       "type": "string",
-      "maxLength": 128,
+      "maxLength": 63,
       "description": "PostgreSQL only. Names the unique index backing ReplicaIdentity = INDEX. The index must be unique, non-partial and over NOT NULL columns; PostgreSQL rejects anything else."
     },
     "Tablespace": {

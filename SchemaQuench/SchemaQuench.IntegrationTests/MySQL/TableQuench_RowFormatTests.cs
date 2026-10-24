@@ -9,7 +9,7 @@ namespace SchemaQuench.IntegrationTests.MySQL;
 
 [Category("MySQL")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_RowFormatTests : TableQuench_RowFormatSharedTests
 {
     protected override Platform Platform => Platform.MySQL;

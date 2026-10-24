@@ -36,7 +36,10 @@ public class ColumnCheckTests
         _connection = DbConnectionFactory.ForPlatform(Platform.MariaDb).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         _connection.Open();
         // CHECK_CONSTRAINTS.LEVEL is MariaDB 10.5+; below it the name is the only evidence of the level.
-        _recordsCheckLevel = (VersionHelper.ParsePatchComparable(Str("SELECT VERSION()"), Platform.MariaDb) ?? 0) >= 100500;
+        var version = VersionHelper.ParsePatchComparable(Str("SELECT VERSION()"), Platform.MariaDb) ?? 0;
+        if (version < 100222)
+            Assert.Ignore("A CHECK is skipped below MariaDB 10.2.22, where it cannot be read back; CheckConstraintGatingTests covers that.");
+        _recordsCheckLevel = version >= 100500;
         DropOwnObjects();
     }
 

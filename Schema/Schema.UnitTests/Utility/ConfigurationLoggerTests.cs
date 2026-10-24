@@ -367,4 +367,57 @@ public class ConfigurationLoggerTests
         Assert.That(logLines, Has.None.Matches<string>(s => s.Contains("Prod")));
         Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "Env: ***"));
     }
+
+    // #577: the LogHygiene block holds token names, patterns and a true/false, never a secret, but "Token" is a sensitive
+    // pattern, so ScrubTokens and LogTokens printed as *** and the log could not confirm what it had been asked to scrub.
+    [Test]
+    public void LogConfiguration_PrintsTheLogHygieneSettingsAsWritten()
+    {
+        var logLines = new List<string>();
+
+        ConfigurationLogger.LogConfiguration(ConfigWith(("LogHygiene:ScrubTokens:0", "ApiKeyName"),
+                                                        ("LogHygiene:ScrubPatterns:0", "*Salt*"),
+                                                        ("LogHygiene:AllowTokens:0", "TokenCount"),
+                                                        ("LogHygiene:LogTokens", "false"),
+                                                        ("Target:Password", "secret123")), s => logLines.Add(s));
+
+        Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "LogTokens: false"));
+        Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "0: ApiKeyName"));
+        Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "0: *Salt*"));
+        Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "0: TokenCount"));
+        Assert.That(logLines, Has.None.Matches<string>(s => s.TrimStart().StartsWith("ScrubTokens") && s.Contains("***")));
+        Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "Password: ***"), "a real secret is still masked");
+    }
+
+    [Test]
+    public void LogCommandLine_PrintsALogHygieneSwitchAsWritten()
+    {
+        _mockEnvironment.CommandLine.Returns("app.exe --LogHygiene__LogTokens=false --Target__Password=secret123");
+        var logLines = new List<string>();
+
+        ConfigurationLogger.LogCommandLine(ConfigWith(), s => logLines.Add(s));
+
+        Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "LogHygiene__LogTokens: false"));
+        Assert.That(logLines, Has.None.Matches<string>(s => s.Contains("secret123")), "a real secret is still masked");
+    }
+
+    // A section line has no value, and a true/false reveals no secret; masking either told the reader nothing, and hid the
+    // switch a learner had just set (TokenizeScripts: ***). A real value under a sensitive name is still masked.
+    [Test]
+    public void LogConfiguration_PrintsASectionLineAndABoolean_UnderASensitiveName_AsWritten()
+    {
+        var logLines = new List<string>();
+
+        ConfigurationLogger.LogConfiguration(ConfigWith(("TokenizeScripts", "true"),
+                                                        ("ScriptTokens:Region", "us-east"),
+                                                        ("Source:ApiToken", "abc123secret")), s => logLines.Add(s));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "TokenizeScripts: true"));
+            Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "ScriptTokens: "));
+            Assert.That(logLines, Has.Some.Matches<string>(s => s.TrimStart() == "ApiToken: ***"), "a real value is still masked");
+            Assert.That(logLines, Has.None.Matches<string>(s => s.Contains("abc123secret")));
+        });
+    }
 }

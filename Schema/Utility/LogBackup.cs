@@ -10,10 +10,17 @@ namespace Schema.Utility;
 
 public static class LogBackup
 {
-    public static void BackupLogsAndExit(string appName, int exitCode = 0)
+    // unloggedWarnings: warnings the run reports without logging them at Warn -- --Validate's board prints its findings
+    // as plain lines, so its Warning findings would otherwise never count.
+    public static void BackupLogsAndExit(string appName, int exitCode = 0, int unloggedWarnings = 0)
     {
-        if (exitCode == 0 && WarningCounter.Count > 0 && ExitNonZeroOnWarning())
+        var warnings = WarningCounter.Count + unloggedWarnings;
+        if (exitCode == 0 && warnings > 0 && ExitNonZeroOnWarning())
+        {
             exitCode = 1;
+            // Otherwise the run ends with its success line and exits 1, and nothing says why.
+            LogFactory.GetLogger("ProgressLog")?.Info($"Exit code 1: {warnings} warning(s) and ExitNonZeroOnWarning is on.");
+        }
         var backupDir = "UNKNOWN";
         try
         {

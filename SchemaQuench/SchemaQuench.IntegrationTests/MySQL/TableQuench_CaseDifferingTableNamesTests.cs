@@ -9,7 +9,7 @@ namespace SchemaQuench.IntegrationTests.MySQL;
 /// <summary>MySQL binding of the case-differing table-name tests.</summary>
 [Category("MySQL")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_CaseDifferingTableNamesTests : TableQuench_CaseDifferingTableNamesSharedTests
 {
     protected override Platform Platform => Platform.MySQL;

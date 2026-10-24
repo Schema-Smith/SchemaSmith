@@ -16,7 +16,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// </summary>
 [Category("SqlServer")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_AnsiPaddingTests : BaseTableQuenchTests
 {
     [Test]

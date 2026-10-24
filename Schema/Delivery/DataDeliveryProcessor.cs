@@ -19,6 +19,9 @@ namespace Schema.Delivery;
 /// </summary>
 public class DataDeliveryProcessor : IDataDelivery
 {
+    /// <summary>The object type the skip below MySQL 8.0 records in the deployment manifest.</summary>
+    public const string DowngradeObjectType = "data delivery";
+
     public static IDataDelivery GetFromFactory()
         => FactoryContainer.ResolveOrCreate<IDataDelivery, DataDeliveryProcessor>();
 
@@ -66,9 +69,9 @@ public class DataDeliveryProcessor : IDataDelivery
                       "Deliver data on this target with manual data scripts.";
             if (string.Equals(context.UnsupportedFeaturePolicy, "fail", StringComparison.OrdinalIgnoreCase))
                 throw new NotSupportedException(msg);
-            log($"  [SKIPPED - unsupported below MySQL 8.0] {msg}");
+            log($"  Skipping data delivery (requires MySQL 8.0 - downgraded): {msg}");
             foreach (var table in tablesToDeliver)
-                context.RecordDowngrade?.Invoke("data delivery", DataDeliveryHelper.GetTableKey(table, platform));
+                context.RecordDowngrade?.Invoke(DowngradeObjectType, DataDeliveryHelper.GetTableKey(table, platform));
             return;
         }
 

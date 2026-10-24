@@ -15,7 +15,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 // extracted definition, and require every column to come back with the same type and collation -- then deploy again
 // and require nothing to be reported as modified.
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class ColumnTypeRoundTripTests : BaseTableQuenchTests
 {
     [Test]

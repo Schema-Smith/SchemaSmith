@@ -280,6 +280,47 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         }
     }
 
+    // #567 on the deferred path, which a self-referencing table takes: an object or array value for a text column arrives as
+    // its compact JSON text, numbers as written, from an indented payload -- not NULL.
+    [Test]
+    public void BuildDeferredMergeScript_AnObjectForATextColumn_ArrivesAsItsCompactText()
+    {
+        if (_serverVersionNum is > 0 and < 800)
+            Assert.Ignore($"Automatic data delivery is gated below MySQL 8.0 (detected {_serverVersionNum}); manual data scripts are the supported path.");
+        using var command = _connection.CreateCommand();
+        var tableName = $"zz_deferred_obj_{Guid.NewGuid():N}";
+        try
+        {
+            command.CommandText = $@"
+CREATE TABLE `{_testDb}`.`{tableName}` (
+    id INT PRIMARY KEY,
+    ParentId INT NULL,
+    Notes TEXT NULL,
+    Tags VARCHAR(100) NULL,
+    CONSTRAINT `fk_{tableName}_self` FOREIGN KEY (ParentId) REFERENCES `{_testDb}`.`{tableName}`(id)
+)";
+            command.ExecuteNonQuery();
+
+            var tableData = "[\n  {\n    \"id\": 1,\n    \"ParentId\": null,\n    \"Notes\": { \"price\": 2.50, \"tags\": [ \"a\" ] },\n    \"Tags\": [ 1, 2 ]\n  }\n]";
+            var script = DeferredMergeBuilder.Build(new MergeScriptHelperAdapter(Platform), command, "MySQL", _testDb, tableName,
+                tableData, "`id`", false, new List<string> { "ParentId" });
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT CONCAT(COALESCE(Notes, '<null>'), ' | ', COALESCE(Tags, '<null>')) FROM `{_testDb}`.`{tableName}` WHERE id = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("{\"price\":2.50,\"tags\":[\"a\"]} | [1,2]"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void BuildDeferredMergeScript_TextColumn_UsesTextInJsonTableAndCanBeExecuted()
     {

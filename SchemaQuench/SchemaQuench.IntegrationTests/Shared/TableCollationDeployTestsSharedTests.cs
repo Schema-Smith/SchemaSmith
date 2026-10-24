@@ -278,6 +278,20 @@ public abstract class TableCollationDeployTestsSharedTests
                 cmd.ExecuteNonQuery();
 
                 config["SchemaPackagePath"] = tempDir;
+                // Early MariaDB patches reject COLLATE on a generated column; there it takes its character set's default.
+                // Asked of the engine, not of SchemaSmith's gate, so a gate that answered wrong could not pick the expectation.
+                var generatedCollates = true;
+                try
+                {
+                    cmd.CommandText = "CREATE TEMPORARY TABLE ss_gen_collate_probe (a INT, g VARCHAR(5) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin AS (CONCAT('x', a)) VIRTUAL)";
+                    cmd.ExecuteNonQuery();
+                    cmd.CommandText = "DROP TEMPORARY TABLE ss_gen_collate_probe";
+                    cmd.ExecuteNonQuery();
+                }
+                catch (MySqlConnector.MySqlException e) when (e.Number == 1064)
+                {
+                    generatedCollates = false;
+                }
 
                 for (var deploy = 1; deploy <= 2; deploy++)
                 {
@@ -301,7 +315,11 @@ public abstract class TableCollationDeployTestsSharedTests
                         Assert.That(undeclared, Is.EqualTo("latin1_german1_ci"),
                             $"deploy {deploy}: a column declaring no character set must keep its own through a MODIFY");
                         Assert.That(switched, Is.EqualTo("ascii"), $"deploy {deploy}: a declared character set change must apply");
-                        Assert.That(gen, Is.EqualTo("utf8mb4_bin"), $"deploy {deploy}: a generated column must keep its declared collation");
+                        if (generatedCollates)
+                            Assert.That(gen, Is.EqualTo("utf8mb4_bin"), $"deploy {deploy}: a generated column must keep its declared collation");
+                        else
+                            Assert.That(gen, Does.StartWith("utf8mb4_").And.Not.EqualTo("utf8mb4_bin"),
+                                $"deploy {deploy}: below the fix a generated column keeps its character set, in that set's default");
                     });
                 }
             }

@@ -243,7 +243,7 @@ public abstract class TableQuench_IndexParitySharedTests : BaseTableQuenchTests
         cmd.CommandText =
             $"CALL SchemaSmith_ParseTableJson('{_mainDb}', '{json.Replace("'", "''")}'); " +
             $"CALL SchemaSmith_ModifiedTableQuench('{product}', '{_mainDb}', 0, 0, 0, 1, 1, 1, 0, {dropUnknownIndexes}, {dropIndexesRemovedFromProduct});";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private void RunIndexOnlyQuench(System.Data.IDbCommand cmd, string product, string json,
@@ -252,7 +252,7 @@ public abstract class TableQuench_IndexParitySharedTests : BaseTableQuenchTests
         cmd.CommandText =
             $"CALL SchemaSmith_ParseTableJson('{_mainDb}', '{json.Replace("'", "''")}'); " +
             $"CALL SchemaSmith_IndexOnlyQuench('{product}', '{_mainDb}', 0, {dropUnknownIndexes}, {dropIndexesRemovedFromProduct});";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private void Cleanup(System.Data.IDbCommand cmd, string table, string product)

@@ -11,6 +11,8 @@ CREATE OR REPLACE PROCEDURE "SchemaSmith"."MissingTableAndColumnQuench"(p_WhatIf
 AS $$
 DECLARE 
   sql_script TEXT = '';
+  restore_candidates TEXT[];
+  restored_table TEXT;
 BEGIN
   RAISE NOTICE 'Handle Table Renames';
   SELECT STRING_AGG('RAISE NOTICE ''  Rename Table ' || tt."Schema" || '.' || tt."OldName" || ' to ' || tt."Name" || ''';' || CHR(10) ||
@@ -39,7 +41,21 @@ BEGIN
       INTO sql_script
       FROM temp_tables tt
       WHERE NOT EXISTS(SELECT * FROM information_schema.tables t WHERE t.table_schema = tt."Schema" AND t.table_name = tt."Name");
+    -- Which of them the hook brought back, as SQL Server says: the create step below now leaves them alone.
+    SELECT ARRAY_AGG(tt."Schema" || '.' || tt."Name")
+      INTO restore_candidates
+      FROM temp_tables tt
+      WHERE NOT EXISTS(SELECT * FROM information_schema.tables t WHERE t.table_schema = tt."Schema" AND t.table_name = tt."Name");
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+    IF NOT p_WhatIf THEN
+      FOR restored_table IN SELECT tt."Schema" || '.' || tt."Name"
+                              FROM temp_tables tt
+                              WHERE tt."Schema" || '.' || tt."Name" = ANY(restore_candidates)
+                                AND EXISTS(SELECT * FROM information_schema.tables t WHERE t.table_schema = tt."Schema" AND t.table_name = tt."Name")
+      LOOP
+        RAISE NOTICE '  % Restored', restored_table;
+      END LOOP;
+    END IF;
   END IF;
   
   RAISE NOTICE 'Add New Tables';

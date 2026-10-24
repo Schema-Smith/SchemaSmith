@@ -1,0 +1,16 @@
+{
+  "$schema": ".json-schemas/products.postgresql.schema",
+  "Name": "TenantCRM",
+  "ValidationScript": "SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname IN ('{{TenantCRMDb}}', 'TestMain'))",
+  "TemplateOrder": [
+    "Initialize",
+    "Shared",
+    "TenantWorkspace"
+  ],
+  "ScriptTokens": {
+    "TenantCRMDb": "tenantcrm",
+    "ReleaseVersion": "1.0.0"
+  },
+  "ScriptFolders": [],
+  "Platform": "PostgreSQL"
+}

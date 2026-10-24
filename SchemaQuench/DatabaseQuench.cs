@@ -293,6 +293,7 @@ public class DatabaseQuench
 
     private sealed class IterationContent
     {
+        public List<SqlScript> SetupScripts { get; set; } = [];
         public List<SqlScript> BeforeScripts { get; set; }
         public List<SqlScript> ObjectScripts { get; set; }
         public List<SqlScript> AfterTablesObjectScripts { get; set; }
@@ -311,6 +312,7 @@ public class DatabaseQuench
         public string SequenceSchema { get; set; }
     }
     // Visible for testing — per-iteration slot scripts after folder gating.
+    internal List<SqlScript> IterationSetupScripts => _iteration.SetupScripts;
     internal List<SqlScript> IterationBeforeScripts => _iteration.BeforeScripts;
     internal List<SqlScript> IterationObjectScripts => _iteration.ObjectScripts;
     internal List<SqlScript> IterationAfterTablesObjectScripts => _iteration.AfterTablesObjectScripts;
@@ -380,6 +382,7 @@ public class DatabaseQuench
         var copy = IterationCopier(string.IsNullOrEmpty(_schemaName)
             ? []
             : new List<KeyValuePair<string, string>> { new("SchemaName", _schemaName) });
+        _iteration.SetupScripts = copy(Scripts(_template.SetupFolders));
         _iteration.BeforeScripts = copy(Scripts(_template.BeforeFolders));
         _iteration.ObjectScripts = copy(Scripts(_template.ObjectFolders));
         _iteration.AfterTablesObjectScripts = copy(Scripts(_template.AfterTablesObjectFolders));
@@ -520,6 +523,10 @@ public class DatabaseQuench
     public void Execute()
     {
         SafeProgressLog("Begin Quench");
+        // #576: the previous run's debug files for this target go, so only the current failure's are there.
+        ResolvedSqlArtifactWriter.DeleteOwned(ResolveArtifactDirectory(), o =>
+            o.Product == _product.Name && o.Server == _server && o.Database == _databaseName
+            && o.Schema == (_schemaName ?? "") && o.Run != ResolvedSqlArtifactWriter.RunId);
 
         var checkpointSummary = _checkpointing?.GetDatabaseCheckpointSummary(DbScope) ?? DatabaseCheckpointSummary.Empty;
         if (checkpointSummary.HasAnyCompleted)
@@ -683,7 +690,11 @@ public class DatabaseQuench
                         command.CommandText = _iteration.BaselineValidationScript;
                         try
                         {
-                            if (!Convert.ToBoolean(command.ExecuteScalar()))
+                            // On SQL Server the script's own error arrives as a message, leaving a null that read as "no".
+                            _infoMessageException = null;
+                            var isValid = Convert.ToBoolean(command.ExecuteScalar());
+                            if (_infoMessageException != null) throw _infoMessageException;
+                            if (!isValid)
                                 throw new Exception("Invalid baseline for this release");
                         }
                         catch (Exception ex)
@@ -694,6 +705,23 @@ public class DatabaseQuench
                     });
                     validateBaselineSw.Stop();
                     RunTiming?.Record(LogPrefix, _databaseName, "ValidateBaseline", validateBaselineSw.ElapsedMilliseconds, 0);
+                }
+
+                // Step: Setup (D13). Database settings and the like that the objects and later scripts rely on: after the
+                // helpers and the baseline check, before the first object. Every deploy, one pass, in order; the first error
+                // fails the deploy, since nothing ahead of these scripts can be missing.
+                if (_iteration.SetupScripts.Count > 0)
+                {
+                    if (!IsWhatIf)
+                    {
+                        SafeProgressLog("  Quenching Setup scripts");
+                        QuenchSetupScripts(command, _iteration.SetupScripts);
+                    }
+                    else
+                    {
+                        SafeProgressLog("  [WhatIf] Setup scripts:");
+                        WhatIfLogSetupScripts(_iteration.SetupScripts);
+                    }
                 }
 
                 // Step: Object scripts without unresolved tokens
@@ -757,6 +785,9 @@ public class DatabaseQuench
                 // Track wrapper here is the equivalent defense for SQL Server / PG.
                 if (!_template.IndexOnlyTableQuenches && _updateTables)
                 {
+                    // Said before the change, so a column whose existing NULLs refuse it fails with its reason in view.
+                    foreach (var notice in _template.LoadNotices)
+                        lock (_lockObject) _progressLog.Warn($"{LogPrefix} {notice.Message}");
                     QuenchMissingTablesAndColumns(effectiveTableCmd);
                 }
 
@@ -817,6 +848,12 @@ public class DatabaseQuench
                     SafeProgressLog("  [WhatIf] Between table and keys scripts:");
                     WhatIfLogTemplateScripts(command, "Between Table And Keys", _iteration.BetweenTablesAndKeysScripts, DatabaseScriptSlot.BetweenTablesAndKeys);
                 }
+
+                // Step: MariaDB VECTOR indexes whose M or DISTANCE changed. MariaDB has no ALTER for either, and the options are
+                // only in SHOW CREATE TABLE, which a procedure cannot read: the index is dropped here, and the indexes step
+                // builds it again as declared.
+                if (_product.Platform == Platform.MariaDb && _updateTables && _mySqlServerVersionNum >= 1107)
+                    RebuildChangedVectorIndexes(effectiveTableCmd);
 
                 // Step: Indexes and constraints
                 if (_updateTables)
@@ -885,15 +922,22 @@ public class DatabaseQuench
                                 UnsupportedFeaturePolicy = _unsupportedFeaturePolicy,
                                 WriteResolvedSqlArtifact = (label, sql) =>
                                 {
+                                    if (!DebugSql.Enabled)
+                                    {
+                                        SafeProgressLogError($"    {DebugSql.HowToGetIt(ResolveArtifactDirectory())}");
+                                        _debugSqlHintLogged = true;
+                                        return;
+                                    }
                                     try
                                     {
                                         var path = ResolvedSqlArtifactWriter.WriteFailureArtifact(
-                                            ResolveArtifactDirectory(), ScrubArtifactsEnabled, SensitiveTokenValues(),
+                                            ResolveArtifactDirectory(), DebugSqlOwner,
                                             $"Failed data delivery: {_server}.{_databaseName}" +
                                             $"{(string.IsNullOrEmpty(_schemaName) ? "" : $" [Schema: {_schemaName}]")} [{label}]",
                                             new List<string> { sql }, failingBatchIndex: 0, label,
                                             safeLabel => GetDebugFileName($"Failed DataDelivery {safeLabel}"));
                                         SafeProgressLogError($"    Resolved SQL written to: {path}");
+                                        _dataDeliveryArtifact ??= path;
                                     }
                                     catch (Exception artifactEx)
                                     {
@@ -1083,6 +1127,8 @@ public class DatabaseQuench
             SafeProgressLogError($"FAILED to quench:\r\n{e.Message}");
             if (!string.IsNullOrWhiteSpace(_debugFileLocation))
                 SafeProgressLogError($"Resolved SQL written to: {_debugFileLocation}");
+            else if (!DebugSql.Enabled && e is not ScriptQuenchException && !_debugSqlHintLogged)
+                SafeProgressLogError(DebugSql.HowToGetIt(ResolveArtifactDirectory()));
 
             // #338 refinement: for a user-script failure, surface the specific per-script error +
             // artifact on the roll-up's Error:/Debug SQL: lines (parity with mechanical failures)
@@ -1097,7 +1143,7 @@ public class DatabaseQuench
             else
             {
                 LastFailure = FailureCtx.ToRecord(e.Message,
-                    string.IsNullOrWhiteSpace(_debugFileLocation) ? null : _debugFileLocation);
+                    string.IsNullOrWhiteSpace(_debugFileLocation) ? _dataDeliveryArtifact : _debugFileLocation);
             }
             // Terse greppable scope marker; the error text is on the inline "FAILED to quench" line
             // above and in the end-of-run roll-up, so it is not restated here (avoids duplicating
@@ -1133,6 +1179,7 @@ public class DatabaseQuench
             // Regular templates copy too: each database a template fans out to runs every script, with
             // its own query-token values (#475). Nothing to substitute here.
             var own = IterationCopier([]);
+            _iteration.SetupScripts = own(_template.SetupScripts);
             _iteration.BeforeScripts = own(_template.BeforeScripts);
             _iteration.ObjectScripts = own(_template.ObjectScripts);
             _iteration.AfterTablesObjectScripts = own(_template.AfterTablesObjectScripts);
@@ -1158,6 +1205,7 @@ public class DatabaseQuench
         };
 
         var copy = IterationCopier(schemaNameTokens);
+        _iteration.SetupScripts = copy(_template.SetupScripts);
         _iteration.BeforeScripts = copy(_template.BeforeScripts);
         _iteration.ObjectScripts = copy(_template.ObjectScripts);
         _iteration.AfterTablesObjectScripts = copy(_template.AfterTablesObjectScripts);
@@ -1234,6 +1282,7 @@ public class DatabaseQuench
     {
         if (_versionScriptTokens == null || _versionScriptTokens.Count == 0) return;
 
+        _iteration.SetupScripts = SubstituteVersionTokens(_iteration.SetupScripts);
         _iteration.BeforeScripts = SubstituteVersionTokens(_iteration.BeforeScripts);
         _iteration.ObjectScripts = SubstituteVersionTokens(_iteration.ObjectScripts);
         _iteration.AfterTablesObjectScripts = SubstituteVersionTokens(_iteration.AfterTablesObjectScripts);
@@ -1489,6 +1538,7 @@ public class DatabaseQuench
 
         // 7. Apply resolved values to this iteration's cloned scripts.
         var tokenList = iterationQueryTokens.ToList();
+        ApplyToIteration(_iteration.SetupScripts, tokenList);
         ApplyToIteration(_iteration.BeforeScripts, tokenList);
         ApplyToIteration(_iteration.ObjectScripts, tokenList);
         ApplyToIteration(_iteration.AfterTablesObjectScripts, tokenList);
@@ -1596,27 +1646,17 @@ public class DatabaseQuench
 
     internal string ResolveArtifactDirectory()
     {
-        var configured = FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.ArtifactPath];
+        var configured = FactoryContainer.Resolve<IConfigurationRoot>()?[SettingsKeys.ArtifactPath];
         return string.IsNullOrWhiteSpace(configured) ? Directory.GetCurrentDirectory() : configured;
     }
 
-    internal bool ScrubArtifactsEnabled =>
-        FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.ScrubArtifacts]?.ToLower() == "true";
-
-    internal IReadOnlyList<KeyValuePair<string, string>> SensitiveTokenValues()
-    {
-        var options = LogHygieneOptions.FromConfiguration(FactoryContainer.ResolveOrCreate<IConfigurationRoot>());
-        return _product.ScriptTokens
-            .Concat(_template.ScriptTokens)
-            .Where(kv => LogScrubber.ShouldScrubName(kv.Key, options))
-            .ToList();
-    }
+    private string DebugSqlOwner => ResolvedSqlArtifactWriter.OwnerLine(_product.Name, _server, _databaseName, _schemaName);
 
     #endregion
 
     #region Platform-Specific Table Quench SQL
 
-    private void QuenchMissingTablesAndColumns(IDbCommand tableCommand)
+    internal void QuenchMissingTablesAndColumns(IDbCommand tableCommand)
     {
         if (_product.Platform.GetBasePlatform() == Platform.MySQL && _template.Tables.Count == 0)
             return;
@@ -1658,8 +1698,10 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
                     $@"CALL ""SchemaSmith"".""ParseTableJson""(@tableJson, {_template.UpdateFillFactor.ToString().ToLower()});",
                     IterationTableSchema, "Parse Table Json");
 
-                // #508: before any table or column is created, so only what already exists is checked on a scratch copy.
-                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {_whatIfOnly}); CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {_whatIfOnly})";
+                // Ownership first, so a refusal leaves another product's table as it was. #508: adoption before any table
+                // or column is created, so only what already exists is checked on a scratch copy.
+                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ValidateTableOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
+CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {_whatIfOnly}); CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {_whatIfOnly})";
                 break;
             }
             case Platform.MySQL:
@@ -1667,13 +1709,14 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
                 ParseMySqlTableJson(tableCommand);
                 SetMySqlOnlineApply(tableCommand);
                 var whatIf = _whatIfOnly == "1" ? 1 : 0;
-                // #508: before any table or column is created (skipped under WhatIf inside the procedure: its copy is a real table).
-                tableCommand.CommandText = $"CALL SchemaSmith_ExpressionMapAdopt('{EscapeSqlLiteral(_databaseName)}', {whatIf}); CALL SchemaSmith_MissingTableAndColumnQuench('{EscapeSqlLiteral(_databaseName)}', {whatIf})";
+                // Ownership first, so a refusal leaves another product's table as it was. #508: adoption before any table or
+                // column is created (skipped under WhatIf inside the procedure: its copy is a real table).
+                tableCommand.CommandText = $"CALL SchemaSmith_ValidateTableOwnership('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(_databaseName)}'); CALL SchemaSmith_ExpressionMapAdopt('{EscapeSqlLiteral(_databaseName)}', {whatIf}); CALL SchemaSmith_MissingTableAndColumnQuench('{EscapeSqlLiteral(_databaseName)}', {whatIf})";
                 break;
             }
         }
 
-        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Missing Tables And Columns"), tableCommand.CommandText);
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Missing Tables And Columns"), ReadsTheParsedTables(tableCommand.CommandText));
         try
         {
             ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
@@ -1703,7 +1746,6 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"
-CALL ""SchemaSmith"".""ValidateTableOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
 CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnknownIndexes}, p_WhatIf := {_whatIfOnly}, p_DropTablesRemovedFromProduct := {_dropRemovedTables}, p_DropColumnsRemovedFromProduct := {_dropRemovedColumns}, p_DropForeignKeysRemovedFromProduct := {_dropRemovedForeignKeys}, p_DropCheckConstraintsRemovedFromProduct := {_dropRemovedCheckConstraints}, p_DropExcludeConstraintsRemovedFromProduct := {_dropRemovedExcludeConstraints}, p_DropStatisticsRemovedFromProduct := {_dropRemovedStatistics}, p_DropIndexesRemovedFromProduct := {_dropRemovedIndexes}, p_CaptureWouldDrop := {FormatBooleanFlag(CaptureWouldDrop)}, p_RebuildPolicyMode := '{RebuildPolicyMode}', p_RebuildPolicyThreshold := {RebuildPolicyThreshold}, p_RebuildPolicyOnOrderMismatch := {RebuildPolicyOnOrderMismatch}, p_OnlineApply := '{OnlineApply}');";
                 break;
             case Platform.MySQL:
@@ -1734,7 +1776,7 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
             }
         }
 
-        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Modified Tables"), tableCommand.CommandText);
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Modified Tables"), ReadsTheParsedTables(tableCommand.CommandText));
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
         RunDeferredOnlineWork(tableCommand);
@@ -1784,6 +1826,7 @@ END CATCH";
     }
 
     internal string SqlServerPreflight => $@"BEGIN TRY
+  EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ValidateTableOwnership @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}
   EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.DegradeUnsupportedFeatures @DeferDatabaseToggles = {(DeferDatabaseToggles ? 1 : 0)}
   EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.CdcPreflight @CdcFilegroup = {TemplateCdcFilegroup}, @CdcSupportsNetChanges = {TemplateCdcSupportsNetChanges}
 END TRY
@@ -1806,7 +1849,7 @@ END CATCH";
 EXEC [{db}].SchemaSmith.FileStreamColumnQuench @WhatIf = {_whatIfOnly}
 EXEC [{db}].SchemaSmith.CdcQuench @WhatIf = {_whatIfOnly}
 EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
-        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Table Features"), tableCommand.CommandText);
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Table Features"), ReadsTheParsedTables(tableCommand.CommandText));
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
     }
@@ -1826,6 +1869,74 @@ EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
         catch (DbException e)
         {
             SafeProgressLog($"  Could not record the expression map ({e.Message}). Expression comparison falls back to text on the next run.");
+        }
+    }
+
+    private void RebuildChangedVectorIndexes(IDbCommand cmd)
+    {
+        var declared = _template.Tables
+            .SelectMany(t => t.Indexes.OfType<Schema.Domain.MariaDb.MariaDbIndex>()
+                .Where(i => string.Equals(i.IndexType, "VECTOR", StringComparison.OrdinalIgnoreCase))
+                .Select(i => (Table: Unquote(t.Name), Index: i)))
+            .ToList();
+        if (declared.Count == 0) return;
+
+        // Only what applies to this target: the parse has already removed the tables and indexes whose
+        // ShouldApplyExpression is false, and the index step skips them, so one dropped here would stay dropped.
+        if (!MySqlTempTablesExist(cmd))
+            ParseMySqlTableJson(cmd);
+        var applied = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        cmd.CommandText = "SELECT TableName, IndexName FROM _SchemaSmith_Indexes WHERE UPPER(IndexType) = 'VECTOR'";
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read()) applied.Add($"{Unquote(reader.GetString(0))}.{Unquote(reader.GetString(1))}");
+        declared = declared.Where(d => applied.Contains($"{d.Table}.{Unquote(d.Index.Name)}")).ToList();
+        if (declared.Count == 0) return;
+
+        var live = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        cmd.CommandText = "SELECT TABLE_NAME, INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_TYPE = 'VECTOR'";
+        using (var reader = cmd.ExecuteReader())
+            while (reader.Read()) live.Add($"{reader.GetString(0)}.{reader.GetString(1)}");
+        if (live.Count == 0) return;
+
+        cmd.CommandText = "SELECT @@mhnsw_default_m, @@mhnsw_default_distance";
+        int defaultM;
+        string defaultDistance;
+        using (var reader = cmd.ExecuteReader())
+        {
+            reader.Read();
+            defaultM = Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
+            defaultDistance = reader.GetValue(1)?.ToString();
+        }
+
+        foreach (var table in declared.GroupBy(d => d.Table, StringComparer.OrdinalIgnoreCase))
+        {
+            var candidates = table.Where(d => live.Contains($"{table.Key}.{Unquote(d.Index.Name)}")).ToList();
+            if (candidates.Count == 0) continue;
+            cmd.CommandText = $"SHOW CREATE TABLE `{table.Key.Replace("`", "``")}`";
+            string createTable;
+            using (var reader = cmd.ExecuteReader())
+                createTable = reader.Read() ? reader.GetString(1) : "";
+            foreach (var (_, index) in candidates.Where(c => MariaDbVectorIndexOptions.NeedsRebuild(c.Index, createTable, defaultM, defaultDistance)))
+            {
+                var name = Unquote(index.Name);
+                var auditName = $"{table.Key}.{name}";
+                if (IsWhatIf)
+                {
+                    SafeProgressLog($"  [WhatIf] Would rebuild VECTOR index `{table.Key}`.`{name}`: its M or DISTANCE changed");
+                    ChangeAudit?.Record("index", auditName, "wouldRebuild");
+                    continue;
+                }
+                SafeProgressLog($"  Rebuilding VECTOR index `{table.Key}`.`{name}`: its M or DISTANCE changed");
+                cmd.CommandText = $"ALTER TABLE `{table.Key.Replace("`", "``")}` DROP INDEX `{name.Replace("`", "``")}`";
+                cmd.ExecuteNonQuery();
+                ChangeAudit?.Record("index", auditName, "dropped");
+            }
+        }
+
+        static string Unquote(string name)
+        {
+            name = name?.Trim() ?? "";
+            return name.Length > 1 && name[0] == '`' && name[^1] == '`' ? name[1..^1].Replace("``", "`") : name;
         }
     }
 
@@ -1883,7 +1994,7 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
             }
         }
 
-        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Indexes"), tableCommand.CommandText);
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Indexes"), ReadsTheParsedTables(tableCommand.CommandText));
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
         RunDeferredOnlineWork(tableCommand);
@@ -1933,7 +2044,8 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
         switch (_product.Platform.GetBasePlatform())
         {
             case Platform.SqlServer:
-                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ForeignKeyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}\nIF [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.fn_ServerMajorVersion() >= 15 EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.EdgeConstraintQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ConstraintStateQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExtendedPropertyQuench @WhatIf = {_whatIfOnly}";
+                // One batch, which a severity-16 error does not end: the TRY stops it at a key that fails, as PostgreSQL does.
+                tableCommand.CommandText = $"BEGIN TRY\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ForeignKeyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}\nIF [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.fn_ServerMajorVersion() >= 15 EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.EdgeConstraintQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ConstraintStateQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExtendedPropertyQuench @WhatIf = {_whatIfOnly}\nEND TRY\nBEGIN CATCH\nDECLARE @v_Error NVARCHAR(2047) = ERROR_MESSAGE()\nRAISERROR('%s', 16, 1, @v_Error)\nEND CATCH";
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ForeignKeyQuench""(p_WhatIf := {_whatIfOnly}, p_OnlineApply := '{OnlineApply}');
@@ -1952,7 +2064,7 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
             }
         }
 
-        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Foreign Keys"), tableCommand.CommandText);
+        _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Foreign Keys"), ReadsTheParsedTables(tableCommand.CommandText));
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
         RunDeferredOnlineWork(tableCommand);
@@ -2326,6 +2438,25 @@ SET NOCOUNT ON
 
     #region Connection and Execution
 
+    // A table step reads the temp tables the parse step built on the same connection, so its file alone fails on a missing
+    // temp table; the file says what has to run first.
+    internal const string ParsedTablesNote = "-- Reads the temp tables the Parse Table Json step builds: run that step's file first, in the same session.";
+
+    private static string ReadsTheParsedTables(string sql) => ParsedTablesNote + Environment.NewLine + sql;
+
+    // A connect that stalled said only "The operation has timed out", under "Begin Quench", naming neither the target nor
+    // that it was the connect.
+    internal static string ConnectFailure(Platform platform, string server, string database, string user, string reason) =>
+        $"{ProductQuench.ConnectFailure(platform, server, $" [Database: {database}]", user)}: {reason}";
+
+    // Not wrapped: the lost-connection classifier walks inner exceptions and would call a failed connect a mid-run drop.
+    private RunFailedException ConnectFailed(IDbConnection connection, Exception e, IConfigurationRoot config)
+    {
+        connection.Dispose();
+        _errorLog.Error($"Could not connect to {_databaseName} on {_server}", e);
+        return new RunFailedException(ConnectFailure(_product.Platform, _server, _databaseName, config[SettingsKeys.Target.User], e.Message));
+    }
+
     private IDbConnection GetConnection(bool fireInfoMessageEventOnUserErrors = true, bool ignoreInfoMessages = false)
     {
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
@@ -2351,7 +2482,22 @@ SET NOCOUNT ON
             }
         }
 
-        connection.Open();
+        try
+        {
+            connection.Open();
+        }
+        catch (DbException e)
+        {
+            throw ConnectFailed(connection, e, config);
+        }
+        catch (TimeoutException e)
+        {
+            throw ConnectFailed(connection, e, config);
+        }
+        catch (InvalidOperationException e)
+        {
+            throw ConnectFailed(connection, e, config);
+        }
 
         // PostgreSQL: set the unsupported-feature policy on every convergence connection (built directly to
         // the target database, so no ChangeDatabase resets the session) via a GUC that works on every PG
@@ -2467,15 +2613,17 @@ SET NOCOUNT ON
         }
     }
 
+    // #576: only with WriteDebugSql. This ran before every generated step of every deploy, so every run left a file per
+    // step in ArtifactPath, the working folder by default.
     private string LogSqlScript(string name, string sql)
     {
+        if (!DebugSql.Enabled) return "";
         try
         {
             var dir = ResolveArtifactDirectory();
             DirectoryWrapper.GetFromFactory().CreateDirectory(dir);
             var path = Path.Combine(dir, name);
-            var toWrite = ScrubArtifactsEnabled ? ResolvedSqlArtifactWriter.Scrub(sql, SensitiveTokenValues()) : sql;
-            FileWrapper.GetFromFactory().WriteAllText(path, toWrite);
+            FileWrapper.GetFromFactory().WriteAllText(path, ResolvedSqlArtifactWriter.WithOwner(DebugSqlOwner, sql));
             return path;
         }
         catch (Exception ex)
@@ -2557,6 +2705,7 @@ SET NOCOUNT ON
         var rows = ChangeAuditReader.ReadAndDrain(_product.Platform, auditCmd);
         if (rows == null) return;
         foreach (var r in rows) ChangeAudit.Record(r.ObjectType, r.ObjectName, r.Action, r.Mode);
+        foreach (var line in DowngradeLog.Lines(_product.Platform, rows)) SafeProgressLog(line);
         ChangeAudit.MarkInstrumented();
     }
 
@@ -2589,10 +2738,8 @@ SET NOCOUNT ON
 
     internal void QuenchOneScript(IDbCommand destCmd, SqlScript script, bool runTwice, bool showErrors = true)
     {
-        if (_product.Platform == Platform.SqlServer)
-            _debugFileLocation = (destCmd.Connection as SqlConnection)?.FireInfoMessageEventOnUserErrors ?? false ? script.LogPath : "";
-        else
-            _debugFileLocation = showErrors ? script.LogPath : "";
+        // The script's own file is not resolved SQL: its artifact, when one is written, is reported with the failure.
+        _debugFileLocation = "";
 
         if (showErrors) SafeProgressLog($"    Quenching {script.LogPath}");
         var needDBReset = false;
@@ -2730,10 +2877,18 @@ SET NOCOUNT ON
         foreach (var dependent in Enumerable.Reverse(scripts))
         {
             var wasQuenched = dependent.HasBeenQuenched;
+            var skippedAsUnchanged = dependent.Outcome == ScriptOutcome.Unchanged;
             QuenchOneScript(destCmd, dependent, _runScriptsTwice, showErrors);
             if (dependent.Error != null) continue;
             dependent.HasBeenQuenched = wasQuenched;
             dependent.Outcome = ScriptOutcome.Applied;
+            // Its "unchanged" was logged before this run dropped it; what the summary counts is that it ran.
+            if (skippedAsUnchanged)
+            {
+                var objectType = ObjectScriptClassifier.Classify(dependent.LogPath);
+                ChangeAudit?.Retract(objectType, dependent.LogPath, "unchanged");
+                ChangeAudit?.RecordRan(objectType, dependent.LogPath);
+            }
             if (ProbeScriptStamp(destCmd, dependent, DatabaseScriptSlot.AfterTablesObject) is { } stamp) RecordScriptStamp(destCmd, stamp);
         }
         ReapplyCapturedPermissions(destCmd, _droppedDependentPermissions);
@@ -3282,6 +3437,43 @@ SET NOCOUNT ON
         }
     }
 
+    // D13: always run, so no run-once tracking; a resumed run skips the scripts that succeeded in it. Stops at the first
+    // failure and reports that script alone -- the scripts after it did not run, and did not fail.
+    private void QuenchSetupScripts(IDbCommand destCmd, List<SqlScript> scripts)
+    {
+        foreach (var script in scripts.Where(s => !s.HasBeenQuenched))
+        {
+            if (_checkpointing.HasCompletedScript(DbScope, DatabaseScriptSlot.Setup.ToString(), script.LogPath))
+            {
+                script.HasBeenQuenched = true;
+                SafeProgressLog($"    Skipping (previously quenched per checkpoint) {script.LogPath}");
+                continue;
+            }
+
+            QuenchOneScript(destCmd, script, _runScriptsTwice);
+            if (!script.HasBeenQuenched)
+            {
+                _debugFileLocation = "";
+                LogScriptErrors([script]);
+            }
+            _checkpointing.MarkScriptCompleted(DbScope, DatabaseScriptSlot.Setup.ToString(), script.LogPath);
+            MigrationScripts?.Record(_server, _databaseName, _schemaName ?? "", _template.Name, DatabaseScriptSlot.Setup.ToString(),
+                GetRelativeScriptPath(script.LogPath), script.Outcome == ScriptOutcome.Skipped ? "Skipped" : "Ran");
+        }
+    }
+
+    private void WhatIfLogSetupScripts(List<SqlScript> scripts)
+    {
+        var entries = new List<WhatIfConsoleEntry>();
+        foreach (var script in scripts)
+        {
+            entries.Add(new WhatIfConsoleEntry("apply", "APPLY", script.LogPath));
+            WhatIf?.Record(WhatIfCategory.Apply, LogPrefix, script.LogPath);
+        }
+        foreach (var line in WhatIfConsoleFormatter.Render(entries, WhatIfConsoleDetail))
+            SafeProgressLog(line);
+    }
+
     internal static bool ShouldAlwaysRun(string scriptName) => Path.GetFileNameWithoutExtension(scriptName).EndsWith("[ALWAYS]");
 
     // Only an absent tracking table reads as "nothing has run yet". Any other failure -- the deploy login cannot read the
@@ -3314,12 +3506,18 @@ SET NOCOUNT ON
         }
         catch (DbException ex)
         {
-            throw new RunFailedException($"Cannot read which {slot} scripts have already run ({ex.Message}). Nothing in the slot was run, because a run-once script "
-                                         + $"would run again. Grant the deploy login SELECT, INSERT and DELETE on {TrackingTableName()}.");
+            throw new RunFailedException(RunOnceReadFailure(slot, TrackingTableName(), ex.Message));
         }
 
         return entries;
     }
+
+    // The engine's own text follows the sentence rather than sitting inside it: PostgreSQL's carries a blank line and a
+    // POSITION detail, which split the instruction across three log lines.
+    internal static string RunOnceReadFailure(string slot, string trackingTable, string engineError) =>
+        $"Cannot read which {slot} scripts have already run from {trackingTable}. Nothing in the slot was run, because a run-once "
+        + $"script would run again. Grant the deploy login SELECT, INSERT and DELETE on {trackingTable}.{Environment.NewLine}"
+        + $"  {engineError.Split('\n').Select(l => l.Trim()).FirstOrDefault(l => l.Length > 0)}";
 
     private void MarkScriptCompleted(IDbCommand destCmd, SqlScript script, string slot)
     {
@@ -3398,10 +3596,15 @@ SET NOCOUNT ON
                              $"{(string.IsNullOrEmpty(_schemaName) ? "" : $" [Schema: {_schemaName}]")}" +
                              $" [{sqlScript.LogPath}] — {sqlScript.Error?.Message}";
                 var fileName = GetDebugFileName($"Failed {Path.GetFileNameWithoutExtension(sqlScript.Name)}");
-                artifactPath = ResolvedSqlArtifactWriter.WriteFailureArtifact(directory, ScrubArtifactsEnabled,
-                    SensitiveTokenValues(), header, sqlScript.Batches, FailingBatchIndex(sqlScript), fileName);
-                SafeProgressLogError($"    Resolved SQL written to: {artifactPath}");
-                SafeErrorLogError($"Unable to quench '{sqlScript.LogPath}': {sqlScript.Error?.Message} — resolved SQL: {artifactPath}");
+                if (DebugSql.Enabled)
+                {
+                    artifactPath = ResolvedSqlArtifactWriter.WriteFailureArtifact(directory, DebugSqlOwner, header,
+                        sqlScript.Batches, FailingBatchIndex(sqlScript), fileName);
+                    SafeProgressLogError($"    Resolved SQL written to: {artifactPath}");
+                    SafeErrorLogError($"Unable to quench '{sqlScript.LogPath}': {sqlScript.Error?.Message} — resolved SQL: {artifactPath}");
+                }
+                else
+                    SafeProgressLogError($"    {DebugSql.HowToGetIt(directory)}");
             }
             catch (Exception artifactEx)
             {
@@ -3433,9 +3636,14 @@ SET NOCOUNT ON
             var header = $"Failed: {_server}.{_databaseName}" +
                          $"{(string.IsNullOrEmpty(_schemaName) ? "" : $" [Schema: {_schemaName}]")}" +
                          $" [{label}] — {error.Message}";
+            if (!DebugSql.Enabled)
+            {
+                SafeProgressLogError($"    {DebugSql.HowToGetIt(ResolveArtifactDirectory())}");
+                return;
+            }
             var fileName = GetDebugFileName($"Failed {label}");
-            var path = ResolvedSqlArtifactWriter.WriteFailureArtifact(ResolveArtifactDirectory(), ScrubArtifactsEnabled,
-                SensitiveTokenValues(), header, new[] { command.CommandText }, 0, fileName);
+            var path = ResolvedSqlArtifactWriter.WriteFailureArtifact(ResolveArtifactDirectory(), DebugSqlOwner, header,
+                new[] { command.CommandText }, 0, fileName);
             SafeProgressLogError($"    Resolved SQL written to: {path}");
         }
         catch (Exception artifactEx)
@@ -3472,6 +3680,10 @@ SET NOCOUNT ON
 
     private bool _explicitTimestampDefaultsReadOnlyReported;
 
+    // A failed data delivery writes its own file and says how to get it; the work unit's failure line and roll-up use them.
+    private string _dataDeliveryArtifact;
+    private bool _debugSqlHintLogged;
+
     // A TIMESTAMP column must be created with the default it declares. With explicit_defaults_for_timestamp off the
     // engine invents one, so the table steps run with it on and give the session its own value back afterwards. User
     // scripts on the same connection keep the server's setting.
@@ -3480,13 +3692,18 @@ SET NOCOUNT ON
         if (_product.Platform.GetBasePlatform() != Platform.MySQL) return null;
         return MySqlSessionSettings.UseExplicitTimestampDefaults(tableCommand, () =>
         {
-            if (_explicitTimestampDefaultsReadOnlyReported) return;
+            if (_explicitTimestampDefaultsReadOnlyReported || !DeclaresATimestampTheServerWouldDefault(_template.Tables)) return;
             _explicitTimestampDefaultsReadOnlyReported = true;
             SafeProgressLog("  explicit_defaults_for_timestamp is OFF and this server or account does not let a session change it, so a " +
                             "TIMESTAMP NOT NULL column declared without a default gets one the server chooses. Declare the " +
                             "default, or turn the variable ON in the server configuration.");
         });
     }
+
+    // The note is about a TIMESTAMP NOT NULL declared without a default; a package with none has nothing to be told.
+    internal static bool DeclaresATimestampTheServerWouldDefault(IEnumerable<Table> tables) =>
+        tables.SelectMany(t => t.Columns).Any(c => !c.Nullable && string.IsNullOrWhiteSpace(c.Default)
+            && (c.DataType ?? "").TrimStart().StartsWith("TIMESTAMP", StringComparison.OrdinalIgnoreCase));
 
     private void SafeProgressLog(string msg)
     {

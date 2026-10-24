@@ -13,7 +13,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// is a no-op. A declared value is applied at create and converged in place when it changes.
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_IndexFillFactorTests : BaseTableQuenchTests
 {
     private static string Json(string table, string indexExtra) => $$"""

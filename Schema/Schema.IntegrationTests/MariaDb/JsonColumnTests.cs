@@ -96,7 +96,8 @@ public class JsonColumnTests
         $"SELECT CONCAT(COLUMN_TYPE, ' ', COLLATION_NAME) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_db}' AND TABLE_NAME = '{Table}' AND COLUMN_NAME = 'doc'");
 
     /// <summary>Every CHECK on the table as <c>name=clause</c>, name-ordered; null when there is none.</summary>
-    private string Checks() => Str(
+    // Below 10.2.22 there is no CHECK_CONSTRAINTS view to read, and no JSON check to find: MariaDB adds one from 10.4.3.
+    private string Checks() => _version < 100222 ? null : Str(
         $"SELECT GROUP_CONCAT(CONCAT(cc.CONSTRAINT_NAME, '=', cc.CHECK_CLAUSE) ORDER BY cc.CONSTRAINT_NAME SEPARATOR ';') " +
         $"FROM INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc WHERE cc.CONSTRAINT_SCHEMA = '{_db}' AND cc.TABLE_NAME = '{Table}'");
 

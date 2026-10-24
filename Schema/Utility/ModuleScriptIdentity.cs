@@ -39,7 +39,6 @@ public sealed class ModuleScriptIdentity
     private static readonly Regex MySqlCreate = new(
         $@"(?<!\w)CREATE\s+(OR\s+REPLACE\s+)?(ALGORITHM\s*=\s*\w+\s+)?(DEFINER\s*=\s*\S+\s+)?(SQL\s+SECURITY\s+\w+\s+)?(AGGREGATE\s+)?(?<kind>PROCEDURE|FUNCTION|VIEW|TRIGGER|EVENT)\s+(?<name>{MySqlToken}(\s*\.\s*{MySqlToken})?)(?<rest>[\s\S]*)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
-    private static readonly Regex StringLiteral = new(@"N?'(?:[^']|'')*'", RegexOptions.Compiled | RegexOptions.Singleline);
     private static readonly Regex SqlServerDrop = new(
         $@"(?<!\w)DROP\s+(?<kind>PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\s+(?:IF\s+EXISTS\s+)?(?<name>{SqlServerToken}(\s*\.\s*{SqlServerToken})?)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
@@ -63,7 +62,7 @@ public sealed class ModuleScriptIdentity
         if (pattern == null) return null;
 
         var matches = batches
-            .Select(b => StringLiteral.Replace(b ?? "", m => new string(' ', m.Length)))
+            .Select(b => BlankLiteralsAndComments(b ?? "", basePlatform == Platform.MySQL))
             .SelectMany(b => pattern.Matches(b).Cast<Match>())
             .ToList();
         if (matches.Count != 1) return null;
@@ -81,6 +80,57 @@ public sealed class ModuleScriptIdentity
         }
 
         return new ModuleScriptIdentity { Kind = kind, Schema = schema, Name = name, TableSchema = tableSchema, TableName = tableName };
+    }
+
+    // String literals and comments are blanked before the CREATE is looked for: a CREATE inside either is not the module.
+    // A header comment showing how to schedule a procedure with CREATE EVENT was taken for the script's module, so the
+    // script never stamped and ran on every deploy. One pass, so a quote inside a comment and a comment marker inside a
+    // string are both left as text; the MySQL family also has # comments and backslash escapes inside strings.
+    private static string BlankLiteralsAndComments(string sql, bool mySqlFamily)
+    {
+        var chars = sql.ToCharArray();
+        var i = 0;
+        while (i < chars.Length)
+        {
+            var ch = chars[i];
+            var next = i + 1 < chars.Length ? chars[i + 1] : '\0';
+            int end;
+            if (ch == '\'' || (ch == 'N' && next == '\'' && !mySqlFamily))
+            {
+                end = ch == 'N' ? i + 2 : i + 1;
+                while (end < chars.Length)
+                {
+                    if (mySqlFamily && chars[end] == '\\') { end += 2; continue; }
+                    if (chars[end] == '\'')
+                    {
+                        if (end + 1 < chars.Length && chars[end + 1] == '\'') { end += 2; continue; }
+                        end++;
+                        break;
+                    }
+                    end++;
+                }
+            }
+            else if ((ch == '-' && next == '-') || (ch == '#' && mySqlFamily))
+            {
+                end = i;
+                while (end < chars.Length && chars[end] != '\n') end++;
+            }
+            else if (ch == '/' && next == '*')
+            {
+                var close = sql.IndexOf("*/", i + 2, StringComparison.Ordinal);
+                end = close < 0 ? chars.Length : close + 2;
+            }
+            else
+            {
+                i++;
+                continue;
+            }
+            end = Math.Min(end, chars.Length);
+            for (var k = i; k < end; k++)
+                if (chars[k] != '\n' && chars[k] != '\r') chars[k] = ' ';
+            i = end;
+        }
+        return new string(chars);
     }
 
     /// <summary>

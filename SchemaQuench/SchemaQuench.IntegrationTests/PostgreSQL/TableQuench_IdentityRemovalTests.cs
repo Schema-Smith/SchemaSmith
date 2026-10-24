@@ -3,11 +3,12 @@
 using System;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_IdentityRemovalTests : BaseTableQuenchTests
 {
     [Test]
@@ -15,7 +16,7 @@ public class TableQuench_IdentityRemovalTests : BaseTableQuenchTests
     {
         var productName = Guid.NewGuid().ToString();
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
-        var schema = "MiscellaneousTests";
+        var schema = "IdentityRemovalTests";
         var tableName = $"RemoveIdentity_{uniqueId}";
 
         using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
@@ -50,7 +51,7 @@ WHERE a.attrelid = '""{schema}"".""{tableName}""'::regclass AND a.attname = 'Id'
 """;
         cmd.CommandText = $@"CALL ""SchemaSmith"".""TableQuench""(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_WhatIf := false, p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := false);";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Identity gone — attidentity is a "char" column; non-identity returns empty char (\0) or ''.
         cmd.CommandText = $@"SELECT a.attidentity FROM pg_attribute a

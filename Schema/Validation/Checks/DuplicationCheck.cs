@@ -90,6 +90,8 @@ public sealed class DuplicationCheck : ISchemaCheck
             case PostgreSqlTable pgTable:
                 findings.AddRange(CheckNamedGroup(pgTable.Statistics, s => s.Name, s => s.ShouldApplyExpression, s => s.VariantName, "statistic", location));
                 findings.AddRange(CheckNamedGroup(pgTable.ExcludeConstraints, e => e.Name, e => e.ShouldApplyExpression, e => e.VariantName, "exclude constraint", location));
+                // #570: two that both apply fail the deploy with 42710.
+                findings.AddRange(CheckNamedGroup(pgTable.Policies, p => p.Name, p => p.ShouldApplyExpression, p => p.VariantName, "policy", location));
                 break;
             case MySqlTable myTable:
                 findings.AddRange(CheckNamedGroup(myTable.FullTextIndexes, f => f.Name, f => f.ShouldApplyExpression, f => f.VariantName, "full-text index", location));
@@ -121,7 +123,7 @@ public sealed class DuplicationCheck : ISchemaCheck
     // "dbo"/"public"/the "{{SchemaName}}" token; MySqlTable's explicit interface implementation
     // always returns null), so casting to the interface gives one schema-qualification path for
     // all three platforms instead of a per-platform switch.
-    private static string TableIdentity(Table table)
+    internal static string TableIdentity(Table table)
     {
         var schema = (table as IDeliverableTable)?.Schema;
         return string.IsNullOrEmpty(schema) ? table.Name : $"{schema}.{table.Name}";

@@ -396,7 +396,12 @@ public class SystemVersioningDeployTests : BaseTableQuenchTests
                 cmd.CommandText = $"ALTER TABLE `{_mainDb}`.`{table}` ADD PARTITION (PARTITION p_extra HISTORY)";
                 cmd.ExecuteNonQuery();
             }
+            cmd.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
             Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, package), "and it redeploys");
+            // What the server could not hold is recorded on every deploy, as the versioning is, not only on the first.
+            cmd.CommandText = "SELECT GROUP_CONCAT(ObjectType) FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ActionType = 'downgraded' AND ObjectName = '" + table + "'";
+            Assert.That(cmd.ExecuteScalar() as string ?? "", Is.EqualTo(downgrades), "the redeploy records the same downgrade");
         }
         finally
         {
@@ -427,7 +432,7 @@ public class SystemVersioningDeployTests : BaseTableQuenchTests
             Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, package), "and it redeploys");
 
             cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
-            var partitioning = Newtonsoft.Json.Linq.JObject.Parse(cmd.ExecuteScalar()?.ToString() ?? "{}")["Partitioning"];
+            var partitioning = Newtonsoft.Json.Linq.JObject.Parse(TransientRetry.Run(() => cmd.ExecuteScalar())?.ToString() ?? "{}")["Partitioning"];
             Assert.Multiple(() =>
             {
                 Assert.That((string)partitioning?["Method"], Is.EqualTo("SYSTEM_TIME"), partitioning?.ToString());

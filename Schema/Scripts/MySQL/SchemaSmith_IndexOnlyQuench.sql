@@ -794,7 +794,7 @@ BEGIN
             ON ft.TableKey = SchemaSmith_IdentifierKey(d.TableName) AND ft.IndexKey = SchemaSmith_NameKeyCI(d.IndexName);
 
         IF p_WhatIf = 1 THEN
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown indexes');
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop indexes not declared for this deploy');
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
             SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
             FROM _SchemaSmith_IndexesToDrop;
@@ -806,7 +806,7 @@ BEGIN
             -- An index-only deploy never touches a foreign key. An index one still needs -- on its own table, or a unique
             -- index another table's key references -- cannot be dropped (1553), so it is kept, with its ownership; a later
             -- deploy drops it once no key needs it.
-            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown indexes');
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop indexes not declared for this deploy');
 
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexDropStmts;
             CALL SchemaSmith_StageOnlineApply();
@@ -814,7 +814,7 @@ BEGIN
                                                             TableName VARCHAR(128) COLLATE utf8mb4_bin, AlterStmt TEXT, OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF')
                 ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             INSERT INTO _SchemaSmith_IndexDropStmts (LogMsg, Stmt, AuditName, TableName, AlterStmt)
-            SELECT CONCAT('  Drop unknown index: ', TableName, '.', IndexName),
+            SELECT CONCAT('  Drop index not declared for this deploy: ', TableName, '.', IndexName),
                    CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
                    CONCAT(TableName, '.', IndexName), TableName,
                    CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP INDEX `', IndexName, '`')

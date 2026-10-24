@@ -146,8 +146,12 @@ public abstract class TableQuench_ForeignKeySchemaSharedTests : BaseTableQuenchT
 
             Exec("DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()");
             RunTableQuenchProc(cmd, Json($"\"RelatedTableSchema\": \"{other}\", "));
-            cmd.CommandText = $"SELECT COUNT(*) FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ObjectName LIKE '%fk_{uid}%'";
-            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero, "then a redeploy is a no-op");
+            cmd.CommandText = $"SELECT COALESCE(GROUP_CONCAT(CONCAT(ObjectType, ' ', ObjectName, ' ', ActionType) SEPARATOR '; '), '') FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ObjectName LIKE '%fk_{uid}%'";
+            var audit = cmd.ExecuteScalar()?.ToString();
+            cmd.CommandText = $"SELECT COALESCE(GROUP_CONCAT(CONCAT(ObjectType, ' ', ObjectName, ' ', ActionType) SEPARATOR '; '), '') FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+            var allAudit = cmd.ExecuteScalar()?.ToString();
+            cmd.CommandText = $"SELECT COALESCE(GROUP_CONCAT(Message SEPARATOR ' | '), '') FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%{uid}%'";
+            Assert.That(audit, Is.Empty, $"then a redeploy is a no-op; its audit: {allAudit}; messages naming {uid}: {cmd.ExecuteScalar()}");
         }
         finally
         {

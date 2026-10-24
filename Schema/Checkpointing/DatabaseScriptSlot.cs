@@ -10,5 +10,6 @@ public enum DatabaseScriptSlot
     BetweenTablesAndKeys,
     AfterTable,
     TableData,
-    After
+    After,
+    Setup
 }

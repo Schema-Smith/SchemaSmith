@@ -6,7 +6,7 @@ using Schema.Domain;
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ModifyIndexTests : BaseTableQuenchTests
 {
     [Test]

@@ -127,7 +127,7 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
             Assert.That(LivePartitionCount(cmd, table), Is.EqualTo(3), "and is untouched");
 
             cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
-            var json = cmd.ExecuteScalar()?.ToString() ?? "";
+            var json = TransientRetry.Run(() => cmd.ExecuteScalar())?.ToString() ?? "";
             var partitioning = json.Contains("Partitioning") ? json[json.IndexOf("\"Partitioning\"", StringComparison.Ordinal)..] : json;
             Assert.That(partitioning, Does.Contain($"\"Method\": \"{method}\"").And.Contain("\"PartitionCount\": 3"), partitioning);
         }
@@ -357,7 +357,7 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
             RunTableQuenchProc(cmd, WithRangePartitioning(table), productName: product);
 
             cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
-            var json = cmd.ExecuteScalar()?.ToString() ?? "";
+            var json = TransientRetry.Run(() => cmd.ExecuteScalar())?.ToString() ?? "";
 
             Assert.Multiple(() =>
             {
@@ -395,7 +395,7 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
             RunTableQuenchProc(cmd, WithPlainTable(table), productName: product);
 
             cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
-            var json = cmd.ExecuteScalar()?.ToString() ?? "";
+            var json = TransientRetry.Run(() => cmd.ExecuteScalar())?.ToString() ?? "";
 
             Assert.That(json, Does.Not.Contain("Partitioning"),
                 "an ordinary table must gain no partitioning key -- otherwise every committed .json in "
@@ -877,7 +877,7 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
     private JObject ExtractPartitioning(IDbCommand cmd, string table)
     {
         cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
-        var json = cmd.ExecuteScalar()?.ToString() ?? "";
+        var json = TransientRetry.Run(() => cmd.ExecuteScalar())?.ToString() ?? "";
         return (JObject)JObject.Parse(json)["Partitioning"] ?? throw new AssertionException("no Partitioning in\n" + json);
     }
 

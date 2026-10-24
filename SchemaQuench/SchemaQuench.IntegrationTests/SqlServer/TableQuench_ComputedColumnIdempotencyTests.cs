@@ -3,6 +3,7 @@
 using System;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -23,7 +24,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 //   * ModifiedTableQuench.sql #ColumnChanges.ColumnScript         (line 118)
 //   * ModifiedTableQuench.sql Add Missing Computed Columns        (line 194)
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ComputedColumnIdempotencyTests : BaseTableQuenchTests
 {
     [Test]
@@ -68,7 +69,7 @@ public class TableQuench_ComputedColumnIdempotencyTests : BaseTableQuenchTests
 """;
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Sanity: the table and computed column exist.
         cmd.CommandText = $"SELECT CAST(CASE WHEN COLUMNPROPERTY(OBJECT_ID('[dbo].[{tableName}]'), 'ExpirationDate', 'IsComputed') = 1 THEN 1 ELSE 0 END AS BIT)";
@@ -137,7 +138,7 @@ public class TableQuench_ComputedColumnIdempotencyTests : BaseTableQuenchTests
 """;
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Capture live definition after first quench to check end-state stability.
         cmd.CommandText = $"SELECT [definition] FROM sys.computed_columns WHERE [object_id] = OBJECT_ID('[dbo].[{tableName}]') AND [name] = 'ExpirationDate'";
@@ -152,7 +153,7 @@ public class TableQuench_ComputedColumnIdempotencyTests : BaseTableQuenchTests
         // form). The end state must still be correct.
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Computed column still exists, still computed, still persisted.
         cmd.CommandText = $"SELECT CAST(CASE WHEN COLUMNPROPERTY(OBJECT_ID('[dbo].[{tableName}]'), 'ExpirationDate', 'IsComputed') = 1 THEN 1 ELSE 0 END AS BIT)";

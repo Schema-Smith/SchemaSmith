@@ -61,6 +61,39 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
         }
     }
 
+    // #587: a package that wraps the table name in backticks got it quoted twice in the rename line, ``RenameMsg``.
+    [Test]
+    public void TheColumnRenameLine_QuotesTheTableOnce()
+    {
+        const string table = "RenameMsg";
+        const string product = "Rename Message";
+        var json = $$"""
+            [{
+                "Name": "`{{table}}`",
+                "Columns": [
+                    { "Name": "id", "DataType": "INT", "Nullable": false },
+                    { "Name": "mail", "OldName": "email", "DataType": "VARCHAR(50)", "Nullable": true }
+                ],
+                "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" } ]
+            }]
+            """;
+
+        using var conn = Open(out var cmd);
+        CleanUp(cmd, product, table);
+        Exec(cmd, $"CREATE TABLE `{table}` (`id` INT NOT NULL PRIMARY KEY, `email` VARCHAR(50) NULL)");
+        try
+        {
+            ClearStatusMessages(cmd);
+            RunTableQuenchProc(cmd, json, productName: product);
+            Assert.That(Scalar(cmd, "SELECT GROUP_CONCAT(Message SEPARATOR ' | ') FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%Rename column%'"),
+                Is.EqualTo($"  Rename column `email` to `mail` on `{table}`"));
+        }
+        finally
+        {
+            CleanUp(cmd, product, table);
+        }
+    }
+
     // Below the RENAME COLUMN floor the respell restates the column with CHANGE COLUMN. A non-first TIMESTAMP NOT NULL
     // restated without its DEFAULT gets an invented zero default where explicit_defaults_for_timestamp is off (MySQL
     // 5.7, and MariaDB below 10.10, where 10.2-10.3 refuse to let a session turn it on) -- 1067 under a strict mode, or

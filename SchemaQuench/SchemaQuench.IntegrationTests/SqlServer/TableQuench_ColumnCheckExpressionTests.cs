@@ -23,7 +23,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 // after paren-stripping, so the canonical authored form is `[Quantity]>(0)`. This mirrors the
 // PostgreSQL tests which use pg_get_constraintdef canonical form for the same reason.
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ColumnCheckExpressionTests : BaseTableQuenchTests
 {
     [Test]

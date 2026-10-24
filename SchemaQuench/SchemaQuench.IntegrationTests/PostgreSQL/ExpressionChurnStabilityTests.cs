@@ -23,7 +23,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// </summary>
 [Category("PostgreSQL")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class ExpressionChurnStabilityTests : BaseTableQuenchTests
 {
     // Defect 1: the compare stripped CHECK's prefix with a regex requiring DOUBLE parens, but

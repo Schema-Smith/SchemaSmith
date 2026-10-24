@@ -169,11 +169,11 @@ namespace Schema.Capabilities
                 800, "MySQL 8.0.16", null, DegradeKind.Skip, "CHECK constraint (MySQL 8.0.16)", IntroducedInPatchComparable: 80016));
             // Automatic data delivery needs JSON_TABLE (MySQL 8.0). MySQL 5.7 has neither JSON_TABLE nor
             // recursive CTEs, so there is no row-source fallback: the delivery is skipped (warn) or aborts
-            // (fail) at the C# layer (DataDeliveryProcessor) — a genuine skip, but with no ChangeAudit manifest
-            // row, so ManifestObjectType is null. (MariaDb is absent: 10.2-10.5 deliver the same rows via a
-            // recursive-CTE shred — equivalent-path, not a degrade.)
+            // (fail) at the C# layer (DataDeliveryProcessor), which records the skip in the manifest under
+            // DowngradeObjectType. (MariaDb is absent: 10.2-10.5 deliver the same rows via a recursive-CTE
+            // shred — equivalent-path, not a degrade.)
             rows.Add(new("data-delivery", "Automatic data delivery (JSON_TABLE row source)", Platform.MySQL,
-                800, "MySQL 8.0", null, DegradeKind.Skip, null));
+                800, "MySQL 8.0", null, DegradeKind.Skip, Schema.Delivery.DataDeliveryProcessor.DowngradeObjectType));
 
             // Column DEFAULT expression: below the floor the whole column is skipped (not just the clause —
             // see MissingTableAndColumnQuench/ModifiedTableQuench). MariaDB is absent on purpose: MDEV-10134
@@ -230,7 +230,8 @@ namespace Schema.Capabilities
             rows.Add(new("explicit-system-time-columns", "Explicit system-time columns on an existing table", Platform.MariaDb,
                 1107, "MariaDB 11.7", null, DegradeKind.Skip, "explicit system-time columns (MariaDB 11.7)"));
             rows.Add(new("temporal-key", "Temporal key (WITHOUT OVERLAPS)", Platform.MariaDb,
-                1005, "MariaDB 10.5.3", null, DegradeKind.Reduced, "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)"));
+                1005, "MariaDB 10.5.3", null, DegradeKind.Reduced, "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)",
+                IntroducedInPatchComparable: 100503));
             // A VECTOR index is skipped below 11.7. MySQL Community has none at any version, so it has no row.
             rows.Add(new("vector-index", "Vector index", Platform.MariaDb,
                 1107, "MariaDB 11.7", null, DegradeKind.Skip, "INDEX (VECTOR, MariaDB 11.7)"));
@@ -287,6 +288,11 @@ namespace Schema.Capabilities
                 1005, "MariaDB 10.5", null, DegradeKind.Skip, "table without its SYSTEM_TIME partitioning"));
             rows.Add(new("system-time-auto-partitions", "SYSTEM_TIME partitioning with AUTO", Platform.MariaDb,
                 1009, "MariaDB 10.9.1", null, DegradeKind.Reduced, "SYSTEM_TIME partitioning without AUTO", IntroducedInPatchComparable: 100901));
+            // Fixed on four lines at once: 10.6 and later always take the clause.
+            rows.Add(new("generated-column-collation", "COLLATE on a generated column", Platform.MariaDb,
+                1002, "MariaDB 10.2.37 / 10.3.28 / 10.4.18 / 10.5.9", null, DegradeKind.Reduced,
+                "column (generated COLLATE, MariaDB 10.2.37)", IntroducedInPatchComparable: 100237,
+                IntroducedInPatchByLine: [100237, 100328, 100418, 100509]));
 
             // Change Data Capture, gated by a DATABASE setting rather than an engine version -- the first
             // row of that kind, which is why Capability gained RequiredDatabaseSetting. IntroducedInComparable

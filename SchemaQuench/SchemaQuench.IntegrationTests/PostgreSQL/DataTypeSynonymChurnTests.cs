@@ -24,7 +24,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 /// with the spelling, deploy twice, and require the second pass to classify nothing as modified.</para>
 /// </summary>
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class DataTypeSynonymChurnTests : BaseTableQuenchTests
 {
     // Left is what a package declares; the comment is the udt_name the catalog reports, which is what the

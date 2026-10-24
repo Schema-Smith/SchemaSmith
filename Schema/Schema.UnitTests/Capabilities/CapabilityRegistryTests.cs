@@ -20,6 +20,8 @@ namespace Schema.UnitTests.Capabilities
         private static readonly HashSet<string> KnownManifestObjectTypes = new()
         {
             "temporal (SQL Server 2016)",
+            // Recorded by the C# delivery step, not a script.
+            Schema.Delivery.DataDeliveryProcessor.DowngradeObjectType,
             "full-text statistical semantics (no semantic database)",
             "nonclustered columnstore index (writable from SQL Server 2016)",
             "clustered columnstore beside rowstore indexes (SQL Server 2016)",
@@ -70,8 +72,27 @@ namespace Schema.UnitTests.Capabilities
             "table without its SYSTEM_TIME partitioning",
             "columnstore over a (max) or computed column (SQL Server 2017)",
             "columnstore index without its ORDER",
-            "SYSTEM_TIME partitioning without AUTO"
+            "SYSTEM_TIME partitioning without AUTO",
+            "column (generated COLLATE, MariaDB 10.2.37)"
         };
+
+        // A fix shipped on several lines: one entry per line, oldest first, each on a distinct line, and the oldest is the
+        // row's IntroducedInPatchComparable, so a consumer reading only that field gets the earliest fixed patch.
+        [Test]
+        public void PatchByLine_IsOneAscendingEntryPerLine_LedByThePatchComparable()
+        {
+            foreach (var c in CapabilityRegistry.All.Where(c => c.IntroducedInPatchByLine != null))
+            {
+                var lines = c.IntroducedInPatchByLine!;
+                Assert.Multiple(() =>
+                {
+                    Assert.That(lines, Is.Ordered.Ascending, c.Key);
+                    Assert.That(lines.Select(p => p / 100).Distinct().Count(), Is.EqualTo(lines.Count), $"{c.Key}: one entry per line");
+                    Assert.That(c.IntroducedInPatchComparable, Is.EqualTo(lines[0]), $"{c.Key}: the oldest entry leads");
+                    Assert.That(c.IntroducedInComparable, Is.EqualTo(lines[0] / 100), $"{c.Key}: the comparable is the oldest line");
+                });
+            }
+        }
 
         [Test]
         public void AllRows_HaveWellFormedFields()
@@ -204,14 +225,22 @@ namespace Schema.UnitTests.Capabilities
         }
 
         [Test]
-        public void DataDelivery_IsAMySqlSkip_WithNoManifest_AndNoMariaDbRow()
+        public void DataDelivery_IsAMySqlSkip_AndNoMariaDbRow()
         {
             var dd = CapabilityRegistry.For(Platform.MySQL).Single(c => c.Key == "data-delivery");
             Assert.That(dd.IntroducedInComparable, Is.EqualTo(800));
             Assert.That(dd.Degrade, Is.EqualTo(DegradeKind.Skip));
-            Assert.That(dd.ManifestObjectType, Is.Null, "data delivery skips at the C# layer — no ChangeAudit manifest");
             Assert.That(CapabilityRegistry.For(Platform.MariaDb).Any(c => c.Key == "data-delivery"), Is.False,
                 "MariaDb <10.6 delivers the same rows via a recursive CTE (equivalent-path) — no row");
+        }
+
+        // The skip records a manifest row, so the row names its type: a consumer mapping a recorded downgrade back to its
+        // registry row could not link this one while the row said there was none.
+        [Test]
+        public void TheMySqlDataDeliveryRow_NamesTheManifestTypeTheSkipRecords()
+        {
+            Assert.That(CapabilityRegistry.For(Platform.MySQL).Single(c => c.Key == "data-delivery").ManifestObjectType,
+                Is.EqualTo(Schema.Delivery.DataDeliveryProcessor.DowngradeObjectType));
         }
     }
 }

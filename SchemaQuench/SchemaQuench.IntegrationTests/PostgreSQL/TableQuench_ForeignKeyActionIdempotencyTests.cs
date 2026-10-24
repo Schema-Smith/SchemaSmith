@@ -29,7 +29,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 // The reliable, rewrite-proof signal is pg_constraint.oid: a drop/recreate of the FK produces a
 // NEW oid. A converged, idempotent quench must leave the oid UNCHANGED across a no-op re-quench.
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ForeignKeyActionIdempotencyTests : BaseTableQuenchTests
 {
     [Test]

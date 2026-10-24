@@ -22,7 +22,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// </summary>
 [Category("SqlServer")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class DataTypeSynonymChurnTests : BaseTableQuenchTests
 {
     // Left is what a user writes; the comment is what sys.types reports back.
@@ -207,6 +207,133 @@ public class DataTypeSynonymChurnTests : BaseTableQuenchTests
             cmd.ExecuteNonQuery();
         }
         conn.Close();
+    }
+
+    // #582: sysname is SQL Server's own alias for nvarchar(128) -- same storage -- but sys.types names it separately, so a
+    // column built one way and declared the other was altered, and every index over it dropped and rebuilt. Legacy DDL
+    // that used sysname, adopted into a package that says NVARCHAR(128), took that rebuild on its first deploy.
+    [TestCase("SYSNAME", "NVARCHAR(128)", TestName = "Sysname_Live_DeclaredNvarchar128_IsNotAltered")]
+    [TestCase("NVARCHAR(128)", "SYSNAME", TestName = "Nvarchar128_Live_DeclaredSysname_IsNotAltered")]
+    [TestCase("NVARCHAR(128)", "sysname", TestName = "Nvarchar128_Live_DeclaredLowercaseSysname_IsNotAltered")]
+    public void SysnameAndNvarchar128_CompareEqual_SoTheColumnAndItsIndexAreLeftAlone(string liveType, string declaredType)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var table = $"SysnameTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = $"CREATE TABLE [dbo].[{table}] ([Id] INT NOT NULL, [Val] {liveType} NOT NULL); "
+                          + $"CREATE INDEX [IX_{table}_Val] ON [dbo].[{table}] ([Val]);";
+        cmd.ExecuteNonQuery();
+
+        try
+        {
+            ClearChangeAudit(cmd);
+            RunTableQuenchProc(cmd, IndexedTable(table, declaredType, nullable: false), productName: $"SysnameProduct_{uid}");
+
+            Assert.That(ColumnChangesRecorded(cmd, table), Is.EqualTo(0),
+                $"a {liveType} column declared {declaredType} was altered -- the two are the same type");
+            Assert.That(IndexChangesRecorded(cmd, table), Is.EqualTo(0),
+                $"the index over a {liveType} column declared {declaredType} was dropped and rebuilt");
+            Assert.That(DeployedTypeName(cmd, table, "Val"), Is.EqualTo(liveType.StartsWith("SYS") ? "sysname" : "nvarchar"),
+                "the column was re-typed: nothing should have touched it");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    // The equality is the type's alone. sysname only defaults to NOT NULL, so a sysname NULL column declared NOT NULL is
+    // still a real change, and must still be made.
+    [Test]
+    public void SysnameNull_DeclaredNvarchar128NotNull_IsStillAltered()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var table = $"SysnameNullTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = $"CREATE TABLE [dbo].[{table}] ([Id] INT NOT NULL, [Val] SYSNAME NULL);";
+        cmd.ExecuteNonQuery();
+
+        try
+        {
+            RunTableQuenchProc(cmd, IndexedTable(table, "NVARCHAR(128)", nullable: false), productName: $"SysnameNullProduct_{uid}");
+
+            cmd.CommandText = $"SELECT is_nullable FROM sys.columns WHERE object_id = OBJECT_ID('[dbo].[{table}]') AND name = 'Val'";
+            Assert.That(Convert.ToBoolean(cmd.ExecuteScalar()), Is.False,
+                "a nullable sysname column declared NOT NULL was left nullable -- the type compares equal, the nullability does not");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    // The sysname fold read any system alias as TYPE_NAME(system_type_id), and the CLR types (hierarchyid, geometry,
+    // geography) are aliases of system type 240, which has no name: their type read as NULL, so a change to one compared
+    // as unknown, was skipped, and the deploy reported success. SQL Server converts none of them in place, so the change
+    // now reaches the engine and fails, naming the type.
+    [TestCase("HIERARCHYID", "VARBINARY(892)")]
+    [TestCase("GEOMETRY", "GEOGRAPHY")]
+    public void AClrTypedColumn_DeclaredAsAnotherType_IsNotSilentlySkipped(string liveType, string declaredType)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var table = $"ClrTypeChange_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = $"CREATE TABLE [dbo].[{table}] ([Id] INT NOT NULL, [Val] {liveType} NULL);";
+        cmd.ExecuteNonQuery();
+
+        try
+        {
+            Assert.That(() => RunTableQuenchProc(cmd, $$"""
+                [ { "Schema": "[dbo]", "Name": "[{{table}}]",
+                    "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[Val]", "DataType": "{{declaredType}}", "Nullable": true } ] } ]
+                """, productName: $"ClrTypeChange_{uid}"),
+                Throws.Exception.With.Message.Contains(liveType.ToLowerInvariant()),
+                $"a {liveType} column declared {declaredType} was compared as unchanged");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    private static string IndexedTable(string table, string dataType, bool nullable) => $$"""
+[
+  {
+    "Schema": "[dbo]",
+    "Name": "[{{table}}]",
+    "Columns": [
+      { "Name": "[Id]",  "DataType": "INT", "Nullable": false },
+      { "Name": "[Val]", "DataType": "{{dataType}}", "Nullable": {{(nullable ? "true" : "false")}} }
+    ],
+    "Indexes": [ { "Name": "[IX_{{table}}_Val]", "IndexColumns": "[Val]" } ]
+  }
+]
+""";
+
+    private int IndexChangesRecorded(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"
+SELECT COUNT(*) FROM SchemaSmith.ChangeAudit
+ WHERE SessionId = @@SPID AND ObjectType = 'index' AND ObjectName LIKE '%{table}%'";
+        return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
     private static string TableWithColumnType(string table, string dataType) => $$"""

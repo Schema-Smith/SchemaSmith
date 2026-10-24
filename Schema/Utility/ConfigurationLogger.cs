@@ -38,7 +38,7 @@ public static class ConfigurationLogger
                 indents++;
                 key = TryIndexToItemName(key.Substring(key.IndexOf(":", StringComparison.Ordinal) + 1), entries, entry, arrayNameKeys);
             }
-            var value = ShouldMask(entry.Key, key, hygiene)
+            var value = ShouldMask(entry.Key, key, hygiene, entry.Value)
                 ? LogScrubber.Mask
                 : LogScrubber.ScrubConnectionStringSubfields(entry.Value ?? ""); // strip any embedded connection-string password
             logLine?.Invoke($"{new string(' ', indents * 2)}{key}: {value}");
@@ -62,7 +62,7 @@ public static class ConfigurationLogger
         {
             foreach (var entry in switches)
             {
-                var value = LogScrubber.ScrubTokenValue(entry.Key, entry.Value ?? "", hygiene);
+                var value = IsLogHygieneSetting(entry.Key) ? entry.Value ?? "" : LogScrubber.ScrubTokenValue(entry.Key, entry.Value ?? "", hygiene);
                 logLine?.Invoke($"  {entry.Key}: {value}");
             }
         }
@@ -75,8 +75,12 @@ public static class ConfigurationLogger
     // entry's own name is just its index, "password:0"), and, with LogTokens off, when it is a script token. Objects
     // are still judged leaf by leaf: masking everything under a sensitive ancestor would hide every ScriptTokens
     // value, since "Token" is one of the sensitive patterns.
-    private static bool ShouldMask(string fullKey, string displayName, LogHygieneOptions hygiene)
+    private static bool ShouldMask(string fullKey, string displayName, LogHygieneOptions hygiene, string value)
     {
+        if (IsLogHygieneSetting(fullKey)) return false;
+        // A section line has no value and a true/false reveals no secret; masking them hid only what was set.
+        if (string.IsNullOrEmpty(value) || bool.TryParse(value, out _)) return false;
+
         if (LogScrubber.ShouldScrubName(displayName, hygiene)) return true;
 
         var segments = fullKey.Split(':');
@@ -87,6 +91,11 @@ public static class ConfigurationLogger
         while (owner >= 0 && int.TryParse(segments[owner], out _)) owner--;
         return owner < segments.Length - 1 && owner >= 0 && LogScrubber.ShouldScrubName(segments[owner], hygiene);
     }
+
+    // The LogHygiene block holds token names, patterns and a true/false, never a secret -- and printing them is how a log
+    // shows what it was asked to scrub (#577).
+    private static bool IsLogHygieneSetting(string key) =>
+        key.Split(':')[0].Split("__")[0].EqualsIgnoringCase(SettingsKeys.LogHygiene);
 
     private static string TryIndexToItemName(string key, Dictionary<string, string> entries, KeyValuePair<string, string> entry, HashSet<string> arrayNameKeys)
     {

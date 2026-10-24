@@ -15,6 +15,9 @@ namespace Schema.Domain
         AfterTablesObjects,
         TableData,
         After,
-        None
+        None,
+        // D13: runs after the baseline validation and before the first object pass, every deploy, one pass. Appended so no
+        // existing value moves.
+        Setup
     }
 }

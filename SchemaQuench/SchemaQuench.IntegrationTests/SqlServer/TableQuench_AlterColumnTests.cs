@@ -7,7 +7,7 @@ using System.Data;
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_AlterColumnTests : BaseTableQuenchTests
 {
     [TestCase("Col1", "BIGINT")]
@@ -24,8 +24,9 @@ public class TableQuench_AlterColumnTests : BaseTableQuenchTests
     [TestCase("Col12", "DECIMAL(10, 2)")]
     [TestCase("Col13", "NUMERIC(12, 3)")]
     [TestCase("Col14", "NUMERIC(10, 2)")]
-    [TestCase("Col15", "SYSNAME")]
-    [TestCase("Col16", "NVARCHAR(128)")]
+    // sysname stores nvarchar(128), so declaring one over the other changes nothing (#582).
+    [TestCase("Col15", "NVARCHAR(128)")]
+    [TestCase("Col16", "SYSNAME")]
     [TestCase("Col17", "FLAG")]
     [TestCase("Col18", "BIT")]
     public void TableQuench_ShouldModifyColumnForChangeDataType(string colName, string expectedType)

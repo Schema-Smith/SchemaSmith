@@ -27,7 +27,7 @@
           },
           "QuenchSlot": {
             "type": "string",
-            "pattern": "^(?:[Bb][Ee][Ff][Oo][Rr][Ee]|[Oo][Bb][Jj][Ee][Cc][Tt][Ss]|[Bb][Ee][Tt][Ww][Ee][Ee][Nn][Tt][Aa][Bb][Ll][Ee][Ss][Aa][Nn][Dd][Kk][Ee][Yy][Ss]|[Aa][Ff][Tt][Ee][Rr][Tt][Aa][Bb][Ll][Ee][Ss][Ss][Cc][Rr][Ii][Pp][Tt][Ss]|[Aa][Ff][Tt][Ee][Rr][Tt][Aa][Bb][Ll][Ee][Ss][Oo][Bb][Jj][Ee][Cc][Tt][Ss]|[Tt][Aa][Bb][Ll][Ee][Dd][Aa][Tt][Aa]|[Aa][Ff][Tt][Ee][Rr]|[Nn][Oo][Nn][Ee])$"
+            "pattern": "^(?:[Bb][Ee][Ff][Oo][Rr][Ee]|[Oo][Bb][Jj][Ee][Cc][Tt][Ss]|[Bb][Ee][Tt][Ww][Ee][Ee][Nn][Tt][Aa][Bb][Ll][Ee][Ss][Aa][Nn][Dd][Kk][Ee][Yy][Ss]|[Aa][Ff][Tt][Ee][Rr][Tt][Aa][Bb][Ll][Ee][Ss][Ss][Cc][Rr][Ii][Pp][Tt][Ss]|[Aa][Ff][Tt][Ee][Rr][Tt][Aa][Bb][Ll][Ee][Ss][Oo][Bb][Jj][Ee][Cc][Tt][Ss]|[Tt][Aa][Bb][Ll][Ee][Dd][Aa][Tt][Aa]|[Aa][Ff][Tt][Ee][Rr]|[Nn][Oo][Nn][Ee]|[Ss][Ee][Tt][Uu][Pp])$"
           },
           "ObjectType": {
             "type": "string",

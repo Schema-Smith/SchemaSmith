@@ -197,8 +197,9 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                CASE con.confupdtype WHEN 'a' THEN '' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' END AS "UpdateAction",
                                COALESCE(con.condeferrable, FALSE) AS "Deferrable",
                                COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred",
-                               COALESCE(con.convalidated, TRUE) AS "Validated",
-                               "SchemaSmith"."ConstraintEnforced"(con.oid) AS "Enforced",
+                               -- The state attributes only where they are not the default: an omitted one leaves the constraint as it is.
+                               CASE WHEN NOT COALESCE(con.convalidated, TRUE) THEN FALSE END AS "Validated",
+                               CASE WHEN NOT "SchemaSmith"."ConstraintEnforced"(con.oid) THEN FALSE END AS "Enforced",
                                CASE con.confmatchtype
                                     WHEN 'f' THEN 'FULL'
                                     WHEN 'p' THEN 'PARTIAL'
@@ -218,9 +219,9 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                -- not expression text, so they are stripped here and read from the catalog flags below.
                                "SchemaSmith"."CheckPredicate"(con.oid) AS "Expression",
                                '' AS "ShouldApplyExpression",
-                               COALESCE(con.convalidated, TRUE) AS "Validated",
-                               COALESCE(con.connoinherit, FALSE) AS "NoInherit",
-                               "SchemaSmith"."ConstraintEnforced"(con.oid) AS "Enforced"
+                               CASE WHEN NOT COALESCE(con.convalidated, TRUE) THEN FALSE END AS "Validated",
+                               CASE WHEN con.connoinherit THEN TRUE END AS "NoInherit",
+                               CASE WHEN NOT "SchemaSmith"."ConstraintEnforced"(con.oid) THEN FALSE END AS "Enforced"
                         FROM pg_catalog.pg_constraint con
                           WHERE con.conrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
                             AND con.contype = 'c'

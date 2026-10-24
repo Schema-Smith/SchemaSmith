@@ -3,11 +3,12 @@
 using System;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_IndexOnlyModificationTests : BaseTableQuenchTests
 {
     [Test]
@@ -55,7 +56,7 @@ WHERE i.[object_id] = OBJECT_ID('dbo.{tableName}') AND i.[name] = 'IDX_Test' AND
 
         cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify index column was changed
         cmd.CommandText = $@"
@@ -106,7 +107,7 @@ CREATE NONCLUSTERED INDEX IDX_Test ON dbo.{tableName} ([Col1]) INCLUDE ([Col2])
 
         cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify include column was changed to Col3
         cmd.CommandText = $@"
@@ -157,7 +158,7 @@ CREATE NONCLUSTERED INDEX IDX_Test ON dbo.{tableName} ([Col1])
 
         cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify include column was added
         cmd.CommandText = $@"
@@ -208,7 +209,7 @@ CREATE NONCLUSTERED INDEX IDX_Test ON dbo.{tableName} ([Status]) WHERE [Status]>
 
         cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify filter expression was changed
         cmd.CommandText = $@"
@@ -259,7 +260,7 @@ CREATE NONCLUSTERED INDEX IDX_Test ON dbo.{tableName} ([Col1])
 
         cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify fill factor was set
         cmd.CommandText = $@"
@@ -310,7 +311,7 @@ CREATE NONCLUSTERED INDEX IDX_Test ON dbo.{tableName} ([Col1])
 
         cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 0, @UpdateFillFactor = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify fill factor was NOT changed (0 = server default = 100%)
         cmd.CommandText = $@"
@@ -365,7 +366,7 @@ CREATE NONCLUSTERED INDEX IDX_Two ON dbo.{tableName} ([Col2])
 
         cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify IDX_One has include column
         cmd.CommandText = $@"

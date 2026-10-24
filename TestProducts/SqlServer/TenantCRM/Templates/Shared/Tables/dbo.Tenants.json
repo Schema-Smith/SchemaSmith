@@ -1,0 +1,45 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[dbo]",
+  "Name": "[Tenants]",
+  "Columns": [
+    {
+      "Name": "[Name]",
+      "DataType": "NVARCHAR(64)"
+    },
+    {
+      "Name": "[DisplayName]",
+      "DataType": "NVARCHAR(128)"
+    },
+    {
+      "Name": "[PlanID]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[Status]",
+      "DataType": "NVARCHAR(16)",
+      "Default": "N'Active'"
+    },
+    {
+      "Name": "[CreatedAt]",
+      "DataType": "DATETIME2(0)",
+      "Default": "SYSUTCDATETIME()"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_Tenants]",
+      "PrimaryKey": true,
+      "Clustered": true,
+      "IndexColumns": "[Name]"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "[FK_Tenants_Plans]",
+      "Columns": "[PlanID]",
+      "RelatedTable": "[Plans]",
+      "RelatedColumns": "[PlanID]"
+    }
+  ]
+}

@@ -6,6 +6,7 @@ using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer
 {
@@ -68,6 +69,54 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             }
         }
 
+        // The JSON tier deployed an index's Description and the XML tier (2008 to 2016, or compatibility below 130) did
+        // not, while extraction on that tier read it back: a declared description never arrived.
+        private static string DescribedPayloadJson(string view, string description) => @"[{""Schema"":""[dbo]"",""Name"":""[" + view + @"]"",
+            ""Definition"":""SELECT Id, Label, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM dbo.IvXmlSource GROUP BY Id, Label"",
+            ""Indexes"":[
+              {""Name"":""[UDX_" + view + @"_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]""" +
+            (description == null ? "" : @",""Description"":""" + description + @"""") + @"}
+            ]}]";
+
+        [Test]
+        public void XmlIndexedView_AnIndexDescription_IsSet_LeftAloneWhenOmitted_AndRemovedByAnEmptyString()
+        {
+            const string xv = "vIvDescXml";
+            var xmlScript = (ResourceLoader.Load("SchemaSmith.IndexedViewXmlQuench.sql", Platform.SqlServer)
+                             ?? throw new System.Exception("IndexedViewXmlQuench.sql not found"))
+                            .Replace("[SchemaSmith].[IndexedViewQuench]", "[SchemaSmith].[IndexedViewQuenchXmlTest]");
+
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+            conn.Open();
+            conn.ChangeDatabase(_mainDb);
+
+            Cleanup(conn, xv, xv);
+            try
+            {
+                Exec(conn, "CREATE TABLE dbo.IvXmlSource (Id INT NOT NULL, Label VARCHAR(100) NOT NULL, Amount DECIMAL(10,2) NOT NULL); " +
+                           "CREATE UNIQUE CLUSTERED INDEX UDX_IvXmlSource ON dbo.IvXmlSource (Id);");
+                foreach (var b in SqlServerBatchSplitter.Split(xmlScript)) Exec(conn, b);
+
+                string Deploy(string description)
+                {
+                    Exec(conn, "EXEC SchemaSmith.IndexedViewQuenchXmlTest @ProductName = 'IvDescXml', @IndexedViewSchema = @p, @TemplateName = N'Main', @SchemaName = N''",
+                        ("@p", ModelXmlSerializer.ToIngestXml(DescribedPayloadJson(xv, description), "IndexedViews", "IndexedView")));
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = "SELECT CONVERT(NVARCHAR(MAX), ep.value) FROM sys.extended_properties ep JOIN sys.indexes i ON i.[object_id] = ep.major_id AND i.index_id = ep.minor_id " +
+                                      $"WHERE ep.class = 7 AND ep.name = 'MS_Description' AND ep.major_id = OBJECT_ID('dbo.{xv}') AND i.name = 'UDX_{xv}_Id'";
+                    return cmd.ExecuteScalar() as string;
+                }
+
+                Assert.That(Deploy("by id"), Is.EqualTo("by id"), "set on create");
+                Assert.That(Deploy(null), Is.EqualTo("by id"), "omitted means the description is not managed, so the database's stays");
+                Assert.That(Deploy(""), Is.Null, "an empty string is the request to remove it");
+            }
+            finally
+            {
+                Cleanup(conn, xv, xv);
+            }
+        }
+
         private static void Cleanup(IDbConnection conn, string jv, string xv) =>
             Exec(conn, $"DROP VIEW IF EXISTS dbo.{jv}; DROP VIEW IF EXISTS dbo.{xv}; " +
                        "DROP TABLE IF EXISTS dbo.IvXmlSource; " +
@@ -102,7 +151,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             cmd.CommandTimeout = 300;
             cmd.CommandText = sql;
             foreach (var (n, v) in parameters) AddParam(cmd, n, v);
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
 
         private static void AddParam(IDbCommand cmd, string name, string value)

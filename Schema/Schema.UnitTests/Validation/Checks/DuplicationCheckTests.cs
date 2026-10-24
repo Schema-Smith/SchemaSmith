@@ -278,4 +278,29 @@ public class DuplicationCheckTests
 
         Assert.That(new DuplicationCheck().Run(Context(Product(), template)).ToList(), Is.Empty);
     }
+
+    // #570: two same-named policies that both apply failed the deploy (42710). A name may repeat across variants, so the
+    // DataDelivery and full-text rule applies: more than one of a name needs a ShouldApplyExpression on every one.
+    [TestCase(null, null, true)]
+    [TestCase("1 = 1", null, true)]
+    [TestCase("1 = 1", "1 = 0", false)]
+    public void SameNamedPolicies_AreAnError_UnlessEveryOneIsGated(string firstGate, string secondGate, bool expected)
+    {
+        var table = new Schema.Domain.PostgreSQL.PostgreSqlTable
+        {
+            Name = "invoice",
+            Policies =
+            {
+                new Schema.Domain.PostgreSQL.PostgreSqlPolicy { Name = "p", ShouldApplyExpression = firstGate, VariantName = "a" },
+                new Schema.Domain.PostgreSQL.PostgreSqlPolicy { Name = "p", ShouldApplyExpression = secondGate, VariantName = "b" }
+            }
+        };
+        var template = new Template { Name = "Main" };
+        template.Tables.Add(table);
+
+        var findings = new DuplicationCheck().Run(Context(Product(), template)).Where(f => f.Code == "SS-DUP-001").ToList();
+
+        Assert.That(findings.Count, Is.EqualTo(expected ? 1 : 0));
+        if (expected) Assert.That(findings[0].Message, Does.Contain("policy"));
+    }
 }

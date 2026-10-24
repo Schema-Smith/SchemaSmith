@@ -10,7 +10,7 @@ namespace SchemaQuench.IntegrationTests.MySQL;
 /// <summary>MySQL binding of the shared default-classification tests (#520).</summary>
 [Category("MySQL")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_DefaultClassificationTests : TableQuench_DefaultClassificationSharedTests
 {
     protected override Platform Platform => Platform.MySQL;

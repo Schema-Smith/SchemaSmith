@@ -5,6 +5,7 @@ using System.Data;
 using System.IO;
 using log4net;
 using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json.Linq;
 using NSubstitute;
 using Schema.Checkpointing;
 using Schema.DataAccess;
@@ -269,7 +270,7 @@ public abstract class CheckpointIntegrationTestsSharedTests
 # Product: {product.Name}
 # Template: Main
 # Server: {_server}
-# Database: {_mainDb}
+# Database: {StoredDatabaseName()}
 # Started: {DateTime.Now:yyyy-MM-dd HH:mm:ss}
 
 [Completed Steps]
@@ -290,7 +291,7 @@ KindleForge
 [After Scripts]
 ";
                 var dbCheckpointPath = Path.Combine(_checkpointDir,
-                    Path.GetFileName($"{FileNameEncoder.Encode(product.Name)}.{FileNameEncoder.Encode("Main")}.{FileNameEncoder.Encode(_server)}.{FileNameEncoder.Encode(_mainDb)}.{FileNameEncoder.Encode("")}.checkpoint"));
+                    Path.GetFileName($"{FileNameEncoder.Encode(product.Name)}.{FileNameEncoder.Encode("Main")}.{FileNameEncoder.Encode(_server)}.{FileNameEncoder.Encode(StoredDatabaseName())}.{FileNameEncoder.Encode("")}.checkpoint"));
                 File.WriteAllText(dbCheckpointPath, dbCheckpointContent);
 
                 // Simulate an out-of-band reset: drop the helper proc + kindle stamp WITHOUT
@@ -353,11 +354,14 @@ KindleForge
             }
 
             var product = Product.Load();
+            // The deploy keys its checkpoint by the name the server reports, which is lowercase under
+            // lower_case_table_names=1; on a case-sensitive file system the declared spelling is a different file.
+            var storedDb = StoredDatabaseName();
             var dbCheckpointContent = $@"# SchemaQuench Database Checkpoint
 # Product: {product.Name}
 # Template: Main
 # Server: {_server}
-# Database: {_mainDb}
+# Database: {storedDb}
 # Started: {DateTime.Now:yyyy-MM-dd HH:mm:ss}
 
 [Completed Steps]
@@ -379,7 +383,7 @@ ModifiedTables
 [After Scripts]
 ";
             var dbCheckpointPath = Path.Join(_checkpointDir,
-                Path.GetFileName($"{FileNameEncoder.Encode(product.Name)}.{FileNameEncoder.Encode("Main")}.{FileNameEncoder.Encode(_server)}.{FileNameEncoder.Encode(_mainDb)}.{FileNameEncoder.Encode("")}.checkpoint"));
+                Path.GetFileName($"{FileNameEncoder.Encode(product.Name)}.{FileNameEncoder.Encode("Main")}.{FileNameEncoder.Encode(_server)}.{FileNameEncoder.Encode(storedDb)}.{FileNameEncoder.Encode("")}.checkpoint"));
             File.WriteAllText(dbCheckpointPath, dbCheckpointContent);
 
             try
@@ -389,6 +393,10 @@ ModifiedTables
                 // Parity signal: a resumed run that skipped ModifiedTables must not crash on missing
                 // session temp state — the run converges to a clean (zero) exit.
                 _environment.DidNotReceive().Exit(Arg.Is<int>(c => c != 0));
+
+                // And its summary says it resumed: the training certification saw false on a run where every unit resumed.
+                var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+                Assert.That(summary.SelectToken("run.resumedFromCheckpoint")?.Value<bool>(), Is.True);
             }
             finally
             {
@@ -397,6 +405,15 @@ ModifiedTables
                 FactoryContainer.Unregister<ICheckpointing>();
             }
         }
+    }
+
+    private string StoredDatabaseName()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME = '{_mainDb}'";
+        return cmd.ExecuteScalar()?.ToString() ?? _mainDb;
     }
 
     private static bool HelperProcExists(IDbCommand cmd)

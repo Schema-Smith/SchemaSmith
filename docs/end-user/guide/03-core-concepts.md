@@ -238,7 +238,7 @@ Table definitions are where you'll spend most of your editing time. They're the 
 
 Reading top to bottom, the whole table is right here:
 
-- **Schema and Name** identify the table. SQL Server uses bracket notation (`[Schema].[Name]`), PostgreSQL uses double quotes (`"schema"."name"`), MySQL uses backticks (`` `name` ``) -- SchemaTongs preserves whatever the source used.
+- **Schema and Name** identify the table. SQL Server uses bracket notation (`[Schema].[Name]`) and MySQL backticks (`` `name` ``) -- SchemaTongs preserves whatever the source used. PostgreSQL names are written bare (`public`, `customer`), because PostgreSQL keeps a double quote as part of a name.
 - **Columns** list every column with its data type, nullability, defaults, and check constraints. `"DataType": "INT IDENTITY(1, 1)"` means an auto-incrementing integer (SQL Server syntax; PostgreSQL uses `INTEGER GENERATED ALWAYS AS IDENTITY`, MySQL uses `INT AUTO_INCREMENT`). `"Default": "0"` applies a default constraint.
 - **Indexes** define the primary key and any secondary indexes. The primary key is a clustered unique index on `ProductID`. Additional indexes cover the foreign key columns.
 - **ForeignKeys** define relationships to other tables. Each entry names the constraint, the local column(s), the related table, and the referential actions.

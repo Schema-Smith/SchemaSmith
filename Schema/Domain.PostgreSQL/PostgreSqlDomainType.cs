@@ -121,9 +121,8 @@ namespace Schema.Domain.PostgreSQL
         [JsonProperty(Order = 2)]
         public string Expression { get; set; } = "";
 
-        [SchemaProperty(Description = "false adds the constraint NOT VALID, so the values already stored in the domain's columns are not checked. true over a NOT VALID constraint validates it, which fails when any value violates it. Omitted means validated.")]
-        [JsonProperty(Order = 3)]
-        [DefaultValue(true)]
-        public bool Validated { get; set; } = true;
+        [SchemaProperty(Description = "false adds the constraint NOT VALID, so the values already stored in the domain's columns are not checked. true over a NOT VALID constraint validates it, which fails when any value violates it. Omitted leaves an existing constraint as it is, and a new one is validated.")]
+        [JsonProperty(Order = 3, NullValueHandling = NullValueHandling.Ignore)]
+        public bool? Validated { get; set; }
     }
 }

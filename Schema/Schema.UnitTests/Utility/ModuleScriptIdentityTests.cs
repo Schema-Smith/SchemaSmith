@@ -116,6 +116,28 @@ public class ModuleScriptIdentityTests
         Assert.That((id.Kind, id.Name), Is.EqualTo((ModuleKind.Procedure, "p")));
     }
 
+    // A CREATE named in a comment is not the module: recyclebin_CleanupJob.sql's header shows how to schedule it with a
+    // CREATE EVENT, which was taken for the script's module, so the script never stamped and ran on every deploy.
+    [Test]
+    public void ACreateInsideAComment_DoesNotCount()
+    {
+        var mySql = Parse(Platform.MySQL,
+            "-- Schedule it with a CREATE EVENT, e.g.\n--   CREATE EVENT recyclebin_cleanup ON SCHEDULE EVERY 1 DAY\n"
+            + "# CREATE VIEW `v_hash` AS select 1\n/* CREATE FUNCTION `f_block`() RETURNS INT RETURN 1 */\n"
+            + "DROP PROCEDURE IF EXISTS `recyclebin_CleanupJob`;",
+            "CREATE PROCEDURE `recyclebin_CleanupJob`() BEGIN SELECT 'it''s -- not a comment', 'a\\'b /* nor this */'; END");
+        var sqlServer = Parse(Platform.SqlServer,
+            "-- CREATE VIEW dbo.v_line AS SELECT 1\r\n/* CREATE PROCEDURE dbo.p_block AS SELECT 1 */\r\nCREATE OR ALTER PROCEDURE dbo.p AS SELECT 1");
+        var postgreSql = Parse(Platform.PostgreSQL,
+            "/* CREATE VIEW v_block AS SELECT 1 */ -- CREATE FUNCTION f_line() ...\nCREATE OR REPLACE PROCEDURE public.p() LANGUAGE sql AS $$ SELECT 1 $$;");
+        Assert.Multiple(() =>
+        {
+            Assert.That((mySql?.Kind, mySql?.Name), Is.EqualTo(((ModuleKind?)ModuleKind.Procedure, "recyclebin_CleanupJob")));
+            Assert.That((sqlServer?.Kind, sqlServer?.Name), Is.EqualTo(((ModuleKind?)ModuleKind.Procedure, "p")));
+            Assert.That((postgreSql?.Kind, postgreSql?.Name), Is.EqualTo(((ModuleKind?)ModuleKind.Procedure, "p")));
+        });
+    }
+
     // A script that drops the module it creates loses the module's grants on every engine, so the quench captures
     // them before such a script and puts them back after it. Only a DROP of the module's own kind and name counts; a
     // DROP inside a string executed later still drops, so literals are not blanked here -- capturing when nothing

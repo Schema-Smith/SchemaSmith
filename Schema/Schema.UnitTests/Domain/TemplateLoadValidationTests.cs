@@ -85,9 +85,9 @@ namespace Schema.UnitTests.Domain
             Assert.That(template.SchemaIdentificationScript, Is.Null.Or.Empty);
         }
 
-        [TestCase(Platform.MySQL)]
-        [TestCase(Platform.MariaDb)]
-        public void SchemaIdentificationScriptAlias_OnMySqlFamily_IsRecordedAsADeprecationNotice(Platform platform)
+        [TestCase(Platform.MySQL, "MySQL")]
+        [TestCase(Platform.MariaDb, "MariaDB")]
+        public void SchemaIdentificationScriptAlias_OnMySqlFamily_IsRecordedAsADeprecationNotice(Platform platform, string engineName)
         {
             var (templateFile, tablesPath) = Paths();
             _mockFile.Exists(templateFile).Returns(true);
@@ -100,6 +100,8 @@ namespace Schema.UnitTests.Domain
             Assert.That(template.DeprecationNotices[0].Code, Is.EqualTo("SS-DEP-001"));
             Assert.That(template.DeprecationNotices[0].Location, Is.EqualTo(templateFile));
             Assert.That(template.DeprecationNotices[0].Message, Does.Contain("DatabaseIdentificationScript"));
+            // #588: the log line said (MySQL) for a MariaDB product.
+            _mockProgressLog.Received().Warn(Arg.Is<string>(m => m.Contains($"({engineName})")));
         }
 
         [TestCase(Platform.SqlServer)]
@@ -478,6 +480,22 @@ namespace Schema.UnitTests.Domain
                 Template.Load("Main", MakeProduct(Platform.SqlServer)));
             Assert.That(ex!.Message, Does.Contain("CreateSchemaIfMissing"));
             Assert.That(ex.Message, Does.Contain("SchemaIdentificationScript"));
+        }
+
+        // On the MySQL family a schema is a database, so the flag is refused, naming the engine as it is written (#588).
+        [TestCase(Platform.MySQL, "MySQL")]
+        [TestCase(Platform.MariaDb, "MariaDB")]
+        public void CreateSchemaIfMissing_OnTheMySqlFamily_IsRefused_NamingTheEngine(Platform platform, string engineName)
+        {
+            var (templateFile, tablesPath) = Paths();
+            var json = @"{ ""Name"": ""Main"", ""CreateSchemaIfMissing"": true }";
+            _mockFile.Exists(templateFile).Returns(true);
+            _mockFile.ReadAllText(templateFile).Returns(json);
+            _mockDirectory.Exists(tablesPath).Returns(false);
+            _mockDirectory.Exists(Arg.Any<string>()).Returns(false);
+
+            var ex = Assert.Throws<PackageException>(() => Template.Load("Main", MakeProduct(platform)));
+            Assert.That(ex!.Message, Does.Contain($"does not apply on {engineName}: a schema is a database there"));
         }
 
         // Token names match case-insensitively, so Foo and foo in one scope are one token with two values. That failed

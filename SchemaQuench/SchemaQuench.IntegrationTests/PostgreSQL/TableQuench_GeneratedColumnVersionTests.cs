@@ -3,11 +3,12 @@
 using System;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_GeneratedColumnVersionTests : BaseTableQuenchTests
 {
     [OneTimeSetUp]
@@ -115,7 +116,7 @@ INSERT INTO ""{schema}"".""{tableName}"" (""Qty"") VALUES (5);";
 SET schemasmith.version_override = '16';
 CALL ""SchemaSmith"".""TableQuench""(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_WhatIf := false, p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := false);";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // New expression must be live and the existing row recomputed to 15 (5 * 3).
         cmd.CommandText = $@"RESET schemasmith.version_override;
@@ -165,7 +166,7 @@ INSERT INTO ""{schema}"".""{tableName}"" (""Qty"") VALUES (5);";
 """;
         cmd.CommandText = $@"CALL ""SchemaSmith"".""TableQuench""(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_WhatIf := false, p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := false);";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $@"SELECT ""DoubleQty"" FROM ""{schema}"".""{tableName}"" WHERE ""Qty"" = 5;";
         Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(15));
@@ -222,7 +223,7 @@ INSERT INTO ""{schema}"".""{tableName}"" (""Qty"") VALUES (5);";
 SET schemasmith.version_override = '16';
 CALL ""SchemaSmith"".""TableQuench""(p_ProductName := '{productName}', p_TableDefinitions := '{json.Replace("'", "''")}', p_WhatIf := false, p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := false);";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // New expression must be live: row recomputed to 15 (5 * 3).
         cmd.CommandText = $@"RESET schemasmith.version_override;

@@ -8,6 +8,7 @@
         "TenantLabel": "<*Query*>SELECT '{{SchemaName}}_label'"
     },
     "ScriptFolders": [
+        { "FolderPath" : "Setup", "QuenchSlot" : "Setup" },
         { "FolderPath" : "Before Scripts", "QuenchSlot" : "Before" },
         { "FolderPath" : "Procedures", "QuenchSlot" : "Objects" }
     ]

@@ -6,7 +6,7 @@ using Schema.Domain;
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_DropIndexesTests : BaseTableQuenchTests
 {
     // Two-phase: an index must be product-OWNED to take the removed-from-product path (a DDL-created

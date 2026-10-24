@@ -91,7 +91,8 @@ BEGIN TRY
                                                       -- same reason PAD_INDEX's is: CompressionType is ISNULL'd to 'NONE' in the
                                                       -- parse, so DATA_COMPRESSION always leads. Gated on 2022 by VALUE; only the
                                                       -- catalog READ needs kindle-time composition, because that names a column.
-                                                      CASE WHEN i.[XmlCompression] = 1 AND SchemaSmith.fn_ServerMajorVersion() >= 16 THEN ', XML_COMPRESSION=ON' ELSE '' END +
+                                                      CASE WHEN (i.[XmlCompression] = 1 OR (i.[Clustered] = 1 AND ISNULL(i.[ColumnStore], 0) = 0 AND ISNULL(xt.[XmlCompression], 0) = 1 AND ISNULL(xt.[MemoryOptimized], 0) = 0))
+                                                            AND SchemaSmith.fn_ServerMajorVersion() >= 16 THEN ', XML_COMPRESSION=ON' ELSE '' END +
                                                       CASE WHEN ol.[Options] <> '' THEN ', ' + ol.[Options] ELSE '' END +
 							                          ')'
                                                  WHEN ol.[Options] <> '' THEN ' WITH (' + ol.[Options] + ')'
@@ -132,7 +133,8 @@ BEGIN TRY
                                                       -- same reason PAD_INDEX's is: CompressionType is ISNULL'd to 'NONE' in the
                                                       -- parse, so DATA_COMPRESSION always leads. Gated on 2022 by VALUE; only the
                                                       -- catalog READ needs kindle-time composition, because that names a column.
-                                                      CASE WHEN i.[XmlCompression] = 1 AND SchemaSmith.fn_ServerMajorVersion() >= 16 THEN ', XML_COMPRESSION=ON' ELSE '' END +
+                                                      CASE WHEN (i.[XmlCompression] = 1 OR (i.[Clustered] = 1 AND ISNULL(i.[ColumnStore], 0) = 0 AND ISNULL(xt.[XmlCompression], 0) = 1 AND ISNULL(xt.[MemoryOptimized], 0) = 0))
+                                                            AND SchemaSmith.fn_ServerMajorVersion() >= 16 THEN ', XML_COMPRESSION=ON' ELSE '' END +
                                                       CASE WHEN ol.[Options] <> '' THEN ', ' + ol.[Options] ELSE '' END +
 							                          ')'
                                                  WHEN ol.[Options] <> '' THEN ' WITH (' + ol.[Options] + ')'
@@ -144,6 +146,9 @@ BEGIN TRY
                                        END + ';' + CHAR(13) + CHAR(10) +
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ''', ''created'', ' + CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');'
     FROM #Indexes i WITH (NOLOCK)
+    -- A clustered index is the table's storage, so it is created with the table's XML compression: left to inherit it,
+    -- the key came out uncompressed on SQL Server 2022 CU26 and the fixup then had to rebuild the table.
+    LEFT JOIN #Tables xt WITH (NOLOCK) ON xt.[Schema] = i.[Schema] AND xt.[Name] = i.[TableName]
     LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'index' AND ol.[Schema] = i.[Schema] AND ol.[TableName] = i.[TableName]
                                            AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
     WHERE NOT EXISTS (SELECT *

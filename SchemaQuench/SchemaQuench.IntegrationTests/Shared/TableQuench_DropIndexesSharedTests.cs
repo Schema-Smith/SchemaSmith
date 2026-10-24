@@ -197,7 +197,7 @@ public abstract class TableQuench_DropIndexesSharedTests : BaseTableQuenchTests
         cmd.CommandText =
             $"CALL SchemaSmith_ParseTableJson('{_mainDb}', '{withoutIndex.Replace("'", "''")}'); " +
             $"CALL SchemaSmith_ModifiedTableQuench('{IndexProduct}', '{_mainDb}', 0, 0, 0, 1, 1, 1, 0, 1, 1);";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         conn.Close();
     }

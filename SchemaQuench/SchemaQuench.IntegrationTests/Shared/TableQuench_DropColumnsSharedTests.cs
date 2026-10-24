@@ -84,6 +84,10 @@ public abstract class TableQuench_DropColumnsSharedTests : BaseTableQuenchTests
     [Test]
     public void TableQuench_ShouldHandleRemovingColumnWithTableLevelCheckConstraint()
     {
+        // Below MariaDB 10.2.22 a CHECK cannot be read, so it is not dropped ahead of a column it reads, and the engine refuses
+        // the column's drop. Documented in the SchemaQuench engine-compatibility notes.
+        if (Platform == Platform.MariaDb && !TestVersionGates.SupportsCheckConstraints(Platform, _connectionString))
+            Assert.Ignore("A CHECK cannot be read below MariaDB 10.2.22.");
         using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
@@ -173,6 +177,10 @@ public abstract class TableQuench_DropColumnsSharedTests : BaseTableQuenchTests
         cmd.ExecuteNonQuery();
 
         cmd.CommandTimeout = 300;
+        // MySQL before 8.0.16 parses a CHECK and ignores it, so the table is created with it everywhere but early MariaDB.
+        var check = Platform != Platform.MariaDb || TestVersionGates.SupportsCheckConstraints(Platform, _connectionString)
+            ? ", CONSTRAINT `CK_DropColumnWithTableCheckConstraint_Dependency` CHECK (`Column2` < `Column1`)"
+            : "";
         cmd.CommandText = $@"
 -- TableQuench_ShouldHandleRemovingColumnUsedInIndex
 CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnInIndex` (`Column1` INT NOT NULL, `Column2` INT);
@@ -185,7 +193,7 @@ ALTER TABLE `{TestSchema}`.`DropColumnInUniqueIndexInFK` ADD CONSTRAINT `FK_Drop
 -- TableQuench_ShouldHandleRemovingColumnWithDefault
 CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnWithDefault` (`Column1` INT NOT NULL, `Column2` INT DEFAULT 0);
 -- TableQuench_ShouldHandleRemovingColumnWithTableLevelCheckConstraint
-CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnWithTableCheckConstraint` (`Column1` INT NOT NULL, `Column2` INT, CONSTRAINT `CK_DropColumnWithTableCheckConstraint_Dependency` CHECK (`Column2` < `Column1`));
+CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnWithTableCheckConstraint` (`Column1` INT NOT NULL, `Column2` INT{check});
 -- TableQuench_ShouldHandleRemovingColumnWithForeignKey
 CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnWithFK` (`Column1` INT NOT NULL, `Column2` INT, PRIMARY KEY (`Column1`));
 CREATE UNIQUE INDEX `UQ_Column2` ON `{TestSchema}`.`DropColumnWithFK` (`Column2`);
@@ -242,17 +250,17 @@ CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnControl` (`Column1` INT NOT
             """;
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{json.Replace("'", "''")}')";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingTableAndColumnQuench('{TestSchema}', 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Trailing 0, 0 are DropUnknownIndexes and DropIndexesRemovedFromProduct. Index removal lives
         // in this procedure now, but this fixture is about COLUMN drops: the definitions above declare
         // no indexes, the catalog indexes created in the DDL block are unowned, and nothing here
         // recreates an index — so both flags stay off and no index is touched.
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{TestSchema}', 0, 0, 1, 1, 1, 1, 0, 0, 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Second quench: exercises table-level DropColumnsRemovedFromProduct flag.
         // DropColumnSuppressed carries "DropColumnsRemovedFromProduct": false → OrphanedColumn survives.
@@ -276,14 +284,14 @@ CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DropColumnControl` (`Column1` INT NOT
             """;
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{flagJson.Replace("'", "''")}')";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingTableAndColumnQuench('{TestSchema}', 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Index-drop flags off, as above — this quench only exercises column removal.
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{TestSchema}', 0, 0, 1, 1, 1, 1, 0, 0, 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         conn.Close();
     }

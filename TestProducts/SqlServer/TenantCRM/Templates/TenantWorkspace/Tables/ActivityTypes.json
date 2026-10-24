@@ -1,0 +1,32 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[ActivityTypes]",
+  "Columns": [
+    {
+      "Name": "[ActivityTypeID]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[TypeName]",
+      "DataType": "NVARCHAR(32)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_ActivityTypes]",
+      "PrimaryKey": true,
+      "Clustered": true,
+      "IndexColumns": "[ActivityTypeID]"
+    },
+    {
+      "Name": "[UQ_ActivityTypes_TypeName]",
+      "Unique": true,
+      "IndexColumns": "[TypeName]"
+    }
+  ],
+  "DataDelivery": {
+    "ContentFile": "Tables/ActivityTypes.tabledata",
+    "MergeType": "Insert",
+    "MatchColumns": "[ActivityTypeID]"
+  }
+}

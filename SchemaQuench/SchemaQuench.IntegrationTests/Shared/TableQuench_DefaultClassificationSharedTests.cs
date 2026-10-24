@@ -41,9 +41,11 @@ public abstract class TableQuench_DefaultClassificationSharedTests : BaseTableQu
         cmd.ExecuteNonQuery();
     }
 
+    // Distinct lines: a deploy retried on transient contention writes the line of a statement it had not yet run a second
+    // time, which is one column altered, not two. A second column still has a line of its own.
     private static int ColumnDdlFor(IDbCommand cmd, string table)
     {
-        cmd.CommandText = $"SELECT COUNT(*) FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%MODIFY COLUMN%' AND Message LIKE '%{table}%'";
+        cmd.CommandText = $"SELECT COUNT(DISTINCT Message) FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%MODIFY COLUMN%' AND Message LIKE '%{table}%'";
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 

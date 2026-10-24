@@ -1,0 +1,41 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[dbo]",
+  "Name": "[GlobalAuditLog]",
+  "Columns": [
+    {
+      "Name": "[AuditID]",
+      "DataType": "BIGINT IDENTITY(1,1)"
+    },
+    {
+      "Name": "[TenantName]",
+      "DataType": "NVARCHAR(64)"
+    },
+    {
+      "Name": "[EventType]",
+      "DataType": "NVARCHAR(32)"
+    },
+    {
+      "Name": "[EventTime]",
+      "DataType": "DATETIME2(0)",
+      "Default": "SYSUTCDATETIME()"
+    },
+    {
+      "Name": "[Detail]",
+      "DataType": "NVARCHAR(512)",
+      "Nullable": true
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_GlobalAuditLog]",
+      "PrimaryKey": true,
+      "Clustered": true,
+      "IndexColumns": "[AuditID]"
+    },
+    {
+      "Name": "[IX_GlobalAuditLog_Tenant_Time]",
+      "IndexColumns": "[TenantName],[EventTime]"
+    }
+  ]
+}

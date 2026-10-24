@@ -82,11 +82,11 @@ public abstract class TableQuench_FullTextIndexSharedTests
 
         // Parse JSON and run IndexOnlyQuench (which handles FULLTEXT indexes)
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act - IndexOnlyQuench creates the FULLTEXT index
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - FULLTEXT index should exist
         command.CommandText = $@"
@@ -113,11 +113,11 @@ public abstract class TableQuench_FullTextIndexSharedTests
 
         // Parse JSON
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act - IndexOnlyQuench
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - FULLTEXT index should exist
         command.CommandText = $@"
@@ -151,11 +151,11 @@ public abstract class TableQuench_FullTextIndexSharedTests
 
         // Parse JSON
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - FULLTEXT index should exist
         command.CommandText = $@"
@@ -185,11 +185,11 @@ public abstract class TableQuench_FullTextIndexSharedTests
         }}]";
 
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - FULLTEXT index should exist with 3 columns
         command.CommandText = $@"
@@ -234,10 +234,10 @@ public abstract class TableQuench_FullTextIndexSharedTests
             }}]";
 
             command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-            command.ExecuteNonQuery();
+            TransientRetry.Run(() => command.ExecuteNonQuery());
 
             command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-            command.ExecuteNonQuery();
+            TransientRetry.Run(() => command.ExecuteNonQuery());
 
             // Exactly one FULLTEXT index — the gated-true (non-ngram) variant was selected
             command.CommandText = $@"
@@ -269,7 +269,7 @@ public abstract class TableQuench_FullTextIndexSharedTests
         command.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
         command.ExecuteNonQuery();
         command.CommandText = $"CALL SchemaSmith_TableQuench('FullTextProduct', '{_testDb}', '{json.Replace("'", "''")}', 0, {dropUnknownIndexes}, 0)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
     }
 
     private string FullText(IDbCommand command)
@@ -342,9 +342,9 @@ public abstract class TableQuench_FullTextIndexSharedTests
         {
             var json = $$"""[{ "Name": "`{{_testTableName}}`", "FullTextIndexes": [ { "Name": "ft_io", "Columns": "{{columns}}" } ] }]""";
             command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{json.Replace("'", "''")}')";
-            command.ExecuteNonQuery();
+            TransientRetry.Run(() => command.ExecuteNonQuery());
             command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-            command.ExecuteNonQuery();
+            TransientRetry.Run(() => command.ExecuteNonQuery());
         }
         IndexOnly("content");
         command.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
@@ -368,11 +368,11 @@ public abstract class TableQuench_FullTextIndexSharedTests
         }}]";
 
         command.CommandText = $"CALL SchemaSmith_ParseTableJson('{_testDb}', '{tableJson.Replace("'", "''")}')";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Act
         command.CommandText = $"CALL SchemaSmith_IndexOnlyQuench('TestProduct', '{_testDb}', 0, 0, 1)";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Assert - FULLTEXT index should be tracked in ProductOwnership
         command.CommandText = $@"

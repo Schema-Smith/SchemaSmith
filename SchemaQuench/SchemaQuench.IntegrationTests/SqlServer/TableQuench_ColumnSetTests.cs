@@ -20,7 +20,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 // classified as modified, ModifiedTableQuench emits a "  Altering Column <schema>.<table>.<column>"
 // RAISERROR (captured here via SqlConnection.InfoMessage). A converged table must emit none.
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ColumnSetTests : BaseTableQuenchTests
 {
     [Test]

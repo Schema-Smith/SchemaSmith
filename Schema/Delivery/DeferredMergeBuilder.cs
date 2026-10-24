@@ -24,6 +24,8 @@ internal static class DeferredMergeBuilder
         string contentEncoding = "Json", bool insertMissingOnly = false)
     {
         var isXml = string.Equals(contentEncoding, "Xml", StringComparison.OrdinalIgnoreCase);
+        // As MergeScriptHelper.BuildMergeScript does: an object or array value arrives compact (#567).
+        if (!isXml) tableData = JsonText.Minify(tableData);
 
         if (platform.Equals("SqlServer", StringComparison.OrdinalIgnoreCase))
             return BuildSqlServer(helper, cmd, schemaOrDb, tableName, tableData, keyColumns, disableTriggers, deferredColumns, isXml);
@@ -107,7 +109,9 @@ internal static class DeferredMergeBuilder
             if (deferredSet.Contains(c.Name))
                 return $"CAST(NULL AS {c.JsonParseType}) AS [{c.Name}]";
             if (c.IsGeometry)
-                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText([{c.Name}], [{c.Name}.STSrid]) AS [{c.Name}]";
+                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText([{c.Name}], COALESCE([{c.Name}.STSrid], {MergeScriptHelper.DefaultSridSqlServer(c.DataType)})) AS [{c.Name}]";
+            if (MergeScriptHelper.IsSqlServerCharacterType(c.DataType))
+                return $"COALESCE([{c.Name}], [{c.Name}{MergeScriptHelper.AsJsonSuffix}]) AS [{c.Name}]";
             return $"[{c.Name}]";
         }));
     }
@@ -126,7 +130,7 @@ internal static class DeferredMergeBuilder
             if (deferredSet.Contains(c.Name))
                 return $"CAST(NULL AS {c.JsonParseType}) AS [{c.Name}]";
             if (c.IsGeometry)
-                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText(Src.n.value('{Node(c.Name)}','NVARCHAR(4000)'), Src.n.value('{Node(c.Name + ".STSrid")}','INT')) AS [{c.Name}]";
+                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText(Src.n.value('{Node(c.Name)}','NVARCHAR(4000)'), COALESCE(Src.n.value('{Node(c.Name + ".STSrid")}','INT'), {MergeScriptHelper.DefaultSridSqlServer(c.DataType)})) AS [{c.Name}]";
             if (c.IsBinary)
                 return $"Src.n.value('xs:base64Binary({Node(c.Name)})','{c.JsonParseType}') AS [{c.Name}]";
             if (c.IsXml)
@@ -350,7 +354,8 @@ internal static class DeferredMergeBuilder
         var selectExpressions = string.Join(", ", columns.Select(c =>
             deferredSet.Contains(c.Name) ? "NULL" : MergeScriptHelper.BuildSingleSelectExpressionMySql(c)));
         var jsonSource = MergeScriptHelper.BuildJsonRowSourceMySql(columns, versionNum);
-        tableData = MergeScriptHelper.DecodeSurrogateEscapesMySql(MergeScriptHelper.QuoteDecimalNumbersMySql(tableData, versionNum, columns), versionNum);
+        tableData = MergeScriptHelper.DecodeSurrogateEscapesMySql(MergeScriptHelper.QuoteDecimalNumbersMySql(
+            MergeScriptHelper.StringifyStructuredTextValuesMySql(tableData, columns), versionNum, columns), versionNum);
 
         var updateCols = columns.Where(c => !c.IsAutoIncrement).Select(c =>
             deferredSet.Contains(c.Name) ? $"`{c.Name}` = NULL" : $"`{c.Name}` = VALUES(`{c.Name}`)");

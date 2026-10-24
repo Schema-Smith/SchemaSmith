@@ -336,15 +336,15 @@ public abstract class TableQuench_AddMissingItemsSharedTests : BaseTableQuenchTe
         try
         {
             cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{json.Replace("'", "''")}')";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             // Index rename/modify/removal live in ModifiedTableQuench; the create half stays below.
             // Every non-index drop flag is 0 so this call cannot drop the table or any column the
             // test did not previously drop, and DropIndexesRemovedFromProduct carries over the 1 the
             // MissingIndexesAndConstraintsQuench call used to pass.
             cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{TestSchema}', 0, 0, 0, 1, 1, 1, 0, 0, 1)";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingIndexesAndConstraintsQuench('{_productName}', '{TestSchema}', 0, 1)";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
             // SchemaSmith_StatusMessages is keyed by CONNECTION_ID(); query on the SAME connection.
             cmd.CommandText = "SELECT COUNT(*) FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%(variant: Modern engines)%'";
@@ -674,21 +674,21 @@ CREATE TABLE IF NOT EXISTS `{TestSchema}`.`AddMyIndexIO` (`Id` INT NOT NULL);
             """;
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{json.Replace("'", "''")}')";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingTableAndColumnQuench('{TestSchema}', 0)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Trailing 0, 1 are DropUnknownIndexes and DropIndexesRemovedFromProduct: index removal now
         // happens here, and the 1 carries over from the MissingIndexesAndConstraintsQuench call below.
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{TestSchema}', 0, 0, 1, 1, 1, 1, 0, 0, 1)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingIndexesAndConstraintsQuench('{_productName}', '{TestSchema}', 0, 1)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ForeignKeyQuench('{_productName}', '{TestSchema}', 0, 0, 1)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Index Only
         var jsonIO = """
@@ -703,10 +703,10 @@ CREATE TABLE IF NOT EXISTS `{TestSchema}`.`AddMyIndexIO` (`Id` INT NOT NULL);
             """;
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{jsonIO.Replace("'", "''")}')";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_IndexOnlyQuench('{_productName}', '{TestSchema}', 0, 0, 1)";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         conn.Close();
     }
@@ -724,5 +724,40 @@ CREATE TABLE IF NOT EXISTS `{TestSchema}`.`AddMyIndexIO` (`Id` INT NOT NULL);
             conn.Close();
         }
         catch { /* Ignore cleanup errors */ }
+    }
+
+    // An index the package declares but a ShouldApplyExpression turns off was dropped as "unknown", which reads as an
+    // index nobody declared.
+    [Test]
+    public void ADeclaredIndexGatedOff_IsDroppedAsNotDeclaredForThisDeploy_NotAsUnknown()
+    {
+        var table = $"gated_{Guid.NewGuid():N}"[..14];
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        string Json(string gate) => $$"""
+            [{ "Name": "{{table}}",
+               "Columns": [ { "Name": "id", "DataType": "INT", "Nullable": false }, { "Name": "region", "DataType": "INT", "Nullable": true } ],
+               "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" },
+                            { "Name": "ix_region", "IndexColumns": "region"{{gate}} } ] }]
+            """;
+        try
+        {
+            RunTableQuenchProc(cmd, Json(""));
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(cmd, Json(", \"ShouldApplyExpression\": \"0\""));
+
+            cmd.CommandText = $"SELECT COALESCE(GROUP_CONCAT(Message SEPARATOR ' | '), '') FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%ix_region%'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo($"  Drop index not declared for this deploy: {table}.ix_region"));
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{table}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{table}%'";
+            cmd.ExecuteNonQuery();
+        }
     }
 }

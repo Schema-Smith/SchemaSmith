@@ -347,6 +347,14 @@ public class InvisibleColumnGatingTests
         });
     }
 
+    // RENAME COLUMN arrives at 10.5.2. A newer server is told 10.5 to reach the fallback; a real one below is already in
+    // the band, and telling it 10.5 would claim catalog it lacks (CHECK_CONSTRAINTS.LEVEL, read from 10.5).
+    private void SimulateRenameColumnFallbackBand()
+    {
+        if (Scalar("SELECT SchemaSmith_ServerVersionPatchNum()") >= 100502)
+            SetVersionOverride(1005);
+    }
+
     [Test]
     public void RenameOfInvisibleColumnWithDefault_InRenameColumnFallbackBand_StaysInvisible()
     {
@@ -376,7 +384,7 @@ public class InvisibleColumnGatingTests
 
         // Step 2: redeploy with the column renamed, under the override that lands exactly in the
         // rename-fallback / invisible-column-live band.
-        SetVersionOverride(1005);
+        SimulateRenameColumnFallbackBand();
         Assert.Multiple(() =>
         {
             Assert.That(Scalar("SELECT SchemaSmith_SupportsRenameColumn()"), Is.EqualTo(0),
@@ -441,7 +449,7 @@ public class InvisibleColumnGatingTests
 
         Exec($"DELETE FROM SchemaSmith_StatusMessages WHERE Message LIKE '%{TableName}%'");
 
-        SetVersionOverride(1005);
+        SimulateRenameColumnFallbackBand();
         Assert.Multiple(() =>
         {
             Assert.That(Scalar("SELECT SchemaSmith_SupportsRenameColumn()"), Is.EqualTo(0),

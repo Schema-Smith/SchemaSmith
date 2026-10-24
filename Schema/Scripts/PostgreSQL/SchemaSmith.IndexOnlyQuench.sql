@@ -22,6 +22,7 @@ AS $$
 DECLARE
   table_json TEXT = CASE WHEN LEFT(p_TableDefinitions, 1) = '[' THEN p_TableDefinitions ELSE '[' || p_TableDefinitions || ']' END;
   sql_script TEXT = '';
+  missing_tablespaces TEXT;
 BEGIN
     -- Dropped first like every other temp table in this procedure. A PostgreSQL TEMPORARY table lives for
     -- the SESSION, not the call, so without this a second IndexOnlyQuench on the same connection dies with
@@ -126,6 +127,16 @@ BEGIN
       FROM temp_indexes
       WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, false);
+
+    -- #571: a declared tablespace that does not exist failed mid-deploy with the engine's 42704. Refused here, before any
+    -- DDL, naming what declares it, as SQL Server refuses a missing partition scheme or filegroup.
+    missing_tablespaces := (SELECT STRING_AGG(d.what || ' declares tablespace ' || d.ts, '; ' ORDER BY d.what)
+                              FROM (SELECT 'index ' || i."TableSchema" || '.' || i."TableName" || '.' || i."Name" AS what, i."Tablespace" AS ts
+                                  FROM temp_indexes i JOIN temp_tables t ON t."Schema" = i."TableSchema" AND t."Name" = i."TableName") d
+                             WHERE d.ts <> '' AND NOT EXISTS (SELECT 1 FROM pg_tablespace s WHERE s.spcname IN (d.ts, LOWER(d.ts))));
+    IF missing_tablespaces IS NOT NULL THEN
+      RAISE EXCEPTION 'Tablespace not found: %. Create it, or remove Tablespace from the declaration.', missing_tablespaces;
+    END IF;
 
     -- Unsupported-feature policy: NULLS NOT DISTINCT requires PostgreSQL 15. On an older target the
     -- effective column above already omits the clause; here the policy decides how to surface that.

@@ -77,7 +77,8 @@ BEGIN
                         ELSE NULL
                     END AS [CompressionType],
                     CASE WHEN i.fill_factor > 0 THEN i.fill_factor ELSE NULL END AS [FillFactor],
-                    CASE WHEN i.is_padded = 1 THEN 'true' ELSE 'false' END AS [PadIndex]
+                    CASE WHEN i.is_padded = 1 THEN 'true' ELSE 'false' END AS [PadIndex],
+                    (SELECT CONVERT(NVARCHAR(MAX), ep.[value]) FROM sys.extended_properties ep WHERE ep.class = 7 AND ep.major_id = i.object_id AND ep.minor_id = i.index_id AND ep.[name] = 'MS_Description') AS [Description]
                   FROM sys.indexes i
                   LEFT JOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id AND p.partition_number = 1
                  WHERE i.object_id = v.object_id AND i.type > 0

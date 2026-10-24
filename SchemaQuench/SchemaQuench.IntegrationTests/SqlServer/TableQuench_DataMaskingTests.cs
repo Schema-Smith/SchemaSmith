@@ -3,11 +3,12 @@
 using System;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_DataMaskingTests : BaseTableQuenchTests
 {
     [Test]
@@ -48,7 +49,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify masking was applied
         cmd.CommandText = $"SELECT masking_function FROM sys.masked_columns WHERE [object_id] = OBJECT_ID('dbo.{tableName}') AND [name] = 'Email'";
@@ -96,7 +97,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify masking was removed
         cmd.CommandText = $"SELECT COUNT(*) FROM sys.masked_columns WHERE [object_id] = OBJECT_ID('dbo.{tableName}') AND [name] = 'SSN'";
@@ -144,7 +145,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify mask was changed
         cmd.CommandText = $"SELECT masking_function FROM sys.masked_columns WHERE [object_id] = OBJECT_ID('dbo.{tableName}') AND [name] = 'Phone'";
@@ -188,7 +189,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify new column has mask
         cmd.CommandText = $"SELECT masking_function FROM sys.masked_columns WHERE [object_id] = OBJECT_ID('dbo.{tableName}') AND [name] = 'CreditCard'";
@@ -231,12 +232,12 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
         // First quench — apply mask
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Second quench — same definition, should not error
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify mask still present
         cmd.CommandText = $"SELECT masking_function FROM sys.masked_columns WHERE [object_id] = OBJECT_ID('dbo.{tableName}') AND [name] = 'Val'";

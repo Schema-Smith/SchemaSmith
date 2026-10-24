@@ -123,8 +123,9 @@ BEGIN
       -- Drop any foreign key that REFERENCES a table about to be removed (from any table), so the
       -- table drop below does not fail on a still-present inbound dependency. Same removed-table
       -- predicate as the drop pass; catalog-driven so it is not limited to product-declared parents.
-      SELECT STRING_AGG('ALTER TABLE ' || "SchemaSmith"."QuoteName"(pn.nspname) || '.' || "SchemaSmith"."QuoteName"(pc.relname) || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(con.conname) || ';' || CHR(10) ||
-                        'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || pn.nspname || '.' || pc.relname || '.' || con.conname || ''', ''dropped'');', CHR(10))
+      SELECT STRING_AGG('RAISE NOTICE ''  Foreign Key ' || REPLACE(REPLACE(pn.nspname || '.' || pc.relname || '.' || con.conname, '''', ''''''), '%', '%%') || ' references a table no longer in product'';' || CHR(10) ||
+                        'ALTER TABLE ' || "SchemaSmith"."QuoteName"(pn.nspname) || '.' || "SchemaSmith"."QuoteName"(pc.relname) || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(con.conname) || ';' || CHR(10) ||
+                        'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || REPLACE(pn.nspname || '.' || pc.relname || '.' || con.conname, '''', '''''') || ''', ''dropped'');', CHR(10))
         INTO sql_script
         FROM temp_product_ownership tp
         JOIN pg_class fc       ON fc.relname = tp."TableName"
@@ -165,10 +166,12 @@ BEGIN
       -- so this pass only considers tables owned by the current (template, schema)
       -- iteration. No additional restriction needed here; the predicate already excludes
       -- other templates' tables AND other tenants' tables of the same template.
-      SELECT STRING_AGG('RAISE NOTICE ''  Table ' || tp."Schema" || '.' || tp."TableName" || ' no longer in product'';' || CHR(10) ||
-                        CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'CustomTableDrop' AND n.nspname = 'SchemaSmith' )
-                             THEN 'CALL "SchemaSmith"."CustomTableDrop"(''' || tp."Schema" || ''', ''' || tp."TableName" || ''');'
-                             ELSE 'DROP TABLE IF EXISTS ' || "SchemaSmith"."QuoteName"(tp."Schema") || '.' || "SchemaSmith"."QuoteName"(tp."TableName") || ';'
+      -- A plain drop says so, and a hooked one names the hook that has the table, as on SQL Server and MySQL.
+      SELECT STRING_AGG(CASE WHEN EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'CustomTableDrop' AND n.nspname = 'SchemaSmith' )
+                             THEN 'RAISE NOTICE ''  Handing table ' || tp."Schema" || '.' || tp."TableName" || ' to SchemaSmith.CustomTableDrop (no longer in product)'';' || CHR(10) ||
+                                  'CALL "SchemaSmith"."CustomTableDrop"(''' || tp."Schema" || ''', ''' || tp."TableName" || ''');'
+                             ELSE 'RAISE NOTICE ''  Dropping table ' || tp."Schema" || '.' || tp."TableName" || ' (no longer in product)'';' || CHR(10) ||
+                                  'DROP TABLE IF EXISTS ' || "SchemaSmith"."QuoteName"(tp."Schema") || '.' || "SchemaSmith"."QuoteName"(tp."TableName") || ';'
                              END || CHR(10) ||
                         'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''table'', ''' || tp."Schema" || '.' || tp."TableName" || ''', ''dropped'');', CHR(10))
         INTO sql_script
@@ -422,7 +425,7 @@ BEGIN
                             OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", ''))
                   -- Declared identity sequence options that differ from the live sequence (only the ones declared).
                   OR (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
-                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> ''))) AS "ModificationPasses",
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", c."TableSchema", c."TableName", c."Name") <> ''))) AS "ModificationPasses",
                      -- ALWAYS fires on ANY detected column change, which includes a column present live
                      -- but absent from the package -- a rebuild delivers that removal as part of building
                      -- the replacement from the declared definition.
@@ -674,7 +677,11 @@ BEGIN
                        WHERE ek."TableSchema" = fk2."TableSchema"
                          AND ek."TableName" = fk2."TableName"
                          AND ek."KeyName" = fk2."Name")
-             OR (p_DropForeignKeysRemovedFromProduct AND COALESCE(tt."DropForeignKeysRemovedFromProduct", TRUE)));
+             OR (p_DropForeignKeysRemovedFromProduct AND COALESCE(tt."DropForeignKeysRemovedFromProduct", TRUE)))
+        -- WhatIf drops nothing, so a key the inbound pass would drop is still here; preview it once.
+        AND (NOT p_WhatIf OR NOT EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                                          WHERE a."SessionId" = pg_backend_pid() AND a."ObjectType" = 'foreignKey' AND a."ActionType" = 'wouldDrop'
+                                            AND a."ObjectName" = ek."TableSchema" || '.' || ek."TableName" || '.' || ek."KeyName"));
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     -- #363: WhatIf twin of the embedded 'foreignKey'/'dropped' audit above; same source/predicate.
@@ -702,7 +709,11 @@ BEGIN
                            WHERE ek."TableSchema" = fk2."TableSchema"
                              AND ek."TableName" = fk2."TableName"
                              AND ek."KeyName" = fk2."Name")
-                 OR (p_DropForeignKeysRemovedFromProduct AND COALESCE(tt."DropForeignKeysRemovedFromProduct", TRUE)));
+                 OR (p_DropForeignKeysRemovedFromProduct AND COALESCE(tt."DropForeignKeysRemovedFromProduct", TRUE)))
+        -- WhatIf drops nothing, so a key the inbound pass would drop is still here; preview it once.
+        AND (NOT p_WhatIf OR NOT EXISTS (SELECT 1 FROM "SchemaSmith"."ChangeAudit" a
+                                          WHERE a."SessionId" = pg_backend_pid() AND a."ObjectType" = 'foreignKey' AND a."ActionType" = 'wouldDrop'
+                                            AND a."ObjectName" = ek."TableSchema" || '.' || ek."TableName" || '.' || ek."KeyName"));
     END IF;
 
     -- A changed DEFERRABLE / INITIALLY DEFERRED is applied in place: ALTER CONSTRAINT changes it without re-validating
@@ -1673,7 +1684,7 @@ BEGIN
         FROM temp_columns c
         JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema" AND ec."TableName" = c."TableName" AND ec."ColumnName" = c."Name"
        WHERE (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
-                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> '');
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", c."TableSchema", c."TableName", c."Name") <> '');
 
     -- PG-095. A column cannot become nullable while it is in the index the table uses as its replica identity, and the
     -- declared identity is applied later (ReplicaIdentityQuench), so a package that moves the identity off that index and
@@ -1720,7 +1731,7 @@ BEGIN
                   OR (COALESCE(ic."Compression", '') != '' AND COALESCE(ic."Compression", '') != COALESCE(iec."Compression", ''))
                   -- Declared identity sequence options that differ from the live sequence (only the ones declared).
                   OR (COALESCE(ic."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(iec."Generated", '') LIKE 'GENERATED%IDENTITY%'
-                      AND "SchemaSmith"."IdentityOptionChanges"(ic."Generated", pg_get_serial_sequence(QUOTE_IDENT(ic."TableSchema") || '.' || QUOTE_IDENT(ic."TableName"), ic."Name")::regclass) <> ''))) || ')'';' || CHR(10) ||
+                      AND "SchemaSmith"."IdentityOptionChanges"(ic."Generated", ic."TableSchema", ic."TableName", ic."Name") <> ''))) || ')'';' || CHR(10) ||
            -- A column converging to serial needs its sequence first: created and owned by the column here, made the
            -- default by the ALTER below. IF NOT EXISTS keeps an earlier half-applied run harmless.
            COALESCE((SELECT STRING_AGG('CREATE SEQUENCE IF NOT EXISTS ' || QUOTE_IDENT(sc."TableSchema") || '.' || QUOTE_IDENT(sc."TableName" || '_' || sc."Name" || '_seq') ||
@@ -1774,8 +1785,8 @@ BEGIN
                            ELSE '' END ||
                       -- The declared sequence options, in place (only those declared, and only where they differ).
                       CASE WHEN (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
-                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> '')
-                           THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) || ','
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", c."TableSchema", c."TableName", c."Name") <> '')
+                           THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || "SchemaSmith"."IdentityOptionChanges"(c."Generated", c."TableSchema", c."TableName", c."Name") || ','
                            ELSE '' END)), ''), ',' || CHR(10)) || ';' AS "code"
       FROM temp_columns c
       JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema"
@@ -1802,7 +1813,7 @@ BEGIN
           OR (COALESCE(c."Compression", '') != '' AND COALESCE(c."Compression", '') != COALESCE(ec."Compression", ''))
                   -- Declared identity sequence options that differ from the live sequence (only the ones declared).
                   OR (COALESCE(c."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(ec."Generated", '') LIKE 'GENERATED%IDENTITY%'
-                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass) <> ''))
+                      AND "SchemaSmith"."IdentityOptionChanges"(c."Generated", c."TableSchema", c."TableName", c."Name") <> ''))
         AND NOT (-- PG < 17 generated-expression change on a generated column (status unchanged): handled SOLELY by the
                  -- drop-and-re-add pass above, which re-adds the FULL target definition. Exclude such columns from the
                  -- ALTER pass entirely — regardless of whether type/collation/nullability ALSO changed (the re-add carries

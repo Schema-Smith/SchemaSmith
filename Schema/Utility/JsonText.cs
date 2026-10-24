@@ -48,4 +48,33 @@ public static class JsonText
     public static XDocument ToXDocument(string json, string rootElement) =>
         JsonConvert.DeserializeObject<XDocument>(json,
             Settings(new JsonSerializerSettings { Converters = { new XmlNodeConverter { DeserializeRootElementName = rootElement } } }));
+
+    /// <summary>
+    /// The JSON text with the whitespace between tokens removed. Done on the text, not by parsing and writing it back,
+    /// so every number keeps its digits exactly as written; whitespace inside a string is kept.
+    /// </summary>
+    public static string Minify(string json)
+    {
+        if (string.IsNullOrEmpty(json)) return json;
+        var sb = new System.Text.StringBuilder(json.Length);
+        var inString = false;
+        for (var i = 0; i < json.Length; i++)
+        {
+            var ch = json[i];
+            if (inString)
+            {
+                sb.Append(ch);
+                if (ch == '\\' && i + 1 < json.Length) sb.Append(json[++i]);
+                else if (ch == '"') inString = false;
+            }
+            else if (ch == '"')
+            {
+                inString = true;
+                sb.Append(ch);
+            }
+            else if (!char.IsWhiteSpace(ch))
+                sb.Append(ch);
+        }
+        return sb.ToString();
+    }
 }

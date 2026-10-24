@@ -7,6 +7,7 @@ using Schema.DataAccess;
 using Schema.Delivery;
 using Schema.Domain;
 using Schema.Domain.SqlServer;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -17,7 +18,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// back, since SQL Server will not keep a spatial index without one. One the package stops declaring is dropped.
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_SpatialIndexTests : BaseTableQuenchTests
 {
     private const string GeometryGrid = """
@@ -71,7 +72,7 @@ public class TableQuench_SpatialIndexTests : BaseTableQuenchTests
     private static SqlServerTable Extract(IDbCommand cmd, string table)
     {
         cmd.CommandText = $"EXEC [SchemaSmith].GenerateTableJSON @p_Schema = 'dbo', @p_Table = '{table}'";
-        using var reader = cmd.ExecuteReader();
+        using var reader = TransientRetry.Run(() => cmd.ExecuteReader());
         var json = "";
         while (reader.Read()) json += reader.GetString(0);
         return (SqlServerTable)PlatformDeserializer.DeserializeTable(json, Platform.SqlServer);
@@ -283,7 +284,7 @@ public class TableQuench_SpatialIndexTests : BaseTableQuenchTests
             Assert.That(Shape(cmd, table), Does.Contain("SX_Adhoc"), "kept by default: the package does not own it");
 
             cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{_productName}', @TableDefinitions = '{Json(table, GeographyAuto).Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 1";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             Assert.That(Shape(cmd, table), Is.EqualTo("SX_Location:GEOGRAPHY_AUTO_GRID:-:-:12:0"), "dropped under DropUnknownIndexes");
         }, table);
     }

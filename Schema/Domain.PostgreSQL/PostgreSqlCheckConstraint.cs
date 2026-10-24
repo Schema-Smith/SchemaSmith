@@ -18,19 +18,16 @@ namespace Schema.Domain.PostgreSQL
         [JsonProperty(Order = 101)]
         public bool InitiallyDeferred { get; set; }
 
-        [SchemaProperty(Description = "false declares the constraint NOT ENFORCED (PostgreSQL 18): it is kept but not checked. Below 18 it deploys enforced under UnsupportedFeaturePolicy. Omitted means enforced. PostgreSQL cannot alter a check constraint's enforceability, so a change drops and re-creates it.")]
-        [JsonProperty(Order = 102)]
-        [DefaultValue(true)]
-        public bool Enforced { get; set; } = true;
+        [SchemaProperty(Description = "false declares the constraint NOT ENFORCED (PostgreSQL 18): it is kept but not checked. Below 18 it deploys enforced under UnsupportedFeaturePolicy. Omitted leaves an existing constraint as it is, and a new one is enforced. PostgreSQL cannot alter a check constraint's enforceability, so a change drops and re-creates it.")]
+        [JsonProperty(Order = 102, NullValueHandling = NullValueHandling.Ignore)]
+        public bool? Enforced { get; set; }
 
-        [SchemaProperty(Description = "false creates the constraint NOT VALID, so the rows already in the table are not checked. true over a NOT VALID constraint validates it, which fails when any row violates it. Omitted means validated.")]
-        [JsonProperty(Order = 103)]
-        [DefaultValue(true)]
-        public bool Validated { get; set; } = true;
+        [SchemaProperty(Description = "false creates the constraint NOT VALID, so the rows already in the table are not checked. true over a NOT VALID constraint validates it, which fails when any row violates it. Omitted leaves an existing constraint as it is, and a new one is validated.")]
+        [JsonProperty(Order = 103, NullValueHandling = NullValueHandling.Ignore)]
+        public bool? Validated { get; set; }
 
         [SchemaProperty(Description = "NO INHERIT: the constraint is not inherited by child tables. Create-time only, so a change drops and re-creates the constraint.")]
-        [JsonProperty(Order = 104)]
-        [DefaultValue(false)]
-        public bool NoInherit { get; set; }
+        [JsonProperty(Order = 104, NullValueHandling = NullValueHandling.Ignore)]
+        public bool? NoInherit { get; set; }
     }
 }

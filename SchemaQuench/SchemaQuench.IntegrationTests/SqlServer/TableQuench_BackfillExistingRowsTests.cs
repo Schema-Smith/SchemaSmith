@@ -12,7 +12,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// where "new nullable column, existing rows get the default" has to be asked for.
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_BackfillExistingRowsTests : BaseTableQuenchTests
 {
     private const string TableName = "BackfillRows";

@@ -24,7 +24,11 @@ cd "$(dirname "$0")/.." || exit 1
 # schemasmith-linux-leg-nuget so later runs skip the restore; `docker volume rm schemasmith-linux-leg-nuget`
 # reclaims it. Containers are memory-capped and removed with their volumes on exit.
 #
-# Usage: scripts/run-linux-leg.sh [mysql57] [mariadb102]     (no argument = both)
+# Usage: scripts/run-linux-leg.sh [mysql57] [mariadb102] [mysql80lctn1] [mariadb114lctn1]     (no argument = the first two)
+#
+# The lctn1 legs are CI's lower_case_table_names=1 job. They belong here rather than on the Windows host: a test that
+# names a file after a database passes on NTFS whatever the case and fails CI's ext4 when the server stores the name in
+# lowercase (a checkpoint the deploy never found, PR #592). scripts/run-lctn1-legs.sh runs them through this script.
 # Exit status is non-zero if any leg's `dotnet test` exits non-zero -- not only on a failed-test summary, since a
 # teardown error exits 1 under a "Passed!" line.
 set -u
@@ -80,6 +84,7 @@ RUNNER
 
 overall=0
 for leg in "${legs[@]}"; do
+  args=()
   case "$leg" in
     mysql57)    image='mysql:5.7';    category='MySQL'
                 envs=(-e SmithySettings_MySQL__ConnectionProperties__SslMode=None)
@@ -88,25 +93,44 @@ for leg in "${legs[@]}"; do
                 envs=(-e SmithySettings_MariaDB__ConnectionProperties__SslMode=None -e SmithySettings_MariaDB__Port=3306)
                 # 10.2 predates the MARIADB_* variables; CI's MARIADB_* names are honoured from 10.3 on.
                 dbenv=(-e MYSQL_ROOT_PASSWORD="$TEST_PASSWORD" -e MYSQL_USER="$TEST_USER" -e MYSQL_PASSWORD="$TEST_PASSWORD" -e MYSQL_DATABASE=TestMain) ;;
-    *) echo "Unknown leg '$leg' (expected mysql57 or mariadb102)"; overall=1; continue ;;
+    mysql80lctn1)    image='mysql:8.0';    category='MySQL'
+                     envs=()
+                     dbenv=(-e MYSQL_ROOT_PASSWORD="$TEST_PASSWORD" -e MYSQL_USER="$TEST_USER" -e MYSQL_PASSWORD="$TEST_PASSWORD" -e MYSQL_DATABASE=TestMain)
+                     args=(--lower-case-table-names=1) ;;
+    mariadb114lctn1) image='mariadb:11.4'; category='MariaDb'
+                     envs=(-e SmithySettings_MariaDB__Port=3306)
+                     dbenv=(-e MARIADB_ROOT_PASSWORD="$TEST_PASSWORD" -e MARIADB_USER="$TEST_USER" -e MARIADB_PASSWORD="$TEST_PASSWORD" -e MARIADB_DATABASE=TestMain)
+                     args=(--lower-case-table-names=1) ;;
+    *) echo "Unknown leg '$leg' (expected mysql57, mariadb102, mysql80lctn1 or mariadb114lctn1)"; overall=1; continue ;;
   esac
 
   engine="linux-leg-$leg-$stamp"
   engines+=("$engine")
   out="$results/$leg"; mkdir -p "$out"
   echo "== $leg ($image)"
-  docker run -d --name "$engine" --memory 2g --memory-swap 2g "${dbenv[@]}" "$image" >/dev/null || { overall=1; continue; }
+  docker run -d --name "$engine" --memory 2g --memory-swap 2g "${dbenv[@]}" "$image" "${args[@]}" >/dev/null || { overall=1; continue; }
 
+  cli='{ command -v mariadb >/dev/null && C=mariadb || C=mysql; } ; $C -h 127.0.0.1 -u root -p"$0" -N "$@"'
   ready=0
   for _ in $(seq 1 60); do
-    docker exec "$engine" mysqladmin ping -h 127.0.0.1 -u root -p"$TEST_PASSWORD" >/dev/null 2>&1 && ready=1 && break
+    docker exec "$engine" sh -c "$cli" "$TEST_PASSWORD" -e "SELECT 1" >/dev/null 2>&1 && ready=1 && break
     sleep 5
   done
   if [ $ready -ne 1 ]; then echo "  never became ready -- NOT RUN"; overall=1; continue; fi
-  docker exec "$engine" mysql -h 127.0.0.1 -u root -p"$TEST_PASSWORD" -e "
-    GRANT ALL PRIVILEGES ON *.* TO '$TEST_USER'@'%' WITH GRANT OPTION;
-    FLUSH PRIVILEGES;
-    SET GLOBAL max_connections = 2000;" 2>/dev/null || { echo "  grant failed -- NOT RUN"; overall=1; continue; }
+  granted=""
+  for _ in $(seq 1 30); do
+    granted=$(docker exec "$engine" sh -c "$cli" "$TEST_PASSWORD" -e "
+      GRANT ALL PRIVILEGES ON *.* TO '$TEST_USER'@'%' WITH GRANT OPTION;
+      FLUSH PRIVILEGES;
+      SET GLOBAL max_connections = 2000;
+      SELECT @@lower_case_table_names;" 2>/dev/null | tail -1)
+    [ -n "$granted" ] && break
+    sleep 2
+  done
+  if [ -z "$granted" ]; then echo "  grant failed -- NOT RUN"; overall=1; continue; fi
+  if [ ${#args[@]} -gt 0 ] && [ "$granted" != "1" ]; then
+    echo "  the server reports lower_case_table_names=$granted, not 1 -- NOT RUN"; overall=1; continue
+  fi
 
   # MSYS_NO_PATHCONV keeps Git Bash from rewriting the container-side paths; pwd -W gives Docker a Windows path.
   host_work=$(cd "$work" && (pwd -W 2>/dev/null || pwd))

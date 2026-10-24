@@ -11,11 +11,26 @@ name: validate-demo-schemas
 # What changed besides the cost: failures are listed in this job's log (all of them, not one per job), and the
 # per-pair PR comments the old action posted are gone along with the 105 check rows.
 
+# The main CI does not run for a change under Demos/ (the labs ship by push to main), so this workflow is where the demo
+# packages are checked, on a push as well as a pull request. The product paths are here too: a new deprecation in the
+# product is checked against the demos the push that adds it.
 on:
+  push:
+    branches: [main]
+    paths:
+      - 'Demos/**/*.json'
+      - 'Demos/**/.json-schemas/*.schema'
+      - 'Schema/**'
+      - 'SchemaQuench/**'
+      - 'scripts/validate-demo-schemas.mjs'
+      - 'scripts/validate-demo-schemas.json'
+      - '.github/workflows/validate-demo-schemas.yml'
   pull_request:
     paths:
       - 'Demos/**/*.json'
       - 'Demos/**/.json-schemas/*.schema'
+      - 'Schema/**'
+      - 'SchemaQuench/**'
       - 'scripts/validate-demo-schemas.mjs'
       - 'scripts/validate-demo-schemas.json'
       - '.github/workflows/validate-demo-schemas.yml'
@@ -38,3 +53,18 @@ jobs:
 
       - name: Validate shipped packages against their committed schemas
         run: node scripts/validate-demo-schemas.mjs
+
+  # A package that depends on a deprecated alias still deploys, which is why it goes unnoticed until the alias retires.
+  # The validator runs offline, so this needs no database.
+  deprecated-aliases:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: No demo package uses a deprecated alias
+        run: dotnet test SchemaQuench/SchemaQuench.IntegrationTests/SchemaQuench.IntegrationTests.csproj -c Debug --filter "Category=DemoPackages"

@@ -83,6 +83,7 @@ public class PerTableConstraintNameTests
     [Test]
     public void TwoTablesWithTheSameCheckName_RedeployWithoutTouchingEitherCheck()
     {
+        RequireCheckConstraints();
         Deploy(TwoTablesWithTheSameCheckName);
         Exec("DELETE FROM SchemaSmith_ChangeAudit WHERE ObjectName LIKE '%ss_ptc_%'");
 
@@ -95,6 +96,7 @@ public class PerTableConstraintNameTests
     [Test]
     public void TwoTablesWithTheSameCheckName_EachExtractsOnlyItsOwnCheck()
     {
+        RequireCheckConstraints();
         Deploy(TwoTablesWithTheSameCheckName);
 
         var a = Scalar($"CALL SchemaSmith_GenerateTableJSON('{_testDb}', 'ss_ptc_a')")?.ToString() ?? "";
@@ -120,6 +122,13 @@ public class PerTableConstraintNameTests
            "Indexes": [ { "Name": "`pk_ss_ptc_b`", "PrimaryKey": true, "Unique": true, "IndexColumns": "`id`" } ],
            "ForeignKeys": [ { "Name": "`{{fkName}}`", "Columns": "`b_parent`", "RelatedTable": "`ss_ptc_p`", "RelatedColumns": "`id`", "DeleteAction": "CASCADE" } ] }]
         """;
+
+    private void RequireCheckConstraints()
+    {
+        var version = VersionHelper.ParsePatchComparable(Scalar("SELECT VERSION()")?.ToString(), Platform.MariaDb) ?? 0;
+        if (version < 100222)
+            Assert.Ignore("A CHECK is skipped below MariaDB 10.2.22, where it cannot be read back.");
+    }
 
     private void RequireMariaDb121()
     {

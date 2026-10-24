@@ -5,11 +5,12 @@ using Schema.Domain;
 using Schema.Utility;
 using Microsoft.Data.SqlClient;
 using System;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_Miscellaneous : BaseTableQuenchTests
 {
     [Test]
@@ -264,7 +265,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
             """;
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 1";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = "SELECT CAST(CASE WHEN OBJECT_ID('dbo.TableNoLongerInProduct') IS NOT NULL THEN 1 ELSE 0 END AS BIT)";
         Assert.That(cmd.ExecuteScalar() as bool?, Is.False);
@@ -661,7 +662,7 @@ INSERT dbo.RemoveIdentityFromColumn (Column2) VALUES ('Row1'), ('Row2')
             }]
             """;
             cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = N'{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
-            Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(), "Deploy against a compat-130 database should succeed");
+            Assert.DoesNotThrow(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()), "Deploy against a compat-130 database should succeed");
 
             cmd.CommandText = "SELECT COUNT(*) FROM sys.tables WHERE name = 'c130_t'";
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "Table should be created at compat 130");
@@ -711,7 +712,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT CAST(CASE WHEN OBJECT_ID('dbo.{oldTableName}') IS NOT NULL THEN 1 ELSE 0 END AS BIT)";
         Assert.That(cmd.ExecuteScalar() as bool?, Is.False, "Old table should no longer exist");
@@ -758,7 +759,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = '{tableName}' AND COLUMN_NAME = 'OldColName'";
         Assert.That(cmd.ExecuteScalar(), Is.EqualTo(0), "Old column name should no longer exist");
@@ -812,7 +813,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
         ]
         """;
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{jsonV1.Replace("'", "''")}', @DropTablesRemovedFromProduct = 1, @DropUnknownIndexes = 0";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.CommandText = $"INSERT INTO dbo.{parentTable} (CustomerId) VALUES (7); INSERT INTO dbo.{oldTableName} (CustomerId) VALUES (7)";
         cmd.ExecuteNonQuery();
 
@@ -839,7 +840,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
         ]
         """;
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{jsonV2.Replace("'", "''")}', @DropTablesRemovedFromProduct = 1, @DropUnknownIndexes = 0";
-        Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(), "Renaming a table and its constraints via OldName should not error");
+        Assert.DoesNotThrow(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()), "Renaming a table and its constraints via OldName should not error");
 
         cmd.CommandText = $"SELECT CAST(CASE WHEN OBJECT_ID('dbo.{oldTableName}') IS NULL THEN 1 ELSE 0 END AS BIT)";
         Assert.That(cmd.ExecuteScalar() as bool?, Is.True, "Old table should no longer exist");
@@ -898,7 +899,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify identity was applied
         cmd.CommandText = $"SELECT COLUMNPROPERTY(OBJECT_ID('dbo.{tableName}'), 'Id', 'IsIdentity')";
@@ -936,7 +937,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @WhatIf = 1, @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         cmd.CommandText = $"SELECT CAST(CASE WHEN OBJECT_ID('dbo.{tableName}') IS NOT NULL THEN 1 ELSE 0 END AS BIT)";
         Assert.That(cmd.ExecuteScalar() as bool?, Is.False, "Table should not be created in WhatIf mode");
@@ -985,7 +986,7 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
         cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
 
         // Verify identity was removed
         cmd.CommandText = $"SELECT COLUMNPROPERTY(OBJECT_ID('dbo.{tableName}'), 'Id', 'IsIdentity')";

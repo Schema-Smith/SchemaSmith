@@ -3,6 +3,7 @@
 using System;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -15,7 +16,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 /// other indexes, but the clustered slot can still hold only one).
 /// </summary>
 [Category("SqlServer")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_IndexOnlyClusteredReplaceTests : BaseTableQuenchTests
 {
     [Test]
@@ -60,7 +61,7 @@ CREATE CLUSTERED INDEX [{oldIx}] ON dbo.[{table}] (ColA);";
             ]
             """;
             cmd.CommandText = $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = '{product}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 0";
-            Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(),
+            Assert.DoesNotThrow(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()),
                 "Index-only quench must drop the conflicting clustered index before creating the new one (#302).");
 
             // Assert: the new clustered index exists (type 1), and the old clustered index is gone

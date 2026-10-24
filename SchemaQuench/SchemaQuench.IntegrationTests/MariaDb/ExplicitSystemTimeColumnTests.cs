@@ -72,7 +72,7 @@ public class ExplicitSystemTimeColumnTests : BaseTableQuenchTests
     {
         cmd.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{_mainDb}', '{table}')";
         var json = "";
-        using (var reader = cmd.ExecuteReader())
+        using (var reader = TransientRetry.Run(() => cmd.ExecuteReader()))
             while (reader.Read())
                 json += reader[0];
         return (MariaDbTable)PlatformDeserializer.DeserializeTable(json, Platform.MariaDb);

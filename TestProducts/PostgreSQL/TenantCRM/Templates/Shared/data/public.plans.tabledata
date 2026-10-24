@@ -1,0 +1,5 @@
+[
+{"plan_id":1,"plan_name":"Free","monthly_rate":0.00},
+{"plan_id":2,"plan_name":"Pro","monthly_rate":49.00},
+{"plan_id":3,"plan_name":"Enterprise","monthly_rate":499.00}
+]

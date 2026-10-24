@@ -192,8 +192,8 @@ BEGIN
                 SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.SystemTime.Limit'))) AS SystemTimeLimit,
                 COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Partitioning.SystemTime.Auto'))), 0) AS SystemTimeAuto,
                 SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].AutoIncrementValue'))) AS AutoIncrementValue,
-                COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Description')))), ''),
-                         NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Comment')))), '')) AS Comment,
+                COALESCE(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Description'))),
+                         SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Comment')))) AS Comment,
                 0 AS NewTable,
                 1 AS ShouldApply,
                 NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].ShouldApplyExpression')))), '') AS ShouldApplyExpression,
@@ -291,6 +291,8 @@ BEGIN
         CompareCheckExpression TEXT DEFAULT NULL,
         CharacterSet VARCHAR(50) DEFAULT NULL,
         Collation VARCHAR(100) DEFAULT NULL,
+        -- 1 when a generated column's declared collation was dropped because the server rejects COLLATE there.
+        CollateSkipped TINYINT DEFAULT 0,
         IsInvisible TINYINT DEFAULT 0,
         IsWithoutSystemVersioning TINYINT DEFAULT 0,
         -- MariaDB: a declared system-time period column, 'ROWSTART' or 'ROWEND' (GeneratedAlways). NULL otherwise.
@@ -349,8 +351,8 @@ BEGIN
                     CASE UPPER(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].GeneratedAlways')))))
                          WHEN 'ROWSTART' THEN 'ROWSTART' WHEN 'ROWEND' THEN 'ROWEND' END AS SystemTimeRole,
                     SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Srid'))) AS Srid,
-                    COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Description')))), ''),
-                         NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Comment')))), '')) AS Comment,
+                    COALESCE(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Description'))),
+                         SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].Comment')))) AS Comment,
                     -- #375: blank/whitespace OldName -> NULL (no rename), same as the table-level OldName above.
                     SchemaSmith_SafeBacktickWrap(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_ColOuterIdx, '].Columns[', v_ColInnerIdx, '].OldName')))), '')) AS OldName,
                     0 AS NewColumn,
@@ -629,10 +631,26 @@ BEGIN
        SET CompareDataType = CASE WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON' THEN 'LONGTEXT'
                                   WHEN VERSION() NOT LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'VECTOR' THEN 'VECTOR(2048)'
                                   ELSE DataType END,
-           CompareCheckExpression = CASE WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON'
+           -- Below MariaDB 10.2.22 a check cannot be read back, so a column's own check is skipped (and reported by the
+           -- constraints step) like a table's; compared as declared, it re-applied the column on every deploy.
+           CompareCheckExpression = CASE WHEN VERSION() LIKE '%MariaDB%' AND SchemaSmith_SupportsCheckConstraints() = 0 THEN NULL
+                                         WHEN VERSION() LIKE '%MariaDB%' AND UPPER(TRIM(DataType)) = 'JSON'
                                           AND (CheckExpression IS NULL OR TRIM(CheckExpression) = '')
                                          THEN SchemaSmith_JsonAliasCheck(SchemaSmith_StripBacktickWrapping(ColumnName))
                                          ELSE CheckExpression END;
+
+    -- A generated column's COLLATE is a syntax error on MariaDB before 10.2.37, 10.3.28, 10.4.18 and 10.5.9. There the column
+    -- keeps its character set (read from the collation when only that is declared, and the collation names one) in that
+    -- set's default collation, and the comparison follows the character set alone, so a redeploy leaves it. The column is
+    -- marked here and reported by SchemaSmith_DegradeUnsupportedColumnFeatures once ShouldApply has settled the working set.
+    IF SchemaSmith_SupportsGeneratedColumnCollation() = 0 THEN
+        UPDATE _SchemaSmith_Columns
+           SET CharacterSet = COALESCE(NULLIF(TRIM(CharacterSet), ''),
+                                       IF(TRIM(Collation) LIKE '%\\_%', SUBSTRING_INDEX(TRIM(Collation), '_', 1), NULL)),
+               Collation = NULL,
+               CollateSkipped = 1
+         WHERE IFNULL(TRIM(GeneratedExpression), '') != '' AND IFNULL(TRIM(Collation), '') != '';
+    END IF;
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Build column scripts');
 
@@ -717,6 +735,7 @@ BEGIN
         -- MariaDB's column-level check rides the column definition, so CREATE, ADD and MODIFY all carry it and a
         -- MODIFY without it removes it. MySQL has no column-level check and its model never supplies one.
         CASE WHEN CheckExpression IS NOT NULL AND TRIM(CheckExpression) != '' AND VERSION() LIKE '%MariaDB%'
+                  AND SchemaSmith_SupportsCheckConstraints() = 1
              THEN CONCAT(' CHECK (', CheckExpression, ')') ELSE '' END
     );
 
@@ -911,8 +930,8 @@ BEGIN
                     COALESCE(SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Visible'))), 1) AS IsVisible,
                     SchemaSmith_JsonScalarInt(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].M'))) AS VectorM,
                     LOWER(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Distance')))), '')) AS VectorDistance,
-                    COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Description')))), ''),
-                         NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Comment')))), '')) AS Comment,
+                    COALESCE(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Description'))),
+                         SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].Comment')))) AS Comment,
                     1 AS ShouldApply,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].ShouldApplyExpression')))), '') AS ShouldApplyExpression,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_IxOuterIdx, '].Indexes[', v_IxInnerIdx, '].VariantName')))), '') AS VariantName;
@@ -1097,8 +1116,8 @@ BEGIN
                     SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Name')))) AS IndexName,
                     SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Columns'))) AS Columns,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Parser')))), '') AS Parser,
-                    COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Description')))), ''),
-                         NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Comment')))), '')) AS Comment,
+                    COALESCE(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Description'))),
+                         SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].Comment')))) AS Comment,
                     1 AS ShouldApply,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].ShouldApplyExpression')))), '') AS ShouldApplyExpression,
                     NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_FtOuterIdx, '].FullTextIndexes[', v_FtInnerIdx, '].VariantName')))), '') AS VariantName;

@@ -10,7 +10,7 @@ namespace SchemaQuench.IntegrationTests.MariaDb;
 /// <summary>MariaDb binding of the shared expression-map tests (#242).</summary>
 [Category("MariaDb")]
 [TestFixture]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_ExpressionMapTests : TableQuench_ExpressionMapTestsSharedTests
 {
     protected override Platform Platform => Platform.MariaDb;

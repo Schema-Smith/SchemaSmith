@@ -16,14 +16,6 @@ SchemaTongs/**
 DataTongs/**
 SchemaShears/**
 TestProducts/**
-# Demo packages: --Validate runs over every one and some are deployed. Their scripts, READMEs and lab helpers are not read.
-Demos/**
-!Demos/**/*.md
-!Demos/**/*.ps1
-!Demos/**/*.sh
-!Demos/**/*.sql
-Demos/**/Templates/**/*.sql
-Demos/**/* Product/**/*.sql
 !**/*.md
 # Read by tests: CapabilityDocumentationTests parses the reference page, check-sweep-record.sh reads the sweep record.
 docs/end-user/reference/schemaquench.md
@@ -51,6 +43,9 @@ coverage.runsettings
 # top-level path that is on neither list. A path under one of these that CI does read (a docs page a test parses) is
 # listed under [tested] above.
 [untested]
+# Demos and the training labs ship by push to main. Their deprecated-alias check is validate-demo-schemas.yml's,
+# and the end-to-end tests deploy copies under TestProducts/.
+Demos
 docs
 packaging
 action

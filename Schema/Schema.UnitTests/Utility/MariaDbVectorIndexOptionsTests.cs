@@ -56,4 +56,37 @@ public class MariaDbVectorIndexOptionsTests
             Assert.That(other.M, Is.Null);
         });
     }
+    // #561: a changed M or DISTANCE on a deployed VECTOR index is a rebuild. Undeclared means the server's default, on
+    // both sides: an option the live index was not written with is the default, and so is one the JSON leaves out.
+    [TestCase(8, "cosine", false)]
+    [TestCase(12, "cosine", true)]
+    [TestCase(8, "euclidean", true)]
+    [TestCase(8, "COSINE", false)]
+    [TestCase(null, "cosine", true)]
+    [TestCase(8, null, true)]
+    public void AVectorIndexWhoseOptionsChanged_NeedsARebuild(int? m, string distance, bool expected)
+    {
+        var declared = new MariaDbIndex { Name = "`vx`", IndexType = "VECTOR", IndexColumns = "`v`", M = m, Distance = distance };
+        Assert.That(MariaDbVectorIndexOptions.NeedsRebuild(declared, Declared, 6, "euclidean"), Is.EqualTo(expected));
+    }
+
+    [TestCase(null, null, false)]
+    [TestCase(6, "euclidean", false)]
+    [TestCase(16, null, true)]
+    [TestCase(null, "cosine", true)]
+    public void AnIndexLiveWithTheServersDefaults_ComparesItsDeclaredOptionsToThem(int? m, string distance, bool expected)
+    {
+        var declared = new MariaDbIndex { Name = "`v`", IndexType = "VECTOR", IndexColumns = "`v`", M = m, Distance = distance };
+        Assert.That(MariaDbVectorIndexOptions.NeedsRebuild(declared, Defaults, 6, "euclidean"), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void AnIndexThatIsNotLiveOrNotAVectorIndex_IsNotARebuild()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(MariaDbVectorIndexOptions.NeedsRebuild(new MariaDbIndex { Name = "`missing`", IndexType = "VECTOR", M = 12 }, Declared, 6, "euclidean"), Is.False);
+            Assert.That(MariaDbVectorIndexOptions.NeedsRebuild(new MariaDbIndex { Name = "`vx`", IndexType = "BTREE", M = 12 }, Declared, 6, "euclidean"), Is.False);
+        });
+    }
 }

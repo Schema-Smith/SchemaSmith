@@ -14,7 +14,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 // writes now: an extension type without its modifier (public.geometry), an array of a public type unqualified
 // (e[]), a collation by its bare name. Deploying such a package over the database it came from must change nothing.
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class OlderPackageSpellingTests : BaseTableQuenchTests
 {
     [Test]

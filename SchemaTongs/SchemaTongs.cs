@@ -1612,7 +1612,10 @@ SELECT SCHEMA_NAME(p.[schema_id]), p.[name], p.is_enabled, p.is_schema_bound, p.
             var create = $"CREATE SECURITY POLICY {qualified}\r\n  {predicates}\r\n  WITH (STATE = {(first.Enabled ? "ON" : "OFF")}, SCHEMABINDING = {(first.SchemaBound ? "ON" : "OFF")})" +
                          (first.NotForReplication ? " NOT FOR REPLICATION" : "");
 
+            // The signature query's FOR XML .value() fails under QUOTED_IDENTIFIER OFF, which a deploy's session keeps from
+            // a module scripted that way, so the script sets it, as a module script does.
             var script =
+                "SET QUOTED_IDENTIFIER ON\r\n" +
                 "IF OBJECT_ID('sys.security_policies') IS NULL\r\n" +
                 $"  RAISERROR('  Security policy {EscapeSql(qualified)} skipped: row-level security needs SQL Server 2016', 10, 1) WITH NOWAIT\r\n" +
                 "ELSE\r\nBEGIN\r\n" +
@@ -2014,7 +2017,8 @@ SELECT k.[name], m.[name], v.encryption_algorithm_name, v.encrypted_value
         DirectoryWrapper.GetFromFactory().CreateDirectory(folder);
         EnsurePrerequisitesFolder();
         _progressLog.Info($"  Casting {file}");
-        files.WriteAllText(file, GeneratedScript.Stamp(sb.ToString()));
+        if (!GeneratedScript.WriteUnlessOwned(file, sb.ToString()))
+            _progressLog.Info($"  Keeping {file}: its generated marker was removed, so it is yours and is not overwritten");
     }
 
     internal const string PartitionSchemesScript = "PartitionSchemes.sql";
@@ -2120,7 +2124,8 @@ SELECT ps.[name], pf.[name], fg.[name]
         DirectoryWrapper.GetFromFactory().CreateDirectory(folder);
         EnsurePrerequisitesFolder();
         _progressLog.Info($"  Casting {file}");
-        files.WriteAllText(file, GeneratedScript.Stamp(sb.ToString()));
+        if (!GeneratedScript.WriteUnlessOwned(file, sb.ToString()))
+            _progressLog.Info($"  Keeping {file}: its generated marker was removed, so it is yours and is not overwritten");
     }
 
     // A template that lists its folders runs only those, so one extracted before the Prerequisites folder existed gets it
@@ -4245,7 +4250,8 @@ SELECT TABLE_NAME
         var type = Regex.Match(createStatement, @"\bas\s+(?<type>\w+(?:\s+unsigned)?)\s+start\b", RegexOptions.IgnoreCase);
         if (type.Success) sequence.DataType = type.Groups["type"].Value.ToLowerInvariant();
         sequence.Increment = Number("increment by", 1);
-        sequence.Cache = Number("cache", 1000);
+        // A cache of 0 is written "nocache", with no number to read.
+        sequence.Cache = Regex.IsMatch(createStatement, @"\bnocache\b", RegexOptions.IgnoreCase) ? 0 : Number("cache", 1000);
         sequence.Cycle = Regex.IsMatch(createStatement, @"\scycle\b", RegexOptions.IgnoreCase);
         var ascending = sequence.Increment > 0;
         var min = Number("minvalue", ascending ? 1 : -9223372036854775807);
@@ -4337,7 +4343,6 @@ SELECT TABLE_SCHEMA, TABLE_NAME
 
             _progressLog.Info($"Casting Table Structures ({filteredCount} of {totalTables} tables)");
 
-            var currentTable = 0;
             // MySQL stored procedures take no default parameter values, so the ordering choice travels
             // as a session variable rather than an argument -- see the proc for why. Set once for the
             // connection, not per table: it is session state, and a SET per table would add a round
@@ -4350,8 +4355,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
             {
                 if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(table.ToLower()) && !_objectsToCast.Contains($"{schema}.{table}".ToLower())) continue;
 
-                currentTable++;
-                _progressLog.Info($"  [{currentTable}/{filteredCount}] Extracting {table}...");
+                _progressLog.Info($"  Cast Json for {table}");
 
                 try
                 {

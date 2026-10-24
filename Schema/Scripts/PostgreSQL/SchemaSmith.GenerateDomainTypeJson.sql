@@ -42,7 +42,7 @@ BEGIN
                                                              -- wrapper is stripped back off here.
                                                              'Expression', "SchemaSmith"."StripParenWrapping"(
                                                                  REGEXP_REPLACE(REGEXP_REPLACE(PG_GET_CONSTRAINTDEF(c.oid), '^CHECK\s*', ''), '\s+NOT VALID\s*$', '', 'i')),
-                                                             'Validated', c.convalidated)
+                                                             'Validated', CASE WHEN NOT c.convalidated THEN FALSE END)
                                            ORDER BY c.conname)
                              FROM pg_constraint c
                             WHERE c.contypid = ty.oid

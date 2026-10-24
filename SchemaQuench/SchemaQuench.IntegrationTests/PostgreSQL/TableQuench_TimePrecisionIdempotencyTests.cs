@@ -22,7 +22,7 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 // columns found in <schema>.<table>(...)" NOTICE when it classifies a column as changed (captured via
 // NpgsqlConnection.Notice). A converged table must emit none.
 [Category("PostgreSQL")]
-[Parallelizable(scope: ParallelScope.All)]
+[Parallelizable(scope: ParallelScope.Self)]
 public class TableQuench_TimePrecisionIdempotencyTests : BaseTableQuenchTests
 {
     [TestCase("timestamptz(3)", TestName = "TableQuench_TimestampTzWithPrecisionIsIdempotent")]

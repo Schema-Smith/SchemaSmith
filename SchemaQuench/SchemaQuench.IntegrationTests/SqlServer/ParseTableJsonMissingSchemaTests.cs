@@ -2,6 +2,7 @@
 
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.SqlServer;
 
@@ -37,7 +38,7 @@ public class ParseTableJsonMissingSchemaTests : BaseTableQuenchTests
         cmd.CommandText =
             $"EXEC SchemaSmith.TableQuench @ProductName = '{_productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
 
-        var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => cmd.ExecuteNonQuery());
+        var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()));
         Assert.That(ex!.Message, Does.Contain("missing Schema"));
         Assert.That(ex.Message, Does.Contain("NoSchemaTable"));
         // The error should NOT have created a dbo table as a side-effect.
@@ -71,7 +72,7 @@ public class ParseTableJsonMissingSchemaTests : BaseTableQuenchTests
         cmd.CommandText =
             $"EXEC SchemaSmith.TableQuench @ProductName = '{_productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
 
-        var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => cmd.ExecuteNonQuery());
+        var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()));
         Assert.That(ex!.Message, Does.Contain("missing Schema"));
         conn.Close();
     }
@@ -98,7 +99,7 @@ public class ParseTableJsonMissingSchemaTests : BaseTableQuenchTests
         cmd.CommandText =
             $"EXEC SchemaSmith.IndexOnlyQuench @ProductName = '{_productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropUnknownIndexes = 0";
 
-        var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => cmd.ExecuteNonQuery());
+        var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()));
         Assert.That(ex!.Message, Does.Contain("missing Schema"));
         Assert.That(ex.Message, Does.Contain("NoSchemaTableIO"));
         conn.Close();
@@ -137,7 +138,7 @@ public class ParseTableJsonMissingSchemaTests : BaseTableQuenchTests
         cmd.CommandText =
             $"EXEC SchemaSmith.TableQuench @ProductName = '{_productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
 
-        var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => cmd.ExecuteNonQuery());
+        var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()));
         Assert.That(ex!.Message, Does.Contain("missing RelatedTableSchema"));
         Assert.That(ex.Message, Does.Contain("FK_MissingRelated"));
         conn.Close();
