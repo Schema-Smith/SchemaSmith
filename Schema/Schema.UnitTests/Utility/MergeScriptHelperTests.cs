@@ -1098,6 +1098,78 @@ public class MergeScriptHelperTests
 
     #endregion
 
+    #region BuildMergeScript - MariaDB below 10.2.22 (#590)
+
+    // INFORMATION_SCHEMA.CHECK_CONSTRAINTS arrived in MariaDB 10.2.22. Reading it on an older server fails, which failed
+    // every delivery there; the read is skipped where the view is absent. The stub answers as such a server does.
+    private sealed class StubDbException(string message) : System.Data.Common.DbException(message);
+
+    private static IDbCommand CreateMariaDbCommand(bool hasCheckView, MySqlColumnDef[] columns)
+    {
+        var cmd = Substitute.For<IDbCommand>();
+        cmd.ExecuteScalar().Returns(_ =>
+            cmd.CommandText == "SELECT VERSION()" ? (hasCheckView ? "10.6.20-MariaDB" : "10.2.21-MariaDB")
+            : cmd.CommandText != null && cmd.CommandText.Contains("TABLE_NAME = 'CHECK_CONSTRAINTS'") ? (hasCheckView ? 1L : 0L)
+            : null);
+        cmd.ExecuteReader().Returns(_ =>
+            cmd.CommandText != null && cmd.CommandText.Contains("FROM INFORMATION_SCHEMA.CHECK_CONSTRAINTS")
+                ? hasCheckView ? CreateEmptyMockReader() : throw new StubDbException("Unknown table 'CHECK_CONSTRAINTS' in information_schema")
+                : CreateMySqlMockReader(columns));
+        return cmd;
+    }
+
+    private static readonly MySqlColumnDef[] MariaDbColumns =
+    [
+        new("id", "int", null, 10L, 0L, null, "int", "", null),
+        new("doc", "longtext", 4294967295L, null, null, null, "longtext", "", null)
+    ];
+
+    private static string BuildMariaDb(IDbCommand cmd) => MergeScriptHelper.BuildMergeScript(Platform.MariaDb, cmd,
+        "testdb", "testtable", "[{\"id\":1,\"doc\":\"x\"}]", "`id`",
+        mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+
+    [Test]
+    public void BuildMergeScript_MariaDbWithoutTheCheckView_StillBuildsTheScript()
+    {
+        var cmd = CreateMariaDbCommand(hasCheckView: false, MariaDbColumns);
+
+        var script = BuildMariaDb(cmd);
+
+        Assert.That(script, Does.Contain("`testdb`.`testtable`"), "a delivery is built where the view is missing");
+    }
+
+    [Test]
+    public void BuildMergeScript_MariaDbWithTheCheckView_StillLooksForJsonChecks()
+    {
+        var cmd = CreateMariaDbCommand(hasCheckView: true, MariaDbColumns);
+
+        BuildMariaDb(cmd);
+
+        Assert.That(cmd.ReceivedCalls().Count(c => c.GetMethodInfo().Name == "ExecuteReader"), Is.GreaterThanOrEqualTo(2),
+            "with the view present the json_valid check read still runs, as well as the column read");
+    }
+
+    [TestCase(0L, false)]
+    [TestCase(1L, true)]
+    public void ReportsCheckConstraints_ReadsTheCatalog(long count, bool expected)
+    {
+        var cmd = Substitute.For<IDbCommand>();
+        cmd.ExecuteScalar().Returns(count);
+
+        Assert.That(ForgeKindler.ReportsCheckConstraints(cmd), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ReportsCheckConstraints_AnUnanswerableServer_IsTreatedAsHavingTheView()
+    {
+        var cmd = Substitute.For<IDbCommand>();
+        cmd.ExecuteScalar().Returns(_ => throw new StubDbException("no answer"));
+
+        Assert.That(ForgeKindler.ReportsCheckConstraints(cmd), Is.True);
+    }
+
+    #endregion
+
     #region BuildMergeScript - MySQL Tests
 
     [Test]
