@@ -76,6 +76,24 @@ namespace Schema.UnitTests.Capabilities
             "column (generated COLLATE, MariaDB 10.2.37)"
         };
 
+        // A fix shipped on several lines: one entry per line, oldest first, each on a distinct line, and the oldest is the
+        // row's IntroducedInPatchComparable, so a consumer reading only that field gets the earliest fixed patch.
+        [Test]
+        public void PatchByLine_IsOneAscendingEntryPerLine_LedByThePatchComparable()
+        {
+            foreach (var c in CapabilityRegistry.All.Where(c => c.IntroducedInPatchByLine != null))
+            {
+                var lines = c.IntroducedInPatchByLine!;
+                Assert.Multiple(() =>
+                {
+                    Assert.That(lines, Is.Ordered.Ascending, c.Key);
+                    Assert.That(lines.Select(p => p / 100).Distinct().Count(), Is.EqualTo(lines.Count), $"{c.Key}: one entry per line");
+                    Assert.That(c.IntroducedInPatchComparable, Is.EqualTo(lines[0]), $"{c.Key}: the oldest entry leads");
+                    Assert.That(c.IntroducedInComparable, Is.EqualTo(lines[0] / 100), $"{c.Key}: the comparable is the oldest line");
+                });
+            }
+        }
+
         [Test]
         public void AllRows_HaveWellFormedFields()
         {

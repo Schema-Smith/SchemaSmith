@@ -8,6 +8,7 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using Schema.Capabilities;
+using Schema.Domain;
 
 namespace Schema.UnitTests.Capabilities
 {
@@ -101,19 +102,23 @@ namespace Schema.UnitTests.Capabilities
         [Test]
         public void EveryPatchLevelGate_HasARegistryRowAtThatPatch()
         {
-            var patchLiteral = new Regex(@"PatchNum\(\)\s*>=\s*(\d+)");
+            // Any comparison against a five- or six-digit literal: PatchNum() >= 80016, v_Patch >= 100328, and the like.
+            var patchLiteral = new Regex(@"(?:>=|>|<=|<)\s*(\d{5,6})\b");
             var problems = new List<string>();
             foreach (var (gate, key) in GateRegistryKey)
             {
                 var resource = SchemaAsm.GetManifestResourceNames().First(n => n.EndsWith("." + gate, StringComparison.Ordinal));
                 using var reader = new StreamReader(SchemaAsm.GetManifestResourceStream(resource)!);
                 var sql = reader.ReadToEnd();
-                var patches = CapabilityRegistry.All.Where(c => c.Key == key).Select(c => c.IntroducedInPatchComparable).ToList();
+                var rows = CapabilityRegistry.All.Where(c => c.Key == key && c.Platform.GetBasePlatform() == Platform.MySQL).ToList();
+                var patches = rows.Select(c => c.IntroducedInPatchComparable)
+                    .Concat(rows.SelectMany(c => c.IntroducedInPatchByLine ?? []).Select(p => (int?)p))
+                    .ToList();
                 foreach (Match m in patchLiteral.Matches(sql))
                 {
                     var n = int.Parse(m.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
                     if (n % 100 != 0 && !patches.Contains(n))
-                        problems.Add($"{gate} turns on patch {n}, but no '{key}' row has IntroducedInPatchComparable {n}");
+                        problems.Add($"{gate} turns on patch {n}, but no MySQL-family '{key}' row carries it (IntroducedInPatchComparable or IntroducedInPatchByLine)");
                 }
             }
 

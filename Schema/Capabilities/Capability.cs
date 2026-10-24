@@ -2,6 +2,7 @@
 
 #nullable enable
 
+using System.Collections.Generic;
 using Schema.Domain;
 
 namespace Schema.Capabilities
@@ -44,6 +45,12 @@ namespace Schema.Capabilities
     /// arrived in, which <see cref="IntroducedInComparable"/> (major*100+minor) cannot express. Null when the
     /// major/minor comparable is exact.
     /// </param>
+    /// <param name="IntroducedInPatchByLine">
+    /// For a fix the engine shipped on several release lines at once: the first fixed patch on each line, in the same
+    /// encoding, oldest line first (MariaDB 10.2.37, 10.3.28, 10.4.18, 10.5.9 for one fix). A server is covered when its
+    /// line's entry is met; a line newer than the last entry is covered from its first patch. <see cref="IntroducedInPatchComparable"/>
+    /// holds the oldest entry. Null for a feature that arrived once.
+    /// </param>
     public sealed record Capability(
         string Key,
         string DisplayName,
@@ -54,5 +61,6 @@ namespace Schema.Capabilities
         DegradeKind Degrade,
         string? ManifestObjectType,
         string? RequiredDatabaseSetting = null,
-        int? IntroducedInPatchComparable = null);
+        int? IntroducedInPatchComparable = null,
+        IReadOnlyList<int>? IntroducedInPatchByLine = null);
 }
