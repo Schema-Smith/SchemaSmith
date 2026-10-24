@@ -80,7 +80,7 @@ FLOORS=(
   # The 10.2 tag resolves to 10.2.44. 10.2.13 is the floor (JSON arrives at 10.2.7, builds no string holding a backtick
   # until 10.2.9, and delivers data correctly from 10.2.13); 10.2.21 is the last patch before the CHECK gate at 10.2.22.
   # Neither runs in CI.
-  "floor-mariadb-10213:mariadb:10.2.13:13413:MariaDb"
+  "floor-mariadb-10213:mariadb:10.2.13:13429:MariaDb"
   "band-mariadb-10221:mariadb:10.2.21:13421:MariaDb"
   "floor-mysql-57:mysql:5.7:13457:MySQL"
   # The supported floor patches: the 5.7 and 8.0 tags resolve to each line's newest, past every patch-level gate.
@@ -229,6 +229,9 @@ for f in "${FLOORS[@]}"; do
       FAILED=1
       echo "  $(basename "$proj" .csproj): ${summary:-NO RESULT} (exit $rc)"
       echo "$out" | grep -aE '  Failed [A-Za-z]|Error occurred while kindling|Unknown column|Unknown system variable|error in your SQL syntax|TearDown failed|SetUp failed' | head -8 | sed 's/^/    /'
+      # The full output, so a failure that does not reproduce alone still has its message.
+      faillog="${TMPDIR:-/tmp}/floor-sweep/${name}-$(basename "$proj" .csproj).log"
+      mkdir -p "$(dirname "$faillog")" && echo "$out" > "$faillog" && echo "    full output: $faillog"
     fi
   done
 
