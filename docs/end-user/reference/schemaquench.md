@@ -127,7 +127,7 @@ SQL Server deployments targeting Availability Groups can quench to a primary plu
 }
 ```
 
-When a secondary list is configured, SchemaQuench routes each product-level folder to the right server based on its `ServerToQuench` setting (`Primary`, `Secondary`, or `Both`). Templates target the primary; product-level scripts can target either side. See [Schema Packages -- Secondary Servers](schema-packages.md#secondary-servers) for the package side of the configuration.
+When a secondary list is configured, SchemaQuench routes each product-level folder to the right server based on its `ServerToQuench` setting (`Primary`, `Secondary`, or `Both`). Templates target the primary; product-level scripts can target either side. Without a secondary list, a `Secondary` folder is skipped (and logged), never run on the primary. See [Schema Packages -- Secondary Servers](schema-packages.md#secondary-servers) for the package side of the configuration.
 
 > **PostgreSQL, MySQL, and MariaDB** deployments use a single connection. Replication and read-only standbys are typically managed at the database engine level, not by the deployment tool.
 

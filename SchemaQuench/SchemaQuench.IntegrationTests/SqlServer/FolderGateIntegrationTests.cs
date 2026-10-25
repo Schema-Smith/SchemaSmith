@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using NSubstitute;
 using Schema.DataAccess;
 using Schema.Domain;
+using Schema.Domain.SqlServer;
 using Schema.IntegrationTests;
 using Schema.Isolators;
 using Schema.Utility;
@@ -71,6 +72,59 @@ public class FolderGateIntegrationTests
         using var cmd = conn.CreateCommand();
 
         Assert.That(FolderGate.ShouldApply(cmd, folder.ShouldApplyExpression), Is.True);
+    }
+
+    // #597: with no SecondaryServers configured, every product folder ran on the primary, so a folder meant only for
+    // replicas (a local cache build, a job that must not run on the primary) ran there in every non-AG environment.
+    [Test]
+    public void ProductFolders_WithNoSecondariesConfigured_RunOnlyThoseMeantForThePrimary()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            var probeDb = $"probe_597_{Guid.NewGuid():N}"[..20];
+            var scriptDir = Path.Join(Path.GetTempPath(), probeDb);
+            config["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "ValidProduct");
+            var secondaries = config["Target:SecondaryServers"];
+            config["Target:SecondaryServers"] = "";
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            try
+            {
+                cmd.CommandText = $"CREATE DATABASE [{probeDb}]";
+                cmd.ExecuteNonQuery();
+                Directory.CreateDirectory(scriptDir);
+                ProductFolder Folder(string name, ServerToQuench serverToQuench)
+                {
+                    var path = Path.Join(scriptDir, $"{name}.sql");
+                    File.WriteAllText(path, $"CREATE TABLE [{probeDb}].dbo.[{name}] (Id INT)");
+                    var folder = new ProductFolder { FolderPath = name, ServerToQuench = serverToQuench, QuenchSlot = ProductQuenchSlot.After };
+                    folder.Scripts.Add(SqlScript.Load(path, []));
+                    return folder;
+                }
+                var folders = new List<ProductFolder>
+                {
+                    Folder("PrimaryOnly", ServerToQuench.Primary), Folder("SecondaryOnly", ServerToQuench.Secondary), Folder("Both", ServerToQuench.Both)
+                };
+
+                new ProductQuench().QuenchProductScriptsWithCheckpoint(folders, "After Product", false);
+
+                cmd.CommandText = $"SELECT name FROM [{probeDb}].sys.tables ORDER BY name";
+                var created = new List<string>();
+                using (var reader = cmd.ExecuteReader())
+                    while (reader.Read()) created.Add(reader.GetString(0));
+                Assert.That(created, Is.EqualTo(new[] { "Both", "PrimaryOnly" }), "a Secondary folder must not run on the primary");
+            }
+            finally
+            {
+                config["SchemaPackagePath"] = null;
+                config["Target:SecondaryServers"] = secondaries;
+                cmd.CommandText = $"IF DB_ID('{probeDb}') IS NOT NULL BEGIN ALTER DATABASE [{probeDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{probeDb}] END";
+                cmd.ExecuteNonQuery();
+                if (Directory.Exists(scriptDir)) Directory.Delete(scriptDir, true);
+            }
+        }
     }
 
     private static string NonexistentBasePath() =>

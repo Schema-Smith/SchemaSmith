@@ -441,7 +441,7 @@ Then declare `ServerToQuench` on your product-level folders:
 }
 ```
 
-`ServerToQuench` accepts `Primary`, `Secondary`, or `Both`. The default is `Primary`. Scripts in folders with `Both` (or scripts marked for the active server type) execute on every server in the list, in parallel. The CLI logs the per-server progress so you can see exactly what landed where.
+`ServerToQuench` accepts `Primary`, `Secondary`, or `Both`. The default is `Primary`. Scripts in folders with `Both` (or scripts marked for the active server type) execute on every server in the list, in parallel. The CLI logs the per-server progress so you can see exactly what landed where. With no `SecondaryServers` configured, `Primary` and `Both` folders run on the primary and a `Secondary` folder runs nowhere: the log says it was skipped and why.
 
 > **Multi-platform note:** PostgreSQL, MySQL, and MariaDB deployments use a single connection only -- the secondary-server feature is SQL Server-specific because Availability Groups are a SQL Server concept.
 

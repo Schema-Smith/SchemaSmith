@@ -1197,8 +1197,15 @@ public class ProductQuench
         }
         else
         {
-            // PostgreSQL/MySQL: single server only
-            QuenchScriptsToServerWithCheckpoint(_primaryServer, msg, folders, isBefore);
+            // PostgreSQL/MySQL: single server only. A SQL Server folder meant for secondaries has nowhere to run without them.
+            var onPrimary = folders;
+            if (_product.Platform == Platform.SqlServer)
+            {
+                foreach (var folder in folders.Where(f => !f.QuenchOnPrimary))
+                    _progressLog.Info($"  Skipping folder '{folder.FolderPath}' — ServerToQuench is Secondary and no SecondaryServers are configured");
+                onPrimary = folders.Where(f => f.QuenchOnPrimary).ToList();
+            }
+            QuenchScriptsToServerWithCheckpoint(_primaryServer, msg, onPrimary, isBefore);
         }
 
         if (_updateFailed)
