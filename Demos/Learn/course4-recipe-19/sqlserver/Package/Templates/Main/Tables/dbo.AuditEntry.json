@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[dbo]",
+  "Name": "[AuditEntry]",
+  "Ledger": "AppendOnly",
+  "Columns": [
+    { "Name": "[EntryId]", "DataType": "INT", "Nullable": false },
+    { "Name": "[Message]", "DataType": "NVARCHAR(200)", "Nullable": false }
+  ],
+  "Indexes": [
+    { "Name": "[PK_AuditEntry]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[EntryId]" }
+  ]
+}

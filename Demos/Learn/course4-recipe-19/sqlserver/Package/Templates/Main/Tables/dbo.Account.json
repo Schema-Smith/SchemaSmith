@@ -1,0 +1,16 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[dbo]",
+  "Name": "[Account]",
+  "Ledger": "Updatable",
+  "LedgerView": { "Name": "[AccountHistory]" },
+  "Columns": [
+    { "Name": "[AccountId]", "DataType": "INT", "Nullable": false },
+    { "Name": "[Owner]", "DataType": "NVARCHAR(100)", "Nullable": false },
+    { "Name": "[Balance]", "DataType": "DECIMAL(12,2)", "Nullable": false },
+    { "Name": "[TxStart]", "DataType": "BIGINT", "Nullable": false, "GeneratedAlways": "TransactionIdStart", "Hidden": true }
+  ],
+  "Indexes": [
+    { "Name": "[PK_Account]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[AccountId]" }
+  ]
+}
