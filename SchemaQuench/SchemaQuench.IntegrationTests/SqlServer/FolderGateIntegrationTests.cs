@@ -127,6 +127,47 @@ public class FolderGateIntegrationTests
         }
     }
 
+    // A product script's RAISERROR(..., 10, 100) reaches the log, as a template script's does.
+    [Test]
+    public void AProductScriptsInformationalMessages_AreLogged()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            var scriptDir = Path.Join(Path.GetTempPath(), $"ProductMsg_{Guid.NewGuid():N}");
+            config["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "ValidProduct");
+            var progress = new List<string>();
+            var progressLog = Substitute.For<log4net.ILog>();
+            progressLog.When(l => l.Info(Arg.Any<object>())).Do(ci => progress.Add($"{ci.Arg<object>()}"));
+            progressLog.When(l => l.Warn(Arg.Any<object>())).Do(ci => progress.Add($"WARN {ci.Arg<object>()}"));
+            LogFactory.Register("ProgressLog", progressLog);
+            LogFactory.Register("ErrorLog", Substitute.For<log4net.ILog>());
+            try
+            {
+                Directory.CreateDirectory(scriptDir);
+                var path = Path.Join(scriptDir, "messages.sql");
+                File.WriteAllText(path, "RAISERROR('product script says hello', 10, 100) WITH NOWAIT\nRAISERROR('WARNING: product script warns', 10, 100) WITH NOWAIT\nRAISERROR('product script mutters', 10, 1) WITH NOWAIT");
+                var folder = new ProductFolder { FolderPath = "Messages", QuenchSlot = ProductQuenchSlot.After };
+                folder.Scripts.Add(SqlScript.Load(path, []));
+
+                new ProductQuench().QuenchProductScriptsWithCheckpoint([folder], "After Product", false);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(progress, Has.Some.EndsWith("product script says hello"), string.Join(Environment.NewLine, progress));
+                    Assert.That(progress, Has.Some.Matches<string>(l => l.StartsWith("WARN ") && l.EndsWith("WARNING: product script warns")), "a WARNING: line is a warning");
+                    Assert.That(progress, Has.None.Contains("product script mutters"), "a message without state 100 stays out unless VerboseLogging is on");
+                });
+            }
+            finally
+            {
+                config["SchemaPackagePath"] = null;
+                LogFactory.Clear();
+                if (Directory.Exists(scriptDir)) Directory.Delete(scriptDir, true);
+            }
+        }
+    }
+
     private static string NonexistentBasePath() =>
         Path.Combine(Path.GetTempPath(), "ss-folder-gate-" + Guid.NewGuid().ToString("N"));
 
