@@ -334,7 +334,6 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        CASE WHEN (SELECT CONVERT(NVARCHAR(50), [value])
                     FROM fn_listextendedproperty(N'PreventDrop', N'Schema', @p_Schema, N'Table', @p_Table, default, default)) = 'true'
             THEN 'true' END AS [PreventDrop],
-       '' AS [OldName],
        -- MS_Description is the one extended property with a key of its own; it stays out of the ExtendedProperties bag below.
        (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, default, default)) AS [Description],
        (SELECT 'true' AS [@json:Array],
@@ -374,14 +373,13 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                  AND cc.[object_id] IS NULL AND cm.EncryptionType IS NULL
                             THEN 'false' END AS [AnsiPadding],
                        CASE WHEN sc.is_column_set = 1 THEN 'true' ELSE 'false' END AS [IsColumnSet],
-                       ISNULL(NULLIF(sc.collation_name, @v_DatabaseCollation), '') AS [Collation],
-                       ISNULL(cm.MaskingFunction, '') COLLATE DATABASE_DEFAULT AS DataMaskFunction,
+                       NULLIF(sc.collation_name, @v_DatabaseCollation) AS [Collation],
+                       cm.MaskingFunction COLLATE DATABASE_DEFAULT AS DataMaskFunction,
                        ISNULL(cm.EncryptionType, 'NONE') COLLATE DATABASE_DEFAULT AS EncryptionType,
-                       ISNULL(cm.EncryptionKey, '') COLLATE DATABASE_DEFAULT AS EncryptionKey,
-                       ISNULL(cm.EncryptionAlgorithm, '') COLLATE DATABASE_DEFAULT AS EncryptionAlgorithm,
+                       cm.EncryptionKey COLLATE DATABASE_DEFAULT AS EncryptionKey,
+                       cm.EncryptionAlgorithm COLLATE DATABASE_DEFAULT AS EncryptionAlgorithm,
                        CASE cm.GeneratedAlwaysType WHEN 1 THEN 'RowStart' WHEN 2 THEN 'RowEnd' WHEN 7 THEN 'TransactionIdStart' WHEN 8 THEN 'TransactionIdEnd' WHEN 9 THEN 'SequenceNumberStart' WHEN 10 THEN 'SequenceNumberEnd' END AS [GeneratedAlways],
                        CASE WHEN ISNULL(cm.GeneratedAlwaysType, 0) IN (1, 2, 7, 8, 9, 10) AND COLUMNPROPERTY(st.[object_id], c.COLUMN_NAME, 'IsHidden') = 1 THEN 'true' END AS [Hidden],
-                       '' AS [OldName],
                        (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Column', c.COLUMN_NAME)) AS [Description],
                        (SELECT ep.[Name] AS [@n], CONVERT(NVARCHAR(MAX), ep.[Value]) AS [*]
                           FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Column', c.COLUMN_NAME) ep

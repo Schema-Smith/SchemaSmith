@@ -557,10 +557,9 @@ public class ImportTableHelperTests
     // Re-extracting an unchanged database must rewrite nothing. The first re-extraction of every package added
     // "ShouldApplyExpression": "", "VariantName": "" and (MySQL) "OldName": "" throughout: carrying authored
     // properties forward coalesced a key the file never had to an empty string, and an empty string serializes.
-    // The fresh JSON below is shaped like each engine's generator output -- PostgreSQL's already carries the empty
-    // ShouldApplyExpression/OldName, MySQL's carries none -- so both ways of arriving at "unset" are covered.
+    // The fresh JSON below is shaped like each engine's generator output.
     [TestCase(Platform.MySQL, """{ "Name": "customer", "Columns": [ { "Name": "customer_id", "DataType": "int" } ], "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`customer_id`" } ] }""")]
-    [TestCase(Platform.PostgreSQL, """{ "Name": "device", "Columns": [ { "Name": "device_id", "DataType": "int4", "ShouldApplyExpression": "", "OldName": "" } ], "Indexes": [ { "Name": "device_pkey", "PrimaryKey": true, "Unique": true, "IndexColumns": "device_id", "ShouldApplyExpression": "" } ], "ShouldApplyExpression": "", "OldName": "" }""")]
+    [TestCase(Platform.PostgreSQL, """{ "Name": "device", "Columns": [ { "Name": "device_id", "DataType": "int4" } ], "Indexes": [ { "Name": "device_pkey", "PrimaryKey": true, "Unique": true, "IndexColumns": "device_id" } ] }""")]
     [TestCase(Platform.SqlServer, """{ "Schema": "[dbo]", "Name": "[Customer]", "Columns": [ { "Name": "[Id]", "DataType": "INT" }, { "Name": "[Doubled]", "DataType": "INT", "ComputedExpression": "[Id]*(2)", "Persisted": true, "Nullable": false } ], "Indexes": [ { "Name": "[PK_Customer]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }""")]
     [TestCase(Platform.MariaDb, """{ "Name": "customer", "Columns": [ { "Name": "customer_id", "DataType": "int(11)" } ], "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`customer_id`" } ] }""")]
     public void ReExtractingAnUnchangedTable_WritesTheSameFile(Platform platform, string extractedJson)
@@ -571,6 +570,28 @@ public class ImportTableHelperTests
         ImportTableHelper.PreserveDataDeliveryAndCustomProperties(reExtracted, PlatformDeserializer.DeserializeTable(onDisk, platform), _ => true);
 
         Assert.That(JsonHelper.Serialize(reExtracted), Is.EqualTo(onDisk));
+    }
+
+    // Extraction once wrote these keys empty everywhere, and carrying an empty value forward kept them in every package
+    // written then. Re-extracting over such a file drops them, and the file it writes is then stable.
+    [TestCase(Platform.PostgreSQL, """{ "Name": "device", "Columns": [ { "Name": "device_id", "DataType": "int4", "ShouldApplyExpression": "", "OldName": "" } ], "Indexes": [ { "Name": "device_pkey", "PrimaryKey": true, "Unique": true, "IndexColumns": "device_id", "ShouldApplyExpression": "" } ], "ShouldApplyExpression": "", "OldName": "" }""",
+              """{ "Name": "device", "Columns": [ { "Name": "device_id", "DataType": "int4" } ], "Indexes": [ { "Name": "device_pkey", "PrimaryKey": true, "Unique": true, "IndexColumns": "device_id" } ] }""")]
+    [TestCase(Platform.SqlServer, """{ "Schema": "[dbo]", "Name": "[T]", "OldName": "", "Columns": [ { "Name": "[Id]", "DataType": "INT", "OldName": "", "Collation": "", "DataMaskFunction": "", "EncryptionKey": "", "EncryptionAlgorithm": "", "VariantName": "" } ] }""",
+              """{ "Schema": "[dbo]", "Name": "[T]", "Columns": [ { "Name": "[Id]", "DataType": "INT" } ] }""")]
+    public void ReExtractingOverAFileWithEmptyValues_DropsThem_AndThenWritesTheSameFile(Platform platform, string onDiskJson, string extractedJson)
+    {
+        var first = PlatformDeserializer.DeserializeTable(extractedJson, platform);
+        ImportTableHelper.PreserveDataDeliveryAndCustomProperties(first, PlatformDeserializer.DeserializeTable(onDiskJson, platform), _ => true);
+        var written = JsonHelper.Serialize(first);
+
+        var second = PlatformDeserializer.DeserializeTable(extractedJson, platform);
+        ImportTableHelper.PreserveDataDeliveryAndCustomProperties(second, PlatformDeserializer.DeserializeTable(written, platform), _ => true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(written, Does.Not.Contain(": \"\""), "no key is written empty");
+            Assert.That(JsonHelper.Serialize(second), Is.EqualTo(written), "and the next re-extraction writes the same file");
+        });
     }
     [Test]
     public void PreserveDataDeliveryAndCustomProperties_RetiresALegacyMsDescription_AndKeepsTheRestOfTheBag()

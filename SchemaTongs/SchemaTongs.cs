@@ -4593,8 +4593,10 @@ SELECT cc.name AS [Name],
                         PromoteCheckConstraintsToTableLevel(sqlTable, allConstraints);
                     }
 
-                    var oldTableFile = ResolveOutputPath(tableDir, EncodeObjectFileName(tableSchema, tableObj.OldName.Trim('"'), ".json"));
-                    if (FileWrapper.GetFromFactory().Exists(filename) || FileWrapper.GetFromFactory().Exists(oldTableFile))
+                    var oldTableFile = !string.IsNullOrEmpty(tableObj.OldName)
+                        ? ResolveOutputPath(tableDir, EncodeObjectFileName(tableSchema, tableObj.OldName.Trim('"'), ".json"))
+                        : null;
+                    if (FileWrapper.GetFromFactory().Exists(filename) || (oldTableFile != null && FileWrapper.GetFromFactory().Exists(oldTableFile)))
                     {
                         var original = LoadOriginalForPreservation(FileWrapper.GetFromFactory().Exists(filename) ? filename : oldTableFile);
                         ImportTableHelper.PreserveDataDeliveryAndCustomProperties(tableObj, original, IsVariantActive, SourceCanReportXmlCompression);
