@@ -61,7 +61,10 @@ BEGIN
   INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
     SELECT @@SPID, 'full-text statistical semantics (no semantic database)', f.[Schema] + '.' + f.[TableName], 'downgraded'
       FROM #FullTextIndexes f WITH (NOLOCK) WHERE f.[Columns] LIKE '% STATISTICAL[_]SEMANTICS%'
-  RAISERROR('  Full-text STATISTICAL_SEMANTICS skipped (no semantic language statistics database registered - downgraded)', 10, 100) WITH NOWAIT
+  DECLARE @v_Semantic NVARCHAR(MAX) = STUFF((SELECT ', ' + f.[Schema] + '.' + f.[TableName] FROM #FullTextIndexes f WITH (NOLOCK)
+                                                 WHERE f.[Columns] LIKE '% STATISTICAL[_]SEMANTICS%'
+                                                 FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  EXEC SchemaSmith.PrintDowngrade N'  Full-text STATISTICAL_SEMANTICS skipped (no semantic language statistics database registered - downgraded)', @v_Semantic
   UPDATE #FullTextIndexes SET [Columns] = REPLACE([Columns], ' STATISTICAL_SEMANTICS', '')
     WHERE [Columns] LIKE '% STATISTICAL[_]SEMANTICS%'
 END

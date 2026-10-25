@@ -349,7 +349,7 @@ public class DeployPathTableFeatureTests
             {
                 cmd.CommandText = "SELECT is_edge FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe')";
                 Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the edge table still deploys");
-                _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Edge constraint skipped: requires SQL Server 2019")));
+                _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Edge constraint skipped: requires SQL Server 2019") && m.EndsWith(": [dbo].[DeployProbe].[EC_DeployProbe]")));
                 return;
             }
             cmd.CommandText = "SELECT [name] COLLATE DATABASE_DEFAULT + ':' + delete_referential_action_desc COLLATE DATABASE_DEFAULT FROM sys.edge_constraints WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
@@ -366,7 +366,7 @@ public class DeployPathTableFeatureTests
             Assert.That(IsTrackedByCdc(cmd), Is.False);
             // Asserted on the log, not on SchemaSmith.ChangeAudit: a real deploy reads its session's audit rows into the
             // deployment summary and then deletes them, so the table is empty afterwards whether or not the degrade ran.
-            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database") && m.EndsWith(": [dbo].[DeployProbe]")));
         }, expectIncomplete: true);
     }
 
@@ -433,7 +433,7 @@ public class DeployPathTableFeatureTests
             _beforeScript = "SELECT 1";
             deploy(CdcTable(enableCdc: true, extraColumn: false));
             Assert.That(IsTrackedByCdc(cmd), Is.False);
-            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database") && m.EndsWith(": [dbo].[DeployProbe]")));
         }, expectIncomplete: true);
     }
 

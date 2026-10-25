@@ -114,12 +114,25 @@ BEGIN
     SELECT @@SPID, d.[ObjectType], d.[Schema] + '.' + d.[TableName] + '.' + d.[IndexName], 'downgraded'
       FROM #IndexDegrades d
 
+  DECLARE @v_Named NVARCHAR(MAX)
   IF EXISTS (SELECT 1 FROM #IndexDegrades WHERE [DropIndex] = 1)
-    RAISERROR('  Columnstore index skipped (not supported on this server version or edition - downgraded)', 10, 100) WITH NOWAIT
+  BEGIN
+    SET @v_Named = STUFF((SELECT ', ' + d.[Schema] + '.' + d.[TableName] + '.' + d.[IndexName] FROM #IndexDegrades d WITH (NOLOCK) WHERE d.[DropIndex] = 1
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+    EXEC SchemaSmith.PrintDowngrade N'  Columnstore index skipped (not supported on this server version or edition - downgraded)', @v_Named
+  END
   IF EXISTS (SELECT 1 FROM #IndexDegrades WHERE [DropIndex] = 0 AND [ObjectType] LIKE 'data compression%')
-    RAISERROR('  Index compression skipped (Enterprise edition below SQL Server 2016 SP1 - downgraded)', 10, 100) WITH NOWAIT
+  BEGIN
+    SET @v_Named = STUFF((SELECT ', ' + d.[Schema] + '.' + d.[TableName] + '.' + d.[IndexName] FROM #IndexDegrades d WITH (NOLOCK) WHERE d.[DropIndex] = 0 AND d.[ObjectType] LIKE 'data compression%'
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+    EXEC SchemaSmith.PrintDowngrade N'  Index compression skipped (Enterprise edition below SQL Server 2016 SP1 - downgraded)', @v_Named
+  END
   IF EXISTS (SELECT 1 FROM #IndexDegrades WHERE [ObjectType] = 'columnstore index without its ORDER')
-    RAISERROR('  Columnstore index created without its ORDER (SQL Server 2022 clustered / 2025 nonclustered - downgraded)', 10, 100) WITH NOWAIT
+  BEGIN
+    SET @v_Named = STUFF((SELECT ', ' + d.[Schema] + '.' + d.[TableName] + '.' + d.[IndexName] FROM #IndexDegrades d WITH (NOLOCK) WHERE d.[ObjectType] = 'columnstore index without its ORDER'
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+    EXEC SchemaSmith.PrintDowngrade N'  Columnstore index created without its ORDER (SQL Server 2022 clustered / 2025 nonclustered - downgraded)', @v_Named
+  END
 
   DELETE i
     FROM #Indexes i

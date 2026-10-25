@@ -69,7 +69,8 @@ public class DataDeliveryProcessor : IDataDelivery
                       "Deliver data on this target with manual data scripts.";
             if (string.Equals(context.UnsupportedFeaturePolicy, "fail", StringComparison.OrdinalIgnoreCase))
                 throw new NotSupportedException(msg);
-            log($"  Skipping data delivery (requires MySQL 8.0 - downgraded): {msg}");
+            log($"  Skipping data delivery (requires MySQL 8.0 - downgraded): " +
+                string.Join(", ", tablesToDeliver.Select(t => DataDeliveryHelper.GetTableKey(t, platform))) + $". {msg}");
             foreach (var table in tablesToDeliver)
                 context.RecordDowngrade?.Invoke(DowngradeObjectType, DataDeliveryHelper.GetTableKey(table, platform));
             return;

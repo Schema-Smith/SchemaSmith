@@ -39,7 +39,9 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'temporal (SQL Server 2016)', t.[Schema] + '.' + t.[Name], 'downgraded'
           FROM #Tables t WITH (NOLOCK) WHERE t.IsTemporal = 1
-      RAISERROR('  Temporal tracking skipped (requires SQL Server 2016 - downgraded)', 10, 100) WITH NOWAIT
+      SET @v_list = STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name] FROM #Tables t WITH (NOLOCK) WHERE t.IsTemporal = 1
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      EXEC SchemaSmith.PrintDowngrade N'  Temporal tracking skipped (requires SQL Server 2016 - downgraded)', @v_list
       UPDATE #Tables SET IsTemporal = 0 WHERE IsTemporal = 1
     END
   END
@@ -77,7 +79,9 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'graph table (SQL Server 2017)', t.[Schema] + '.' + t.[Name], 'downgraded'
           FROM #Tables t WITH (NOLOCK) WHERE t.[GraphType] IN ('Node', 'Edge')
-      RAISERROR('  Graph node/edge skipped: requires SQL Server 2017 - the table deploys as an ordinary table (downgraded)', 10, 100) WITH NOWAIT
+      SET @v_list = STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name] FROM #Tables t WITH (NOLOCK) WHERE t.[GraphType] IN ('Node', 'Edge')
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      EXEC SchemaSmith.PrintDowngrade N'  Graph node/edge skipped: requires SQL Server 2017 - the table deploys as an ordinary table (downgraded)', @v_list
       UPDATE #Tables SET [GraphType] = 'None' WHERE [GraphType] IN ('Node', 'Edge')
     END
   END
@@ -99,7 +103,9 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'edge constraint (SQL Server 2019)', e.[Schema] + '.' + e.[TableName] + '.' + e.[ConstraintName], 'downgraded'
           FROM #EdgeConstraints e WITH (NOLOCK)
-      RAISERROR('  Edge constraint skipped: requires SQL Server 2019 - the edge table deploys without it (downgraded)', 10, 100) WITH NOWAIT
+      SET @v_list = STUFF((SELECT ', ' + e.[Schema] + '.' + e.[TableName] + '.' + e.[ConstraintName] FROM #EdgeConstraints e WITH (NOLOCK) WHERE 1 = 1
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      EXEC SchemaSmith.PrintDowngrade N'  Edge constraint skipped: requires SQL Server 2019 - the edge table deploys without it (downgraded)', @v_list
       DELETE FROM #EdgeConstraints
     END
   END
@@ -134,7 +140,11 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'XML compression (SQL Server 2022)', X.[Schema] + '.' + X.[TableName] + '.' + X.[IndexName], 'downgraded'
           FROM #XmlIndexes X WITH (NOLOCK) WHERE ISNULL(X.[XmlCompression], 0) = 1
-      RAISERROR('  XML compression skipped: requires SQL Server 2022 - the object deploys uncompressed (downgraded)', 10, 100) WITH NOWAIT
+      SET @v_list = STUFF((SELECT ', ' + n FROM (SELECT t.[Schema] + '.' + t.[Name] AS n FROM #Tables t WITH (NOLOCK) WHERE ISNULL(t.[XmlCompression], 0) = 1
+                                                UNION ALL SELECT I.[Schema] + '.' + I.[TableName] + '.' + I.[IndexName] FROM #Indexes I WITH (NOLOCK) WHERE ISNULL(I.[XmlCompression], 0) = 1
+                                                UNION ALL SELECT X.[Schema] + '.' + X.[TableName] + '.' + X.[IndexName] FROM #XmlIndexes X WITH (NOLOCK) WHERE ISNULL(X.[XmlCompression], 0) = 1) o
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      EXEC SchemaSmith.PrintDowngrade N'  XML compression skipped: requires SQL Server 2022 - the object deploys uncompressed (downgraded)', @v_list
       UPDATE #Tables SET [XmlCompression] = 0 WHERE ISNULL([XmlCompression], 0) = 1
       UPDATE #Indexes SET [XmlCompression] = 0 WHERE ISNULL([XmlCompression], 0) = 1
       UPDATE #XmlIndexes SET [XmlCompression] = 0 WHERE ISNULL([XmlCompression], 0) = 1
@@ -163,7 +173,9 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'ledger table (SQL Server 2022)', t.[Schema] + '.' + t.[Name], 'downgraded'
           FROM #Tables t WITH (NOLOCK) WHERE ISNULL(t.[Ledger], 'Off') <> 'Off'
-      RAISERROR('  Ledger skipped: requires SQL Server 2022 - the table deploys as an ordinary table (downgraded)', 10, 100) WITH NOWAIT
+      SET @v_list = STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name] FROM #Tables t WITH (NOLOCK) WHERE ISNULL(t.[Ledger], 'Off') <> 'Off'
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      EXEC SchemaSmith.PrintDowngrade N'  Ledger skipped: requires SQL Server 2022 - the table deploys as an ordinary table (downgraded)', @v_list
       -- The generated columns and view exist only on a ledger table, so they go with it.
       DELETE c FROM #Columns c JOIN #Tables t ON t.[Schema] = c.[Schema] AND t.[Name] = c.[TableName]
        WHERE ISNULL(t.[Ledger], 'Off') <> 'Off'
@@ -194,7 +206,9 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'data masking (SQL Server 2016)', c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName], 'downgraded'
           FROM #Columns c WITH (NOLOCK) WHERE RTRIM(ISNULL(c.[DataMaskFunction], '')) <> ''
-      RAISERROR('  Dynamic data masking skipped (requires SQL Server 2016 - downgraded)', 10, 100) WITH NOWAIT
+      SET @v_list = STUFF((SELECT ', ' + c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] FROM #Columns c WITH (NOLOCK) WHERE RTRIM(ISNULL(c.[DataMaskFunction], '')) <> ''
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      EXEC SchemaSmith.PrintDowngrade N'  Dynamic data masking skipped (requires SQL Server 2016 - downgraded)', @v_list
       UPDATE #Columns SET [DataMaskFunction] = '' WHERE RTRIM(ISNULL([DataMaskFunction], '')) <> ''
     END
   END
@@ -216,7 +230,9 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'Always Encrypted (SQL Server 2016)', c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName], 'downgraded'
           FROM #Columns c WITH (NOLOCK) WHERE RTRIM(ISNULL(c.[EncryptionType], 'NONE')) <> 'NONE'
-      RAISERROR('  Always Encrypted skipped (requires SQL Server 2016 - downgraded)', 10, 100) WITH NOWAIT
+      SET @v_list = STUFF((SELECT ', ' + c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] FROM #Columns c WITH (NOLOCK) WHERE RTRIM(ISNULL(c.[EncryptionType], 'NONE')) <> 'NONE'
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      EXEC SchemaSmith.PrintDowngrade N'  Always Encrypted skipped (requires SQL Server 2016 - downgraded)', @v_list
       UPDATE #Columns SET [EncryptionType] = 'NONE' WHERE RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE'
     END
   END
@@ -248,7 +264,9 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'data compression (Enterprise edition below SQL Server 2016 SP1)', t.[Schema] + '.' + t.[Name], 'downgraded'
           FROM #Tables t WITH (NOLOCK) WHERE RTRIM(ISNULL(t.[CompressionType], 'NONE')) IN ('ROW', 'PAGE')
-      RAISERROR('  Table compression skipped (Enterprise edition below SQL Server 2016 SP1 - downgraded)', 10, 100) WITH NOWAIT
+      SET @v_list = STUFF((SELECT ', ' + t.[Schema] + '.' + t.[Name] FROM #Tables t WITH (NOLOCK) WHERE RTRIM(ISNULL(t.[CompressionType], 'NONE')) IN ('ROW', 'PAGE')
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      EXEC SchemaSmith.PrintDowngrade N'  Table compression skipped (Enterprise edition below SQL Server 2016 SP1 - downgraded)', @v_list
       UPDATE #Tables SET [CompressionType] = 'NONE' WHERE RTRIM(ISNULL([CompressionType], 'NONE')) IN ('ROW', 'PAGE')
     END
   END
@@ -291,7 +309,9 @@ BEGIN
         SELECT @@SPID, 'FILESTREAM (server or filegroup not available)',
                c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName], 'downgraded'
           FROM #Columns c WITH (NOLOCK) WHERE c.[FileStream] = 1
-      RAISERROR('  FILESTREAM skipped: not enabled on this server, or the database has no FILESTREAM filegroup. The column(s) deploy as plain VARBINARY(MAX) - downgraded', 10, 100) WITH NOWAIT
+      SET @v_list = STUFF((SELECT ', ' + c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] FROM #Columns c WITH (NOLOCK) WHERE c.[FileStream] = 1
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      EXEC SchemaSmith.PrintDowngrade N'  FILESTREAM skipped: not enabled on this server, or the database has no FILESTREAM filegroup. The column(s) deploy as plain VARBINARY(MAX) - downgraded', @v_list
       UPDATE #Columns
         SET [ColumnScript] = REPLACE([ColumnScript], ' FILESTREAM', ''), [FileStream] = 0
         WHERE [FileStream] = 1

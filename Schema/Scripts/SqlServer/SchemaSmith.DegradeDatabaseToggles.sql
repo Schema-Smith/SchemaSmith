@@ -47,7 +47,9 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'CDC (database not enabled)', T.[Schema] + '.' + T.[Name], 'downgraded'
           FROM #Tables T WITH (NOLOCK) WHERE T.EnableCDC = 1
-      RAISERROR('  CDC skipped: not enabled on this database (EXEC sys.sp_cdc_enable_db to allow it - downgraded)', 10, 100) WITH NOWAIT
+      SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK) WHERE T.EnableCDC = 1
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      EXEC SchemaSmith.PrintDowngrade N'  CDC skipped: not enabled on this database (EXEC sys.sp_cdc_enable_db to allow it - downgraded)', @v_list
       UPDATE #Tables SET EnableCDC = NULL WHERE EnableCDC = 1
     END
   END
@@ -77,7 +79,9 @@ BEGIN
       INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT @@SPID, 'Change Tracking (database not enabled)', T.[Schema] + '.' + T.[Name], 'downgraded'
           FROM #Tables T WITH (NOLOCK) WHERE T.EnableChangeTracking = 1
-      RAISERROR('  Change Tracking skipped: not enabled on this database (ALTER DATABASE ... SET CHANGE_TRACKING = ON to allow it - downgraded)', 10, 100) WITH NOWAIT
+      SET @v_list = STUFF((SELECT ', ' + T.[Schema] + '.' + T.[Name] FROM #Tables T WITH (NOLOCK) WHERE T.EnableChangeTracking = 1
+                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+      EXEC SchemaSmith.PrintDowngrade N'  Change Tracking skipped: not enabled on this database (ALTER DATABASE ... SET CHANGE_TRACKING = ON to allow it - downgraded)', @v_list
       UPDATE #Tables SET EnableChangeTracking = NULL WHERE EnableChangeTracking = 1
     END
   END

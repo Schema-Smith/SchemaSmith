@@ -2,6 +2,7 @@
 
 using System;
 using System.Data;
+using System.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -520,6 +521,31 @@ namespace SchemaQuench.IntegrationTests.SqlServer
         // ---------------------------------------------------------------------------------------------------
 
         private const string NoFullTextObjectType = "full-text index (Full-Text Search not installed)";
+
+        // A degrade's line names what it applied to; a list too long for one message is cut, and says so.
+        [Test]
+        public void ADowngradeLine_NamesItsObjects_AndCutsAListTooLongForOneMessage()
+        {
+            using var conn = KindleScratchDatabase("NoFtsBake", policy: "warn");
+            var messages = new System.Collections.Generic.List<string>();
+            ((Microsoft.Data.SqlClient.SqlConnection)conn).InfoMessage += (_, e) => messages.AddRange(e.Errors.Cast<Microsoft.Data.SqlClient.SqlError>().Select(x => x.Message));
+            using var cmd = conn.CreateCommand();
+
+            cmd.CommandText = "EXEC SchemaSmith.PrintDowngrade N'  Thing skipped (downgraded)', N'[dbo].[A], [dbo].[B]'; " +
+                              "EXEC SchemaSmith.PrintDowngrade N'  Many skipped (downgraded)', @l";
+            var list = cmd.CreateParameter();
+            list.ParameterName = "@l";
+            list.Value = string.Join(", ", System.Linq.Enumerable.Range(1, 400).Select(i => $"[dbo].[Table{i:000}]"));
+            cmd.Parameters.Add(list);
+            cmd.ExecuteNonQuery();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(messages, Does.Contain("  Thing skipped (downgraded): [dbo].[A], [dbo].[B]"));
+                Assert.That(messages.Last(), Does.StartWith("  Many skipped (downgraded): [dbo].[Table001]").And.EndWith(", ... (the summary lists them all)"));
+                Assert.That(messages.Last().Length, Is.LessThan(2048), "one message");
+            });
+        }
 
         private static void SimulateNoFullTextSearch(IDbCommand cmd)
         {
