@@ -23,6 +23,7 @@ namespace Schema.UnitTests.Capabilities
             // Recorded by the C# delivery step, not a script.
             Schema.Delivery.DataDeliveryProcessor.DowngradeObjectType,
             "full-text statistical semantics (no semantic database)",
+            "full-text index (Full-Text Search not installed)",
             "nonclustered columnstore index (writable from SQL Server 2016)",
             "clustered columnstore beside rowstore indexes (SQL Server 2016)",
             "data compression (Enterprise edition below SQL Server 2016 SP1)",

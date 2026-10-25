@@ -511,6 +511,105 @@ namespace SchemaQuench.IntegrationTests.SqlServer
         // database, so this is the real refusal, not a simulation.
         // ---------------------------------------------------------------------------------------------------
 
+        // ---------------------------------------------------------------------------------------------------
+        // #594: without Full-Text Search installed (the stock Linux container images) SQL Server refuses every
+        // full-text index, and the deploy stopped partway with the table already created. Every CI leg installs it,
+        // so the missing service is simulated through the CONTEXT_INFO override, extended with an 'SSFT' marker
+        // that SchemaSmith.fn_FullTextInstalled reads; the catalog named below does not exist, so any attempt to
+        // build the index would fail.
+        // ---------------------------------------------------------------------------------------------------
+
+        private const string NoFullTextObjectType = "full-text index (Full-Text Search not installed)";
+
+        private static void SimulateNoFullTextSearch(IDbCommand cmd)
+        {
+            cmd.CommandText = "DECLARE @c VARBINARY(128) = 0x53534F56 + CONVERT(BINARY(4), CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))) + " +
+                              "0x5353454400 + 0x5353465400; SET CONTEXT_INFO @c";
+            cmd.ExecuteNonQuery();
+        }
+
+        private static string PlainFullTextJson(string tableName) => $$"""
+{
+    "Schema": "[dbo]",
+    "Name": "[{{tableName}}]",
+    "Columns": [
+        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+        {"Name": "[Body]", "DataType": "NVARCHAR(MAX)", "Nullable": true}
+    ],
+    "Indexes": [
+        {"Name": "[PK_{{tableName}}]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]"}
+    ],
+    "FullTextIndex": {"FullTextCatalog": "[ss_no_such_cat]", "KeyIndex": "[PK_{{tableName}}]", "Columns": "[Body]"}
+}
+""";
+
+        private static int FullTextIndexCount(IDbCommand cmd, string tableName)
+        {
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.fulltext_indexes WHERE [object_id] = OBJECT_ID('dbo.{tableName}')";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public void FullTextIndex_WithoutFullTextSearch_DeploysTheTableWithoutIt_AndRecordsTheDowngrade(bool indexOnly)
+        {
+            var tableName = $"NoFts_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("NoFtsBake", policy: "warn");
+            using var cmd = conn.CreateCommand();
+            try
+            {
+                if (indexOnly)
+                {
+                    cmd.CommandText = $"CREATE TABLE dbo.[{tableName}] (Id INT NOT NULL CONSTRAINT [PK_{tableName}] PRIMARY KEY CLUSTERED, Body NVARCHAR(MAX) NULL)";
+                    cmd.ExecuteNonQuery();
+                }
+                SimulateNoFullTextSearch(cmd);
+
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, PlainFullTextJson(tableName), indexOnly: indexOnly, productName: tableName));
+
+                cmd.CommandText = $"SELECT COUNT(*) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.{tableName}')";
+                var columns = Convert.ToInt32(cmd.ExecuteScalar());
+                Assert.Multiple(() =>
+                {
+                    Assert.That(columns, Is.EqualTo(2), "the table deploys");
+                    Assert.That(FullTextIndexCount(cmd, tableName), Is.Zero, "without its full-text index");
+                    Assert.That(DowngradeRowCount(cmd, NoFullTextObjectType, $"[dbo].[{tableName}]"), Is.EqualTo(1));
+                });
+            }
+            finally
+            {
+                cmd.CommandText = "SET CONTEXT_INFO 0x0";
+                cmd.ExecuteNonQuery();
+            }
+        }
+
+        [Test]
+        public void FullTextIndex_WithoutFullTextSearch_UnderFail_RefusesBeforeCreatingTheTable()
+        {
+            var tableName = $"NoFtsF_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("NoFtsFailBake", policy: "fail");
+            using var cmd = conn.CreateCommand();
+            try
+            {
+                SimulateNoFullTextSearch(cmd);
+
+                var ex = Assert.Catch(() => RunTableQuenchProc(cmd, PlainFullTextJson(tableName), productName: tableName));
+
+                cmd.CommandText = $"SELECT CASE WHEN OBJECT_ID('dbo.{tableName}') IS NULL THEN 0 ELSE 1 END";
+                var created = Convert.ToInt32(cmd.ExecuteScalar());
+                Assert.Multiple(() =>
+                {
+                    Assert.That(ex!.Message, Does.Contain("Full-Text Search").And.Contain($"[dbo].[{tableName}]"));
+                    Assert.That(created, Is.Zero, "refused before the table is created");
+                });
+            }
+            finally
+            {
+                cmd.CommandText = "SET CONTEXT_INFO 0x0";
+                cmd.ExecuteNonQuery();
+            }
+        }
+
         private const string SemanticsObjectType = "full-text statistical semantics (no semantic database)";
 
         private static string SemanticFullTextJson(string tableName) => $$"""

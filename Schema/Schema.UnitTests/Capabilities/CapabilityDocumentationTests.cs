@@ -79,6 +79,7 @@ public class CapabilityDocumentationTests
         ["SqlServer/change-tracking-database-toggle"] = "**Change Tracking**",
         ["SqlServer/filestream-column"] = "**FILESTREAM**",
         ["SqlServer/fulltext-statistical-semantics"] = "**Full-text statistical semantics**",
+        ["SqlServer/fulltext-search-not-installed"] = "**Full-text indexes without Full-Text Search**",
 
         // ---- PostgreSQL ----
         ["PostgreSQL/online-foreign-key-partitioned"] = "**Online foreign key on a partitioned table**",

@@ -677,6 +677,7 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_RebuildBlockedReason.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.fn_EnterpriseFeaturesUnavailable.sql"),
+                new("SchemaSmith.fn_FullTextInstalled.sql"),
                 new("SchemaSmith.fn_OnlineOperationsAvailable.sql"),
                 new("SchemaSmith.fn_OnlineIndexForm.sql"),
                 new("SchemaSmith.fn_OnlineAlterColumnForm.sql"),

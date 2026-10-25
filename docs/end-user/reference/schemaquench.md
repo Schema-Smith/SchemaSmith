@@ -496,6 +496,8 @@ One further case is compatibility-level gated rather than version gated: a `Json
 
 **Full-text statistical semantics** (`STATISTICAL_SEMANTICS` on a full-text column) needs a semantic language statistics database registered on the server; without one, SQL Server refuses the whole full-text index. The index is created without semantic statistics and a downgrade is recorded.
 
+**Full-text indexes without Full-Text Search** fail on a server that has no Full-Text Search installed, which includes the stock SQL Server Linux container images until the `mssql-server-fts` package is added. The table deploys without its full-text index and a downgrade is recorded; under `fail` the deploy is refused before any change, naming each table. A later deploy to a server that has it creates the index.
+
 **Three more route through the same policy but are gated on server *state*, not version** — every supported version can do them, if the feature is turned on. **Change Data Capture** and **Change Tracking** need the feature enabled on the database; **FILESTREAM** columns need FILESTREAM enabled on the server *and* a FILESTREAM filegroup on the database. Where the prerequisite is absent, the object is deployed without that aspect and a downgrade is recorded, exactly as a version degrade would be — so a package that assumes CDC is on does not fail, it quietly deploys without it under the default `warn`. Enable the prerequisite, or set `Target:UnsupportedFeaturePolicy=fail`, if that is not what you want.
 
 #### MySQL / MariaDB

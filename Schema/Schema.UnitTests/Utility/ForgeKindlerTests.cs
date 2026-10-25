@@ -349,7 +349,8 @@ public class ForgeKindlerTests
         // +1 on SQL Server = DegradeUnsupportedSelectiveXmlIndexes (below 2012 SP1 a selective XML index is skipped).
         // +1 on SQL Server = DegradeUnsupportedJsonIndexes (below 2025 a JSON index is skipped).
         // +1 on SQL Server = ValidateTableOwnership (the ownership refusal, before anything is created or renamed).
-        Assert.That(sqlServer.Length, Is.EqualTo(75));
+        // +1 on SQL Server = fn_FullTextInstalled (#594: without Full-Text Search a full-text index is skipped).
+        Assert.That(sqlServer.Length, Is.EqualTo(76));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns

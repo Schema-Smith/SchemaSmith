@@ -11,6 +11,32 @@ BEGIN
   -- 2012+); without one SQL Server refuses the whole full-text index with 41209. Under 'warn' the option is
   -- removed, so the index is still created; under 'fail' the deploy is refused before anything is created. Operates on
   -- the caller's #FullTextIndexes, and is called once it is filled, on both the table and --IndexOnly paths.
+  --
+  -- Without Full-Text Search installed SQL Server refuses every full-text index, so under 'warn' the table deploys
+  -- without one and under 'fail' the deploy is refused, naming each table.
+  IF EXISTS (SELECT 1 FROM #FullTextIndexes WITH (NOLOCK)) AND SchemaSmith.fn_FullTextInstalled() = 0
+  BEGIN
+    DECLARE @v_Tables NVARCHAR(MAX) = STUFF((SELECT ', ' + f.[Schema] + '.' + f.[TableName] FROM #FullTextIndexes f WITH (NOLOCK)
+                                               ORDER BY f.[Schema], f.[TableName]
+                                               FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+    IF SchemaSmith.UnsupportedFeaturePolicy() = 'fail'
+    BEGIN
+      DECLARE @v_NotInstalled NVARCHAR(2048) = 'Full-text indexes require Full-Text Search, which is not installed on this server; table(s): ' +
+                                               LEFT(@v_Tables, 1800) + '.'
+      RAISERROR(@v_NotInstalled, 16, 1)
+      RETURN
+    END
+
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+      SELECT @@SPID, 'full-text index (Full-Text Search not installed)', f.[Schema] + '.' + f.[TableName], 'downgraded'
+        FROM #FullTextIndexes f WITH (NOLOCK)
+    DECLARE @v_Skipped NVARCHAR(2048) = '  Full-text index skipped on ' + LEFT(@v_Tables, 1800) +
+                                        ': Full-Text Search is not installed - the table deploys without it (downgraded)'
+    RAISERROR('%s', 10, 100, @v_Skipped) WITH NOWAIT
+    DELETE FROM #FullTextIndexes
+    RETURN
+  END
+
   IF NOT EXISTS (SELECT 1 FROM #FullTextIndexes WITH (NOLOCK) WHERE [Columns] LIKE '% STATISTICAL[_]SEMANTICS%')
     RETURN
 
