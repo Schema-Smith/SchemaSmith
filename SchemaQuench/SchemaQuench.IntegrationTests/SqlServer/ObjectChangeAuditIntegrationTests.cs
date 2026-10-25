@@ -65,8 +65,7 @@ public class ObjectChangeAuditIntegrationTests : BaseTableQuenchTests
             "expected column/modified for Name");
         Assert.That(changed.Any(r => r is { Type: "index", Action: "dropped" } && r.Name.Contains("IX_AuditChild")),
             "expected index/dropped for IX_AuditChild_Name");
-        // A dropped index was named as the catalog stores it, IX_AuditChild_Name, beside the bracketed name it was created
-        // under, so the two rows did not read as the same index.
+        // A dropped and a created index are named the same way, so the two rows read as the same index.
         Assert.That(changed.Single(r => r is { Type: "index", Action: "dropped" } && r.Name.Contains("IX_AuditChild")).Name,
             Is.EqualTo(created.Single(r => r is { Type: "index", Action: "created" } && r.Name.Contains("IX_AuditChild")).Name),
             "a dropped index is named as it was created");

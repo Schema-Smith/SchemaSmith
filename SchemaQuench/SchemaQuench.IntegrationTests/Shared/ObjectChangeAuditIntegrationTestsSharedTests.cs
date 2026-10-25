@@ -181,8 +181,8 @@ public abstract class ObjectChangeAuditIntegrationTestsSharedTests : BaseTableQu
         conn.Close();
     }
 
-    // A column the deploy added was named `Orders`.`Channel` and one it modified Orders.Status, and the progress log gave a
-    // line per column for what runs as one ALTER. Every row now names an object as the catalog does, without backticks.
+    // Every row names an object as the catalog does, without backticks, whether it was created or modified, and the
+    // progress log gives one line for what runs as one ALTER.
     [Test]
     public void TableQuench_NamesEveryChangeOneWay_AndLogsAFoldedAlterOnce()
     {

@@ -659,8 +659,8 @@ VALUES ('{_productName}', '', '{TestSchema}', 'FOREIGN KEY', 'ModFKCascUpd.FK_Mo
         conn.Close();
     }
 
-    // A declared key on a column the engine widens in place was dropped and re-added, which re-validates every row of the
-    // referencing table. Where the engine keeps the key, it is left in place.
+    // Dropping and re-adding a declared key re-validates every row of the referencing table, so where the engine widens
+    // the column in place and keeps the key, the key is left in place.
     [Test]
     public void TableQuench_VarcharWideningUnderADeclaredForeignKey_LeavesTheKeyInPlace_WhereTheEngineKeepsIt()
     {

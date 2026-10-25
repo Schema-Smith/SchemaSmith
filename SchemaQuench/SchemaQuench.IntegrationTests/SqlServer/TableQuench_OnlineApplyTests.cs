@@ -541,8 +541,7 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
     }
 
     // A check constraint or foreign key added to an existing table scans it, and OnlineApply has no lower-lock form for
-    // either on SQL Server. Under Require it passed with the plain statement and no word, so "Require" read as "online or
-    // refused". It still runs as written, and now says so on its log line and in the summary's mode.
+    // either on SQL Server. It runs as written, under Require too, and says so on its log line and in the summary's mode.
     [TestCase("REQUIRE", true, false)]
     [TestCase("PREFER", true, false)]
     [TestCase("OFF", false, false)]

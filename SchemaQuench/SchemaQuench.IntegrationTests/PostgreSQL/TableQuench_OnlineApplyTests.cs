@@ -515,8 +515,7 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
     }
 
     // OnlineApply has no lower-lock form for a column change here: INT to BIGINT rewrites the table under ACCESS EXCLUSIVE.
-    // Under Require it ran with no word, so "Require" read as "online or refused". It still runs as written, and now says
-    // so on its log line and in the summary's mode.
+    // It runs as written, under Require too, and says so on its log line and in the summary's mode.
     [TestCase("REQUIRE", true)]
     [TestCase("PREFER", true)]
     [TestCase("OFF", false)]

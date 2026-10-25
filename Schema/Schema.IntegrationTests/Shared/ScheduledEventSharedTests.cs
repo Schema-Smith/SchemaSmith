@@ -354,8 +354,8 @@ public abstract class ScheduledEventSharedTests
         Assert.That(EventField("ON_COMPLETION"), Is.EqualTo("PRESERVE"));
     }
 
-    // #593: MariaDB keeps 64 characters of an event's comment, so a longer one never matched and the event was
-    // re-created on every deploy, resetting its STARTS. MySQL 8.0 keeps 2048 and the test holds there too.
+    // MariaDB and MySQL 5.7 keep 64 characters of an event's comment, MySQL 8.0 keeps 2048. Re-creating the event
+    // resets its STARTS, so a comment the engine shortened must still read as unchanged.
     [Test]
     public void ACommentLongerThanTheEngineKeeps_RedeploysAsUnchanged()
     {

@@ -512,9 +512,9 @@ namespace SchemaQuench.IntegrationTests.SqlServer
         // ---------------------------------------------------------------------------------------------------
 
         // ---------------------------------------------------------------------------------------------------
-        // #594: without Full-Text Search installed (the stock Linux container images) SQL Server refuses every
-        // full-text index, and the deploy stopped partway with the table already created. Every CI leg installs it,
-        // so the missing service is simulated through the CONTEXT_INFO override, extended with an 'SSFT' marker
+        // Without Full-Text Search installed (the stock Linux container images) SQL Server refuses every full-text
+        // index. Every CI leg installs it, so the missing service is simulated through the CONTEXT_INFO override,
+        // extended with an 'SSFT' marker
         // that SchemaSmith.fn_FullTextInstalled reads; the catalog named below does not exist, so any attempt to
         // build the index would fail.
         // ---------------------------------------------------------------------------------------------------

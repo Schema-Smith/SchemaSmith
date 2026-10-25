@@ -3333,7 +3333,7 @@ public class CoherenceCheckTests
         Assert.That(CoherenceCheck.Codes["SS-COL-008"], Is.EqualTo(new[] { Severity.Warning }));
     }
 
-    // #593: MariaDB and MySQL 5.7 keep 64 characters of an event's comment and drop the rest.
+    // MariaDB and MySQL 5.7 keep 64 characters of an event's comment and drop the rest.
     [TestCase(Platform.MariaDb, 65, false, "MariaDB keeps the first 64")]
     [TestCase(Platform.MySQL, 93, false, "MySQL 5.7 keeps (8.0 and later keep 2,048) the first 64")]
     [TestCase(Platform.MySQL, 70, true, "MySQL 5.7 keeps")]

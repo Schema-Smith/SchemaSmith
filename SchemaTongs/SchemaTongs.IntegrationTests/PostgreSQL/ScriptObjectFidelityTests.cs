@@ -221,8 +221,8 @@ public class ScriptObjectFidelityTests
         }
     }
 
-    // #595: a guarded create skipped the edited script once the publication existed, so a table added to it was never
-    // published. The target holds the publication as it was before the edit: one table, insert only.
+    // An edited script must change a publication that already exists. The target holds it as it was before the edit:
+    // one table, insert only.
     [Test]
     public void Publication_AnExistingOne_IsConvergedToTheScript()
     {

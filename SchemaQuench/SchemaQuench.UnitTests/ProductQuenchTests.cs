@@ -170,7 +170,7 @@ public class ProductQuenchTests
 
     #region Product Script Server Routing Tests
 
-    // #596: "127.0.0.1,11433" was read as two secondaries, 127.0.0.1 and 11433, and the deploy stopped at the server check.
+    // SQL Server names a server on another port "host,port", so the port must stay with its server.
     [TestCase("secondary-1,secondary-2", new[] { "secondary-1", "secondary-2" })]
     [TestCase("127.0.0.1,11433", new[] { "127.0.0.1,11433" })]
     [TestCase(" replica-1,14330 , replica-2 ,replica-3,14331", new[] { "replica-1,14330", "replica-2", "replica-3,14331" })]

@@ -74,8 +74,8 @@ public class FolderGateIntegrationTests
         Assert.That(FolderGate.ShouldApply(cmd, folder.ShouldApplyExpression), Is.True);
     }
 
-    // #597: with no SecondaryServers configured, every product folder ran on the primary, so a folder meant only for
-    // replicas (a local cache build, a job that must not run on the primary) ran there in every non-AG environment.
+    // A folder meant only for replicas (a local cache build, a job that must not run on the primary) has nowhere to run
+    // without them, as in any environment that has no Availability Group.
     [Test]
     public void ProductFolders_WithNoSecondariesConfigured_RunOnlyThoseMeantForThePrimary()
     {

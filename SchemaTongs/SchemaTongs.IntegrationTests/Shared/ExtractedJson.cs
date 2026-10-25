@@ -12,8 +12,8 @@ namespace SchemaTongs.IntegrationTests.Shared;
 
 internal static class ExtractedJson
 {
-    // An extracted package writes a key only when it holds a value. Every engine used to write some keys as "" -- a
-    // different set on each -- so a package's shape depended on the engine it came from.
+    // An extracted package writes a key only when it holds a value, on every engine, so a package's shape does not
+    // depend on the engine it came from.
     public static void HasNoEmptyValues(IFile file)
     {
         var empties = file.ReceivedCalls()

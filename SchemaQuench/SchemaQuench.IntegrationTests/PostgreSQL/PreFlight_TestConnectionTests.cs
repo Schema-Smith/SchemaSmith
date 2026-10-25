@@ -58,7 +58,7 @@ public class PreFlight_TestConnectionTests : BaseTableQuenchTests
                 Assert.That(pq.RunPreFlight(previewTargets: false), Is.False);
                 Assert.That(pq.Failed, Is.True);
 
-                // The driver's reason was only in Errors.log, as a stack trace, and Failures.log stayed empty.
+                // The driver's reason belongs on the line and in a Failures.log block, not only in Errors.log.
                 var failedLine = progressErrors.FirstOrDefault(m => m.Contains("**CONNECTION FAILED**"));
                 Assert.That(failedLine, Is.Not.Null, "the server check reports the failed connection");
                 Assert.Multiple(() =>

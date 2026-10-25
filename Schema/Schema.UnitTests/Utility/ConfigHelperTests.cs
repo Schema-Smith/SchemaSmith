@@ -235,7 +235,7 @@ public class ConfigHelperTests
         Assert.That(resolved, Is.EqualTo(Path.GetFullPath("rellogs").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
     }
 
-    // #599: Path.GetFullPath("") threw before the argument check could say what was wrong.
+    // A switch left without a value falls back to the default, so the argument check that runs next can report it.
     [TestCase("app.exe --LogPath ./logs")]
     [TestCase("app.exe --LogPath=")]
     [TestCase("app.exe --LogPath:")]

@@ -1723,8 +1723,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
 
-    // #593: the engine keeps 64 characters of an event's comment (MariaDB, MySQL 5.7; 8.0 keeps 2048) and drops the
-    // rest silently. The deploy compares what is kept, so this is about the comment the database will show.
+    // The engine keeps 64 characters of an event's comment (MariaDB, MySQL 5.7; 8.0 keeps 2048) and drops the rest
+    // silently. The deploy compares what is kept, so this is about the comment the database will show.
     private static IEnumerable<Finding> CheckEventCommentLength(Template template, Platform platform)
     {
         if (platform == Platform.Unknown || platform.GetBasePlatform() != Platform.MySQL) yield break;
