@@ -71,7 +71,7 @@ BEGIN TRY
   -- After the indexes/constraints pass on purpose: enabling change tracking requires a primary key,
   -- which for a table created in this same run does not exist until the line above has run.
   EXEC SchemaSmith.ChangeTrackingQuench @WhatIf
-  EXEC SchemaSmith.ForeignKeyQuench @ProductName, @WhatIf
+  EXEC SchemaSmith.ForeignKeyQuench @ProductName, @WhatIf, @OnlineApply = @OnlineApply
   -- Edge constraints need their node tables, which exist by now; the procedure is floor-safe, the guard only saves the call.
   IF SchemaSmith.fn_ServerMajorVersion() >= 15 EXEC SchemaSmith.EdgeConstraintQuench @WhatIf
   -- After the keys exist: enforcement and validation are state on a constraint that must already be there.

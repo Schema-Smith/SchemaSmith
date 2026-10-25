@@ -513,4 +513,29 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
         }
         finally { s.Sql("DROP TABLE IF EXISTS public.onl_wi CASCADE; DROP TABLE IF EXISTS public.onl_wi_ref CASCADE"); }
     }
+
+    // OnlineApply has no lower-lock form for a column change here: INT to BIGINT rewrites the table under ACCESS EXCLUSIVE.
+    // Under Require it ran with no word, so "Require" read as "online or refused". It still runs as written, and now says
+    // so on its log line and in the summary's mode.
+    [TestCase("REQUIRE", true)]
+    [TestCase("PREFER", true)]
+    [TestCase("OFF", false)]
+    public void AColumnTypeChange_RunsAsWritten_AndSaysOnlineApplyDoesNotCoverIt(string online, bool marked)
+    {
+        var table = $"onl_nc_{online.ToLowerInvariant()}";
+        using var s = Open();
+        try
+        {
+            Seed(s, table);
+            Deploy(s, Table(table, IdAndA.Replace("\"Name\": \"a\", \"DataType\": \"integer\"", "\"Name\": \"a\", \"DataType\": \"bigint\"")), online);
+            Assert.Multiple(() =>
+            {
+                Assert.That(s.Scalar($"SELECT data_type FROM information_schema.columns WHERE table_name = '{table}' AND column_name = 'a'"), Is.EqualTo("bigint"));
+                Assert.That(Mode(s, $"public.{table}.a", "modified"), Is.EqualTo(marked ? "notCovered" : "NULL"));
+                Assert.That(s.Notices.Any(n => n.Contains($"Modified columns found in public.{table}(a)") && n.Contains("(not covered by OnlineApply)")),
+                    Is.EqualTo(marked), string.Join(" | ", s.Notices));
+            });
+        }
+        finally { s.Sql($"DROP TABLE IF EXISTS public.{table} CASCADE"); }
+    }
 }

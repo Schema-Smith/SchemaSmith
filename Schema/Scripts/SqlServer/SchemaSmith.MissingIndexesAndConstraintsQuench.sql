@@ -435,10 +435,12 @@ BEGIN TRY
                               AND COL_NAME(dc.parent_object_id, dc.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(c.ColumnName))
 
   RAISERROR('Add Missing Check Constraints', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding check constraint ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName] + CASE WHEN RTRIM(ISNULL(cc.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(cc.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding check constraint ' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName] + CASE WHEN RTRIM(ISNULL(cc.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(cc.[VariantName]), '''', '''''') + ')' ELSE '' END +
+                                  CASE WHEN EXISTS (SELECT 1 FROM #OnlineTables ot WITH (NOLOCK) WHERE ot.[Schema] = cc.[Schema] AND ot.[Name] = cc.[TableName] AND ot.[Mode] <> 'OFF') THEN ' (not covered by OnlineApply)' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE ' + cc.[Schema] + '.' + cc.[TableName] + CASE WHEN ISNULL(cc.[Validated], 1) = 0 THEN ' WITH NOCHECK' ELSE '' END + ' ADD CONSTRAINT ' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName])) +
                                   ' CHECK ' + CASE WHEN ISNULL(cc.[NotForReplication], 0) = 1 THEN 'NOT FOR REPLICATION ' ELSE '' END + '(' + cc.[Expression] + ');' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', ''' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName] + ''', ''created'');' AS NVARCHAR(MAX))
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''constraint'', ''' + cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName] + ''', ''created'', ' +
+                                  CASE WHEN EXISTS (SELECT 1 FROM #OnlineTables ot WITH (NOLOCK) WHERE ot.[Schema] = cc.[Schema] AND ot.[Name] = cc.[TableName] AND ot.[Mode] <> 'OFF') THEN '''notCovered''' ELSE 'NULL' END + ');' AS NVARCHAR(MAX))
                            FROM #CheckConstraints cc WITH (NOLOCK)
                            WHERE NOT EXISTS (SELECT *
                                                FROM sys.check_constraints sc
@@ -449,16 +451,19 @@ BEGIN TRY
 
   -- #363: WhatIf twin of the embedded check-constraint 'created' audit above; same predicate.
   IF @WhatIf = 1
-    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-      SELECT @@SPID, 'constraint', cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName], 'wouldCreate'
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
+      SELECT @@SPID, 'constraint', cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ConstraintName], 'wouldCreate',
+             CASE WHEN EXISTS (SELECT 1 FROM #OnlineTables ot WITH (NOLOCK) WHERE ot.[Schema] = cc.[Schema] AND ot.[Name] = cc.[TableName] AND ot.[Mode] <> 'OFF') THEN 'notCovered' END
         FROM #CheckConstraints cc WITH (NOLOCK)
         WHERE NOT EXISTS (SELECT * FROM sys.check_constraints sc
                             WHERE sc.[parent_object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
                               AND sc.[name] = SchemaSmith.fn_StripBracketWrapping(cc.[ConstraintName]))
 
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding check constrain to column ' + c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding check constrain to column ' + c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] +
+                                  CASE WHEN EXISTS (SELECT 1 FROM #OnlineTables ot WITH (NOLOCK) WHERE ot.[Schema] = c.[Schema] AND ot.[Name] = c.[TableName] AND ot.[Mode] <> 'OFF') THEN ' (not covered by OnlineApply)' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ADD CHECK (' + c.[CheckExpression] + ');' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', ''' + REPLACE(c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ' (check)', '''', '''''') + ''', ''created'');' AS NVARCHAR(MAX))
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''constraint'', ''' + REPLACE(c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ' (check)', '''', '''''') + ''', ''created'', ' +
+                                  CASE WHEN EXISTS (SELECT 1 FROM #OnlineTables ot WITH (NOLOCK) WHERE ot.[Schema] = c.[Schema] AND ot.[Name] = c.[TableName] AND ot.[Mode] <> 'OFF') THEN '''notCovered''' ELSE 'NULL' END + ');' AS NVARCHAR(MAX))
                            FROM #Columns c WITH (NOLOCK)
                            WHERE RTRIM(ISNULL(c.[CheckExpression], '')) <> ''
                              -- A check the package declares by name on the same column is its own entry, not this one.

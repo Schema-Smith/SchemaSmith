@@ -539,4 +539,45 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
             Assert.That(Audits(cmd, t), Is.EquivalentTo(new[] { $"[dbo].[{t}].[IX_{t}]|dropped|-", $"[dbo].[{t}].[IX_{t}]|created|-" }));
         });
     }
+
+    // A check constraint or foreign key added to an existing table scans it, and OnlineApply has no lower-lock form for
+    // either on SQL Server. Under Require it passed with the plain statement and no word, so "Require" read as "online or
+    // refused". It still runs as written, and now says so on its log line and in the summary's mode.
+    [TestCase("REQUIRE", true, false)]
+    [TestCase("PREFER", true, false)]
+    [TestCase("OFF", false, false)]
+    [TestCase("REQUIRE", true, true)]
+    [TestCase("OFF", false, true)]
+    public void ACheckOrForeignKeyAddedToAnExistingTable_RunsAsWritten_AndSaysOnlineApplyDoesNotCoverIt(string online, bool marked, bool whatIf)
+    {
+        var t = Unique("OnNc");
+        WithTable(t, (conn, cmd) =>
+        {
+            Quench(cmd, Json(t, Pk(t)));
+            var v2 = Json(t, Pk(t), """, { "Name": "[X]", "DataType": "INT", "Nullable": true, "CheckExpression": "[X] >= 0" }""")
+                .TrimEnd().TrimEnd(']').TrimEnd().TrimEnd('}') + $$"""
+                ,
+                    "CheckConstraints": [ { "Name": "[CK_{{t}}]", "Expression": "[W] >= 0" } ],
+                    "ForeignKeys": [ { "Name": "[FK_{{t}}_Self]", "Columns": "[W]", "RelatedTableSchema": "[dbo]", "RelatedTable": "[{{t}}]", "RelatedColumns": "[Id]" } ]
+                }]
+                """;
+            ClearAudit(cmd);
+
+            var printed = Printed(conn, cmd, v2, online, whatIf: whatIf);
+
+            var mode = marked ? "notCovered" : "-";
+            var action = whatIf ? "wouldCreate" : "created";
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar(cmd, $"SELECT OBJECT_ID('dbo.CK_{t}')") is DBNull, Is.EqualTo(whatIf), "the check is added, unless this is a preview");
+                Assert.That(Scalar(cmd, $"SELECT OBJECT_ID('dbo.FK_{t}_Self')") is DBNull, Is.EqualTo(whatIf), "and the key");
+                foreach (var line in new[] { $"Adding check constraint [dbo].[{t}].[CK_{t}]", $"Adding foreign key [dbo].[{t}].[FK_{t}_Self]", $"to column [dbo].[{t}].[X]" })
+                    Assert.That(printed.Split('\n').Any(l => l.Contains(line) && l.Contains("(not covered by OnlineApply)")), Is.EqualTo(marked), $"{line}:\n{printed}");
+                Assert.That(Audits(cmd, t), Is.SupersetOf(new[]
+                {
+                    $"[dbo].[{t}].[CK_{t}]|{action}|{mode}", $"[dbo].[{t}].[FK_{t}_Self]|{action}|{mode}", $"[dbo].[{t}].[X] (check)|{action}|{mode}"
+                }));
+            });
+        });
+    }
 }

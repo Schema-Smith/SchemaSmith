@@ -770,7 +770,7 @@ deploy use them, per environment, with a per-table override.
 |---|---|
 | `Off` (default) | The plain statements, exactly as a deploy has always run them. |
 | `Prefer` | The online form wherever the engine's version and edition allow it, and the plain form otherwise. |
-| `Require` | The online form, or the deploy is refused, naming each statement that could not run online. On SQL Server and PostgreSQL the refusal comes before any existing index, key or column on the table changes (a column the deploy adds is added first); MySQL and MariaDB cannot take DDL back, so there it stops the deploy at that statement. |
+| `Require` | The online form for each change the engine's table below lists, or the deploy is refused, naming each statement that could not run online. On SQL Server and PostgreSQL the refusal comes before any existing index, key or column on the table changes (a column the deploy adds is added first); MySQL and MariaDB cannot take DDL back, so there it stops the deploy at that statement. A change the table does not list runs as written, under `Require` too. |
 
 It is off by default because each online form costs something you did not ask for: an online index build takes about
 twice the space and the time, a resumable one leaves its progress behind if the deploy's session ends, a PostgreSQL
@@ -779,8 +779,9 @@ table's row versions. Those are deployment-window decisions, so you opt in per e
 
 The [Deployment Summary](deployment-summary-report.md#details) says which form each change used: `mode` is `online`,
 `instant` (MySQL and MariaDB), `resumable` (SQL Server) or `unavailable` (the plain form, where the online one could not
-be used). A change has no `mode` when
-`OnlineApply` is `Off`, and the progress log says the same thing, with the reason for an offline one.
+be used). A change OnlineApply has no form for, on a table under `Prefer` or `Require`, runs as written: its `mode` is
+`notCovered` and its progress-log line ends `(not covered by OnlineApply)`. A change has no `mode` when `OnlineApply` is
+`Off`, and the progress log says the same thing, with the reason for an offline one.
 
 A table this deploy creates is empty, so its indexes are built the plain way whatever `OnlineApply` says.
 
@@ -801,6 +802,10 @@ statements, and `Require` is refused at the start of the deploy, naming the tabl
 A column change runs offline when SQL Server cannot make it online: a text, ntext, image, CLR or FILESTREAM column on
 either side of the change, an XML column bound to a schema collection, an Always Encrypted column, and a table that is
 system-versioned, memory-optimized, has change tracking or merge replication, or has a columnstore index.
+
+Everything else runs as written, under `Require` too. A check constraint or foreign key added to an existing table
+scans it to check the rows, and SQL Server has no online form for either: its log line ends
+`(not covered by OnlineApply)` and its summary row's `mode` is `notCovered`.
 
 ### OnlineApplyMaxDuration
 
@@ -832,6 +837,10 @@ finished, each on its own. The progress log marks each one `(online, after this 
 | A constraint declared validated that is `NOT VALID` on the server | `VALIDATE CONSTRAINT` on its own |
 | An exclusion constraint, a `WITHOUT OVERLAPS` key, or any index on a partitioned table | built the plain way: PostgreSQL has no concurrent build for them |
 | A foreign key on a partitioned table, before PostgreSQL 18 | added the plain way: `NOT VALID` is refused there |
+
+A column change runs as written, under `Require` too: PostgreSQL has no lower-lock form for it, and a type change such as
+`integer` to `bigint` rewrites the table under `ACCESS EXCLUSIVE`. Its log line ends `(not covered by OnlineApply)` and
+its summary rows' `mode` is `notCovered`.
 
 A changed index is still dropped inside its step and built again after it, so the table is without that index between
 the two. A concurrent build that fails (a unique index over duplicate rows, a lock that timed out) leaves an invalid
