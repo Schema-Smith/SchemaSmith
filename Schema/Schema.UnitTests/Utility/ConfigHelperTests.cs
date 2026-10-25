@@ -235,6 +235,18 @@ public class ConfigHelperTests
         Assert.That(resolved, Is.EqualTo(Path.GetFullPath("rellogs").TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
     }
 
+    // #599: Path.GetFullPath("") threw before the argument check could say what was wrong.
+    [TestCase("app.exe --LogPath ./logs")]
+    [TestCase("app.exe --LogPath=")]
+    [TestCase("app.exe --LogPath:")]
+    public void ResolveLogPath_ValuelessSwitch_FallsBackToToolDir(string commandLine)
+    {
+        _mockEnvironment.CommandLine.Returns(commandLine);
+
+        var expected = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        Assert.That(ConfigHelper.ResolveLogPath(), Is.EqualTo(expected));
+    }
+
     [Test]
     public void ResolveLogPath_Unspecified_FallsBackToToolDir()
     {
