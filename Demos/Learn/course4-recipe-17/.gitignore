@@ -1,0 +1,5 @@
+# Learner-generated: extracted packages, logs, and deployment summaries.
+extracted/
+*/logs/
+artifacts/
+checkpoints/

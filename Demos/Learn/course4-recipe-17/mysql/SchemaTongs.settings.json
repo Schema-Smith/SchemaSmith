@@ -1,0 +1,18 @@
+{
+  "Source": {
+    "Server": "localhost",
+    "Port": "13306",
+    "User": "root",
+    "Password": "Learn!Passw0rd",
+    "Database": "cookbook_r17",
+    "Platform": "MySQL",
+    "ConnectionProperties": {}
+  },
+  "Product": {
+    "Path": "./extracted",
+    "Name": "Library"
+  },
+  "Template": {
+    "Name": "Main"
+  }
+}

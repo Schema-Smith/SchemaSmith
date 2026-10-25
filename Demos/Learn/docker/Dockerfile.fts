@@ -1,0 +1,13 @@
+# SQL Server 2022 with Full-Text Search, for Course 4 Recipe 17. The stock image omits it;
+# Microsoft installs it on Linux from the mssql-server-fts package.
+FROM mcr.microsoft.com/mssql/server:2022-latest
+USER root
+RUN apt-get update \
+ && apt-get install -yq curl gnupg \
+ && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc > /etc/apt/trusted.gpg.d/microsoft.asc \
+ && curl -fsSL https://packages.microsoft.com/config/ubuntu/22.04/mssql-server-2022.list > /etc/apt/sources.list.d/mssql-server-2022.list \
+ && apt-get update \
+ && apt-get install -yq mssql-server-fts \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
+USER mssql

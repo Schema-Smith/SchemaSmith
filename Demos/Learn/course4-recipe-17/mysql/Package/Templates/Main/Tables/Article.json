@@ -1,0 +1,15 @@
+{
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
+  "Name": "`Article`",
+  "Columns": [
+    { "Name": "`ArticleId`", "DataType": "INT", "Nullable": false },
+    { "Name": "`Title`", "DataType": "VARCHAR(200)", "Nullable": false },
+    { "Name": "`Body`", "DataType": "TEXT", "Nullable": false }
+  ],
+  "Indexes": [
+    { "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "`ArticleId`" }
+  ],
+  "FullTextIndexes": [
+    { "Name": "ft_article_title", "Columns": "`Title`" }
+  ]
+}

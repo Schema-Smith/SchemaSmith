@@ -1,0 +1,20 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[dbo]",
+  "Name": "[Article]",
+  "Columns": [
+    { "Name": "[ArticleId]", "DataType": "INT", "Nullable": false },
+    { "Name": "[Title]", "DataType": "NVARCHAR(200)", "Nullable": false },
+    { "Name": "[Body]", "DataType": "NVARCHAR(MAX)", "Nullable": false }
+  ],
+  "Indexes": [
+    { "Name": "[PK_Article]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[ArticleId]" },
+    { "Name": "[IX_Article_Title]", "IndexColumns": "[Title]" }
+  ],
+  "FullTextIndex": {
+    "FullTextCatalog": "[LibraryCatalog]",
+    "KeyIndex": "[PK_Article]",
+    "ChangeTracking": "AUTO",
+    "Columns": "[Title],[Body]"
+  }
+}

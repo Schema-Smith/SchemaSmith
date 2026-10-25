@@ -59,6 +59,8 @@ services:
   postgres:
     image: ${POSTGRES_IMAGE:-postgres:16}
     container_name: learn-postgres
+    # logical, so a publication on this server can feed the `replica` profile's subscriber (Course 9 M6).
+    command: ["postgres", "-c", "wal_level=logical"]
     environment:
       POSTGRES_PASSWORD: "Learn!Passw0rd"
       POSTGRES_DB: "learn"
@@ -202,3 +204,69 @@ services:
       timeout: 5s
       retries: 30
       start_period: 20s
+
+  # --- Opt-in SQL Server with Full-Text Search (Course 4 · Recipe 17) -------------
+  # The stock image has no Full-Text Search. This one is built from it plus Microsoft's
+  # mssql-server-fts package (Dockerfile.fts). Not started by a plain `docker compose up` --
+  # opt in with:  docker compose --profile fts up -d --build sqlserver-fts
+  sqlserver-fts:
+    build:
+      context: .
+      dockerfile: Dockerfile.fts
+    image: schemasmith-learn/mssql-fts:2022
+    container_name: learn-sqlserver-fts
+    profiles: ["fts"]
+    mem_limit: 3g
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Learn!Passw0rd"
+      MSSQL_PID: "Developer"
+    ports:
+      - "11436:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 15s
+      retries: 60
+      start_period: 20m
+
+  # --- Opt-in SQL Server Express (Course 6 · Module 7; Course 7 · Module 7) --------
+  # The same 2022 image as `sqlserver`, licensed as Express: online index operations are an
+  # Enterprise/Developer feature, so OnlineApply's edition refusal shows here. Course 7 M7 also
+  # uses it as a second, separate server. Opt in with:  docker compose --profile edition-tier up -d
+  sqlserver-express:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: learn-sqlserver-express
+    profiles: ["edition-tier"]
+    mem_limit: 2g
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Learn!Passw0rd"
+      MSSQL_PID: "Express"
+    ports:
+      - "11435:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 15s
+      retries: 60
+      start_period: 20m
+
+  # --- Opt-in PostgreSQL subscriber (Course 9 · Module 6) --------------------------
+  # A second PostgreSQL that subscribes to a publication on `postgres` (reached as host
+  # `postgres` on the compose network). Opt in with:  docker compose --profile replica up -d
+  postgres-replica:
+    image: ${POSTGRES_IMAGE:-postgres:16}
+    container_name: learn-postgres-replica
+    profiles: ["replica"]
+    environment:
+      POSTGRES_PASSWORD: "Learn!Passw0rd"
+      POSTGRES_DB: "learn"
+    ports:
+      - "15434:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -h 127.0.0.1 -U postgres -d learn"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
