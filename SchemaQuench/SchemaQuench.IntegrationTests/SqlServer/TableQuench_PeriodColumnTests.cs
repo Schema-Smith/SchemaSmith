@@ -96,7 +96,9 @@ public class TableQuench_PeriodColumnTests : BaseTableQuenchTests
     private void WithTables(Action<IDbCommand> body, params string[] tables)
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
-        if (conn is SqlConnection sql) sql.InfoMessage += (_, e) => { lock (_messages) _messages.Add(e.Message); };
+        // The deploy log shows a server message raised with state 100 and drops the rest, so only those are kept.
+        if (conn is SqlConnection sql)
+            sql.InfoMessage += (_, e) => { lock (_messages) _messages.AddRange(e.Errors.Cast<SqlError>().Where(m => m.State == 100).Select(m => m.Message)); };
         conn.Open();
         conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();

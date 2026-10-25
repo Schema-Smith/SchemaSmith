@@ -91,7 +91,7 @@ BEGIN
   SELECT @v_Warn = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
       'RAISERROR(''  WARNING: ' + REPLACE(REPLACE(p.[Schema] + '.' + p.[Name] + ': ' + w.[Columns] +
           '. SQL Server cannot change the precision of a period column, so the deploy leaves it as it is; re-create the table to change it.', '''', ''''''), '%', '%%') +
-      ''', 10, 1) WITH NOWAIT;' AS NVARCHAR(MAX))
+      ''', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
     FROM #LivePeriods p
     CROSS APPLY (SELECT STUFF(
                    CASE WHEN p.[LiveStartScale] <> CONVERT(INT, SUBSTRING(p.[StartType], CHARINDEX('(', p.[StartType]) + 1, 1))
