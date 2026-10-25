@@ -1,6 +1,6 @@
 # Course 8 · Module 1 — Reading the black box
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (Quench Indexes artifact calls): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (Quench Indexes artifact calls; #576 debug SQL): delete the "On 2.7.x" callouts -->
 
 One induced failure on one database (`diag_blackbox`), read end to end. Module 0 showed you the trail a *healthy* deploy leaves. This is the first deploy that stops on purpose — a unique index that won't take on dirty data — and the walk from `exit 2` to a named phase to green.
 
@@ -47,9 +47,27 @@ Exits `0` and forges the `Shop` schema into `diag_blackbox`, then a run-once see
 schemaquench --ConfigFile:quench.settings.after.json --LogPath:"$PWD/logs"
 ```
 
-**Exit `2`.** Now read the black box.
+**Exit `2`.** Now read the black box. The log says which step failed and why, and one line under the error
+says how to see the SQL the server rejected:
 
-**Fast path.** Open `logs/SchemaQuench - Failures.log` first. One block per failure: the error, a `Debug SQL:` pointer to the artifact, and a `Context (last 25 lines)` phase trail — everything you need without scrolling the full run narrative. The SQL Server block from this lab:
+```
+Rerun with --WriteDebugSql to write the resolved SQL of this step to ./artifacts.
+```
+
+Debug SQL is written only when you ask for it, because it holds every token expanded to its real value —
+passwords and keys included. Ask:
+
+```bash
+# from course8-module-01/<engine>
+schemaquench --ConfigFile:quench.settings.after.json --LogPath:"$PWD/logs" --WriteDebugSql
+```
+
+Same failure, exit `2`, and this time `artifacts/` has a file for each step the run reached.
+
+> **On 2.7.x** there is no `--WriteDebugSql`: the run logs `Ignored - not recognized: --WriteDebugSql` and
+> writes the artifacts on every run anyway, so both deploys above leave files in `artifacts/`.
+
+**Fast path.** Open `logs/SchemaQuench - Failures.log` first. One block per failure: the error, a `Debug SQL:` pointer to the artifact, and a `Context (last 25 lines)` phase trail — everything you need without scrolling the full run narrative. (On the run without the switch, that pointer reads `Debug SQL: rerun with --WriteDebugSql to write it`.) The SQL Server block from this lab:
 
 ```text
 1 failure(s): 1 Template:Main
@@ -90,7 +108,8 @@ CALL "SchemaSmith"."FixupIndexOwnership"(p_ProductName := 'Shop', p_WhatIf := fa
 
 > **On 2.7.x** the SQL Server call ends at `@WhatIf = 0`, and the PostgreSQL artifact has four `CALL`s — no `DescriptionQuench`, and `MissingIndexesAndConstraintsQuench(p_WhatIf := false)` takes no `p_OnlineApply`.
 
-Paste it into your client and the phase fails identically, by hand — that's your reproduction. There's no `>>> FAILING BATCH` marker here; that's a *user-script* thing (Module 4). A mechanical phase like this one puts the error in `Progress.log` and hands you the proc calls. (On SQL Server the error also lands in `Errors.log`; on PostgreSQL, MySQL, and MariaDB that file stays empty — `Progress.log` is the cross-engine place to read.)
+Paste it into your client and the phase fails identically, by hand — that's your reproduction. The file
+holds real values, so it stays on your machine; Module 7 comes back to that. There's no `>>> FAILING BATCH` marker here; that's a *user-script* thing (Module 4). A mechanical phase like this one puts the error in `Progress.log` and hands you the proc calls. (On SQL Server the error also lands in `Errors.log`; on PostgreSQL, MySQL, and MariaDB that file stays empty — `Progress.log` is the cross-engine place to read.)
 
 **Name the phase:** `Quenching indexes and constraints`. That's what turns a wall of SQL into "the unique index couldn't be created because the data has duplicates." And notice `checkpoints/` — the failed run **left a checkpoint** behind (a green run deletes it; a failure keeps it).
 

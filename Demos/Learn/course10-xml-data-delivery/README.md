@@ -1,7 +1,6 @@
 # Course 10 bonus recipe — XML data delivery, on purpose
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (JSON delivery below compatibility level 130): delete the "On 2.7.x" callouts, bump the pre-flight to 2.8.0 -->
-<!-- TRAINING-RELEASE-PIN #573 (JSON extract at compatibility level 100): delete the Part 4 known-issue note and show the no-switch extract from learn_2008 -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (JSON delivery below compatibility level 130; #573 JSON extract at level 100): delete the "On 2.7.x" callouts, bump the pre-flight to 2.8.0 -->
 
 Course 10's oldest SQL Server tier (`learn_2008`, compatibility level 100) is where
 SchemaSmith's own model ingest switches from JSON to XML, because `OPENJSON` needs level 130
@@ -217,8 +216,22 @@ FAILED: DeliveryEncoding is Json, but the source is SQL Server <version>, and th
 
 The sandbox can't show those two — every tier in it is one SQL Server 2022 instance. It does show
 the other half of the rule: the choice follows the **server**, not the database's compatibility
-level. `tongs.settings.legacy.json` extracts from `learn_2008`, and with no switch it would pick JSON,
-because the server is 2022. That's the case to pass the switch:
+level. `tongs.settings.legacy.json` extracts from `learn_2008`, a compatibility-100 database, and with no
+switch it picks JSON, because the server is 2022:
+
+```bash
+# from course10-xml-data-delivery/sqlserver
+datatongs --ConfigFile:tongs.settings.legacy.json
+head -c 60 extracted/dbo.CountryCode.tabledata; echo
+```
+
+```
+[
+{"Code":"CA","Continent":"North America","Name":"Canada"},
+```
+
+JSON, from a level-100 database — and Part 1 showed a JSON delivery lands there. If you want XML from it
+anyway, pass the switch:
 
 ```bash
 # from course10-xml-data-delivery/sqlserver
@@ -231,10 +244,9 @@ datatongs --ConfigFile:tongs.settings.legacy.json --DeliveryEncoding:Xml
     Writing contents to : ./extracted\dbo.CountryCode.tabledata
 ```
 
-> **Known issue ([#573](https://github.com/Schema-Smith/SchemaSmith/issues/573)):** a JSON extract
-> from a database at compatibility level 100 fails — `Error processing table dbo.CountryCode:
-> Incorrect syntax near '('.`, exit `2` — so leaving the switch off here fails. Until it's fixed,
-> pass `--DeliveryEncoding:Xml` when you extract from a database below level 110.
+> **On 2.7.x** a JSON extract from a database at compatibility level 100 fails — `Error processing table
+> dbo.CountryCode: Incorrect syntax near '('.`, exit `2` (#573) — so the no-switch extract above fails. Pass
+> `--DeliveryEncoding:Xml` when you extract from a database below level 110.
 
 `--DeliveryEncoding` is the switch that decides what DataTongs writes. Don't reach for
 `Source:CompatEncoding` here — it sounds related, but it only chooses how DataTongs reads a SQL
@@ -340,18 +352,11 @@ datatongs --ConfigFile:tongs.settings.scripts.json --DeliveryEncoding:Xml
 ```
 
 ```
-    Writing contents to : ./extracted\countrycode.tabledata
-    Cannot wire the '{{countrycode.tabledata}}' token for countrycode: ContentPath './extracted' is not within a template. The generated script will not deploy without manual ScriptTokens configuration.
-  Error processing table countrycode: DeliveryEncoding is Xml, but MySQL and MariaDB merge scripts read their content file with JSON_TABLE, so tokenized scripts cannot deploy an Xml file. Use DeliveryEncoding Json, or set ShouldCast:TokenizeScripts to false to embed the data in each script.
-=== DataTongs Summary ===
-  Tables processed: 0
-  Errors: 1
+FAILED: DeliveryEncoding is Xml, but MySQL and MariaDB merge scripts read their content file with JSON_TABLE, so tokenized scripts cannot deploy an Xml file. Use DeliveryEncoding Json, or set ShouldCast:TokenizeScripts to false to embed the data in each script.
 ```
 
-Exit code `2`: the content file is written, the script is refused. (The `Cannot wire` warning is
-about where this lab extracts to — `extracted/` sits outside any template, so even a JSON script
-would need its token wired by hand. Extract into a template's folder and DataTongs wires it.) A
-`DataDelivery` is unaffected, as the deploys above showed.
+Exit code `2`, before anything is extracted: no content file, no scripts, nothing half-written to clean
+up. A `DataDelivery` is unaffected, as the deploys above showed.
 
 > **On 2.7.x** there's no refusal: DataTongs writes the XML file and the scripts, and each script
 > fails with `Invalid JSON text` when it's deployed.

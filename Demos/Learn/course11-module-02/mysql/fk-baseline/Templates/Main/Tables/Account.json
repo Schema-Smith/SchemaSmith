@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
+  "Name": "Account",
+  "Columns": [
+    { "Name": "Id", "DataType": "INT" },
+    { "Name": "Code", "DataType": "VARCHAR(10)" }
+  ],
+  "Indexes": [
+    { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" },
+    { "Name": "ux_account_code", "Unique": true, "IndexColumns": "Code" }
+  ]
+}

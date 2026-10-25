@@ -1,5 +1,7 @@
 # Course 4, Recipe 9 — Extensions as a source of truth: the data dictionary (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (Description key, ExtendedProperties): delete the "On 2.7.x" callouts -->
+
 Goal: `Extensions` isn't just an input to gates and defaults — it's an **authoritative metadata store** your
 own scripts can turn into real work. Here every table carries business metadata in `Extensions` (table-level
 `BusinessDomain` / `DataOwner` / `Description` / `RetentionPolicy`; column-level `BusinessName` /
@@ -68,6 +70,78 @@ Re-quench and re-run the Step 2 query:
 # from course4-recipe-09/<engine>
 schemaquench --ConfigFile:deploy.settings.json
 ```
+
+## Step 4: The description the database already understands
+
+`Extensions.Description` is yours. Nothing outside your scripts reads it. Every engine also has a native place for
+a description — `MS_Description` on SQL Server, `COMMENT` on PostgreSQL, MySQL and MariaDB — and that one shows up
+in SSMS, pgAdmin, `information_schema` and every documentation tool pointed at the database. 2.8 gives it one
+key on every engine: `Description`, at the top level of a table, column or index, beside `Name`. Give the table and
+its `Email` column one:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/dbo.Customer.json" set Description '"Registered customers"' -->
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/dbo.Customer.json" set Columns[Name=Email].Description '"Where we send receipts"' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/public.customer.json" set Description '"Registered customers"' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/public.customer.json" set Columns[Name=email].Description '"Where we send receipts"' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Customer.json" set Description '"Registered customers"' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Customer.json" set 'Columns[Name=`Email`].Description' '"Where we send receipts"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Customer.json" set Description '"Registered customers"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Customer.json" set 'Columns[Name=`Email`].Description' '"Where we send receipts"' -->
+```json
+{
+  "Schema": "dbo", "Name": "Customer",
+  "Description": "Registered customers",
+  "Extensions": { "BusinessDomain": "Identity", "DataOwner": "identity-team", "Description": "Registered customers", ... },
+  "Columns": [
+    { "Name": "Email", "DataType": "NVARCHAR(256)", "Nullable": false,
+      "Description": "Where we send receipts",
+      "Extensions": { ... } }
+  ]
+}
+```
+
+On SQL Server, a column can also carry any other extended property by name, under
+`Extensions.ExtendedProperties` — here a classification label a data-governance tool reads:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/dbo.Customer.json" set Columns[Name=Email].Extensions.ExtendedProperties '{"Classification": "Confidential - GDPR"}' -->
+```json
+"Extensions": { "BusinessName": "Email Address", "SensitivityLevel": "PII", "DataSteward": "privacy-office",
+                "ExtendedProperties": { "Classification": "Confidential - GDPR" } }
+```
+
+Deploy, and ask the engine:
+
+```bash
+# from course4-recipe-09/<engine>
+schemaquench --ConfigFile:deploy.settings.json
+```
+
+```bash
+# from course4-recipe-09
+../lab-sql.sh sqlserver cookbook_r9 "SELECT COALESCE(COL_NAME(major_id, minor_id), '(table)'), name, CAST(value AS nvarchar(100)) FROM sys.extended_properties WHERE major_id = OBJECT_ID('dbo.Customer') AND name IN ('MS_Description', 'Classification') ORDER BY minor_id, name"
+# → (table) MS_Description Registered customers
+# → Email Classification Confidential - GDPR
+# → Email MS_Description Where we send receipts
+../lab-sql.sh postgres cookbook_r9 "SELECT obj_description('public.customer'::regclass), col_description('public.customer'::regclass, 2)"
+# → Registered customers|Where we send receipts
+../lab-sql.sh mysql cookbook_r9 "SELECT TABLE_COMMENT FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'cookbook_r9' AND TABLE_NAME = 'Customer'"
+# → Registered customers
+../lab-sql.sh mariadb cookbook_r9 "SELECT COLUMN_NAME, COLUMN_COMMENT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'cookbook_r9' AND TABLE_NAME = 'Customer' AND COLUMN_COMMENT <> ''"
+# → Email	Where we send receipts
+```
+
+The log names each one it set: `Setting the description of table dbo.Customer` on SQL Server and PostgreSQL,
+`Change comment: ALTER TABLE … COMMENT='Registered customers'` on MySQL and MariaDB. Deploy again and nothing is set.
+
+**What leaving it out means differs by engine, and it is worth knowing before you adopt it.** On SQL Server and
+PostgreSQL a description lives beside the table, so a package that omits `Description` leaves whatever the database
+already has alone — a description a DBA typed into SSMS survives your deploy. On MySQL and MariaDB the comment is
+part of the column and table definition, so a package that omits it clears it, as `Comment` always did. `""`
+removes one on every engine.
+
+> **On 2.7.x** `Description` is not a key it knows: the deploy stops at exit `3` with
+> `Could not find member 'Description' on object of type 'SqlServerColumn'`. MySQL and MariaDB spelled it
+> `Comment` there, which 2.8 still accepts with a `--Validate` warning (`SS-DESC-002`).
 
 ## Enforcing the metadata in CI (optional)
 

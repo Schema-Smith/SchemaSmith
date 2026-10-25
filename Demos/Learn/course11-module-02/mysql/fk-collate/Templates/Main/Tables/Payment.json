@@ -1,0 +1,28 @@
+{
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
+  "Name": "Payment",
+  "Columns": [
+    {
+      "Name": "Id",
+      "DataType": "INT"
+    },
+    {
+      "Name": "AccountCode",
+      "DataType": "VARCHAR(10)",
+      "Nullable": true,
+      "Collation": "utf8mb4_bin"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "Id"
+    },
+    {
+      "Name": "ix_payment_account",
+      "IndexColumns": "AccountCode"
+    }
+  ]
+}

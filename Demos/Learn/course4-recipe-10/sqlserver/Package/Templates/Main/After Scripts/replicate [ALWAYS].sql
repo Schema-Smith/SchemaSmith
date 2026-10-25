@@ -6,6 +6,8 @@ FROM OPENJSON(@graph) t
 WHERE JSON_VALUE(t.[value], '$.Extensions.ReplicationEnabled') = 'true';
 
 IF @replicated IS NOT NULL
+BEGIN
+  RAISERROR('Provisioning Shop_Replica', 10, 100) WITH NOWAIT;
   EXEC Shop_Replica.SchemaSmith.TableQuench
       @ProductName = N'{{ProductName}}',
       @TableDefinitions = @replicated,
@@ -13,3 +15,4 @@ IF @replicated IS NOT NULL
       @DropUnknownIndexes = 0,
       @DropTablesRemovedFromProduct = 0,
       @UpdateFillFactor = 1;
+END;

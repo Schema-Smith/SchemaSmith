@@ -1,5 +1,7 @@
 # Course 4, Recipe 11 — Declared, not scripted: the silent no-op (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (MariaDB declared sequences): delete the "On 2.7.x" callouts -->
+
 Goal: PostgreSQL domain types, enum types and standalone sequences can be **declared** — compared,
 converged, and removable by absence — instead of scripted. The reason that matters is sharper than
 "it's tidier." The *scripted* form is worse than doing it by hand: a guarded `CREATE …` silently
@@ -8,7 +10,8 @@ nothing, forever, while the run reports success. You do not get an error. You ge
 
 This lab makes you watch that happen, then does the same work declaratively.
 
-Everything runs against `cookbook_r11` on PostgreSQL.
+Everything runs against `cookbook_r11` on PostgreSQL; Step 5 takes the sequence to MariaDB, the other engine
+with a native `SEQUENCE`.
 
 ## Before you start
 
@@ -173,11 +176,62 @@ it is left in place - remove it by hand, or restore it to the package.
 Exit **0** — this one is a report, not a failure. The value stays. You are told, in the deploy log,
 exactly what the model and the database disagree about, and left to decide.
 
+## Step 5 (MariaDB): a sequence you can change without resetting it
+
+MariaDB has a native `SEQUENCE` too, and the scripted form fails it in the opposite direction. A guarded
+`CREATE SEQUENCE IF NOT EXISTS` swallows your edits, as Step 1's domain did. The other common form,
+`CREATE OR REPLACE SEQUENCE`, takes every edit — by recreating the sequence on every deploy, so `NEXTVAL` starts
+again from `START` and hands out order numbers it has already given (before 2.8, that is what extraction
+wrote). From 2.8 a MariaDB sequence is declared like PostgreSQL's:
+
+```json
+{ "Name": "order_number", "DataType": "bigint", "Start": 1000, "Increment": 1, "Cache": 1, "Cycle": false }
+```
+
+That is `mariadb/Package/Templates/Main/Sequences/order_number.json`. Deploy it and take two numbers:
+
+```bash
+# from course4-recipe-11/mariadb
+schemaquench --ConfigFile:deploy.settings.json      # exit 0
+#       Create sequence order_number
+```
+
+```bash
+# from course4-recipe-11
+../lab-sql.sh mariadb cookbook_r11 "SELECT NEXTVAL(order_number); SELECT NEXTVAL(order_number)"
+# → 1000
+# → 1001
+```
+
+Now change the increment to `10` in `order_number.json` and deploy again:
+
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "mariadb/Package/Templates/Main/Sequences/order_number.json" set Increment 10 -->
+```bash
+# from course4-recipe-11/mariadb
+schemaquench --ConfigFile:deploy.settings.json      # exit 0
+#       Alter sequence order_number
+```
+
+```bash
+# from course4-recipe-11
+../lab-sql.sh mariadb cookbook_r11 "SELECT NEXTVAL(order_number); SELECT NEXTVAL(order_number)"
+# → 1002
+# → 1012
+```
+
+The edit landed, and the sequence carried on from where it was: `1002`, then counting by ten. SchemaSmith
+altered the sequence in place and never touched its current value. Deploy once more and the log shows
+`Quenching sequences` with nothing under it.
+
+> **On 2.7.x** a `.json` file in a MariaDB `Sequences/` folder is not read: the deploy exits `0` and creates no
+> sequence. Only `.sql` sequence scripts deploy there.
+
 ## Cleanup
 
 ```bash
 # from course4-recipe-11
 ../lab-sql.sh postgres cookbook_r11 "DROP TABLE IF EXISTS public.customer_order CASCADE; DROP DOMAIN IF EXISTS public.email_address CASCADE; DROP TYPE IF EXISTS public.order_status CASCADE; DROP SEQUENCE IF EXISTS public.order_number CASCADE"
+../lab-sql.sh mariadb cookbook_r11 "DROP SEQUENCE IF EXISTS order_number"
 ```
 
 ## The principle

@@ -1,0 +1,13 @@
+{
+  "Source": {
+    "Server": "localhost",
+    "Port": "15432",
+    "User": "postgres",
+    "Password": "Learn!Passw0rd",
+    "Database": "catalog",
+    "Platform": "PostgreSQL",
+    "ConnectionProperties": {}
+  },
+  "Product": { "Path": "./extracted", "Name": "Catalog" },
+  "Template": { "Name": "Main" }
+}

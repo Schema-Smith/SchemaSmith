@@ -1,6 +1,6 @@
 # Module 4 — Bring an existing database under management (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (extraction column order and keys): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (extraction column order and keys; SchemaTongs progress lines): delete the "On 2.7.x" callouts -->
 
 Goal: take a database that nobody has under source control, point **SchemaTongs** at it, and cast it
 into a schema package — tables, keys, and indexes — that you then own and manage like any other.
@@ -57,7 +57,8 @@ From your engine folder:
 schematongs --ConfigFile:tongs.settings.json
 ```
 
-Expected on SQL Server and PostgreSQL (SQL Server shown; PostgreSQL prints `Cast Json for public.album`):
+Expected (SQL Server shown; PostgreSQL prints `Cast Json for public.album`, MySQL and MariaDB
+`Cast Json for Album`, with no schema):
 
 ```
   Cast Json for dbo.Album
@@ -69,18 +70,7 @@ Expected on SQL Server and PostgreSQL (SQL Server shown; PostgreSQL prints `Cast
 Casting Completed Successfully
 ```
 
-On MySQL and MariaDB the table lines are numbered instead:
-
-```
-Casting Table Structures (7 of 7 tables)
-  [1/7] Extracting Album...
-  [2/7] Extracting Artist...
-  ... (and the rest)
-
-=== Casting Summary ===
-  Tables:     7 extracted, 0 errors
-Casting Completed Successfully
-```
+> **On 2.7.x** MySQL and MariaDB number the table lines instead: `[1/7] Extracting Album...`.
 
 SchemaTongs writes the package to `./Extracted`, one file per table:
 

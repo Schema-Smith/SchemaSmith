@@ -1,0 +1,12 @@
+{
+  "Source": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "Database": "learn_2008",
+    "Platform": "SqlServer",
+    "ConnectionProperties": { "TrustServerCertificate": "True" }
+  },
+  "Product": { "Path": "./extracted-2008", "Name": "OldestTier" },
+  "Template": { "Name": "Main" }
+}

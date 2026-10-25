@@ -204,6 +204,35 @@ two lines. Read the branches before you run it, every time.
 
 (`cast/` is generated output — leave it out of source control.)
 
+### An exit code a pipeline can trust
+
+A cast in CI has to fail when it didn't get everything you asked for. Ask for one more table — one that isn't
+there — by adding a second entry to `Tables` for this run only:
+
+```bash
+# from level2-module-05/<engine>
+SmithySettings_Tables__1__Name=NoSuchTable SmithySettings_Tables__1__KeyColumns=Id datatongs --ConfigFile:tongs.settings.json
+echo "exit $?"
+```
+
+```
+  Casting data for: NoSuchTable
+  Table dbo.NoSuchTable does not exist in source database. Skipping table.
+=== DataTongs Summary ===
+  Tables processed: 1
+DataTongs completed.
+exit 1
+```
+
+(SQL Server shown; the other engines name the table in their own form.) `IsoCurrency` was cast as before,
+`NoSuchTable` was skipped, and the run exits `1`: it finished, but without everything you asked for. A table
+that fails partway through its extraction exits `2`. Only a run that produced every table exits `0`, so
+`datatongs … || exit 1` in a pipeline means what it says. Read the exit code, not the last line — `DataTongs
+completed.` prints either way.
+
+(Before 2.7.2, DataTongs exited `0` however many tables it skipped or failed — so on 2.7.0 or 2.7.1 this run
+exits `0`.)
+
 ## Per-engine notes
 
 | | SQL Server | PostgreSQL | MySQL |

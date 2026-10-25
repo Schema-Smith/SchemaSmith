@@ -56,8 +56,20 @@ After Script:
 [localhost,11433].[Shop_Replica] Successfully Quenched
 [localhost,11433].[Shop_Primary]   Kindling the forge
 [localhost,11433].[Shop_Primary]     Quenching .\Package\Templates\Main\After Scripts\replicate [ALWAYS].sql
+[localhost,11433].[Shop_Primary]       Provisioning Shop_Replica
+[localhost,11433].[Shop_Primary]       Parse Tables from Json
+...
+[localhost,11433].[Shop_Primary]         Adding new table [dbo].[Customers]
+[localhost,11433].[Shop_Primary]         Adding new table [dbo].[Orders]
 [localhost,11433].[Shop_Primary] Successfully Quenched
 ```
+
+Everything under `Provisioning Shop_Replica` is the **replica** being built, though the log files it under
+`[Shop_Primary]`: the After Script calls `Shop_Replica`'s `TableQuench` over the publisher's connection, and
+the log can only name the connection a line arrived on. The script prints that marker itself
+(`RAISERROR(... WITH NOWAIT)`; a `PRINT` would not be logged) so you can tell where the replica's work begins.
+Earlier in the full log, three `Adding new table` lines are the publisher's own tables (`Customers`,
+`Inventory`, `Orders`); the two after the marker are the replica's — no `Inventory`.
 
 Check what actually landed on each database:
 

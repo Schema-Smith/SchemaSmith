@@ -1,6 +1,6 @@
 # Course 6, Module 6 — Lint before you deploy: the `--Validate` semantic linter (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (SS-STALE-001 on 2.7.x boards; MariaDB CheckExpression): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (SS-STALE-001 on 2.7.x boards; MariaDB CheckExpression; --Validate with --ExitNonZeroOnWarning): delete the "On 2.7.x" callouts -->
 
 **Goal:** catch the cross-object errors JSON Schema can't express — a dangling foreign key, an ungated duplicate column, an undefined token, a stale editor schema, a drifted file name — with a single static command that needs no database, no credentials, and no running engine. Read a broken package's findings board, fix each error to green, prove the linter is *semantic* (not dumb), surface a misnamed-file warning that never gates the exit code, clear an induced staleness finding, see where the engines' own rules give different verdicts, then wire it in as a CI gate. SQL Server, PostgreSQL, MySQL, and MariaDB.
 
@@ -106,6 +106,20 @@ You met the warning tier in Scenario 1: a warning never gates the exit code. Her
    WARN [SS-FILE-NAME-003] .../orderitem-legacy.json: Table file 'orderitem-legacy.json' does not match its canonical name 'dbo.OrderItem.json' (from Schema/Name/VariantName). Identity is content, so this is a naming lean, not an error - rename to keep the file a reliable pointer to its table.
    ```
    Exit `0`. The count line reads `0 error(s), 1 warning(s)` — a warning-only board still passes.
+   If your pipeline treats a warning as a failure, say so with `--ExitNonZeroOnWarning`:
+   ```bash
+   # from course6-module-06
+   schemaquench --Validate --SchemaPackagePath:./<engine>/Package --ExitNonZeroOnWarning
+   ```
+   ```
+   0 error(s), 1 warning(s)
+   Exit code 1: 1 warning(s) and ExitNonZeroOnWarning is on.
+   ```
+   Exit `1` — the same board, now a failure your CI can stop on. Errors still exit `2`, so the code tells the
+   two apart.
+
+   > **On 2.7.x** the switch does not exist for `--Validate`: it is logged as `Ignored - not recognized` and
+   > the exit code is unchanged.
 3. Rename the file back to `dbo.OrderItem.json` (`orderitem.json` on PostgreSQL, `OrderItem.json` on MySQL and MariaDB). This is an induced scenario — the committed package files stay canonical.
 
 <!-- walk[sqlserver]: mv "<engine>/Package/Templates/Main/Tables/orderitem-legacy.json" "<engine>/Package/Templates/Main/Tables/dbo.OrderItem.json" -->

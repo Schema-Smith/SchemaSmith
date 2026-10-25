@@ -1,5 +1,7 @@
 # Course 8 · Module 4 — Script-slot & data-delivery failures
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (#576 debug SQL, delivery roll-up names its file): delete the "On 2.7.x" callouts -->
+
 Two induced incidents on one database (`diag_scripts`), read end to end. Modules 1–3 diagnosed the
 **mechanical** engine — the phases SchemaSmith computes for you (missing tables, modified tables,
 indexes, foreign keys). This module diagnoses the other half: the scripts and the data **you** put in
@@ -62,12 +64,15 @@ trip on.
 
 `beat1-broken/` adds a run-once After-script, `02_backfill_customers.sql`, that onboards customers
 migrated from a legacy CRM in two batches: an idempotent name-tidy, then one `INSERT` of the migrated
-rows. The last row is missing its email — and `Email` is `NOT NULL`:
+rows. The last row is missing its email — and `Email` is `NOT NULL`. This beat opens the failing SQL, so ask
+for it with `--WriteDebugSql` (debug SQL is written only on request, because it holds real values):
 
 ```bash
 # from course8-module-04/<engine>
-schemaquench --ConfigFile:quench.settings.beat1-broken.json --LogPath:"$PWD/logs"
+schemaquench --ConfigFile:quench.settings.beat1-broken.json --LogPath:"$PWD/logs" --WriteDebugSql
 ```
+
+> **On 2.7.x** the switch is logged as `Ignored - not recognized` and the artifacts are written on every run.
 
 Fails at the **After** slot (`Quenching after database scripts`), exit `2`. In `Progress.log` you get
 the per-script line — **`Unable to quench '.\beat1-broken\…\02_backfill_customers.sql': <error>`**:
@@ -120,7 +125,7 @@ was never seeded — an **orphan**:
 
 ```bash
 # from course8-module-04/<engine>
-schemaquench --ConfigFile:quench.settings.beat2-broken.json --LogPath:"$PWD/logs"
+schemaquench --ConfigFile:quench.settings.beat2-broken.json --LogPath:"$PWD/logs" --WriteDebugSql
 ```
 
 Fails at the **TableData** slot, exit `2`. `DataDelivery` orders parents before children and retries
@@ -142,9 +147,12 @@ same table — is the **generated MERGE**, copy-runnable (on SQL Server, `OPENJS
 `.tabledata` into a `MERGE`). Paste it into your client and it fails identically. No ordering or retry
 can save a row whose parent genuinely isn't there — the fix is in the data you shipped.
 
-In `Failures.log` the delivery's roll-up names the table but not the artifact:
-`Error: Data delivery failed for 1 table(s): dbo.SalesOrder`, then `Debug SQL: n/a`. The artifact's
-path is in the `Resolved SQL written to:` line of its context tail.
+In `Failures.log` the delivery's roll-up names the table and the artifact:
+`Error: Data delivery failed for 1 table(s): dbo.SalesOrder`, then
+`Debug SQL: ./artifacts\SchemaQuench - Failed DataDelivery dbo.SalesOrder#0 localhost,11433.diag_scripts.sql`.
+
+> **On 2.7.x** that roll-up says `Debug SQL: n/a`; the artifact's path is in the `Resolved SQL written to:`
+> line of its context tail.
 
 **Recover — fix the content, redeploy.** Reparent the orphan in the `.tabledata` file (`999` → a real
 customer, e.g. `1`): in `<engine>/beat2-broken/Templates/Main/data/` (`dbo.SalesOrder.tabledata`,

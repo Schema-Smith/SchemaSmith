@@ -101,6 +101,13 @@ Not a special case for tablespaces — the same reading applies across the produ
 | `Compression` (MySQL), `PageCompressed` (MariaDB) | page compression unmanaged; an omitted value never uncompresses a table |
 | `ReplicaIdentity` (PostgreSQL) | leave the server's current setting alone |
 | `Statistics` | only named statistics your product defines; **auto-created statistics are never touched** |
+| `Enforced` / `Validated` on a key or check (SQL Server, PostgreSQL; MySQL check `Enforced`) | a constraint someone disabled (`NOCHECK`) or left untrusted (`NOT VALID`) stays that way (2.8) |
+| `EnableCDC` / `EnableChangeTracking` (SQL Server) | capture or tracking someone switched on by hand is left on |
+| `Description` (SQL Server, PostgreSQL) | a description a DBA typed in stays (2.8) |
+
+One honest exception, so the table doesn't oversell: on MySQL and MariaDB a comment is part of the column and
+table definition, so a package that leaves `Description` out of a table it manages clears the comment there.
+The engine gives no way to change a column without restating it.
 
 Read that list as one idea rather than seven: your package's authority extends exactly as far as what it
 declares, and no further.

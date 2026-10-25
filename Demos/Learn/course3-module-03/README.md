@@ -1,5 +1,7 @@
 # Course 3, Module 3 — Rollback & recovery (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (#549 rollback rerun, hook hand-off lines, WhatIf preview): delete the "On 2.7.x" callouts -->
+
 Goal: roll back a schema release the SchemaSmith way — **deploy the prior package and let
 SchemaQuench compute the reverting delta.** No hand-written undo scripts. The same tool that deploys
 forward deploys backward, on SQL Server, PostgreSQL, MySQL, and MariaDB alike. Along the way you'll see
@@ -136,37 +138,40 @@ WhatIf runs the full deploy path and reports the reverting delta without touchin
 show up: drop the inbound foreign key, drop the `Customer.PromotionId` column, and remove the `Promotion`
 table — routed through the recyclebin's `CustomTableDrop` hook rather than a raw `DROP TABLE`.
 
-**SQL Server:**
+**SQL Server** (each statement is previewed with the log line it will print, shown here as the `RAISERROR` text):
 
 ```
+  RAISERROR('  Dropping inbound foreign Key dbo.Customer.FK_Customer_Promotion', 10, 100) WITH NOWAIT;
+  IF OBJECT_ID('[dbo].[FK_Customer_Promotion]') IS NOT NULL ALTER TABLE [dbo].[Customer] DROP CONSTRAINT [FK_Customer_Promotion];
+  RAISERROR('  Handing table [dbo].Promotion to SchemaSmith.CustomTableDrop (no longer in product)', 10, 100) WITH NOWAIT;
   EXEC SchemaSmith.CustomTableDrop 'dbo', 'Promotion';
-  Dropping columns from [dbo].[Customer] ([PromotionId])
+  RAISERROR('  Dropping columns from [dbo].[Customer] ([PromotionId])', 10, 100) WITH NOWAIT;
   ALTER TABLE [dbo].[Customer] DROP COLUMN [PromotionId];
 ```
 
 **PostgreSQL:**
 
 ```
-  ALTER TABLE "public"."Customer" DROP CONSTRAINT IF EXISTS "fk_customer_promotion";
-  Table public.Promotion no longer in product             -- routed to CALL "SchemaSmith"."CustomTableDrop"(...)
-  Column public.Customer.PromotionId no longer in product
+  RAISE NOTICE '  Foreign Key public.Customer.fk_customer_promotion references a table no longer in product';
+ALTER TABLE "public"."Customer" DROP CONSTRAINT IF EXISTS "fk_customer_promotion";
+  RAISE NOTICE '  Handing table public.Promotion to SchemaSmith.CustomTableDrop (no longer in product)';
+CALL "SchemaSmith"."CustomTableDrop"('public', 'Promotion');
+  RAISE NOTICE '  Column public.Customer.PromotionId no longer in product';
+ALTER TABLE "public"."Customer" DROP COLUMN IF EXISTS "PromotionId" CASCADE;
 ```
 
-**MySQL:**
+**MySQL and MariaDB** — the column step takes its foreign key and that key's index down with it, in the
+deploy's own words:
 
 ```
-  ALTER TABLE `ordersservice_dev`.`Customer` DROP COLUMN `PromotionId`
-  ALTER TABLE `ordersservice_dev`.`Customer` DROP FOREIGN KEY `FK_Customer_Promotion`
+  Drop FK for column: ALTER TABLE `ordersservice_dev`.`Customer` DROP FOREIGN KEY `FK_Customer_Promotion`
+  Drop index for column: DROP INDEX `FK_Customer_Promotion` ON `ordersservice_dev`.`Customer`
+  Drop column: ALTER TABLE `ordersservice_dev`.`Customer` DROP COLUMN `PromotionId`
   CALL SchemaSmith_CustomTableDrop('ordersservice_dev', 'Promotion')
 ```
 
-**MariaDB:**
-
-```
-  ALTER TABLE `ordersservice_dev`.`Customer` DROP COLUMN `PromotionId`
-  ALTER TABLE `ordersservice_dev`.`Customer` DROP FOREIGN KEY `FK_Customer_Promotion`
-  CALL SchemaSmith_CustomTableDrop('ordersservice_dev', 'Promotion')
-```
+> **On 2.7.x** the previews differ: SQL Server omits the foreign-key drop, PostgreSQL's names the table and
+> column only, and MySQL and MariaDB preview the foreign-key drop a second time after the column.
 
 The line to read twice is the **column** drop. **Dropping a column drops its data** — and unlike the
 table, a column is *not* caught by the recyclebin. In this lab `PromotionId` is empty, so there's nothing
@@ -261,17 +266,25 @@ SmithySettings_ScriptTokens__TargetDb=ordersservice_dev \
   schemaquench --ConfigFile:./base.settings.json
 ```
 
-The rollback log drops the inbound foreign key first, then routes the table through the hook. On SQL
-Server the line reads like an ordinary drop — the hook does its work silently:
+The rollback log drops the inbound foreign key first, then says plainly that the table went to the hook
+rather than being dropped. SQL Server:
 
 ```
   Dropping inbound foreign Key dbo.Customer.FK_Customer_Promotion
-  Dropping table [dbo].Promotion
+  Handing table [dbo].Promotion to SchemaSmith.CustomTableDrop (no longer in product)
+  Dropping columns from [dbo].[Customer] ([PromotionId])
 ```
 
-PostgreSQL, MySQL, and MariaDB announce it outright — e.g. `Table public.Promotion recycled as
-recyclebin.public_Promotion with a retention of 90 days.` Either way `Promotion` is gone from its
-schema, but its rows are sitting in the recyclebin — confirm it, from the lab folder:
+PostgreSQL prints the same hand-off (`Handing table public.Promotion to SchemaSmith.CustomTableDrop (no longer
+in product)`), followed by the hook's own line, `Table public.Promotion recycled as recyclebin.public_Promotion
+with a retention of 90 days.` MySQL and MariaDB print `Handing table Promotion to SchemaSmith_CustomTableDrop
+(no longer in product)`.
+
+> **On 2.7.x** the hand-off line isn't there: SQL Server logs `Dropping table [dbo].Promotion`, as if the table
+> were destroyed, and PostgreSQL logs `Table public.Promotion no longer in product`.
+
+Either way `Promotion` is gone from its schema, but its rows are sitting in the recyclebin — confirm it, from
+the lab folder:
 
 ```bash
 # from course3-module-03
@@ -298,9 +311,10 @@ SmithySettings_SchemaPackagePath=../../v2/<engine>/Package \
 ```
 
 ```
-  Attempt custom table restore for tables being added …
   [dbo].[Promotion] Restored
 ```
+
+(PostgreSQL logs `public.Promotion Restored`, MySQL and MariaDB `Promotion Restored`.)
 
 `Promotion` is back **with the `Summer Sale` row intact**, the foreign key and `PromotionId` column are
 rebuilt from the package, and the registry entry is gone. The round trip preserved the data without a

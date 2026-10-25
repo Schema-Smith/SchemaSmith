@@ -161,6 +161,14 @@ already done, so they skip past all of them. `fleet_tenant_003` has no resume li
 first checkpointed step, so it had no checkpoint to resume from, and it starts over from the top and
 finishes. The run exits `0`, and on that clean success the checkpoint files are deleted.
 On a thousand-tenant fleet where 999 succeeded, resume means you redeploy **one** — not all thousand.
+The run's summary says so too: `SchemaQuench - Summary.json` carries `"resumedFromCheckpoint": true` in `run`.
+
+> **Sidebar — two runs, one checkpoint folder.** A checkpoint file is named by product, template, server name
+> and database. Two runs that reach the same names — two pipelines on one agent, or this lab's MySQL and MariaDB
+> runs, which are both `localhost` — would read each other's progress if they both resumed from one folder, and
+> skip work the other had done. Only `--ResumeQuench` reads a checkpoint, so plain runs side by side are safe;
+> give each run you might resume its own `--CheckpointDirectory`, as this step does. (On 2.7.x *every* run read
+> the checkpoint folder, so even two plain runs could skip each other's steps and still exit `0` — #497.)
 
 ## Step 5: Do it on PostgreSQL, MySQL, and MariaDB
 

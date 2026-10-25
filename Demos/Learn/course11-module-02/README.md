@@ -1,6 +1,6 @@
 # Course 11, Module 2 — State your package never described (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (grants come back): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (grants come back; #581 undeclared foreign key): delete the "On 2.7.x" callouts -->
 <!-- TRAINING-RELEASE-PIN 2.8.0 (#535, #537, #538, #542): bump the pre-flight to 2.8.0 and delete the "merged, not yet released" note -->
 
 Goal: Module 1 refused a change because *delivering* it would rewrite the table. This module refuses
@@ -328,7 +328,8 @@ package does not mention is not the package's business. Hold that thought — Pa
 ### MariaDB
 
 MariaDB carries functional and generated-column dependents across a rename by itself, so it has
-nothing here for SchemaSmith to rebuild or refuse. On MariaDB this module is Part 1.
+nothing here for SchemaSmith to rebuild. Its refusal is in Part 3, beside MySQL's: a foreign key nobody
+declared.
 
 ### Three sources
 
@@ -336,7 +337,7 @@ nothing here for SchemaSmith to rebuild or refuse. On MariaDB this module is Par
 |---|---|---|---|
 | **The package** | schema-bound views and functions in the after-tables folders — for a column change with `DropSchemaBoundDependents`, for a changed function by default | declared views, routines, materialized views and policies, by default | declared functional indexes and generated columns, by default |
 | **The catalog** | a schema-bound security policy | a trigger's `WHEN` / `UPDATE OF`, a publication's row filter | — |
-| **Neither** | refused before the drop (Part 3) | refused before the drop (Part 3) | refused before the rename (Part 3) |
+| **Neither** | refused before the drop (Part 3) | refused before the drop (Part 3) | refused before the rename, and before a foreign key is dropped (Part 3; MariaDB too) |
 
 ## Part 3 — neither: refused before the drop
 
@@ -537,14 +538,80 @@ unmanaged* — and unmanaged is something SchemaSmith will not destroy on your b
 > **On 2.7.x** both renames fail with MySQL's own refusal ("has a functional index dependency"): 2.7
 > does not take a functional index down around a rename (#537).
 
+### An undeclared foreign key (MySQL, MariaDB)
+
+A different product — call it Payments — owns two tables, `Account` and `Payment`. Its package declares both,
+and their indexes, but not the foreign key between them: a DBA added that by hand one afternoon.
+
+```bash
+# from course11-module-02/<engine>
+schemaquench --ConfigFile:quench.settings.fk-baseline.json   # exit 0
+```
+
+```bash
+# from course11-module-02
+../lab-sql.sh mysql vault_m2 "ALTER TABLE Payment ADD CONSTRAINT fk_dba_payment_account FOREIGN KEY (AccountCode) REFERENCES Account (Code)"
+../lab-sql.sh mariadb vault_m2 "ALTER TABLE Payment ADD CONSTRAINT fk_dba_payment_account FOREIGN KEY (AccountCode) REFERENCES Account (Code)"
+```
+
+Now the package moves both code columns to a case-sensitive collation, `utf8mb4_bin` (`fk-collate/`). Neither
+engine changes a collation under a foreign key, so the key has to come off first, and SchemaSmith can only put
+back a key it has a recipe for:
+
+```bash
+# from course11-module-02/<engine>
+schemaquench --ConfigFile:quench.settings.fk-collate.json   # exit 2
+```
+
+```text
+  Foreign key Payment.fk_dba_payment_account blocks a column type or collation change and is not in the package, so it would be dropped and not put back. Declare it in the package, or drop it before the deploy.
+```
+
+```bash
+# from course11-module-02
+../lab-sql.sh mysql vault_m2 "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fk_dba_payment_account'"
+# → 1
+../lab-sql.sh mariadb vault_m2 "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE TABLE_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fk_dba_payment_account'"
+# → 1
+```
+
+The key is still there and no column changed. Before 2.8 this deploy dropped the key, changed both columns, and
+exited `0` — the key was simply gone, and nothing in the log said it would not be coming back (#581). Write it
+down in `Payment.json`:
+
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "mysql/fk-collate/Templates/Main/Tables/Payment.json" set ForeignKeys '[{"Name": "fk_dba_payment_account", "Columns": "AccountCode", "RelatedTable": "Account", "RelatedColumns": "Code"}]' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "mariadb/fk-collate/Templates/Main/Tables/Payment.json" set ForeignKeys '[{"Name": "fk_dba_payment_account", "Columns": "AccountCode", "RelatedTable": "Account", "RelatedColumns": "Code"}]' -->
+```json
+"ForeignKeys": [
+  { "Name": "fk_dba_payment_account", "Columns": "AccountCode", "RelatedTable": "Account", "RelatedColumns": "Code" }
+]
+```
+
+```bash
+# from course11-module-02/<engine>
+schemaquench --ConfigFile:quench.settings.fk-collate.json   # exit 0
+```
+
+```text
+  Drop FK for column collation change: ALTER TABLE `vault_m2`.`Payment` DROP FOREIGN KEY `fk_dba_payment_account`
+  Modify column: ALTER TABLE `vault_m2`.`Account` MODIFY COLUMN `Code` VARCHAR(10) COLLATE utf8mb4_bin NOT NULL
+  Modify column: ALTER TABLE `vault_m2`.`Payment` MODIFY COLUMN `AccountCode` VARCHAR(10) COLLATE utf8mb4_bin NULL
+  Create FK: Payment.fk_dba_payment_account
+```
+
+Down, change, back up. The same rule as the index above: once the package has the recipe, SchemaSmith takes the
+key down around the change and builds it again.
+
+> **On 2.7.x** the `fk-collate` deploy exits `0` with the key dropped and never put back.
+
 ## Cleanup
 
 ```bash
 # from course11-module-02
 ../lab-sql.sh sqlserver vault_m2 "DROP SECURITY POLICY IF EXISTS dbo.pol_Actor; DROP VIEW IF EXISTS dbo.vw_DbaActors, dbo.vw_ActorKeys, dbo.vw_AuditActors; DROP FUNCTION IF EXISTS dbo.fn_ActorKey, dbo.fn_ActorVisible; DROP TABLE IF EXISTS dbo.AuditTrail"
 ../lab-sql.sh postgres vault_m2 "DROP VIEW IF EXISTS public.vw_dba_report, public.vw_audit_actors; DROP TABLE IF EXISTS public.audit_trail; DROP FUNCTION IF EXISTS public.fn_actor_changed()"
-../lab-sql.sh mysql vault_m2 "DROP TABLE IF EXISTS AuditTrail, Contact"
-../lab-sql.sh mariadb vault_m2 "DROP TABLE IF EXISTS AuditTrail"
+../lab-sql.sh mysql vault_m2 "DROP TABLE IF EXISTS Payment, Account, AuditTrail, Contact"
+../lab-sql.sh mariadb vault_m2 "DROP TABLE IF EXISTS Payment, Account, AuditTrail"
 ```
 
 ## The principle

@@ -1,6 +1,6 @@
 # Course 4, Recipe 15 — The re-run that wasn't a no-op: expression change detection (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (empty expression map is verified): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (empty expression map is verified; 2.8 type synonyms): delete the "On 2.7.x" callouts -->
 
 Goal: prove that a second deploy of an unchanged package changes **nothing** — on the objects where that used to
 be a lie. Every engine rewrites an expression when it stores it. SQL Server keeps `RetentionDays <= 365` as
@@ -54,6 +54,39 @@ schemaquench --ConfigFile:deploy.settings.json --report:./rerun    # exit 0
 
 Zeros, on every engine. That is the claim this whole recipe is about, and the report is the evidence — not the
 absence of scary lines in a log you skimmed.
+
+## Step 1b: Spell a type the way the standard does
+
+Expressions are not the only thing an engine rewrites. Look at the column types above: `INTEGER`, `BOOL`,
+`CHARACTER VARYING(20)`, `TIMESTAMP WITH TIME ZONE`. Each is a synonym, and the catalog hands back the base name —
+`int`, `tinyint(1)`, `varchar(20)`, `timestamptz`. Before 2.7.0 every one of those columns was altered on every
+deploy, with the package and the database both correct. The zeros you just read cover them.
+
+2.8 closes the rest of the family. Add one more column, spelled the textbook way, to your engine's table:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/dbo.Subscription.json" append Columns '{"Name": "Notes", "DataType": "CHAR VARYING(100)", "Nullable": true}' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/public.subscription.json" append Columns '{"Name": "renewed_at", "DataType": "TIMESTAMP WITHOUT TIME ZONE", "Nullable": true}' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Subscription.json" append Columns '{"Name": "Score", "DataType": "DOUBLE PRECISION", "Nullable": true}' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/Subscription.json" append Columns '{"Name": "Score", "DataType": "DOUBLE PRECISION", "Nullable": true}' -->
+```json
+{ "Name": "Notes",      "DataType": "CHAR VARYING(100)", "Nullable": true }             // SQL Server
+{ "Name": "renewed_at", "DataType": "TIMESTAMP WITHOUT TIME ZONE", "Nullable": true }   // PostgreSQL
+{ "Name": "Score",      "DataType": "DOUBLE PRECISION", "Nullable": true }              // MySQL, MariaDB
+```
+
+Deploy to add it, then deploy again with a report:
+
+```bash
+# from course4-recipe-15/<engine>
+schemaquench --ConfigFile:deploy.settings.json                     # exit 0 -- adds the column
+schemaquench --ConfigFile:deploy.settings.json --report:./rerun    # exit 0
+```
+
+`rerun.md` reads `Modified: tables=0, columns=0` again. The engine stores `varchar(100)` and `double`, and SchemaSmith
+compares the type you wrote as the type it becomes.
+
+> **On 2.7.x** the second deploy reports `Modified: tables=0, columns=1` on SQL Server, MySQL and MariaDB: the
+> synonym column is altered on every deploy. PostgreSQL's reads zero there too.
 
 ## Step 2: See what SchemaSmith recorded
 

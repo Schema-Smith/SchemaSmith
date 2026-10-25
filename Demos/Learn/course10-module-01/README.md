@@ -1,6 +1,6 @@
 # Course 10 · Module 1 — Let the engine adapt
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (warn downgrade exits 1; --ExitNonZeroOnWarning): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (warn downgrade exits 1; --ExitNonZeroOnWarning; PostgreSQL Skipping line): delete the "On 2.7.x" callouts -->
 
 You author one modern feature per engine and deploy the same package to a **floor-version**
 target that predates it. SchemaSmith detects the target version, emits the degraded form the
@@ -57,10 +57,16 @@ schemaquench --ConfigFile:quench.settings.warn.json --LogPath:"$PWD\logs"
 
 Deploys, exits 1. The `metric` table lands, but the expression statistic `ST_metric_expr` cannot exist
 on PostgreSQL 12 (it needs 14). SchemaSmith skips it and records a `downgraded` row, and a run
-that downgraded something finishes as incomplete — exit 1, not 0. Read the
-deployment summary's **Unsupported Feature Downgrades** section.
+that downgraded something finishes as incomplete — exit 1, not 0. The log says so as it happens:
 
-> **On 2.7.x** the same run exits 0; the statistic is still skipped and the downgrade still recorded.
+```
+[localhost].[learn]   Skipping expression statistics (PG14) on public.metric.ST_metric_expr (downgraded)
+```
+
+Then read the deployment summary's **Unsupported Feature Downgrades** section.
+
+> **On 2.7.x** the same run exits 0 and prints no `Skipping` line; the statistic is still skipped and the
+> downgrade still recorded in the summary.
 
 Add `--ExitNonZeroOnWarning`, the switch that turns a `0` into a `1` when a run logged a warning:
 
@@ -103,7 +109,12 @@ schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"     # macOS
 
 Deploys, exits 1. The `Ledger` table lands, but MySQL 5.7 parses-and-ignores `CHECK` constraints (they
 need 8.0.16), so SchemaSmith emits the table without the check and records a downgrade — and the
-downgrade makes the run finish as incomplete. Deploy
+downgrade makes the run finish as incomplete:
+
+```
+[localhost].[learn]       Skipping check constraint (requires MySQL 8.0.16 - downgraded): Ledger.CK_Ledger_Amount
+```
+ Deploy
 the identical package to MySQL 8.0 and the check is created — same package, target decides.
 
 > **On 2.7.x** the same run exits 0; the check is still left out and the downgrade still recorded.
@@ -125,7 +136,12 @@ schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"     # macOS
 
 Deploys, exits 1. `Ledger` lands, but MariaDB 10.2 is below both features it declares: the **descending**
 index key part (10.8) is stored ascending, and the **invisible** index (10.6) is created visible.
-Each records its own `downgraded` row — two lines in the summary — and the run finishes as incomplete.
+Each records its own `downgraded` row — two lines in the summary — and the run finishes as incomplete:
+
+```
+[localhost].[learn]       Descending index key part stored ascending (requires MySQL 8.0 / MariaDB 10.8 - downgraded): Ledger.IX_Ledger_Amount_Desc
+[localhost].[learn]       Invisible index stored visible (requires MySQL 8.0 / MariaDB 10.6 - downgraded): Ledger.IX_Ledger_Region_Hidden
+```
 
 > **On 2.7.x** the same run exits 0; both indexes are still downgraded the same way.
 

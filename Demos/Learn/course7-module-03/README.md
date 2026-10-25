@@ -1,5 +1,7 @@
 # Course 7, Module 3 — Provisioning at onboarding (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (#539 skipped tenant row, #550 WhatIf onboarding): delete the "On 2.7.x" callouts -->
+
 Goal: onboard a brand-new tenant in a **single deploy**. In Module 1 you ran `CREATE DATABASE` by hand
 and let discovery find it. Here the config roster names a tenant that *doesn't exist yet* —
 `fleet_tenant_006` — and `CreateIfMissing: true` makes SchemaSmith stand the database up itself, on the
@@ -52,6 +54,19 @@ schemaquench --ConfigFile:quench.settings.skip.json
 you didn't ask for. (On PostgreSQL, MySQL, and MariaDB the line is identical but for the host prefix —
 `[localhost]` without a port.)
 
+The deployment summary keeps the skip on the record, so a report built from it still lists the tenant you
+asked for. `SchemaQuench - Summary.md` in the log folder:
+
+```
+## Targets (2)
+- localhost,11433 / fleet_tenant_001 — Main — Success — …ms
+- localhost,11433 / fleet_tenant_006 — Main — Skipped — 0ms
+```
+
+`Summary.json` carries the same row in `targets[]`, with `"outcome": "Skipped"`.
+
+> **On 2.7.x** the summary lists only `fleet_tenant_001`: a skipped tenant leaves no row (#539).
+
 ## Step 2: Dry-run before you let it create anything
 
 Turn `CreateIfMissing` on, but run under WhatIf first. SchemaSmith tells you exactly what it *would*
@@ -64,9 +79,13 @@ schemaquench --ConfigFile:quench.settings.whatif.json
 
 ```
   [WhatIf] Would create database [fleet_tenant_006] (CreateIfMissing: true)
+[localhost,11433].[fleet_tenant_006] [WhatIf] Would deploy template 'Main' into the new, empty database 'fleet_tenant_006': every object it declares would be created.
 ```
 
-Check the catalog after — `006` still doesn't exist. That's your look-before-you-leap on provisioning.
+Exit `0`. Check the catalog after — `006` still doesn't exist. That's your look-before-you-leap on provisioning.
+
+> **On 2.7.x** the preview reports the creation, then tries to open the database that doesn't exist yet: the
+> `fleet_tenant_006` unit fails and the run exits `2` (#550).
 
 ## Step 3: Onboard — provision and deploy in one run
 

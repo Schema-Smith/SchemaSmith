@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
+  "Name": "Payment",
+  "Columns": [
+    { "Name": "Id", "DataType": "INT" },
+    { "Name": "AccountCode", "DataType": "VARCHAR(10)", "Nullable": true }
+  ],
+  "Indexes": [
+    { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" },
+    { "Name": "ix_payment_account", "IndexColumns": "AccountCode" }
+  ]
+}

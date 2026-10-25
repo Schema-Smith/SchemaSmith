@@ -140,7 +140,7 @@ A few things are worth knowing:
 **Using the Docker sandbox? Skip this — it already meets every floor.** This section is only for
 the own-server path above.
 
-SchemaSmith itself supports SQL Server 2008+, PostgreSQL 12+, MySQL 5.7.22+ (8.0.23+ on the 8.0 line), and MariaDB 10.2.7+. Some
+SchemaSmith itself supports SQL Server 2008+, PostgreSQL 12+, MySQL 5.7.22+ (8.0.23+ on the 8.0 line), and MariaDB 10.2.13+. Some
 labs need more than that, because they demonstrate a feature that needs a newer engine — most often
 automatic data delivery, which needs `OPENJSON` (SQL Server 2016) or `JSON_TABLE` (MySQL 8.0).
 

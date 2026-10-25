@@ -1,5 +1,7 @@
 # Course 7, Module 5 — Diagnosing a fleet failure (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (#576 debug SQL): delete the "On 2.7.x" callouts -->
+
 Goal: roll out a new unique index across the whole fleet, watch **two** tenants fail in **two different
 phases**, and work through the exact sequence a real operator uses to locate each tenant's evidence, name its
 phase, remediate it, and resume the run. You'll do all of this on SQL Server, then repeat the same moves on
@@ -74,12 +76,18 @@ damage, which the engine's error will confirm.
 ## Step 3: Run the rollout — watch it fail
 
 Deploy the `after/` package fleet-wide. The settings file already wires `ArtifactPath` and
-`CheckpointDirectory` — you don't need to pass those flags:
+`CheckpointDirectory`. Add `--WriteDebugSql`, because Step 4 reads the SQL each failed phase ran — debug SQL is
+written only when you ask for it, since it holds every token's real value:
 
 ```bash
 # from course7-module-05/<engine>
-schemaquench --ConfigFile:quench.settings.after.json
+schemaquench --ConfigFile:quench.settings.after.json --WriteDebugSql
 ```
+
+(On a real incident you usually find out you want it after the fact: without the switch, the line under each
+error reads `Rerun with --WriteDebugSql to write the resolved SQL of this step to ./artifacts.`)
+
+> **On 2.7.x** the switch is logged as `Ignored - not recognized` and the artifacts are written anyway.
 
 The run finishes with exit code `2`. Tenants 001, 003, and 005 succeed. Two fail:
 
@@ -162,7 +170,7 @@ PostgreSQL, MySQL, and MariaDB have no `TableFeatures` step, so their succeeded 
 
 **The resolved-SQL artifacts**
 
-The `./artifacts` folder holds thin, copy-runnable `EXEC` wrappers — one per phase per tenant — named
+The `./artifacts` folder (there because of `--WriteDebugSql`) holds thin, copy-runnable `EXEC` wrappers — one per phase per tenant — named
 `<server>.<database>.sql`. For example:
 
 ```

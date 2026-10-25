@@ -1,5 +1,7 @@
 # Course 10 · Module 4 — The oldest tier
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (ModuleSyntax Legacy, SS-VER-002): delete the "On 2.7.x" callouts -->
+
 Module 3 gave you two shapes of one query and a gate to pick between them. This module goes
 all the way down to the **oldest tier in the fleet** — a SQL Server database so far back that
 `OPENJSON` won't even parse — and shows what SchemaSmith does about it automatically, and
@@ -240,6 +242,81 @@ shreds at every supported version; MySQL and MariaDB below their JSON cliff fall
 all, so it's the only one where the XML twin is a *needed* alternative rather than a portability
 convenience. **This is not a parity gap** — it's an accurate reflection of where the encoding cliff
 actually exists.
+
+---
+
+## Part D — modules your oldest tier can run
+
+Tables are only half a package. Views, procedures, functions and triggers are scripts, and SchemaTongs
+writes them as `CREATE OR ALTER` — a statement SQL Server added in **2016 SP1**. Below that it is a syntax
+error, so a package extracted the default way fails on its first module the day it meets a real 2012 or 2014
+server.
+
+This sandbox can't show you that failure: `learn_2008` is a compatibility-100 database on a **2022** binary,
+and the binary is what parses the statement. So the lesson is the warning that catches it before a real old
+server does. Give the oldest tier a view to extract:
+
+```bash
+# from course10-module-04
+../lab-sql.sh sqlserver learn_2008 "IF OBJECT_ID('dbo.ActiveWidget') IS NULL EXEC('CREATE VIEW dbo.ActiveWidget AS SELECT WidgetId, Name FROM dbo.Widget WHERE IsActive = 1')"
+```
+
+Extract it, declare the floor you mean to support, and validate:
+
+```bash
+# from course10-module-04/sqlserver
+schematongs --ConfigFile:tongs.settings.2008.json
+```
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "sqlserver/extracted-2008/Product.json" set MinimumVersion '"2008"' -->
+In `extracted-2008/Product.json`, add `"MinimumVersion": "2008"` — the claim that this package deploys
+to SQL Server 2008 — and validate:
+
+```bash
+# from course10-module-04/sqlserver
+schemaquench --Validate --SchemaPackagePath:./extracted-2008
+```
+
+```
+WARN [SS-VER-002] Product 'OldestTier': MinimumVersion '2008' admits SQL Server builds before 2016 SP1 (13.0.4001), which reject CREATE OR ALTER as a syntax error, and 1 script uses it (Templates/Main/Views/dbo.ActiveWidget.sql). Declare MinimumVersion 2017 or later, or extract the package with ShouldCast:ModuleSyntax set to Legacy, which writes each module in a form every supported version accepts.
+0 error(s), 1 warning(s)
+```
+
+The package's claim and its scripts disagree, and `--Validate` says so by name. Take the second way out:
+extract again with `ShouldCast:ModuleSyntax` set to `Legacy`:
+
+```bash
+# from course10-module-04/sqlserver
+SmithySettings_ShouldCast__ModuleSyntax=Legacy schematongs --ConfigFile:tongs.settings.2008.json
+```
+
+`extracted-2008/Templates/Main/Views/dbo.ActiveWidget.sql` now reads:
+
+```sql
+IF OBJECT_ID(N'[dbo].[ActiveWidget]') IS NULL EXEC('CREATE VIEW [dbo].[ActiveWidget] AS SELECT 1 AS x')
+GO
+
+ALTER VIEW [dbo].[ActiveWidget] AS SELECT WidgetId, Name FROM dbo.Widget WHERE IsActive = 1
+```
+
+A guarded stub that only ever creates, then an `ALTER` with the real body — both run on 2008. Re-extracting
+kept your `MinimumVersion`, and the same validation now reports `no issues found`:
+
+```bash
+# from course10-module-04/sqlserver
+schemaquench --Validate --SchemaPackagePath:./extracted-2008
+```
+
+> **On 2.7.x** there is no `ModuleSyntax` switch and no `SS-VER-002`: the default extraction validates clean
+> with `MinimumVersion` 2008 and fails on a real pre-2016 SP1 server.
+
+Clear the view away before Module 5, which extracts these tiers again:
+
+```bash
+# from course10-module-04
+../lab-sql.sh sqlserver learn_2008 "DROP VIEW IF EXISTS dbo.ActiveWidget"
+rm -rf sqlserver/extracted-2008
+```
 
 ---
 

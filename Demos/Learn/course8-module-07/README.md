@@ -1,8 +1,6 @@
 # Course 8 · Module 7 — Before you share the log
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (--ExitNonZeroOnWarning): delete the "On 2.7.x" callouts -->
-<!-- TRAINING-RELEASE-PIN #576 (ScrubArtifacts): re-check Step 6 when the issue is closed -->
-<!-- TRAINING-RELEASE-PIN #577 (LogHygiene echo masks itself): delete the Step 3 note and show the echo listing DeployKey -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (--ExitNonZeroOnWarning, #576 debug SQL, #577 echo): delete the "On 2.7.x" callouts -->
 
 The last module of Course 8. Every module so far ended with a log you read. This one ends with a log you
 **hand to someone else** — attached to a ticket, uploaded as a CI artifact, pasted into a chat. Before it
@@ -143,9 +141,17 @@ before you attach it.
 (`"*Salt*"`); `AllowTokens` lets a false positive back out (a `PublicToken` that holds nothing
 secret). Name your secrets once, in the settings file the deploy already uses.
 
-> **Note:** the configuration echo at the top of the log prints this block as `ScrubTokens: ***` — the
-> setting's own name contains `Token`, so it masks itself (#577). Check the token block, not the echo, to
-> see the setting worked.
+The configuration echo at the top of the log shows the block as you wrote it, so you can confirm the run
+read it:
+
+```
+  LogHygiene: 
+    ScrubTokens: 
+      0: DeployKey
+```
+
+> **On 2.7.x** the echo prints this block as `ScrubTokens: ***` — the setting's own name contains `Token`, so
+> it masks itself (#577). Check the token block, not the echo, to see the setting worked.
 
 ## Step 4 — a block the tools can't read
 
@@ -220,16 +226,33 @@ Now a deploy that fails. `broken/` adds a script that rotates the reporting key 
 schemaquench --ConfigFile:quench.settings.broken.json --LogPath:"$PWD/logs"
 ```
 
-Exit `2`. You know this shape from Module 1 — the error, then the pointer:
+Exit `2`. You know this shape from Module 1 — the error, and under it the offer:
 
 ```
-Resolved SQL written to: ./artifacts\SchemaQuench - Failed 02_rotate_report_key <server>.diag_hygiene.sql
+Rerun with --WriteDebugSql to write the resolved SQL of this step to ./artifacts.
 Unable to quench '.\broken\Templates\Main\After Scripts\02_rotate_report_key.sql': <the engine's "no such table" error>
 ```
 
+Nothing was written to `artifacts/`, and the logs don't hold the reporting key either:
+
+```bash
+# from course8-module-07/<engine>
+grep -rl "rk-55aa01be" logs
+```
+
+No output. Take the offer:
+
+```bash
+# from course8-module-07/<engine>
+schemaquench --ConfigFile:quench.settings.broken.json --LogPath:"$PWD/logs" --WriteDebugSql
+```
+
+```
+Resolved SQL written to: ./artifacts\SchemaQuench - Failed 02_rotate_report_key <server>.diag_hygiene.sql
+```
+
 (`<server>` is `localhost,11433` on SQL Server and `localhost` elsewhere; paths print with your system's
-separator.) Search both folders for the
-reporting key:
+separator.) Search both folders for the reporting key:
 
 ```bash
 # from course8-module-07/<engine>
@@ -244,16 +267,23 @@ artifacts/SchemaQuench - Failed 02_rotate_report_key <server>.diag_hygiene.sql
 says so in its own header:
 
 ```
--- Contains expanded values — may be sensitive. Local debugging; scrub before sharing.
+-- Holds real values: local debugging only. Do not attach it to a ticket or a CI artifact.
 ```
 
 That's on purpose. The artifact exists so you can paste it into your client and re-run the failure exactly
-as the deploy did (Module 1), and it can only do that with the real values in it. So the rule is short:
-**logs travel, artifacts stay on your machine.** Attach the log to the ticket; keep the artifact local.
+as the deploy did (Module 1), and it can only do that with the real values in it. That's why it's written
+only when you ask, and why it doesn't linger: the next run deletes it when it starts, and a run that finishes
+cleanly deletes its own. So the rule is short: **logs travel, artifacts stay on your machine.** Attach the log
+to the ticket; keep the artifact local.
 
-Don't reach for `ScrubArtifacts` to make one shareable. It replaces each secret with `***`, and a `***`
-inside quotes is still valid SQL — re-run that file and it writes `***` into your table (#576). Masked is
-safe to read, not safe to run.
+There's no masked version to make one shareable. `ScrubArtifacts`, which swapped each secret for `***`, is
+deprecated and ignored: a `'***'` inside quotes is still valid SQL, so a masked file re-run wrote `***` into
+your table (#576). A run that still sets it logs a warning.
+
+> **On 2.7.x** there is no `--WriteDebugSql` (it's logged as `Ignored - not recognized`): every run writes the
+> artifacts, so the first `broken` deploy already leaves the key in `artifacts/`, and the files stay until you
+> delete them. The header reads `-- Contains expanded values — may be sensitive. Local debugging; scrub before
+> sharing.`, and `ScrubArtifacts` still masks — into SQL that writes `***` if you run it.
 
 ## Before you attach a log
 
