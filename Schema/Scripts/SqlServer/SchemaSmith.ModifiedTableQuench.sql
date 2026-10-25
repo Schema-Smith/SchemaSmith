@@ -904,7 +904,8 @@ BEGIN TRY
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   BEGIN
     DECLARE @v_FitSchema NVARCHAR(256), @v_FitTable NVARCHAR(256), @v_FitColumn NVARCHAR(256), @v_FitType NVARCHAR(MAX),
-            @v_FitInstance SYSNAME, @v_FitChangeTable NVARCHAR(600), @v_FitError NVARCHAR(MAX), @v_FitSQL NVARCHAR(MAX)
+            @v_FitInstance SYSNAME, @v_FitChangeTable NVARCHAR(600), @v_FitError NVARCHAR(MAX), @v_FitSQL NVARCHAR(MAX),
+            @v_FitLongest BIGINT
     DECLARE fit_cur CURSOR LOCAL FAST_FORWARD FOR
       SELECT cc.[Schema], cc.[TableName], cc.[ColumnName], REPLACE(REPLACE(cc.[ColumnScript], ' SPARSE', ''), ' NOT NULL', ' NULL'),
              ct.capture_instance, QUOTENAME(OBJECT_SCHEMA_NAME(ct.[object_id])) + '.' + QUOTENAME(OBJECT_NAME(ct.[object_id]))
@@ -928,6 +929,13 @@ BEGIN TRY
       END TRY
       BEGIN CATCH
         SET @v_FitError = ERROR_MESSAGE()
+        -- A truncation error names the probe's own table variable, so say how long the longest stored value is instead.
+        IF ERROR_NUMBER() IN (2628, 8152)
+        BEGIN
+          SET @v_FitSQL = N'SELECT @l = MAX(' + CASE WHEN @v_FitType LIKE '%BINARY%' THEN N'DATALENGTH(' ELSE N'LEN(' END + @v_FitColumn + N')) FROM ' + @v_FitChangeTable + N' WITH (NOLOCK)'
+          EXEC sp_executesql @v_FitSQL, N'@l BIGINT OUTPUT', @l = @v_FitLongest OUTPUT
+          SET @v_FitError = 'the longest is ' + CONVERT(NVARCHAR(20), @v_FitLongest) + CASE WHEN @v_FitType LIKE '%BINARY%' THEN ' bytes' ELSE ' characters' END
+        END
       END CATCH
       IF @v_FitError IS NULL
         FETCH NEXT FROM fit_cur INTO @v_FitSchema, @v_FitTable, @v_FitColumn, @v_FitType, @v_FitInstance, @v_FitChangeTable

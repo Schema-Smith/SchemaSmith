@@ -836,6 +836,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNarrow
             {
                 Assert.That(ex!.Message, Does.Contain("CDC capture would stop on [dbo].[CdcNarrow]: the change to column [Val] (VARCHAR(10)"));
                 Assert.That(ex.Message, Does.Contain("change table [cdc].[dbo_CdcNarrow_CT] of capture instance dbo_CdcNarrow"));
+                Assert.That(ex.Message, Does.Contain("(the longest is 34 characters)").And.Not.Contain("tempdb"), "the reason is the history's, not the probe's");
                 Assert.That(ex.Message, Does.Contain("@source_name = N'CdcNarrow', @capture_instance = N'dbo_CdcNarrow'"), "the message names the instance to drop");
                 Assert.That(valType, Is.EqualTo("VARCHAR(50)"), "nothing on the table changed");
                 Assert.That(otherType, Is.EqualTo("INT"), "not even the change that would have been fine");
