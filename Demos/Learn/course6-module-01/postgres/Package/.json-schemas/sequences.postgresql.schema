@@ -50,6 +50,7 @@
     },
     "PersistenceType": {
       "type": "string",
+      "pattern": "^(?:[Ll][Oo][Gg][Gg][Ee][Dd]|[Uu][Nn][Ll][Oo][Gg][Gg][Ee][Dd])$",
       "description": "Unlogged for a sequence that skips the write-ahead log (PostgreSQL 15+), or Logged. Left out, the sequence is created logged and an existing one's persistence is not changed."
     },
     "Description": {

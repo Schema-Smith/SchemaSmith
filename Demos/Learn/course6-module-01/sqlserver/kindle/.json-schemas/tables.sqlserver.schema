@@ -256,11 +256,11 @@
           },
           "Enforced": {
             "type": "boolean",
-            "description": "false disables the key (ALTER TABLE ... NOCHECK CONSTRAINT): it stays defined but is not checked. Omitted means enforced, and a deploy re-enables a key someone disabled."
+            "description": "false disables the key (ALTER TABLE ... NOCHECK CONSTRAINT): it stays defined but is not checked. Omitted leaves an existing key as it is, and a new one is enforced."
           },
           "Validated": {
             "type": "boolean",
-            "description": "false creates the key WITH NOCHECK, so the rows already in the table are not checked and the key is untrusted. true over an untrusted key re-checks those rows, which fails when any violate it. Omitted means validated."
+            "description": "false creates the key WITH NOCHECK, so the rows already in the table are not checked and the key is untrusted. true over an untrusted key re-checks those rows, which fails when any violate it. Omitted leaves an existing key as it is, and a new one is validated."
           },
           "NotForReplication": {
             "type": "boolean",
@@ -298,11 +298,11 @@
           },
           "Enforced": {
             "type": "boolean",
-            "description": "false disables the constraint (ALTER TABLE ... NOCHECK CONSTRAINT): it stays defined but is not checked. Omitted means enforced, and a deploy re-enables a constraint someone disabled."
+            "description": "false disables the constraint (ALTER TABLE ... NOCHECK CONSTRAINT): it stays defined but is not checked. Omitted leaves an existing constraint as it is, and a new one is enforced."
           },
           "Validated": {
             "type": "boolean",
-            "description": "false creates the constraint WITH NOCHECK, so the rows already in the table are not checked and the constraint is untrusted. true over an untrusted constraint re-checks those rows, which fails when any violate it. Omitted means validated."
+            "description": "false creates the constraint WITH NOCHECK, so the rows already in the table are not checked and the constraint is untrusted. true over an untrusted constraint re-checks those rows, which fails when any violate it. Omitted leaves an existing constraint as it is, and a new one is validated."
           },
           "NotForReplication": {
             "type": "boolean",
