@@ -43,10 +43,10 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
         cmd.ExecuteNonQuery();
     }
 
-    private void Deploy(IDbCommand cmd, string json, string online, bool whatIf = false, bool indexOnly = false)
+    private void Deploy(IDbCommand cmd, string json, string online, bool whatIf = false, bool indexOnly = false, Action beforeRetry = null)
     {
         Sql(cmd, $"SET @ss_online_apply = '{online}'; DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID(); DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()");
-        RunTableQuenchProc(cmd, json, indexOnly: indexOnly, whatIf: whatIf);
+        RunTableQuenchProc(cmd, json, indexOnly: indexOnly, whatIf: whatIf, beforeRetry: beforeRetry);
     }
 
     // The Mode on this session's latest change row for the object: "<none>" with no row, "NULL" when it carries none.
@@ -154,8 +154,10 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
         try
         {
             Drop(cmd, "onl_new");
+            // A retry would find the table the failed attempt created, so it starts again from no table.
             Deploy(cmd, Table("onl_new", string.Join(", ", Col("id", nullable: false), Col("a")),
-                """, "Indexes": [{ "Name": "ix_onl_new_a", "IndexColumns": "a" }]"""), "PREFER");
+                """, "Indexes": [{ "Name": "ix_onl_new_a", "IndexColumns": "a" }]"""), "PREFER",
+                beforeRetry: () => Sql(cmd, $"DROP TABLE IF EXISTS `{_mainDb}`.`onl_new`; DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()"));
             Assert.Multiple(() =>
             {
                 Assert.That(IndexExists(cmd, "onl_new", "ix_onl_new_a"), Is.True);
