@@ -1282,6 +1282,10 @@ BEGIN
                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
              WHERE c.NewColumn = 0
                AND ((c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation)
+                    -- A character set declared without a collation is the same change, as STEP 3 compares it.
+                    OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                        AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                            != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
                     -- A type change is refused the same way (MA-054), and a widened key pair changes both sides --
                     -- unless the engine makes it under the key and keeps it.
                     OR (SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1
@@ -1302,6 +1306,10 @@ BEGIN
                   AND SchemaSmith_NameKeyCI(kcu.REFERENCED_COLUMN_NAME) = c.ColumnKey
              WHERE c.NewColumn = 0
                AND ((c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation)
+                    -- A character set declared without a collation is the same change, as STEP 3 compares it.
+                    OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                        AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                            != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
                     -- A type change is refused the same way (MA-054), and a widened key pair changes both sides --
                     -- unless the engine makes it under the key and keeps it.
                     OR (SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1

@@ -701,6 +701,54 @@ VALUES ('{_productName}', '', '{TestSchema}', 'FOREIGN KEY', 'ModFKCascUpd.FK_Mo
         conn.Close();
     }
 
+    // A character set declared without a collation changes the column as a collation would, and the engine refuses it
+    // on either side of a foreign key until the key is dropped; the foreign-key phase puts it back.
+    [Test]
+    public void TableQuench_ACharacterSetChangeOnAForeignKeyPair_WithNoCollation_DropsAndRestoresTheKey()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        var schema = CreatePrivateDdlDatabase(cmd, "fkcs");
+        var product = $"FkCharsetProduct_{Guid.NewGuid():N}"[..24];
+        try
+        {
+            cmd.CommandText = $"CREATE TABLE `{schema}`.cs_account (Code VARCHAR(10) CHARACTER SET latin1 NOT NULL PRIMARY KEY); " +
+                              $"CREATE TABLE `{schema}`.cs_payment (Id INT NOT NULL PRIMARY KEY, Code VARCHAR(10) CHARACTER SET latin1 NOT NULL, " +
+                              "KEY fk_cs_payment_account (Code), CONSTRAINT fk_cs_payment_account FOREIGN KEY (Code) REFERENCES cs_account (Code))";
+            cmd.ExecuteNonQuery();
+            const string json = """
+                [ { "Name": "cs_account",
+                    "Columns": [ { "Name": "Code", "DataType": "VARCHAR(10)", "Nullable": false, "CharacterSet": "utf8mb4" } ],
+                    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Code" } ] },
+                  { "Name": "cs_payment",
+                    "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false },
+                                 { "Name": "Code", "DataType": "VARCHAR(10)", "Nullable": false, "CharacterSet": "utf8mb4" } ],
+                    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" },
+                                 { "Name": "fk_cs_payment_account", "IndexColumns": "Code" } ],
+                    "ForeignKeys": [ { "Name": "fk_cs_payment_account", "Columns": "Code", "RelatedTable": "cs_account", "RelatedColumns": "Code" } ] } ]
+                """;
+
+            Assert.DoesNotThrow(() => RunFullQuench(cmd, json, product, schema));
+
+            cmd.CommandText = $"SELECT GROUP_CONCAT(CONCAT(TABLE_NAME, ':', CHARACTER_SET_NAME) ORDER BY TABLE_NAME) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{schema}' AND COLUMN_NAME = 'Code'";
+            var charsets = Convert.ToString(cmd.ExecuteScalar());
+            cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '{schema}' AND CONSTRAINT_NAME = 'fk_cs_payment_account'";
+            var keys = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Multiple(() =>
+            {
+                Assert.That(charsets, Is.EqualTo("cs_account:utf8mb4,cs_payment:utf8mb4"));
+                Assert.That(keys, Is.EqualTo(1), "the key is back");
+            });
+        }
+        finally
+        {
+            DropPrivateDdlDatabase(cmd, schema, product);
+        }
+        conn.Close();
+    }
+
     /// <summary>
     /// A private target database for a test that runs DDL.
     /// <para>The fixture's six read-only tests happily share <c>TestSchema</c>, but the two collation
