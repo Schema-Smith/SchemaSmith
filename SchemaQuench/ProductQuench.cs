@@ -150,9 +150,7 @@ public class ProductQuench
         // Secondary servers are SqlServer-only (Availability Groups)
         if (_product.Platform == Platform.SqlServer)
         {
-            _secondaryServers.AddRange((_config[SettingsKeys.Target.SecondaryServers] ?? "")
-                .Split([','], StringSplitOptions.RemoveEmptyEntries)
-                .Where(s => !string.IsNullOrWhiteSpace(s)));
+            _secondaryServers.AddRange(ReadSecondaryServers(_config));
         }
     }
 
@@ -179,6 +177,24 @@ public class ProductQuench
     }
 
     private IReadOnlyList<string> ReadFilterArray(string sectionKey) => ReadFilterArray(_config, sectionKey);
+
+    // SQL Server names a server on another port `host,port`. An array item is one server whole; in the comma-separated
+    // string, an all-digit item is the port of the server before it.
+    internal static List<string> ReadSecondaryServers(IConfiguration config)
+    {
+        var listed = ReadFilterArray(config, SettingsKeys.Target.SecondaryServers);
+        if (listed.Count > 0) return listed.ToList();
+
+        var servers = new List<string>();
+        foreach (var item in (config[SettingsKeys.Target.SecondaryServers] ?? "").Split(',').Select(s => s.Trim()).Where(s => s.Length > 0))
+        {
+            if (servers.Count > 0 && item.All(char.IsAsciiDigit))
+                servers[^1] += "," + item;
+            else
+                servers.Add(item);
+        }
+        return servers;
+    }
 
     internal static bool ResolveCascadedFlag(bool? env, bool? product, bool? template, bool defaultValue)
     {

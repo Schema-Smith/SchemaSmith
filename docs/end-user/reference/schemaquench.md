@@ -51,7 +51,7 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | `Target:Port` | string | platform default | TCP port. SQL Server `1433`, PostgreSQL `5432`, MySQL `3306`. |
 | `Target:User` | string | _(empty)_ | Login username. SQL Server allows blank for Windows auth. |
 | `Target:Password` | string | _(empty)_ | Login password. |
-| `Target:SecondaryServers` | string | _(empty)_ | **SQL Server only.** Comma-separated list of additional servers (Availability Group secondaries) to quench in parallel with the primary. See [Secondary Servers](#secondary-servers). |
+| `Target:SecondaryServers` | string or array | _(empty)_ | **SQL Server only.** Additional servers (Availability Group secondaries) to quench in parallel with the primary: a JSON array, one server per item (`["replica-1,14330", "replica-2"]`), or a comma-separated string, where an all-digit item is the port of the server before it. See [Secondary Servers](#secondary-servers). |
 | `Target:ConnectionProperties` | object | `{}` | Arbitrary key-value pairs appended to the connection string. Platform-specific keys -- see the [Configuration Reference](configuration.md#connection-configuration). |
 
 ### Behavior Settings
@@ -126,6 +126,8 @@ SQL Server deployments targeting Availability Groups can quench to a primary plu
   }
 }
 ```
+
+A secondary on another port is named `host,port`, as for `Target:Server`. Use an array to list such servers, one per item: `"SecondaryServers": ["replica-1,14330", "replica-2,14330"]`. In the comma-separated string an all-digit item is read as the port of the server before it, so `"replica-1,14330,replica-2"` names two servers.
 
 When a secondary list is configured, SchemaQuench routes each product-level folder to the right server based on its `ServerToQuench` setting (`Primary`, `Secondary`, or `Both`). Templates target the primary; product-level scripts can target either side. Without a secondary list, a `Secondary` folder is skipped (and logged), never run on the primary. See [Schema Packages -- Secondary Servers](schema-packages.md#secondary-servers) for the package side of the configuration.
 

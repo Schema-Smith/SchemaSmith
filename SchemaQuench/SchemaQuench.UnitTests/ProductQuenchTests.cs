@@ -170,6 +170,27 @@ public class ProductQuenchTests
 
     #region Product Script Server Routing Tests
 
+    // #596: "127.0.0.1,11433" was read as two secondaries, 127.0.0.1 and 11433, and the deploy stopped at the server check.
+    [TestCase("secondary-1,secondary-2", new[] { "secondary-1", "secondary-2" })]
+    [TestCase("127.0.0.1,11433", new[] { "127.0.0.1,11433" })]
+    [TestCase(" replica-1,14330 , replica-2 ,replica-3,14331", new[] { "replica-1,14330", "replica-2", "replica-3,14331" })]
+    [TestCase("", new string[0])]
+    public void ReadSecondaryServers_TheCommaListKeepsEachServersPort(string value, string[] expected)
+    {
+        var config = new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string> { ["Target:SecondaryServers"] = value }).Build();
+
+        Assert.That(ProductQuench.ReadSecondaryServers(config), Is.EqualTo(expected));
+    }
+
+    [Test]
+    public void ReadSecondaryServers_AnArrayNamesEachServerWhole()
+    {
+        var json = """{ "Target": { "SecondaryServers": [ "replica-1,14330", "replica-2" ] } }""";
+        var config = new ConfigurationBuilder().AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json))).Build();
+
+        Assert.That(ProductQuench.ReadSecondaryServers(config), Is.EqualTo(new[] { "replica-1,14330", "replica-2" }));
+    }
+
     [Test]
     public void QuenchProductScriptsWithCheckpoint_OpensCommandAgainstEachServerByName()
     {
