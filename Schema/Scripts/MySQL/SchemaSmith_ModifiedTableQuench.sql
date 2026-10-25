@@ -1435,7 +1435,7 @@ BEGIN
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
-                      ' MODIFY COLUMN ', c.ColumnScript)
+                      ' ', GROUP_CONCAT(CONCAT('MODIFY COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
         INNER JOIN _SchemaSmith_CatColumns isc
@@ -1540,7 +1540,8 @@ BEGIN
           OR (c.CompareCheckExpression IS NOT NULL
               AND EXISTS (SELECT 1 FROM _SchemaSmith_TableLevelColumnChecks tl
                            WHERE tl.TableKey = c.TableKey AND tl.ColumnKey = c.ColumnKey))
-          );
+          )
+        GROUP BY c.TableName;
 
         -- #363: WhatIf twin of the ELSE-branch 'column'/'modified' audit; same source/predicate, wouldModify.
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
@@ -1649,14 +1650,13 @@ BEGIN
         WHERE t.NewTable = 0 AND c.NewColumn = 0 AND c.CompareCheckExpression IS NOT NULL
         ORDER BY c.TableName, c.ColumnName;
 
-        -- Per-column progress messages, set-based (preserves the per-column "ALTER TABLE ...
-        -- MODIFY COLUMN ..." single-column text, even though execution below folds multiple
-        -- columns of the same table into one statement).
+        -- One progress message per table, the statement as execution below runs it: the columns of a table are
+        -- folded into one ALTER, and a line per column read as several statements under one OnlineApply form.
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Modify column: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
-                      ' MODIFY COLUMN ', c.ColumnScript)
+                      ' ', GROUP_CONCAT(CONCAT('MODIFY COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
         INNER JOIN _SchemaSmith_CatColumns isc
@@ -1761,7 +1761,8 @@ BEGIN
           OR (c.CompareCheckExpression IS NOT NULL
               AND EXISTS (SELECT 1 FROM _SchemaSmith_TableLevelColumnChecks tl
                            WHERE tl.TableKey = c.TableKey AND tl.ColumnKey = c.ColumnKey))
-          );
+          )
+        GROUP BY c.TableName;
 
         -- Object-change audit (#243 E5): one row per column about to be modified. Same join +
         -- predicate as the fold below, evaluated before the ALTER (INFORMATION_SCHEMA still reflects
@@ -2516,7 +2517,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             END WHILE;
         END IF;
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT CONNECTION_ID(), 'column', CONCAT(TableName, '.', ColumnName), IF(p_WhatIf = 1, 'wouldDrop', 'dropped')
+        SELECT CONNECTION_ID(), 'column', CONCAT(SchemaSmith_StripBacktickWrapping(TableName), '.', SchemaSmith_StripBacktickWrapping(ColumnName)), IF(p_WhatIf = 1, 'wouldDrop', 'dropped')
         FROM _SchemaSmith_GenColsToDrop;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColDropStmts;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColsToDrop;

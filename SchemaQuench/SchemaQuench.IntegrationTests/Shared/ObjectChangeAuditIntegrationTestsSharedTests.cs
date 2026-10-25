@@ -181,6 +181,55 @@ public abstract class ObjectChangeAuditIntegrationTestsSharedTests : BaseTableQu
         conn.Close();
     }
 
+    // A column the deploy added was named `Orders`.`Channel` and one it modified Orders.Status, and the progress log gave a
+    // line per column for what runs as one ALTER. Every row now names an object as the catalog does, without backticks.
+    [Test]
+    public void TableQuench_NamesEveryChangeOneWay_AndLogsAFoldedAlterOnce()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        DropIfExists(cmd, "AuditSpell");
+        ClearAudit(cmd);
+        string Json(string length, string extra) => $$"""
+            [ { "Name": "`AuditSpell`",
+                "Columns": [ { "Name": "`Id`", "DataType": "INT", "Nullable": false },
+                             { "Name": "`A`", "DataType": "VARCHAR({{length}})", "Nullable": true },
+                             { "Name": "`B`", "DataType": "VARCHAR({{length}})", "Nullable": true }{{extra}} ],
+                "Indexes": [ { "Name": "`PK_AuditSpell`", "PrimaryKey": true, "IndexColumns": "`Id`" } ] } ]
+            """;
+        try
+        {
+            RunTableQuenchProc(cmd, Json("10", ""), productName: Product);
+            var created = ReadAudit(cmd);
+            ClearAudit(cmd);
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(cmd, Json("20", """, { "Name": "`C`", "DataType": "INT", "Nullable": true }"""), productName: Product);
+            var changed = ReadAudit(cmd);
+            cmd.CommandText = "SELECT Message FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%Modify column:%AuditSpell%'";
+            var modifyLines = new List<string>();
+            using (var reader = cmd.ExecuteReader())
+                while (reader.Read()) modifyLines.Add(reader.GetString(0));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(created.Where(r => r.Type == "table").Select(r => r.Name), Is.EqualTo(new[] { "AuditSpell" }));
+                Assert.That(changed.Where(r => r.Type == "column").Select(r => $"{r.Name}|{r.Action}"),
+                    Is.EquivalentTo(new[] { "AuditSpell.C|created", "AuditSpell.A|modified", "AuditSpell.B|modified" }));
+                Assert.That(modifyLines, Has.Count.EqualTo(1), "one ALTER, one line");
+                Assert.That(modifyLines.FirstOrDefault(), Does.Contain("MODIFY COLUMN `A`").And.Contain("MODIFY COLUMN `B`"));
+            });
+        }
+        finally
+        {
+            DropIfExists(cmd, "AuditSpell");
+        }
+        conn.Close();
+    }
+
     private const string RenameBeforeJson = """
         [
         {

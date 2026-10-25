@@ -783,12 +783,12 @@ BEGIN
         -- audits. Set-based over the same temp-table sources; the new-table's own columns are covered
         -- by the table row (NewTable = 0 only for the column twin), matching the real audits.
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT CONNECTION_ID(), 'table', t.TableName, 'wouldCreate'
+        SELECT CONNECTION_ID(), 'table', SchemaSmith_StripBacktickWrapping(t.TableName), 'wouldCreate'
         FROM _SchemaSmith_Tables t
         WHERE t.NewTable = 1;
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT CONNECTION_ID(), 'column', CONCAT(c.TableName, '.', c.ColumnName), 'wouldCreate'
+        SELECT CONNECTION_ID(), 'column', CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName)), 'wouldCreate'
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
         WHERE t.NewTable = 0
@@ -1101,7 +1101,7 @@ BEGIN
                 EXECUTE stmt;
             END IF;
             -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
-            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'table', v_StatusTableName, 'created');
+            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'table', SchemaSmith_StripBacktickWrapping(v_StatusTableName), 'created');
             DEALLOCATE PREPARE stmt;
         END LOOP;
 
@@ -1176,7 +1176,7 @@ BEGIN
         -- Object-change audit (#243 E5): one row per physical column added to an existing table.
         -- Set-based over temp tables only (no INFORMATION_SCHEMA — not the #337 segfault shape).
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
-        SELECT CONNECTION_ID(), 'column', CONCAT(c.TableName, '.', c.ColumnName), 'created', s.Form
+        SELECT CONNECTION_ID(), 'column', CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName)), 'created', s.Form
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
         LEFT JOIN _SchemaSmith_AddColumnStmts s ON s.TableName = c.TableName
