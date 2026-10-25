@@ -2447,7 +2447,7 @@ SET NOCOUNT ON
     // A connect that stalled said only "The operation has timed out", under "Begin Quench", naming neither the target nor
     // that it was the connect.
     internal static string ConnectFailure(Platform platform, string server, string database, string user, string reason) =>
-        $"{ProductQuench.ConnectFailure(platform, server, $" [Database: {database}]", user)}: {reason}";
+        ProductQuench.ConnectFailure(platform, server, $" [Database: {database}]", user, reason);
 
     // Not wrapped: the lost-connection classifier walks inner exceptions and would call a failed connect a mid-run drop.
     private RunFailedException ConnectFailed(IDbConnection connection, Exception e, IConfigurationRoot config)

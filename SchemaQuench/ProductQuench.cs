@@ -498,8 +498,9 @@ public class ProductQuench
 
     // The engine is named because a package run with another engine's settings fails here, and "unable to connect"
     // alone reads as a server that is down.
-    internal static string ConnectFailure(Platform platform, string server, string detail, string user) =>
-        $"Unable to connect to {platform.ToDisplayName()} at {server}{detail}{(string.IsNullOrWhiteSpace(user) ? "" : $" with user {user}")}";
+    internal static string ConnectFailure(Platform platform, string server, string detail, string user, string reason = null) =>
+        $"Unable to connect to {platform.ToDisplayName()} at {server}{detail}{(string.IsNullOrWhiteSpace(user) ? "" : $" with user {user}")}" +
+        (string.IsNullOrWhiteSpace(reason) ? "" : $": {reason}");
 
     internal virtual IDbCommand GetCommand(string server)
     {
@@ -528,7 +529,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User]), e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User], e.Message), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -577,7 +578,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, $" [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]", _config[SettingsKeys.Target.User]), e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, $" [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]", _config[SettingsKeys.Target.User], e.Message), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -625,7 +626,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User]), e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User], e.Message), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -1275,6 +1276,7 @@ public class ProductQuench
             {
                 _progressLog.Error($"  {server}: {e.Message} **CONNECTION FAILED**");
                 _errorLog.Error($"Unable to connect to {server}:\r\n{e}");
+                _failureRecords.Add(new FailureRecord("Validate", server, e.Message, Array.Empty<string>(), null));
                 shouldFail = true;
             }
         }
@@ -1286,7 +1288,11 @@ public class ProductQuench
             shouldFail = true;
         }
 
-        if (shouldFail) throw new RunFailedException("Error validating configured servers");
+        if (shouldFail)
+        {
+            EmitFailureRollup();
+            throw new RunFailedException("Error validating configured servers");
+        }
 
         _progressLog.Info("");
         _progressLog.Info("");
