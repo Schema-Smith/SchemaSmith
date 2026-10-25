@@ -72,6 +72,7 @@ BEGIN
             SET @v_ftmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_FTModStmts);
             WHILE @v_ftmod_id IS NOT NULL DO
                 SELECT Stmt, AuditName INTO @exec_sql, @ss_auditname FROM _SchemaSmith_FTModStmts WHERE RowId = @v_ftmod_id;
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Drop modified fulltext index: ', @exec_sql));
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'fullTextIndex', @ss_auditname, 'dropped');

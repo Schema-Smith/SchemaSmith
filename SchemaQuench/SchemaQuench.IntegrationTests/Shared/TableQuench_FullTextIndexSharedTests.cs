@@ -4,6 +4,7 @@ using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
 using System;
+using System.Collections.Generic;
 
 using NUnit.Framework;
 
@@ -266,7 +267,7 @@ public abstract class TableQuench_FullTextIndexSharedTests
     // The normal table quench, with both by-absence drops on: DropUnknownIndexes here, removed-from-product inside.
     private void FullQuench(IDbCommand command, string json, int dropUnknownIndexes = 1)
     {
-        command.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+        command.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID(); DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
         command.ExecuteNonQuery();
         command.CommandText = $"CALL SchemaSmith_TableQuench('FullTextProduct', '{_testDb}', '{json.Replace("'", "''")}', 0, {dropUnknownIndexes}, 0)";
         TransientRetry.Run(() => command.ExecuteNonQuery());
@@ -281,6 +282,15 @@ public abstract class TableQuench_FullTextIndexSharedTests
                      GROUP BY INDEX_NAME) f
             """;
         return command.ExecuteScalar()?.ToString() ?? "";
+    }
+
+    private static List<string> FullTextMessages(IDbCommand command)
+    {
+        command.CommandText = "SELECT Message FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%fulltext index:%' ORDER BY Id";
+        var messages = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) messages.Add(reader.GetString(0));
+        return messages;
     }
 
     private string IndexAudits(IDbCommand command)
@@ -310,7 +320,13 @@ public abstract class TableQuench_FullTextIndexSharedTests
         });
 
         FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary" }"""));
-        Assert.That(FullText(command), Is.EqualTo("ft_content(content,summary)"), "its columns changed");
+        var messages = FullTextMessages(command);
+        Assert.Multiple(() =>
+        {
+            Assert.That(FullText(command), Is.EqualTo("ft_content(content,summary)"), "its columns changed");
+            Assert.That(messages, Has.Some.Contains("Drop modified fulltext index:").And.Contains("`ft_content`"), "the log names the drop: " + string.Join(" | ", messages));
+            Assert.That(messages, Has.Some.Contains("Create fulltext index:").And.Contains("ft_content"), "and the create");
+        });
 
         FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary", "Comment": "search" }"""));
         Assert.That(FullText(command), Is.EqualTo("ft_content(content,summary) search"), "its comment changed");
