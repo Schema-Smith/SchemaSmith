@@ -2355,8 +2355,9 @@ SET NOCOUNT ON
 
     private void ParseMySqlTableJson(IDbCommand command)
     {
-        var tableJson = !string.IsNullOrEmpty(_template.TableSchema)
-            ? _template.TableSchema
+        // The iteration's payload: it carries the engine tokens ({{ServerMajorVersion}}) as well as the user's.
+        var tableJson = !string.IsNullOrEmpty(IterationTableSchema)
+            ? IterationTableSchema
             : JsonHelper.SerializeAll(_template.Tables);
         PrepareParameterizedTableJson(command,
             $"CALL SchemaSmith_ParseTableJson('{EscapeSqlLiteral(_databaseName)}', @tableJson)",
