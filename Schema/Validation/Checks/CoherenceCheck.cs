@@ -86,6 +86,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string CompressionConflictCode = "SS-CO-001";
     private const string CompressionLevelInertCode = "SS-CO-002";
     private const string DuplicateEventCode = "SS-EVT-001";
+    private const string EventCommentTruncatedCode = "SS-EVT-002";
     private const string DuplicateEnumTypeCode = "SS-ENUM-001";
     private const string DuplicateSequenceCode = "SS-SEQ-001";
     private const string DuplicateDomainTypeCode = "SS-DOM-001";
@@ -181,6 +182,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         [CompressionConflictCode] = ErrorLevel,
         [CompressionLevelInertCode] = WarningLevel,
         [DuplicateEventCode] = ErrorLevel,
+        [EventCommentTruncatedCode] = WarningLevel,
         [DuplicateEnumTypeCode] = ErrorLevel,
         [DuplicateSequenceCode] = ErrorLevel,
         [DuplicateDomainTypeCode] = ErrorLevel,
@@ -232,6 +234,8 @@ public sealed class CoherenceCheck : ISchemaCheck
                 $"Template '{template.Name}'"));
         foreach (var template in ctx.Templates)
             findings.AddRange(CheckScheduledEvents(template));
+        foreach (var template in ctx.Templates)
+            findings.AddRange(CheckEventCommentLength(template, ctx.Platform));
 
         // Load already changed each of these so it deploys: the declaration is wrong, the package is not.
         foreach (var template in ctx.Templates)
@@ -1718,6 +1722,24 @@ public sealed class CoherenceCheck : ISchemaCheck
                 "what the declared form converged — keep one.");
     }
 
+
+    // #593: the engine keeps 64 characters of an event's comment (MariaDB, MySQL 5.7; 8.0 keeps 2048) and drops the
+    // rest silently. The deploy compares what is kept, so this is about the comment the database will show.
+    private static IEnumerable<Finding> CheckEventCommentLength(Template template, Platform platform)
+    {
+        if (platform == Platform.Unknown || platform.GetBasePlatform() != Platform.MySQL) yield break;
+        const int Kept = 64;
+        foreach (var ev in template.Events)
+        {
+            var comment = ev.Description ?? ev.Comment;
+            if (comment == null || comment.EnumerateRunes().Count() <= Kept) continue;
+            var engines = platform == Platform.MariaDb ? "MariaDB keeps" : "MySQL 5.7 keeps (8.0 and later keep 2,048)";
+            yield return new Finding(Severity.Warning, EventCommentTruncatedCode, Category,
+                $"Template '{template.Name}' / Event '{ev.Name}'",
+                $"The event's comment is {comment.EnumerateRunes().Count()} characters; {engines} the first {Kept} and " +
+                "drops the rest without a word, so the database will show a shorter comment than the package.");
+        }
+    }
 
     /// <summary>
     /// A PostgreSQL enum type, sequence or domain type declared BOTH as JSON and scripted as a .sql file

@@ -3332,4 +3332,41 @@ public class CoherenceCheckTests
         }));
         Assert.That(CoherenceCheck.Codes["SS-COL-008"], Is.EqualTo(new[] { Severity.Warning }));
     }
+
+    // #593: MariaDB and MySQL 5.7 keep 64 characters of an event's comment and drop the rest.
+    [TestCase(Platform.MariaDb, 65, false, "MariaDB keeps the first 64")]
+    [TestCase(Platform.MySQL, 93, false, "MySQL 5.7 keeps (8.0 and later keep 2,048) the first 64")]
+    [TestCase(Platform.MySQL, 70, true, "MySQL 5.7 keeps")]
+    public void AnEventCommentLongerThanTheEngineKeeps_IsAWarning(Platform platform, int length, bool legacySpelling, string says)
+    {
+        var ev = new Schema.Domain.MySQL.MySqlEvent { Name = "`nightly`", Definition = "DO 1" };
+        if (legacySpelling) ev.Comment = new string('y', length);
+        else ev.Description = new string('x', length);
+
+        var findings = EventFindings(platform, ev);
+
+        Assert.That(findings.Select(f => (f.Severity, f.Code, f.Location)),
+            Is.EqualTo(new[] { (Severity.Warning, "SS-EVT-002", "Template 'Main' / Event '`nightly`'") }));
+        Assert.That(findings[0].Message, Does.Contain($"{length} characters").And.Contain(says));
+    }
+
+    [TestCase(Platform.MariaDb, 64)]
+    [TestCase(Platform.MySQL, 64)]
+    [TestCase(Platform.MariaDb, null)]
+    public void AnEventCommentTheEngineKeepsWhole_OrNone_IsClean(Platform platform, int? length)
+    {
+        var ev = new Schema.Domain.MySQL.MySqlEvent { Name = "`nightly`", Definition = "DO 1",
+            Description = length == null ? null : new string('x', length.Value) };
+
+        Assert.That(EventFindings(platform, ev), Is.Empty);
+    }
+
+    private static Finding[] EventFindings(Platform platform, Schema.Domain.MySQL.MySqlEvent ev)
+    {
+        var template = new Template { Name = "Main" };
+        template.Events.Add(ev);
+        var product = new Product { Name = "Acme", Platform = platform, TemplateOrder = new System.Collections.Generic.List<string>() };
+        return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg"))
+            .Where(f => f.Code.StartsWith("SS-EVT")).ToArray();
+    }
 }
