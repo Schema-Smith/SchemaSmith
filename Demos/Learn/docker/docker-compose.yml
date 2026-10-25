@@ -16,6 +16,8 @@ services:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Learn!Passw0rd"
       MSSQL_PID: "Developer"
+      # SQL Server Agent runs the Change Data Capture capture and cleanup jobs (Course 11 M5).
+      MSSQL_AGENT_ENABLED: "true"
     ports:
       - "11433:1433"
     healthcheck:

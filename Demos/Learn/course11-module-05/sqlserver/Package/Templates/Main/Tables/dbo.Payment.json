@@ -1,0 +1,14 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[dbo]",
+  "Name": "[Payment]",
+  "EnableCDC": true,
+  "Columns": [
+    { "Name": "[PaymentId]", "DataType": "INT", "Nullable": false },
+    { "Name": "[Amount]", "DataType": "DECIMAL(12,2)", "Nullable": false },
+    { "Name": "[Memo]", "DataType": "VARCHAR(20)", "Nullable": true }
+  ],
+  "Indexes": [
+    { "Name": "[PK_Payment]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[PaymentId]" }
+  ]
+}

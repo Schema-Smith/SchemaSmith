@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Create the Course 11 "Vault" databases on each sandbox engine, or on your own server's single
-# activated engine (LEARN_SERVER): vault_m1 .. vault_m4, one per module, all empty.
+# activated engine (LEARN_SERVER): vault_m1 .. vault_m5, one per module, all empty.
 #
 # It also creates the SQL Server partition function and scheme Module 1 needs -- deliberately.
 # SchemaSmith names a partition scheme and NEVER creates one, exactly as it never creates a
@@ -15,7 +15,7 @@ set -u
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 . "$HERE/../lab-sql.sh"
 
-dbs="vault_m1 vault_m2 vault_m3 vault_m4"
+dbs="vault_m1 vault_m2 vault_m3 vault_m4 vault_m5"
 reset=0
 [ "${1:-}" = "--reset" ] && reset=1
 

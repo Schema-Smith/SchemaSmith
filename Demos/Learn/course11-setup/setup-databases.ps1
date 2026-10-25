@@ -1,5 +1,5 @@
 # Create the Course 11 "Vault" databases on each sandbox engine, or on your own server's single
-# activated engine (LEARN_SERVER): vault_m1 .. vault_m4, one per module, all empty.
+# activated engine (LEARN_SERVER): vault_m1 .. vault_m5, one per module, all empty.
 #
 # It also creates the SQL Server partition function and schemes, and the PostgreSQL tablespace, that
 # Module 1 declares BY NAME. SchemaSmith never creates either -- they are server-side objects a DBA
@@ -12,7 +12,7 @@ param([switch]$Reset)
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\..\lab-sql.ps1"
 
-$dbs = @('vault_m1','vault_m2','vault_m3','vault_m4')
+$dbs = @('vault_m1','vault_m2','vault_m3','vault_m4','vault_m5')
 $labels = @{ sqlserver = 'SQL Server'; postgres = 'PostgreSQL'; mysql = 'MySQL'; mariadb = 'MariaDB' }
 $fail = $false
 

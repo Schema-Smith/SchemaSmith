@@ -71,6 +71,13 @@ These credentials are intentionally simple and public. The sandbox is disposable
 them anywhere real.** The ports are offset (`11433` / `15432` / `13306`) so the sandbox won't collide
 with a default SQL Server, PostgreSQL, or MySQL you may already be running locally.
 
+## After you pull new lab files
+
+When `docker/docker-compose.yml` has changed, run `docker compose up -d` again: Compose recreates each container
+whose settings changed. PostgreSQL, MySQL and MariaDB keep their databases in volumes. SQL Server keeps its databases
+inside the container, so a recreated SQL Server comes back with only `learn` — re-run the setup script of the course
+you're working on.
+
 ## Tear it down
 
 ```bash

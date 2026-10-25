@@ -18,6 +18,7 @@ SQL Server
   vault_m2                 PASS
   vault_m3                 PASS
   vault_m4                 PASS
+  vault_m5                 PASS
 PostgreSQL
   vault_m1                 PASS (+ vault_ts tablespace)
   ...
@@ -28,7 +29,7 @@ only ever drops a database the labs created.
 
 ## What it creates, and the part that is the lesson
 
-Four empty databases, one per module: `vault_m1` … `vault_m4`.
+Five empty databases, one per module: `vault_m1` … `vault_m5`.
 
 And then something worth stopping on. It also creates:
 
@@ -77,6 +78,7 @@ reports PASS over a missing or unusable object is worse than one that fails.
 | `vault_m2` | 2 · State you never described | `AuditTrail` + a schema-bound view — the rebuild guards and `DropSchemaBoundDependents` |
 | `vault_m3` | 3 · The refusal you did not ask for | A partitioned table and the drop-by-absence guard |
 | `vault_m4` | 4 · Unset means unmanaged | `RetainedDocument` — placement declared vs left alone |
+| `vault_m5` | 5 · What the database owns | `Customer` and `Payment` — Change Tracking and Change Data Capture (SQL Server) |
 
 ## Cleanup
 
