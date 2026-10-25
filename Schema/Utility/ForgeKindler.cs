@@ -971,6 +971,8 @@ public static class ForgeKindler
                 new("SchemaSmith_GeneratedKindChanged.sql"),
                 // Read by ModifiedTableQuench STEP 2.9: a type change takes down the foreign keys on its column first (MA-054).
                 new("SchemaSmith_ColumnTypeDiffers.sql"),
+                // Read by the same step: a widening the engine makes under the key leaves the key in place.
+                new("SchemaSmith_TypeChangeKeepsForeignKey.sql"),
                 // Read by the index detectors: a case-only respelling a foreign key blocks is a no-op on these MariaDB patches.
                 new("SchemaSmith_CaseRespellKeepsOldSpelling.sql"),
                 new("SchemaSmith_SupportsExplicitSystemTimeConversion.sql"),

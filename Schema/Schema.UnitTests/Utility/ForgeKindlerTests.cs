@@ -549,7 +549,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_ValidateTableOwnership (the ownership refusal, before anything is created or renamed).
         // +1 = SchemaSmith_SupportsGeneratedColumnCollation (a generated column's COLLATE, refused by early MariaDB patches).
         // +1 = SchemaSmith_DegradeUnsupportedColumnFeatures (column degrades reported once ShouldApply has settled).
-        Assert.That(mysql.Length, Is.EqualTo(111));
+        // +1 = SchemaSmith_TypeChangeKeepsForeignKey (a widening the engine makes under a foreign key keeps the key).
+        Assert.That(mysql.Length, Is.EqualTo(112));
     }
 
     [Test]

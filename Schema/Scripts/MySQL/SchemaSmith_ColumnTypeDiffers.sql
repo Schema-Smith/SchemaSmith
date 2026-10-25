@@ -8,9 +8,9 @@ DROP FUNCTION IF EXISTS SchemaSmith_ColumnTypeDiffers//
 
 -- 1 when a declared column type (the parse's CompareDataType) is not the live COLUMN_TYPE, by the comparison STEP 3
 -- of ModifiedTableQuench makes before it emits a MODIFY COLUMN. STEP 2.9 asks it first, to take down the foreign keys
--- on and pointing at such a column: neither engine changes the type of a column a foreign key uses ("Cannot change
--- column ...: used in a foreign key constraint"), even with foreign_key_checks off. A number, not a string, so no
--- caller's collation meets it.
+-- on and pointing at such a column: the engines refuse most type changes to a column a foreign key uses ("Cannot change
+-- column ...: used in a foreign key constraint"), and SchemaSmith_TypeChangeKeepsForeignKey names the widenings they
+-- make in place. A number, not a string, so no caller's collation meets it.
 CREATE FUNCTION SchemaSmith_ColumnTypeDiffers(
     p_LiveType TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
     p_DeclaredType TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci

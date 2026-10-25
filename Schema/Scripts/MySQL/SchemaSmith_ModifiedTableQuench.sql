@@ -1282,8 +1282,10 @@ BEGIN
                   AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
              WHERE c.NewColumn = 0
                AND ((c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation)
-                    -- A type change is refused the same way (MA-054), and a widened key pair changes both sides.
-                    OR SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1);
+                    -- A type change is refused the same way (MA-054), and a widened key pair changes both sides --
+                    -- unless the engine makes it under the key and keeps it.
+                    OR (SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1
+                        AND SchemaSmith_TypeChangeKeepsForeignKey(isc.COLUMN_TYPE, c.CompareDataType, isc.CHARACTER_SET_NAME, c.CharacterSet) = 0));
 
             -- And FKs POINTING AT one. Separate INSERT for the same optimizer reason as the table-level twin.
             CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
@@ -1300,8 +1302,10 @@ BEGIN
                   AND SchemaSmith_NameKeyCI(kcu.REFERENCED_COLUMN_NAME) = c.ColumnKey
              WHERE c.NewColumn = 0
                AND ((c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation)
-                    -- A type change is refused the same way (MA-054), and a widened key pair changes both sides.
-                    OR SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1);
+                    -- A type change is refused the same way (MA-054), and a widened key pair changes both sides --
+                    -- unless the engine makes it under the key and keeps it.
+                    OR (SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1
+                        AND SchemaSmith_TypeChangeKeepsForeignKey(isc.COLUMN_TYPE, c.CompareDataType, isc.CHARACTER_SET_NAME, c.CharacterSet) = 0));
 
             -- MDEV-35630 (MA-055): MariaDB refuses to widen a column that follows a STORED generated column while any
             -- foreign key is declared on the table, naming that key (1832), even one on an unrelated column. Not seen
