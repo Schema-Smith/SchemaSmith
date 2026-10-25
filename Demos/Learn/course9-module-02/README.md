@@ -172,6 +172,14 @@ file per overload.
 `Window Functions/` is the one PostgreSQL folder this lab leaves empty: PostgreSQL only lets you write a window
 function in C, so the ones you'll meet come from extensions.
 
+The catalog goes further than this lab needs. SchemaTongs also casts range types, text search configurations,
+operators, casts and event triggers, each to its own folder (`Range Types/`, `Text Search Configurations/`,
+`Operators/`, `Casts/`, `Event Triggers/`), so a package extracted from a database that uses them deploys to an
+empty one. An operator's file name carries its symbol and argument types, with characters a file system can't hold
+encoded: `<->` on two `numeric`s is `public.%3C-%3E(numeric, numeric).sql`. (On 2.7.x none of the five was
+extracted, and a range type's constructor functions came out as ordinary functions in `Functions/`, so such a
+package could not rebuild its database.)
+
 ---
 
 ### Sessions — MySQL
