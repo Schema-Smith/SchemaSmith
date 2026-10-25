@@ -1,0 +1,8 @@
+{ "Name": "`Item`",
+  "Columns": [
+    { "Name": "`ItemId`", "DataType": "INT" },
+    { "Name": "`Name`", "DataType": "VARCHAR(100)" },
+    { "Name": "`Embedding`", "DataType": "VECTOR(3)", "VariantName": "Native", "ShouldApplyExpression": "{{ServerMajorVersion}} >= 1107" },
+    { "Name": "`Embedding`", "DataType": "VARBINARY(12)", "VariantName": "Bytes", "ShouldApplyExpression": "{{ServerMajorVersion}} < 1107" } ],
+  "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`ItemId`" },
+               { "Name": "vx_item_embedding", "IndexType": "VECTOR", "IndexColumns": "`Embedding`", "Distance": "cosine" } ] }

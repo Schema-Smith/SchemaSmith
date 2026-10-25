@@ -1,0 +1,1 @@
+{ "Name": "Main", "DatabaseIdentificationScript": "SELECT [name] FROM sys.databases WHERE [name] = 'learn'" }

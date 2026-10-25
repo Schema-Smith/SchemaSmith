@@ -21,7 +21,7 @@ lab_engines() {
 }
 
 lab_endpoint_label() {
-  if lab_own_server; then echo "${LEARN_SERVER}:${LEARN_PORT}"; else echo "learn-$1 (container)"; fi
+  if lab_own_server; then echo "${LEARN_SERVER}:${LEARN_PORT}"; else echo "$(lab_container "$1") (container)"; fi
 }
 
 lab_client() {
@@ -41,7 +41,10 @@ lab_client() {
   printf '%s' "$client"
 }
 
+# LEARN_CONTAINER names a different sandbox container for this one call -- the opt-in tiers
+# (learn-sqlserver-2025, learn-mariadb-118) -- while the engine still picks the client.
 lab_container() {
+  if [ -n "${LEARN_CONTAINER:-}" ]; then printf '%s' "$LEARN_CONTAINER"; return 0; fi
   case "$1" in
     sqlserver) printf 'learn-sqlserver' ;;
     postgres)  printf 'learn-postgres' ;;

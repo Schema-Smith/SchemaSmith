@@ -1,0 +1,7 @@
+{ "Schema": "[dbo]", "Name": "[Event]",
+  "Columns": [
+    { "Name": "[EventId]", "DataType": "INT" },
+    { "Name": "[Payload]", "DataType": "JSON", "Nullable": true, "VariantName": "Native", "ShouldApplyExpression": "{{ServerMajorVersion}} >= 17" },
+    { "Name": "[Payload]", "DataType": "NVARCHAR(MAX)", "Nullable": true, "VariantName": "Text", "ShouldApplyExpression": "{{ServerMajorVersion}} < 17" } ],
+  "Indexes": [ { "Name": "[PK_Event]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[EventId]" } ],
+  "JsonIndexes": [ { "Name": "[JX_Event_Payload]", "Column": "[Payload]", "Paths": [ "$.customer.id", "$.status" ] } ] }

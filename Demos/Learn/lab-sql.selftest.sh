@@ -34,6 +34,9 @@ clear_lab_env
 if lab_own_server; then assert_equal 'sandbox' 'own-server' 'no LEARN_SERVER means sandbox mode'
 else echo '  PASS  no LEARN_SERVER means sandbox mode'; fi
 assert_equal 'sqlserver postgres mysql mariadb' "$(lab_engines | tr '\n' ' ' | sed 's/ $//')" 'sandbox runs all four engines'
+assert_equal 'learn-sqlserver' "$(lab_container sqlserver)" 'the engine names its default container'
+assert_equal 'learn-sqlserver-2025' "$(LEARN_CONTAINER=learn-sqlserver-2025 lab_container sqlserver)" 'LEARN_CONTAINER overrides the container for one call'
+assert_equal 'learn-sqlserver' "$(lab_container sqlserver)" 'the override does not outlive its call'
 assert_equal '1' "$(lab_sql sqlserver master   'SELECT 1')" 'sqlserver inline query'
 assert_equal '1' "$(lab_sql postgres  postgres 'SELECT 1')" 'postgres inline query'
 assert_equal '1' "$(lab_sql mysql     learn    'SELECT 1')" 'mysql inline query'

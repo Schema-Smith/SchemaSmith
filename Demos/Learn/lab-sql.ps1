@@ -21,7 +21,7 @@ function Get-LabEngines {
 function Get-LabEndpointLabel {
     param([Parameter(Mandatory)][string]$Engine)
     if (Test-LabOwnServer) { return "$($env:LEARN_SERVER):$($env:LEARN_PORT)" }
-    return "learn-$Engine (container)"
+    return "$(Get-LabContainer $Engine) (container)"
 }
 
 function Get-LabClient {
@@ -58,8 +58,11 @@ function Get-LabSqlAuth {
     return @('-U', $env:LEARN_USER, '-P', $env:LEARN_PASSWORD)
 }
 
+# LEARN_CONTAINER names a different sandbox container for this one call -- the opt-in tiers
+# (learn-sqlserver-2025, learn-mariadb-118) -- while the engine still picks the client.
 function Get-LabContainer {
     param([Parameter(Mandatory)][string]$Engine)
+    if ($env:LEARN_CONTAINER) { return $env:LEARN_CONTAINER }
     return @{ sqlserver = 'learn-sqlserver'; postgres = 'learn-postgres'; mysql = 'learn-mysql'; mariadb = 'learn-mariadb' }[$Engine]
 }
 

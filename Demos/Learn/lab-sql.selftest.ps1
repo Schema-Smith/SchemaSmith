@@ -31,6 +31,11 @@ Write-Host 'sandbox mode'
 Clear-LabEnv
 Assert-Equal $false (Test-LabOwnServer) 'no LEARN_SERVER means sandbox mode'
 Assert-Equal 'sqlserver postgres mysql mariadb' ((Get-LabEngines) -join ' ') 'sandbox runs all four engines'
+Assert-Equal 'learn-sqlserver' (Get-LabContainer sqlserver) 'the engine names its default container'
+$env:LEARN_CONTAINER = 'learn-sqlserver-2025'
+Assert-Equal 'learn-sqlserver-2025' (Get-LabContainer sqlserver) 'LEARN_CONTAINER overrides the container'
+Remove-Item Env:LEARN_CONTAINER
+Assert-Equal 'learn-sqlserver' (Get-LabContainer sqlserver) 'clearing LEARN_CONTAINER restores the default'
 Assert-Equal '1' (Invoke-LabSql -Engine sqlserver -Database master   -Sql 'SELECT 1') 'sqlserver inline query'
 Assert-Equal '1' (Invoke-LabSql -Engine postgres  -Database postgres -Sql 'SELECT 1') 'postgres inline query'
 Assert-Equal '1' (Invoke-LabSql -Engine mysql     -Database learn    -Sql 'SELECT 1') 'mysql inline query'

@@ -5,3 +5,6 @@
 */logs/
 */checkpoints/
 */artifacts/
+newest/*/logs/
+newest/*/artifacts/
+newest/*/checkpoints/

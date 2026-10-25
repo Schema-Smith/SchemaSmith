@@ -162,3 +162,43 @@ services:
       timeout: 5s
       retries: 30
       start_period: 30s
+
+  # --- Opt-in newest tier (Course 10 · Module 1, "features newer than your newest server") ---
+  # The newest releases, for features the current-tier engines above do not have yet: SQL Server
+  # 2025 (JSON indexes on a `json` column) and MariaDB 11.8 (VECTOR indexes). Not started by a plain
+  # `docker compose up` -- opt in with:  docker compose --profile latest-tier up -d
+  # SQL Server is ~2 GB; mem_limit keeps it from taking the rest of the Docker VM.
+  sqlserver-latest:
+    image: mcr.microsoft.com/mssql/server:2025-latest
+    container_name: learn-sqlserver-2025
+    profiles: ["latest-tier"]
+    mem_limit: 4g
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Learn!Passw0rd"
+      MSSQL_PID: "Developer"
+    ports:
+      - "11434:1433"
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P \"$$MSSQL_SA_PASSWORD\" -C -Q 'SELECT 1' -b >/dev/null 2>&1"]
+      interval: 15s
+      timeout: 15s
+      retries: 60
+      start_period: 20m
+
+  mariadb-latest:
+    image: mariadb:11.8
+    container_name: learn-mariadb-118
+    profiles: ["latest-tier"]
+    command: --log-bin-trust-function-creators=1 --max-allowed-packet=64M
+    environment:
+      MARIADB_ROOT_PASSWORD: "Learn!Passw0rd"
+      MARIADB_DATABASE: "learn"
+    ports:
+      - "13308:3306"
+    healthcheck:
+      test: ["CMD-SHELL", "healthcheck.sh --connect --innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 20s

@@ -1,6 +1,6 @@
 # Course 10 · Module 1 — Let the engine adapt
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (warn downgrade exits 1; --ExitNonZeroOnWarning; PostgreSQL Skipping line): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (warn downgrade exits 1; --ExitNonZeroOnWarning; PostgreSQL Skipping line; newest tier, and its #598 note once that fix ships): delete the "On 2.7.x" callouts -->
 
 You author one modern feature per engine and deploy the same package to a **floor-version**
 target that predates it. SchemaSmith detects the target version, emits the degraded form the
@@ -162,6 +162,132 @@ is absent, and the mask is applied. SQL Server feature support gates on the serv
 how SchemaSmith *encodes* its model on the wire (Module 4's topic), not which features it can
 deploy — and that gap between compat level and server version is exactly the footgun Module 2 turns on.
 
+## The newest tier — a feature your current server doesn't have yet
+
+Everything above runs a modern feature down to an old server. The same gate faces the other way too: the day a new
+release adds something, *your current server* is the old one. SQL Server 2025 adds JSON indexes over a native `json`
+column; MariaDB 11.7 adds `VECTOR` indexes over a `VECTOR` column. The sandbox's main engines are SQL Server 2022 and
+MariaDB 11.4, so this section brings up the newest releases beside them and deploys one package to both.
+
+There is one wrinkle the floor beats above did not have. There, only the *index* was too new. Here the *column type*
+is too new as well — a SQL Server 2022 server has no `json` type, and MariaDB 11.4 has no `VECTOR` — so no
+downgrade can save a package that declares them unconditionally. The answer is a **column variant**: the same column
+declared twice, each gated on the server version, the native type where the server has it and a plain one where it
+doesn't.
+
+```json
+{ "Name": "[Payload]", "DataType": "JSON",          "Nullable": true, "VariantName": "Native", "ShouldApplyExpression": "{{ServerMajorVersion}} >= 17" },
+{ "Name": "[Payload]", "DataType": "NVARCHAR(MAX)", "Nullable": true, "VariantName": "Text",   "ShouldApplyExpression": "{{ServerMajorVersion}} < 17" }
+```
+
+`NVARCHAR(MAX)` holds the same JSON text on 2022, so the application keeps working; only the index is missing. MariaDB's
+package does the same with `VECTOR(3)` above 11.7 and `VARBINARY(12)` below it (`{{ServerMajorVersion}}` reads `1108`
+on MariaDB 11.8 and `1104` on 11.4). The index itself is declared once, unconditionally — and that is the point: where
+the server has the feature it is built, and where it doesn't, the `UnsupportedFeaturePolicy` downgrade you met above
+records it instead of failing.
+
+### Bring up the newest tier
+
+The `latest-tier` profile adds `learn-sqlserver-2025` (`localhost,11434`) and `learn-mariadb-118` (`localhost:13308`).
+SQL Server is another ~2 GB, capped at 4 GB; its first boot can take several minutes.
+
+```bash
+# from docker
+docker compose --profile latest-tier up -d sqlserver-latest mariadb-latest
+```
+
+When both report healthy (`docker ps`), give SQL Server 2025 its `learn` database (MariaDB's image creates its own).
+`LEARN_CONTAINER` points `lab-sql` at a container other than the engine's default:
+
+```bash
+# from course10-module-01
+LEARN_CONTAINER=learn-sqlserver-2025 ../lab-sql.sh sqlserver master "IF DB_ID('learn') IS NULL CREATE DATABASE learn"
+```
+
+### SQL Server — a JSON index on 2025, recorded on 2022
+
+```bash
+# from course10-module-01/newest/sqlserver
+schemaquench --ConfigFile:quench.settings.2025.json --LogPath:"$PWD/logs"
+schemaquench --ConfigFile:quench.settings.2022.json --LogPath:"$PWD/logs"
+```
+
+The 2025 deploy exits `0`:
+
+```
+  Adding new table [dbo].[Event]
+  Creating JSON index [dbo].[Event].[JX_Event_Payload]
+```
+
+The 2022 deploy exits `1` — the `warn` policy's "finished, but something was relaxed":
+
+```
+  JSON index skipped: requires SQL Server 2025 - the table deploys without it (downgraded)
+```
+
+and its summary's **Unsupported Feature Downgrades** names it: `JSON index (SQL Server 2025): [dbo].[Event].[JX_Event_Payload]`.
+Ask each server what it built:
+
+```bash
+# from course10-module-01
+LEARN_CONTAINER=learn-sqlserver-2025 ../lab-sql.sh sqlserver learn "SELECT TYPE_NAME(user_type_id) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Event') AND name = 'Payload'"
+# → json
+../lab-sql.sh sqlserver learn "SELECT TYPE_NAME(user_type_id) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Event') AND name = 'Payload'"
+# → nvarchar
+LEARN_CONTAINER=learn-sqlserver-2025 ../lab-sql.sh sqlserver learn "SELECT name, type_desc FROM sys.indexes WHERE object_id = OBJECT_ID('dbo.Event') AND type_desc = 'JSON'"
+# → JX_Event_Payload JSON
+```
+
+Same package, two servers, each with the most it can hold. The day the 2022 server is upgraded, the next deploy picks
+the `Native` variant there too — but a column changing from `nvarchar(max)` to `json` is a real type change on a real
+table, so plan that deploy like one.
+
+### MariaDB — a VECTOR index on 11.8, recorded on 11.4
+
+```bash
+# from course10-module-01/newest/mariadb
+schemaquench --ConfigFile:quench.settings.118.json --LogPath:"$PWD/logs"
+schemaquench --ConfigFile:quench.settings.114.json --LogPath:"$PWD/logs"
+```
+
+11.8 exits `0` with ``Create index: Item.vx_item_embedding``; 11.4 exits `1` with
+``Skipping VECTOR index (requires MariaDB 11.7, MySQL unsupported - downgraded): Item.vx_item_embedding``. On 11.8 the
+index does the job it exists for — nearest neighbours by cosine distance:
+
+```bash
+# from course10-module-01
+LEARN_CONTAINER=learn-mariadb-118 ../lab-sql.sh mariadb learn "INSERT INTO Item VALUES (1, 'anvil', VEC_FromText('[1,0,0]')), (2, 'hammer', VEC_FromText('[0.9,0.1,0]')), (3, 'apron', VEC_FromText('[0,0,1]'))"
+LEARN_CONTAINER=learn-mariadb-118 ../lab-sql.sh mariadb learn "SELECT GROUP_CONCAT(Name ORDER BY VEC_DISTANCE_COSINE(Embedding, VEC_FromText('[1,0.05,0]'))) FROM Item"
+# → anvil,hammer,apron
+../lab-sql.sh mariadb learn "SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'learn' AND TABLE_NAME = 'Item' AND COLUMN_NAME = 'Embedding'"
+# → varbinary(12)
+```
+
+> **Pending #598:** on MySQL and MariaDB, `{{ServerMajorVersion}}` is not yet expanded in a table or column
+> `ShouldApplyExpression`, so the MariaDB package fails both deploys with `You have an error in your SQL syntax … near
+> '{ServerMajorVersion}} >= 1107)'` until the fix ships. The SQL Server half is unaffected.
+
+### What the sandbox can't show: edition degrades
+
+One more family of downgrades is gated by **edition**, not version. Before SQL Server 2016 SP1, table compression and
+columnstore indexes were Enterprise features: on Express, Standard and Web they were not there at all. SchemaSmith
+treats that like any other missing feature — under `warn` the table deploys without the compression or the
+columnstore index and records a downgrade; under `fail` the deploy is refused before anything changes. (On 2012 and
+2014 a nonclustered columnstore index makes its table read-only, so SchemaSmith skips it there until the server is
+2016, rather than deploy a table nobody can write to.)
+
+The sandbox cannot run it for you, and the reason is worth knowing rather than glossing over: SQL Server's container
+images begin at 2017, and from 2016 SP1 onward every edition has compression and columnstore. The servers where this
+downgrade fires — 2012, 2014 or 2016 RTM, on a non-Enterprise edition — exist only as Windows installs. If your fleet
+still has one, this is the downgrade it will show you.
+
+### Clean up the newest tier
+
+```bash
+# from docker
+docker compose rm -sfv sqlserver-latest mariadb-latest
+```
+
 ## What each folder is
 
 | Path | Purpose |
@@ -173,6 +299,8 @@ deploy — and that gap between compat level and server version is exactly the f
 | `mariadb/package/` | `Ledger` table with a descending index (10.8) and an invisible index (10.6). |
 | `sqlserver/package/` | `Account` table with a data-masked column (SQL Server 2016). |
 | `<engine>/quench.settings*.json` | Targets that engine's floor tier; carries `UnsupportedFeaturePolicy`. |
+| `newest/sqlserver/` | `Event` with a `json` / `NVARCHAR(MAX)` column variant and a JSON index; settings for SQL Server 2025 (11434) and 2022 (11433). |
+| `newest/mariadb/` | `Item` with a `VECTOR(3)` / `VARBINARY(12)` column variant and a `VECTOR` index; settings for MariaDB 11.8 (13308) and 11.4 (13307). |
 
 ## Up next
 

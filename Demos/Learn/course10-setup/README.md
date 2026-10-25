@@ -107,6 +107,8 @@ All engines use password `Learn!Passw0rd` and (except the SQL Server tiers) the 
 database; users and full connection details are in [`../README.md`](../README.md#connection-details-throwaway--sandbox-only).
 The SQL Server tiers live in `learn_2022` / `learn_2016` / `learn_2008` on the one instance.
 
+A fourth, newest tier is opt-in for one section of Module 1 only, and this script does not start it: `docker compose --profile latest-tier up -d sqlserver-latest mariadb-latest` brings up SQL Server 2025 on `localhost,11434` and MariaDB 11.8 on `localhost:13308`, for features newer than the current tier (JSON and `VECTOR` indexes). Module 1 says when to start it and how to remove it.
+
 ## What the script provisions
 
 | Target | Where | State confirmed |
