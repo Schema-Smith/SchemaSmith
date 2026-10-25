@@ -1,5 +1,7 @@
 # Course 4, Recipe 12 — Declared, not scripted: scheduled events (lab)
 
+<!-- TRAINING-RELEASE-PIN 2.8.0 (event log lines; #593 MariaDB comment churn note): delete the "On 2.7.x" callouts, and the #593 note once it is fixed -->
+
 Goal: the companion to [Recipe 11](../course4-recipe-11), on the other side of the family. MySQL and
 MariaDB **scheduled events** can be declared — compared, converged, and removed by absence — instead
 of scripted. And the scripted form fails in exactly the same silent way: a guarded `CREATE EVENT IF NOT
@@ -103,16 +105,34 @@ for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.j
 # exit 0, both. Run it a second time -- still exit 0, nothing changes. It is idempotent.
 ```
 
+The first deploy names each event it creates:
+
+```
+  Quenching scheduled events
+      Create event `archive_old_sessions`
+      Create event `purge_old_sessions`
+```
+
+The second prints `Quenching scheduled events` with nothing under it — nothing to do.
+
+> **On MariaDB** the second deploy currently logs ``Replace changed event `archive_old_sessions` `` too, on every run:
+> that event's comment is longer than the 64 characters MariaDB keeps, so the comparison always sees a difference
+> (#593). The event still works.
+
+> **On 2.7.x** no line follows `Quenching scheduled events`, whatever the deploy did.
+
 ## Step 3: Change the body — this time it takes
 
 Make the same retention edit you made in Step 1, but in the declaration: `INTERVAL 30 DAY` →
 `INTERVAL 7 DAY` in the `Definition` of `<engine>/Package/Templates/Main/Events/purge_old_sessions.json`
 (both `mysql/` and `mariadb/`). Re-quench and look:
 
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Events/purge_old_sessions.json" set Definition '"DELETE FROM app_session WHERE started_at < NOW() - INTERVAL 7 DAY"' -->
 ```bash
 # from course4-recipe-12
 for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.json); done
 #   Quenching scheduled events
+#       Replace changed event `purge_old_sessions`
 for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r12 "SELECT EVENT_DEFINITION FROM information_schema.EVENTS WHERE EVENT_NAME='purge_old_sessions'"; done
 # → DELETE FROM app_session WHERE started_at < NOW() - INTERVAL 7 DAY   (both engines)
 ```
@@ -152,7 +172,8 @@ for e in mysql mariadb; do ../lab-sql.sh $e cookbook_r12 "SELECT GROUP_CONCAT(EV
 # → handmade_probe,purge_old_sessions
 ```
 
-`archive_old_sessions` is gone — the package stopped declaring it, so the deploy removed it.
+`archive_old_sessions` is gone — the package stopped declaring it, so the deploy removed it, and said so:
+``Drop event `archive_old_sessions` (removed from product)``.
 `handmade_probe` is untouched, because SchemaSmith never created it. Removal reaches only what the
 product owns; an event some DBA wrote at 2am is not yours to delete, and the tool does not pretend
 otherwise.

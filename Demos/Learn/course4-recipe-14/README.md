@@ -1,6 +1,6 @@
 # Course 4, Recipe 14 — Subfolder organization: your layout survives re-extraction (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (--ExitNonZeroOnWarning): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (--ExitNonZeroOnWarning; #551 Product.json kept): delete the "On 2.7.x" callouts -->
 
 Goal: extraction tools usually flatten. You organise your procedures by domain, run the tool that
 refreshes them from the database, and get back one directory with two hundred files in alphabetical
@@ -55,10 +55,13 @@ Procedures/Identity/usp_customer_lookup.sql
 
 Both objects went back to their own subfolders, on SQL Server, PostgreSQL, MySQL and MariaDB. **The
 assertion is `git status`, not the file listing** — if a file had moved you would see a delete and an
-add, and here you see neither. You do see modified files, and they are edits in place, not moves: the
-extraction writes the database it read into `Product.json` (a `MainDb` script token) on every engine,
-and on MySQL and MariaDB it rewrites both procedures in the form the server returns them, with a
-`sql_mode` pin around each. Commit that once; what you are checking for is files that changed folder.
+add, and here you see neither. On SQL Server and PostgreSQL there is nothing to see at all. On MySQL and
+MariaDB the two procedures show as modified — edits in place, not moves: the extraction writes each in the form
+the server returns it, with a `sql_mode` pin around it. Commit that once; what you are checking for is files
+that changed folder.
+
+> **On 2.7.x** `Product.json` is modified too, on every engine: the extraction writes the database it read into
+> it as a `MainDb` script token (#551).
 That stability is the whole feature: a re-extraction that churns your tree is one nobody runs.
 
 Before it writes anything, SchemaTongs walks the template folder and builds an index of every `.sql`,

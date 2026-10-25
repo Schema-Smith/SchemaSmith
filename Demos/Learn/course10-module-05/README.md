@@ -182,11 +182,15 @@ dbo.Gadget.Legacy.json
 dbo.Gadget.Modern.json
 
 $ schemaquench --Validate --SchemaPackagePath:./package
-WARN [SS-TOK-003] ./package\Product.json: ScriptTokens entry 'MainDb' (defined in ./package\Product.json) is never referenced anywhere in the package.
-0 error(s), 1 warning(s)
+PASS - no issues found
 ```
 
-The one warning is SchemaTongs' doing, not the gate's: the re-extraction rewrote `Product.json`, adding a `MainDb` token nothing uses and dropping keys it doesn't own, `DropTablesRemovedFromProduct` among them ([#551](https://github.com/Schema-Smith/SchemaSmith/issues/551)). Put the file back as it was before you deploy this package again.
+`Product.json` is exactly as you left it: re-extracting into an existing template leaves the file alone.
+
+> **On 2.7.x** the board reads `WARN [SS-TOK-003] ./package\Product.json: ScriptTokens entry 'MainDb' (defined in
+> ./package\Product.json) is never referenced anywhere in the package.` and `0 error(s), 1 warning(s)`: the
+> re-extraction rewrote `Product.json`, adding a `MainDb` token nothing uses and dropping keys it doesn't own,
+> `DropTablesRemovedFromProduct` among them (#551). Put the file back before you deploy this package again.
 
 This is why a token-gated variant is safe to keep in a package indefinitely: extracting the live
 shape doesn't duplicate it or lose the gate. The gate is transitional by design — you author it,
