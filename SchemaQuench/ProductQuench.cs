@@ -541,6 +541,12 @@ public class ProductQuench
         var connection = factory.GetDbConnection(connectionString);
         if (connection is Microsoft.Data.SqlClient.SqlConnection sqlConnection)
             sqlConnection.InfoMessage += (_, e) => LogServerMessages(server, initDb, e.Errors);
+        else if (connection is Npgsql.NpgsqlConnection pgConnection)
+            pgConnection.Notice += (_, e) =>
+            {
+                if (DatabaseQuench.ShouldLogPostgreSqlNotice(e.Notice.MessageText, e.Notice.Where, VerboseLogging))
+                    LogServerMessage(server, initDb, e.Notice.MessageText);
+            };
         try
         {
             connection.Open();
@@ -555,19 +561,23 @@ public class ProductQuench
         return command;
     }
 
-    // A product script's messages are logged as a template script's are: those raised with state 100, or every one under
-    // VerboseLogging, and a WARNING: line as a warning.
+    // A product script's messages are logged as a template script's are: on SQL Server those raised with state 100, on
+    // PostgreSQL SchemaSmith's own notices, every one of either under VerboseLogging, and a WARNING: line as a warning.
     private void LogServerMessages(string server, string database, Microsoft.Data.SqlClient.SqlErrorCollection errors)
     {
-        var verbose = _config[SettingsKeys.VerboseLogging]?.ToLower() == "true";
         foreach (Microsoft.Data.SqlClient.SqlError message in errors)
-        {
-            if (message.Class > 10 || !(verbose || message.State == 100)) continue;
-            var line = $"[{server}].[{database}]      {message.Message}";
-            if (DatabaseQuench.IsServerWarning(message.Message)) _progressLog.Warn(line);
-            else _progressLog.Info(line);
-        }
+            if (message.Class <= 10 && (VerboseLogging || message.State == 100))
+                LogServerMessage(server, database, message.Message);
     }
+
+    private void LogServerMessage(string server, string database, string message)
+    {
+        var line = $"[{server}].[{database}]      {message}";
+        if (DatabaseQuench.IsServerWarning(message)) _progressLog.Warn(line);
+        else _progressLog.Info(line);
+    }
+
+    private bool VerboseLogging => _config[SettingsKeys.VerboseLogging]?.ToLower() == "true";
 
     /// <summary>
     /// Resolves <see cref="Template.IdentificationDatabase"/> through the product + template
