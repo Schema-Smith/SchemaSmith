@@ -53,11 +53,25 @@ PASSWORD='SchemaSmith!Band2026'
 # ~1.5 GB boot and one full suite spent twice for a single result. Whether the ceiling has MOVED is a
 # comparison, not a test run, and continuous-integration.yml's ceiling ratchet already makes it --
 # including that the declared ceiling has a pinned leg. When it fires, add the band here.
-BANDS="14340:2017-latest 14341:2019-latest 14342:2022-latest 14345:2025-latest"
+#
+# The bands ARE CI's legs, read from continuous-integration.yml by scripts/ci_matrix.py: the image CI pins and the
+# server collation it sets (2025 runs case-sensitive). They were once `-latest` tags at the default collation, which
+# tested images and a collation no CI leg ran. Each band is port|image|collation.
+TEST_USER='TestUser'
+. scripts/ci-steps-local.sh
+if ! ci_legs=$(python3 scripts/ci_matrix.py sqlserver); then
+  echo "FAIL: could not read CI's SQL Server legs."; exit 1
+fi
+BANDS=""
+port=14340
+while IFS=$'\t' read -r img tag collation; do
+  BANDS="$BANDS $port|$img:$tag|$collation"
+  port=$((port + 1))
+done <<< "$ci_legs"
 
 cleanup() {
   for band in $BANDS; do
-    docker rm -fv "ss-band-${band%%:*}" >/dev/null 2>&1
+    docker rm -fv "ss-band-${band%%|*}" >/dev/null 2>&1
   done
 }
 trap cleanup EXIT
@@ -69,14 +83,16 @@ trap 'echo; echo "Interrupted: no record written."; exit 130' INT TERM
 EXPECTED_ASSEMBLIES=4
 
 for band in $BANDS; do
-  port="${band%%:*}"
-  image="mcr.microsoft.com/mssql/server:${band##*:}"
+  port="${band%%|*}"
+  rest="${band#*|}"
+  image="${rest%%|*}"
+  collation="${rest#*|}"
   name="ss-band-$port"
-  echo "===== band $image on $port ====="
+  echo "===== band $image ($collation) on $port ====="
 
   docker rm -fv "$name" >/dev/null 2>&1
   if ! docker run -d --name "$name" --memory 4g --memory-swap 4g -p "$port:1433" \
-       -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$PASSWORD" "$image" >/dev/null; then
+       -e ACCEPT_EULA=Y -e "MSSQL_SA_PASSWORD=$PASSWORD" -e "MSSQL_COLLATION=$collation" "$image" >/dev/null; then
     echo "  could not start $image -- recording as NOT RUN rather than skipping silently"
     SWEEP_ROWS="${SWEEP_ROWS}| $image @ $port | CONTAINER FAILED TO START | full SqlServer category |
 "
@@ -179,8 +195,17 @@ for band in $BANDS; do
       2>/dev/null | tr -d '\r' | head -1)"
   echo "  ready: $version"
 
+  # Last, because sa is gone afterwards: the tests log in as CI's do.
+  if ! ci_sqlserver_setup "$name" "$PASSWORD" >/dev/null 2>&1; then
+    echo "  CI's login rename failed -- recording as NOT RUN"
+    SWEEP_ROWS="${SWEEP_ROWS}| $image @ $port | SETUP FAILED | full SqlServer category |
+"
+    docker rm -fv "$name" >/dev/null 2>&1
+    continue
+  fi
+
   SmithySettings_SqlServer__Server=127.0.0.1 SmithySettings_SqlServer__Port=$port \
-  SmithySettings_SqlServer__User=sa SmithySettings_SqlServer__Password="$PASSWORD" \
+  SmithySettings_SqlServer__User="$TEST_USER" SmithySettings_SqlServer__Password="$PASSWORD" \
   dotnet test SchemaSmith.sln --filter "Category=SqlServer" 2>&1 \
     | tee "/tmp/ss-band-$port.log" | grep -E "^(Passed!|Failed!|No test)|^  Failed "
   # A fixture's one-time teardown error fails the run without counting as a failed test.
@@ -233,7 +258,7 @@ echo "Recorded in $RECORD for commit $SWEEP_SHA -- commit it alongside the relea
 # sweep must not report success for it. Exiting 0 on an all-NEVER-READY run is how a broken probe
 # looked exactly like a clean pass -- the record said so plainly while the exit code said otherwise,
 # and the exit code is what a caller (or a hook) actually reads.
-if printf "%s" "$SWEEP_ROWS" | grep -qE "NEVER READY|CONTAINER FAILED TO START|FULL-TEXT INSTALL FAILED|NO RESULT|INCOMPLETE|Failed!"; then
+if printf "%s" "$SWEEP_ROWS" | grep -qE "NEVER READY|CONTAINER FAILED TO START|FULL-TEXT INSTALL FAILED|SETUP FAILED|NO RESULT|INCOMPLETE|Failed!"; then
   echo "FAIL: at least one band did not run. The rows above are not a certification."
   exit 1
 fi

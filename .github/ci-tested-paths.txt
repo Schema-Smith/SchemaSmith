@@ -26,6 +26,10 @@ scripts/provision-semantic-db.sh
 scripts/run-sqlserver-shards.sh
 scripts/suite-overhead.py
 scripts/ci_path_filter.py
+scripts/ci_matrix.py
+scripts/ci-mysql-family-setup.sh
+scripts/ci-sqlserver-setup.sh
+scripts/ci-postgres-setup.sh
 .github/ci-tested-paths.txt
 .github/workflows/continuous-integration.yml
 .github/workflows/ci-docs-only-companion.yml

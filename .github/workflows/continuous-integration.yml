@@ -24,6 +24,10 @@ on:
       - 'scripts/run-sqlserver-shards.sh'
       - 'scripts/suite-overhead.py'
       - 'scripts/ci_path_filter.py'
+      - 'scripts/ci_matrix.py'
+      - 'scripts/ci-mysql-family-setup.sh'
+      - 'scripts/ci-sqlserver-setup.sh'
+      - 'scripts/ci-postgres-setup.sh'
       - '.github/ci-tested-paths.txt'
       - '.github/workflows/continuous-integration.yml'
       - '.github/workflows/ci-docs-only-companion.yml'
@@ -56,6 +60,10 @@ on:
       - 'scripts/run-sqlserver-shards.sh'
       - 'scripts/suite-overhead.py'
       - 'scripts/ci_path_filter.py'
+      - 'scripts/ci_matrix.py'
+      - 'scripts/ci-mysql-family-setup.sh'
+      - 'scripts/ci-sqlserver-setup.sh'
+      - 'scripts/ci-postgres-setup.sh'
       - '.github/ci-tested-paths.txt'
       - '.github/workflows/continuous-integration.yml'
       - '.github/workflows/ci-docs-only-companion.yml'
@@ -293,12 +301,8 @@ jobs:
           exit 1
 
       - name: Rename sa login to TestUser
-        run: |
-          # Path differs by image generation; tools18 also requires -C to trust the self-signed cert.
-          SQLCMD="$(docker exec mssql sh -c 'ls /opt/mssql-tools18/bin/sqlcmd /opt/mssql-tools/bin/sqlcmd 2>/dev/null | head -1')"
-          case "$SQLCMD" in *tools18*) TLS=-C ;; *) TLS= ;; esac
-          docker exec mssql "$SQLCMD" -S localhost -U sa -P "$TEST_PASSWORD" $TLS \
-            -Q "ALTER LOGIN [sa] WITH NAME = [$TEST_USER];"
+        # The same script scripts/run-modern-band-sweep.sh runs, so a local band logs in as this job does.
+        run: bash scripts/ci-sqlserver-setup.sh mssql "$TEST_PASSWORD" "$TEST_USER"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -393,36 +397,12 @@ jobs:
           --health-retries 10
           --health-start-period 15s
     steps:
-      - name: Increase PostgreSQL max connections
-        run: |
-          apply_and_wait() {
-            PGPASSWORD="$TEST_PASSWORD" psql -h 127.0.0.1 -U "$TEST_USER" -d TestMain -c "ALTER SYSTEM SET max_connections = 2000;"
-            # shellcheck disable=SC2046  # docker restart accepts multiple IDs; word splitting is intentional
-            docker restart $(docker ps -q --filter "ancestor=postgres:${{ matrix.pg }}")
-            sleep 5
-            for _ in $(seq 1 30); do
-              PGPASSWORD="$TEST_PASSWORD" psql -h 127.0.0.1 -U "$TEST_USER" -d TestMain -c "SELECT 1" > /dev/null 2>&1 && break
-              sleep 2
-            done
-          }
-          get_max_conn() {
-            PGPASSWORD="$TEST_PASSWORD" psql -h 127.0.0.1 -U "$TEST_USER" -d TestMain -tAc "SHOW max_connections" 2>/dev/null | tr -d '[:space:]'
-          }
-          # max_connections is a postmaster-level setting: ALTER SYSTEM only takes effect after a
-          # restart, and restarting a service container can silently race — leaving PostgreSQL at the
-          # default 100 and starving the parallel fan-out tests ("too many clients already"). Apply,
-          # then VERIFY it actually took (retry once), and fail loudly in setup rather than mid-suite.
-          apply_and_wait
-          actual="$(get_max_conn)"
-          if [ "$actual" != "2000" ]; then
-            echo "max_connections=$actual after first apply; retrying"
-            apply_and_wait
-            actual="$(get_max_conn)"
-          fi
-          echo "PostgreSQL max_connections=$actual"
-          [ "$actual" = "2000" ] || { echo "ERROR: could not raise PostgreSQL max_connections to 2000 (got '$actual')"; exit 1; }
-
+      # First: the next step runs a script from the checkout.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Increase PostgreSQL max connections
+        # The same script scripts/run-floor-sweep.sh runs.
+        run: bash scripts/ci-postgres-setup.sh "$(docker ps -q --filter "ancestor=postgres:${{ matrix.pg }}")" 127.0.0.1 5432
 
       - name: Setup .NET
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
@@ -512,14 +492,8 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Grant TestUser full privileges and increase max connections
-        run: |
-          # MySQL 5.7.22 offers only TLS 1.0/1.1, which the runner's client (OpenSSL 3) refuses; the tests already run
-          # with SslMode=None on the 5.7 legs.
-          mysql -h 127.0.0.1 -u root -p"$TEST_PASSWORD" ${{ startsWith(matrix.mysql, '5.7') && '--ssl-mode=DISABLED' || '' }} -e "
-            GRANT ALL PRIVILEGES ON *.* TO '$TEST_USER'@'%' WITH GRANT OPTION;
-            FLUSH PRIVILEGES;
-            SET GLOBAL max_connections = 2000;
-          "
+        # The same script the local sweeps run, through the same client.
+        run: bash scripts/ci-mysql-family-setup.sh 127.0.0.1 3306 mysql:${{ matrix.mysql }}
 
       - name: Restore & Build
         run: dotnet build SchemaSmith.sln -c Debug
@@ -616,12 +590,8 @@ jobs:
           dotnet-version: ${{ env.DOTNET_VERSION }}
 
       - name: Grant TestUser full privileges and increase max connections
-        run: |
-          mysql -h 127.0.0.1 -P 3317 -u root -p"$TEST_PASSWORD" -e "
-            GRANT ALL PRIVILEGES ON *.* TO '$TEST_USER'@'%' WITH GRANT OPTION;
-            FLUSH PRIVILEGES;
-            SET GLOBAL max_connections = 2000;
-          "
+        # The same script the local sweeps run, through the same client.
+        run: bash scripts/ci-mysql-family-setup.sh 127.0.0.1 3317 mariadb:${{ matrix.mariadb }}
 
       - name: Restore & Build
         run: dotnet build SchemaSmith.sln -c Debug
@@ -700,16 +670,7 @@ jobs:
             -e ${{ matrix.prefix }}_ROOT_PASSWORD="$TEST_PASSWORD" -e ${{ matrix.prefix }}_USER="$TEST_USER" \
             -e ${{ matrix.prefix }}_PASSWORD="$TEST_PASSWORD" -e ${{ matrix.prefix }}_DATABASE=TestMain \
             ${{ matrix.image }}:${{ matrix.version }} --lower-case-table-names=1
-          for i in $(seq 1 60); do
-            if mysql -h 127.0.0.1 -P ${{ matrix.port }} -u root -p"$TEST_PASSWORD" -N -e "SELECT 1" >/dev/null 2>&1; then break; fi
-            sleep 3
-          done
-          mysql -h 127.0.0.1 -P ${{ matrix.port }} -u root -p"$TEST_PASSWORD" -N -e "
-            GRANT ALL PRIVILEGES ON *.* TO '$TEST_USER'@'%' WITH GRANT OPTION;
-            FLUSH PRIVILEGES;
-            SET GLOBAL max_connections = 2000;
-            SELECT @@version, @@lower_case_table_names;
-          " | tee /dev/stderr | grep -qE '[[:space:]]1$' || { echo "::error::The server is not running with lower_case_table_names=1."; exit 1; }
+          bash scripts/ci-mysql-family-setup.sh 127.0.0.1 ${{ matrix.port }} ${{ matrix.image }}:${{ matrix.version }} lctn1
 
       - name: Restore & Build
         run: dotnet build SchemaSmith.sln -c Debug
