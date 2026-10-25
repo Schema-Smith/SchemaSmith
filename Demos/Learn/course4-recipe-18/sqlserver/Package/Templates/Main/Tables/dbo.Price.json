@@ -1,0 +1,18 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[dbo]",
+  "Name": "[Price]",
+  "IsTemporal": true,
+  "HistoryTableName": "[PriceHistory]",
+  "HistoryRetentionPeriod": "6 MONTHS",
+  "Columns": [
+    { "Name": "[PriceId]", "DataType": "INT", "Nullable": false },
+    { "Name": "[Amount]", "DataType": "DECIMAL(10,2)", "Nullable": false },
+    { "Name": "[SysStart]", "DataType": "DATETIME2(2)", "Nullable": false, "GeneratedAlways": "RowStart", "Hidden": true },
+    { "Name": "[SysEnd]", "DataType": "DATETIME2(2)", "Nullable": false, "GeneratedAlways": "RowEnd", "Hidden": true }
+  ],
+  "Indexes": [
+    { "Name": "[PK_Price]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[PriceId]" },
+    { "Name": "[IX_Price_SysStart]", "IndexColumns": "[SysStart]" }
+  ]
+}

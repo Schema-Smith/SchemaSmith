@@ -1,0 +1,8 @@
+{
+  "$schema": ".json-schemas/products.sqlserver.schema",
+  "Name": "Pricing",
+  "ValidationScript": "SELECT CAST(CASE WHEN DB_ID('cookbook_r18') IS NULL THEN 0 ELSE 1 END AS BIT)",
+  "TemplateOrder": ["Main"],
+  "ScriptFolders": [],
+  "Platform": "SqlServer"
+}

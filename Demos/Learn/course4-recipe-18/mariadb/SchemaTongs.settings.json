@@ -1,0 +1,18 @@
+{
+  "Source": {
+    "Server": "localhost",
+    "Port": "13307",
+    "User": "root",
+    "Password": "Learn!Passw0rd",
+    "Database": "cookbook_r18",
+    "Platform": "MariaDb",
+    "ConnectionProperties": {}
+  },
+  "Product": {
+    "Path": "./extracted",
+    "Name": "Pricing"
+  },
+  "Template": {
+    "Name": "Main"
+  }
+}

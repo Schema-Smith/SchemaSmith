@@ -1,0 +1,17 @@
+{
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
+  "Name": "`Price`",
+  "IsSystemVersioned": true,
+  "Columns": [
+    { "Name": "`PriceId`", "DataType": "INT", "Nullable": false },
+    { "Name": "`Sku`", "DataType": "VARCHAR(20)", "Nullable": false },
+    { "Name": "`Amount`", "DataType": "DECIMAL(10,2)", "Nullable": false },
+    { "Name": "`Note`", "DataType": "VARCHAR(200)", "Nullable": true, "WithoutSystemVersioning": true },
+    { "Name": "`rs`", "DataType": "TIMESTAMP(6)", "Nullable": false, "GeneratedAlways": "RowStart", "Invisible": true },
+    { "Name": "`re`", "DataType": "TIMESTAMP(6)", "Nullable": false, "GeneratedAlways": "RowEnd", "Invisible": true }
+  ],
+  "Indexes": [
+    { "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "`PriceId`" },
+    { "Name": "ux_price_sku", "Unique": true, "IndexColumns": "`Sku`" }
+  ]
+}

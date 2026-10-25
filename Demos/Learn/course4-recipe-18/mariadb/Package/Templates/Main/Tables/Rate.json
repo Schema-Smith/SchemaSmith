@@ -1,0 +1,18 @@
+{
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
+  "Name": "`Rate`",
+  "Columns": [
+    { "Name": "`RateId`", "DataType": "INT", "Nullable": false },
+    { "Name": "`Sku`", "DataType": "VARCHAR(20)", "Nullable": false },
+    { "Name": "`Amount`", "DataType": "DECIMAL(10,2)", "Nullable": false },
+    { "Name": "`ValidFrom`", "DataType": "DATE", "Nullable": false },
+    { "Name": "`ValidTo`", "DataType": "DATE", "Nullable": false }
+  ],
+  "Periods": [
+    { "Name": "Validity", "StartColumn": "ValidFrom", "EndColumn": "ValidTo" }
+  ],
+  "Indexes": [
+    { "Name": "PRIMARY", "PrimaryKey": true, "IndexColumns": "`RateId`" },
+    { "Name": "ux_rate_sku_validity", "Unique": true, "IndexColumns": "`Sku`, Validity", "WithoutOverlaps": true }
+  ]
+}

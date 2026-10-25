@@ -44,6 +44,9 @@ SQL Server
   cookbook_r14               PASS
   cookbook_r15               PASS
   cookbook_r16               PASS
+  cookbook_r17               PASS
+  cookbook_r18               PASS
+  cookbook_r19               PASS
 PostgreSQL
   cookbook_r1_prod           PASS
   ...
@@ -54,7 +57,7 @@ MariaDB
   cookbook_r1_prod           PASS
   ...
 
-All 60 databases are ready.
+All 72 databases are ready.
 ```
 
 ## Databases created
@@ -75,6 +78,9 @@ All 60 databases are ready.
 | 14 — subfolder organization | `cookbook_r14` | Subfolder-layout recipe |
 | 15 — expression change detection | `cookbook_r15` | Expression-change recipe |
 | 16 — trust the round trip | `cookbook_r16` | Round-trip recipe |
+| 17 — search you declare | `cookbook_r17` | Full-text index recipe |
+| 18 — history the database keeps | `cookbook_r18` | Temporal and system-versioning recipe |
+| 19 — history you can't rewrite | `cookbook_r19` | Ledger-table recipe |
 
 Recipes 7 and 10 bring their own databases, so they have no row here.
 
@@ -82,10 +88,10 @@ Each database is created on all four engines:
 
 | Engine     | Databases |
 | ---------- | --------- |
-| SQL Server | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r16` |
-| PostgreSQL | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r16` |
-| MySQL      | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r16` |
-| MariaDB    | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r16` |
+| SQL Server | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r19` |
+| PostgreSQL | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r19` |
+| MySQL      | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r19` |
+| MariaDB    | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r19` |
 
 ## Connection details
 
