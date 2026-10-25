@@ -20,7 +20,7 @@ maps to a course like this:
 | **Course 6 · Production & least privilege** | `course6-module-01` … `course6-module-06` | Operating in CI under least privilege |
 | **Course 7 · Fleet fan-out** | `course7-module-01` … `course7-module-06` | One schema across a fleet of per-tenant databases |
 | **Course 8 · Troubleshooting & recovery** | `course8-module-01` … `course8-module-07` | The when-a-deploy-fails playbook |
-| **Course 9 · Polyglot shop** | `course9-module-01` … `course9-module-05` | All engines at once, each service independently deployable |
+| **Course 9 · Polyglot shop** | `course9-module-01` … `course9-module-06` | All engines at once, each service independently deployable |
 | **Course 10 · Mixed-version fleet** | `course10-module-01` … `course10-module-05`, plus the `course10-xml-data-delivery` bonus recipe | One package across servers that are not all on the same version |
 | **Course 11 · What SchemaSmith Refuses To Do** | `course11-module-01` … `course11-module-04` | The boundary: what a declarative tool converges, refuses by name, and degrades-and-reports |
 

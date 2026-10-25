@@ -1,4 +1,4 @@
-# Course 9 · Module 5 — Capstone: an independent release done right
+# Course 9 · Module 6 — Capstone: an independent release done right
 
 This is the capstone. Everything in the course — native packages, connection config, organized package structure, independent pipelines — comes together here in a pattern that solves one of the hardest problems in multi-service schema management: how do you ship a reference-data change that multiple services depend on, without coordinating everyone at once?
 
@@ -42,13 +42,13 @@ This module is the same three products as the earlier modules, so each baseline 
 
 macOS / Linux:
 ```bash
-# from course9-module-05/postgres
+# from course9-module-06/postgres
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-# from course9-module-05/postgres
+# from course9-module-06/postgres
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD\logs"
 ```
 
@@ -58,13 +58,13 @@ This creates the canonical `public.shipping_region` with NA, EMEA, and LEGACY. D
 
 macOS / Linux:
 ```bash
-# from course9-module-05/sqlserver
+# from course9-module-06/sqlserver
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-# from course9-module-05/sqlserver
+# from course9-module-06/sqlserver
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD\logs"
 ```
 
@@ -74,13 +74,13 @@ This creates `dbo.valid_region` — Orders' own copy of the valid regions — de
 
 macOS / Linux:
 ```bash
-# from course9-module-05/mysql
+# from course9-module-06/mysql
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-# from course9-module-05/mysql
+# from course9-module-06/mysql
 schemaquench --ConfigFile:quench.settings.baseline.json --LogPath:"$PWD\logs"
 ```
 
@@ -89,7 +89,7 @@ This creates `valid_region` — Sessions' own copy — delivered with the same t
 Check all three copies from the lab folder. Each prints `EMEA`, `LEGACY`, `NA`:
 
 ```bash
-# from course9-module-05
+# from course9-module-06
 ../lab-sql.sh postgres catalog "SELECT region_code FROM public.shipping_region ORDER BY region_code"
 ../lab-sql.sh sqlserver orders "SELECT RegionCode FROM dbo.valid_region ORDER BY RegionCode"
 ../lab-sql.sh mysql sessions "SELECT RegionCode FROM valid_region ORDER BY RegionCode"
@@ -101,20 +101,20 @@ Catalog ships its expand release. This is a release for **one service only** —
 
 macOS / Linux:
 ```bash
-# from course9-module-05/postgres
+# from course9-module-06/postgres
 schemaquench --ConfigFile:quench.settings.expand.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-# from course9-module-05/postgres
+# from course9-module-06/postgres
 schemaquench --ConfigFile:quench.settings.expand.json --LogPath:"$PWD\logs"
 ```
 
 The expand package uses `MergeType: "Insert/Update"`. DataDelivery inserts the APAC row and updates the others — LEGACY is still in the file, so it survives. After this deploy, `shipping_region` has four rows: NA, EMEA, LEGACY, APAC. APAC is now official; LEGACY is still valid for anyone who hasn't migrated. Nothing in Orders or Sessions changes. The window is open for consumers to migrate.
 
 ```bash
-# from course9-module-05
+# from course9-module-06
 ../lab-sql.sh postgres catalog "SELECT region_code FROM public.shipping_region ORDER BY region_code"
 ```
 
@@ -128,13 +128,13 @@ Each consumer re-syncs its own `valid_region` copy whenever it's ready. Orders a
 
 macOS / Linux:
 ```bash
-# from course9-module-05/sqlserver
+# from course9-module-06/sqlserver
 schemaquench --ConfigFile:quench.settings.adopt.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-# from course9-module-05/sqlserver
+# from course9-module-06/sqlserver
 schemaquench --ConfigFile:quench.settings.adopt.json --LogPath:"$PWD\logs"
 ```
 
@@ -144,13 +144,13 @@ The adopt package re-delivers `dbo.valid_region` with NA, EMEA, and APAC. `Inser
 
 macOS / Linux:
 ```bash
-# from course9-module-05/mysql
+# from course9-module-06/mysql
 schemaquench --ConfigFile:quench.settings.adopt.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-# from course9-module-05/mysql
+# from course9-module-06/mysql
 schemaquench --ConfigFile:quench.settings.adopt.json --LogPath:"$PWD\logs"
 ```
 
@@ -159,7 +159,7 @@ Same change to Sessions' own copy: NA, EMEA, APAC. Sessions has migrated off LEG
 Check both consumer copies from the lab folder. Each prints `APAC`, `EMEA`, `NA`:
 
 ```bash
-# from course9-module-05
+# from course9-module-06
 ../lab-sql.sh sqlserver orders "SELECT RegionCode FROM dbo.valid_region ORDER BY RegionCode"
 ../lab-sql.sh mysql sessions "SELECT RegionCode FROM valid_region ORDER BY RegionCode"
 ```
@@ -170,20 +170,20 @@ Only run this **after** both consumers have adopted. Once nobody's copy carries 
 
 macOS / Linux:
 ```bash
-# from course9-module-05/postgres
+# from course9-module-06/postgres
 schemaquench --ConfigFile:quench.settings.contract.json --LogPath:"$PWD/logs"
 ```
 
 Windows PowerShell:
 ```powershell
-# from course9-module-05/postgres
+# from course9-module-06/postgres
 schemaquench --ConfigFile:quench.settings.contract.json --LogPath:"$PWD\logs"
 ```
 
 The contract package uses `MergeType: "Insert/Update/Delete"` and the tabledata contains only NA, EMEA, and APAC. DataDelivery deletes the LEGACY row. The retire is complete:
 
 ```bash
-# from course9-module-05
+# from course9-module-06
 ../lab-sql.sh postgres catalog "SELECT region_code FROM public.shipping_region ORDER BY region_code"
 ```
 
