@@ -396,7 +396,7 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
             Quench(cmd, Version(true), indexOnly: indexOnly);
             Assert.Multiple(() =>
             {
-                Assert.That(Audits(cmd, t), Is.SupersetOf(new[] { $"[dbo].[{t}].UQ_{t}|dropped|-", $"[dbo].[{t}].[UQ_{t}]|created|-" }),
+                Assert.That(Audits(cmd, t), Is.SupersetOf(new[] { $"[dbo].[{t}].[UQ_{t}]|dropped|-", $"[dbo].[{t}].[UQ_{t}]|created|-" }),
                     "SQL Server cannot change a constraint's IGNORE_DUP_KEY in place (1979)");
                 Assert.That(Convert.ToInt32(Scalar(cmd, $"SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.{t}') AND name = 'UQ_{t}' AND ignore_dup_key = 1 AND is_unique_constraint = 1")), Is.EqualTo(1));
             });
@@ -416,7 +416,7 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
             Quench(cmd, Version("[V],[W]"), "PREFER", indexOnly: indexOnly);
             Assert.Multiple(() =>
             {
-                Assert.That(Audits(cmd, t), Is.SupersetOf(new[] { $"[dbo].[{t}].CX_{t}|dropped|online", $"[dbo].[{t}].[CX_{t}]|created|online" }));
+                Assert.That(Audits(cmd, t), Is.SupersetOf(new[] { $"[dbo].[{t}].[CX_{t}]|dropped|online", $"[dbo].[{t}].[CX_{t}]|created|online" }));
                 Assert.That(Keys(cmd, t, $"CX_{t}"), Is.EqualTo("V,W"));
             });
         });
@@ -536,7 +536,7 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
             Assert.That(Audits(cmd, t), Is.EquivalentTo(new[] { $"[dbo].[{t}].[IX_{t}]|created|-" }));
             ClearAudit(cmd);
             Quench(cmd, Json(t, Pk(t) + "," + Index($"IX_{t}", "[W]")), indexOnly: indexOnly);
-            Assert.That(Audits(cmd, t), Is.EquivalentTo(new[] { $"[dbo].[{t}].IX_{t}|dropped|-", $"[dbo].[{t}].[IX_{t}]|created|-" }));
+            Assert.That(Audits(cmd, t), Is.EquivalentTo(new[] { $"[dbo].[{t}].[IX_{t}]|dropped|-", $"[dbo].[{t}].[IX_{t}]|created|-" }));
         });
     }
 }

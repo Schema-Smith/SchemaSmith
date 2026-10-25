@@ -372,4 +372,40 @@ public class DeploymentSummaryTextTests
         Assert.That(result, Does.Contain("Before/skip.sql — primary / Db — skipped (SHOULD NOT APPLY)"));
         Assert.That(result, Does.Contain("Before/ran.sql — primary / Db" + Environment.NewLine).Or.Contain("Before/ran.sql — primary / Db\n"));
     }
+
+    // Course 7 M6: a five-tenant run listed "table [dbo].[ShipmentEvent] created" five times with no target, so it could not
+    // say what each tenant had applied before tenant 3 failed.
+    [Test]
+    public void Render_AFailedFleetRun_GroupsWhatItAppliedByTarget()
+    {
+        var scripts = new List<MigrationScriptRecord>
+        {
+            new(Path: "Before/ran.sql", Slot: "Before", Template: "Main", Schema: null, Server: "srv", Database: "tenant_001", Outcome: "Ran"),
+            new(Path: "Before/ran.sql", Slot: "Before", Template: "Main", Schema: null, Server: "srv", Database: "tenant_002", Outcome: "Ran")
+        };
+        var details = new List<ObjectChangeDetail>
+        {
+            new("table", "[dbo].[ShipmentEvent]", "created", Server: "srv", Database: "tenant_001"),
+            new("table", "[dbo].[ShipmentEvent]", "created", Server: "srv", Database: "tenant_002"),
+            new("table", "[sales].[Order]", "created", Server: "srv", Database: "tenant_002", Schema: "sales")
+        };
+        var failed = BuildFullyPopulatedSummary() with { MigrationScripts = scripts };
+        failed = failed with { ObjectChanges = failed.ObjectChanges with { Details = details } };
+
+        var result = DeploymentSummaryText.Render(failed).Replace("\r\n", "\n");
+        var section = result[result.IndexOf("## Applied Before The Failure", StringComparison.Ordinal)..];
+        section = section[..section.IndexOf("\n\n", StringComparison.Ordinal)];
+
+        Assert.That(section, Is.EqualTo(string.Join("\n",
+            "## Applied Before The Failure (5)",
+            "Nothing here was rolled back. `--ResumeQuench` continues from where the run stopped.",
+            "### srv / tenant_001",
+            "- migration script Before/ran.sql",
+            "- table [dbo].[ShipmentEvent] created",
+            "### srv / tenant_002",
+            "- migration script Before/ran.sql",
+            "- table [dbo].[ShipmentEvent] created",
+            "### srv / tenant_002 [sales]",
+            "- table [sales].[Order] created")));
+    }
 }

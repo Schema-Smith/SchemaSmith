@@ -158,7 +158,7 @@ BEGIN TRY
                        -- Under WhatIf a modified index was not really dropped, but the real run re-creates it.
                        OR (@WhatIf = 1 AND EXISTS (SELECT 1 FROM SchemaSmith.ChangeAudit a
                                                     WHERE a.SessionId = @@SPID AND a.ActionType = 'wouldDrop' AND a.ObjectType IN ('index', 'constraint')
-                                                      AND a.ObjectName = i.[Schema] + '.' + i.[TableName] + '.' + SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
+                                                      AND a.ObjectName = i.[Schema] + '.' + i.[TableName] + '.' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))))
     ORDER BY i.[Schema], i.[TableName], CASE WHEN i.[Clustered] =  1 THEN 0 ELSE 1 END, i.[IndexName]
     FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
@@ -176,7 +176,7 @@ BEGIN TRY
                        -- Under WhatIf a modified index was not really dropped, but the real run re-creates it.
                        OR (@WhatIf = 1 AND EXISTS (SELECT 1 FROM SchemaSmith.ChangeAudit a
                                                     WHERE a.SessionId = @@SPID AND a.ActionType = 'wouldDrop' AND a.ObjectType IN ('index', 'constraint')
-                                                      AND a.ObjectName = i.[Schema] + '.' + i.[TableName] + '.' + SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
+                                                      AND a.ObjectName = i.[Schema] + '.' + i.[TableName] + '.' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))))
 
   RAISERROR('Add Missing Xml Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Creating index ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + CASE WHEN RTRIM(ISNULL(i.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(i.[VariantName]), '''', '''''') + ')' ELSE '' END + CASE WHEN ol.[Form] = 'online' THEN ' (online)' WHEN ol.[Form] = 'resumable' THEN ' (online, resumable)' WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +

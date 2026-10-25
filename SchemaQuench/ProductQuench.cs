@@ -1805,7 +1805,7 @@ public class ProductQuench
             try
             {
                 ProvisionDatabaseViaAdminConnection(server, databaseName);
-                _changeAudit.Record("database", databaseName, IsWhatIfOnly ? "wouldCreate" : "created");
+                _changeAudit.Record("database", databaseName, IsWhatIfOnly ? "wouldCreate" : "created", target: new ChangeTarget(server, databaseName));
             }
             catch (Exception ex)
             {

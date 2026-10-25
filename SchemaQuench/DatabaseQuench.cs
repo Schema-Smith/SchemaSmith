@@ -109,6 +109,9 @@ public class DatabaseQuench
     /// </summary>
     public ChangeAuditCapture ChangeAudit { get; init; }
 
+    // Where this unit's changes are made, carried on every row it records.
+    private ChangeTarget AuditTarget => new(_server, _databaseName, string.IsNullOrEmpty(_schemaName) ? null : _schemaName);
+
     /// <summary>
     /// No-drop protection tier (#270 Slice E): when true, the ModifiedTableQuench proc records the
     /// tables it would have dropped by absence (but is suppressing) to the ChangeAudit seam as
@@ -913,7 +916,7 @@ public class DatabaseQuench
                                 ExecuteScript = (name, script) => { effectiveSilentCmd.CommandText = script; effectiveSilentCmd.ExecuteNonQuery(); },
                                 ProgressLog = SafeProgressLog,
                                 ProgressLogError = SafeProgressLogError,
-                                RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded"),
+                                RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded", target: AuditTarget),
                                 RecordDelivery = RecordDataDelivery,
                                 WhatIf = IsWhatIf,
                                 PostgreSqlServerVersionNum = _postgreSqlServerVersionNum,
@@ -1054,7 +1057,7 @@ public class DatabaseQuench
                             ExecuteScript = (_, _) => { },
                             ProgressLog = SafeProgressLog,
                             ProgressLogError = SafeProgressLogError,
-                            RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded"),
+                            RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded", target: AuditTarget),
                             RecordDelivery = RecordDataDelivery,
                             WhatIf = true
                         });
@@ -1404,7 +1407,7 @@ public class DatabaseQuench
         {
             new SchemaProvisioner().EnsureSchemaExists(command, _schemaName, _product.Platform,
                 IsWhatIf, SafeProgressLog);
-            ChangeAudit?.Record("schema", _schemaName, IsWhatIf ? "wouldCreate" : "created");
+            ChangeAudit?.Record("schema", _schemaName, IsWhatIf ? "wouldCreate" : "created", target: AuditTarget);
         }
         catch (Exception ex)
         {
@@ -1923,13 +1926,13 @@ EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
                 if (IsWhatIf)
                 {
                     SafeProgressLog($"  [WhatIf] Would rebuild VECTOR index `{table.Key}`.`{name}`: its M or DISTANCE changed");
-                    ChangeAudit?.Record("index", auditName, "wouldRebuild");
+                    ChangeAudit?.Record("index", auditName, "wouldRebuild", target: AuditTarget);
                     continue;
                 }
                 SafeProgressLog($"  Rebuilding VECTOR index `{table.Key}`.`{name}`: its M or DISTANCE changed");
                 cmd.CommandText = $"ALTER TABLE `{table.Key.Replace("`", "``")}` DROP INDEX `{name.Replace("`", "``")}`";
                 cmd.ExecuteNonQuery();
-                ChangeAudit?.Record("index", auditName, "dropped");
+                ChangeAudit?.Record("index", auditName, "dropped", target: AuditTarget);
             }
         }
 
@@ -2660,7 +2663,7 @@ SET NOCOUNT ON
                     script.Outcome = ScriptOutcome.Unchanged;
                     SafeProgressLog($"    Unchanged, not re-run: {script.LogPath}");
                     _checkpointing.MarkScriptCompleted(DbScope, slot.ToString(), script.LogPath);
-                    ChangeAudit?.Record(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged");
+                    ChangeAudit?.Record(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged", target: AuditTarget);
                     continue;
                 }
 
@@ -2680,7 +2683,7 @@ SET NOCOUNT ON
                 {
                     _checkpointing.MarkScriptCompleted(DbScope, slot.ToString(), script.LogPath);
                     if (slot is DatabaseScriptSlot.Object or DatabaseScriptSlot.AfterTablesObject)
-                        ChangeAudit?.RecordRan(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath);
+                        ChangeAudit?.RecordRan(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, AuditTarget);
                     if (stamp != null && script.Outcome == ScriptOutcome.Applied) RecordScriptStamp(destCmd, stamp);
                 }
             }
@@ -2704,7 +2707,7 @@ SET NOCOUNT ON
         // returns null, leaving the run honestly not-instrumented; the record/mark steps can't throw.
         var rows = ChangeAuditReader.ReadAndDrain(_product.Platform, auditCmd);
         if (rows == null) return;
-        foreach (var r in rows) ChangeAudit.Record(r.ObjectType, r.ObjectName, r.Action, r.Mode);
+        foreach (var r in rows) ChangeAudit.Record(r.ObjectType, r.ObjectName, r.Action, r.Mode, AuditTarget);
         foreach (var line in DowngradeLog.Lines(_product.Platform, rows)) SafeProgressLog(line);
         ChangeAudit.MarkInstrumented();
     }
@@ -2854,7 +2857,7 @@ SET NOCOUNT ON
                     destCmd.CommandText = statement;
                     destCmd.ExecuteNonQuery();
                 }
-                ChangeAudit?.Record(drop.AuditType, drop.AuditName, "dropped");
+                ChangeAudit?.Record(drop.AuditType, drop.AuditName, "dropped", target: AuditTarget);
                 if (drop.Dependent.Kind == SchemaBoundDependentKind.Module)
                     droppedModuleScripts.AddRange(ScriptsCreating(drop.Dependent.Schema, drop.Dependent.Name));
                 if (drop.Dependent.Kind == SchemaBoundDependentKind.SecurityPolicy)
@@ -2886,8 +2889,8 @@ SET NOCOUNT ON
             if (skippedAsUnchanged)
             {
                 var objectType = ObjectScriptClassifier.Classify(dependent.LogPath);
-                ChangeAudit?.Retract(objectType, dependent.LogPath, "unchanged");
-                ChangeAudit?.RecordRan(objectType, dependent.LogPath);
+                ChangeAudit?.Retract(objectType, dependent.LogPath, "unchanged", AuditTarget);
+                ChangeAudit?.RecordRan(objectType, dependent.LogPath, AuditTarget);
             }
             if (ProbeScriptStamp(destCmd, dependent, DatabaseScriptSlot.AfterTablesObject) is { } stamp) RecordScriptStamp(destCmd, stamp);
         }
@@ -3029,7 +3032,7 @@ SET NOCOUNT ON
                 {
                     view.Script.HasBeenQuenched = false;
                     view.Script.Outcome = ScriptOutcome.Applied;
-                    ChangeAudit?.Retract(ObjectScriptClassifier.Classify(view.Script.LogPath), view.Script.LogPath, "unchanged");
+                    ChangeAudit?.Retract(ObjectScriptClassifier.Classify(view.Script.LogPath), view.Script.LogPath, "unchanged", AuditTarget);
                     _tablesChangedThisRun.Add(view.Identity.Name);
                     requeued.Add(view);
                 }
@@ -3836,7 +3839,7 @@ SET NOCOUNT ON
                 script.Outcome = ScriptOutcome.Unchanged;
                 entries.Add(new WhatIfConsoleEntry("skip (unchanged)", "SKIP (unchanged)", script.LogPath));
                 WhatIf?.Record(WhatIfCategory.Skip, LogPrefix, script.LogPath);
-                ChangeAudit?.Record(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged");
+                ChangeAudit?.Record(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged", target: AuditTarget);
                 continue;
             }
             entries.Add(new WhatIfConsoleEntry("apply", "APPLY", script.LogPath));
@@ -3846,7 +3849,7 @@ SET NOCOUNT ON
                 var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
                 var name = ModuleAuditName(identity);
                 SafeProgressLog($"    Would re-apply the grants on {name} after {script.LogPath}");
-                ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldReapply");
+                ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldReapply", target: AuditTarget);
             }
             if (CaptureModuleSignatures(destCmd, script) is { } signatures)
             {
@@ -3855,7 +3858,7 @@ SET NOCOUNT ON
                 if (signatures.Script != null)
                 {
                     SafeProgressLog($"    Would sign {name} again after {script.LogPath}");
-                    ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldResign");
+                    ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldResign", target: AuditTarget);
                 }
                 if (signatures.Unsignable != null) WarnUnsignable(name, signatures.Unsignable);
             }
@@ -3867,7 +3870,7 @@ SET NOCOUNT ON
                 foreach (var drop in plan.Drops)
                 {
                     SafeProgressLog($"    Would drop {drop.Dependent.Display} before re-applying {script.LogPath}; the run would put it back");
-                    ChangeAudit?.Record(drop.AuditType, drop.AuditName, "wouldDrop");
+                    ChangeAudit?.Record(drop.AuditType, drop.AuditName, "wouldDrop", target: AuditTarget);
                 }
             }
         }
@@ -3880,10 +3883,10 @@ SET NOCOUNT ON
         if (IsWhatIf)
         {
             WhatIf?.Record(WhatIfCategory.Deliver, LogPrefix, label);
-            ChangeAudit?.Record("dataDelivery", label, "wouldDeliver");
+            ChangeAudit?.Record("dataDelivery", label, "wouldDeliver", target: AuditTarget);
         }
         else
-            ChangeAudit?.Record("dataDelivery", label, "delivered");
+            ChangeAudit?.Record("dataDelivery", label, "delivered", target: AuditTarget);
     }
 
     private void WhatIfLogTableDataScripts(List<SqlScript> scripts)

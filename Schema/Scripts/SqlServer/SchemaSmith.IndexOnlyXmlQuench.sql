@@ -994,7 +994,7 @@ BEGIN TRY
   BEGIN
     RAISERROR('Capture indexes suppressed by PreventDrop (would drop by absence)', 10, 100) WITH NOWAIT
     SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + w.[ObjectType] + ''', ''' + w.[Schema] + '.' + w.[TableName] + '.' + w.[IndexName] + ''', ''dropSuppressed'');' AS NVARCHAR(MAX))
+      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + w.[ObjectType] + ''', ''' + w.[Schema] + '.' + w.[TableName] + '.' + QUOTENAME(w.[IndexName]) + ''', ''dropSuppressed'');' AS NVARCHAR(MAX))
       FROM (
         -- Indexes removed from the product (minus the @DropIndexesRemovedFromProduct gate; per-table opt-out kept)
         SELECT [Schema] = CAST(ir.[Schema] AS NVARCHAR(500)), [TableName] = CAST(ir.[TableName] AS NVARCHAR(500)),
@@ -1041,7 +1041,7 @@ BEGIN TRY
                                        THEN 'IF OBJECT_ID(''' + di.[Schema] + '.' + QUOTENAME(di.[IndexName]) + ''') IS NOT NULL ALTER TABLE ' + di.[Schema] + '.' + di.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(di.[IndexName]) + od.[With] + ';'
                                        ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + di.[Schema] + '.' + di.[TableName] + '''), ''' + di.[IndexName] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(di.[IndexName]) + ' ON ' + di.[Schema] + '.' + di.[TableName] + od.[With] + ';'
                                        END + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + REPLACE(di.[Schema] + '.' + di.[TableName] + '.' + di.[IndexName], '''', '''''') + ''', ''dropped'', ' + CASE WHEN od.[With] <> '' THEN '''online''' ELSE 'NULL' END + ');'
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + REPLACE(di.[Schema] + '.' + di.[TableName] + '.' + QUOTENAME(di.[IndexName]), '''', '''''') + ''', ''dropped'', ' + CASE WHEN od.[With] <> '' THEN '''online''' ELSE 'NULL' END + ');'
     FROM #IndexesToDrop di WITH (NOLOCK)
     -- Only a clustered index can be dropped online (3745); its heap is then built without blocking.
     CROSS APPLY (SELECT [With] = CASE WHEN di.[IsClustered] = 1 AND SchemaSmith.fn_OnlineOperationsAvailable() = 1
@@ -1052,7 +1052,7 @@ BEGIN TRY
 
   IF @WhatIf = 1
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
-      SELECT @@SPID, CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END, di.[Schema] + '.' + di.[TableName] + '.' + di.[IndexName], 'wouldDrop',
+      SELECT @@SPID, CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END, di.[Schema] + '.' + di.[TableName] + '.' + QUOTENAME(di.[IndexName]), 'wouldDrop',
              CASE WHEN od.[With] <> '' THEN 'online' END
         FROM #IndexesToDrop di WITH (NOLOCK)
         -- Only a clustered index can be dropped online (3745); its heap is then built without blocking.
@@ -1267,7 +1267,7 @@ BEGIN TRY
               -- Under WhatIf a modified index was not really dropped, but the real run re-creates it.
               OR EXISTS (SELECT 1 FROM SchemaSmith.ChangeAudit a
                           WHERE a.SessionId = @@SPID AND a.ActionType = 'wouldDrop' AND a.ObjectType IN ('index', 'constraint')
-                            AND a.ObjectName = i.[Schema] + '.' + i.[TableName] + '.' + SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
+                            AND a.ObjectName = i.[Schema] + '.' + i.[TableName] + '.' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
 
   RAISERROR('Add missing ProductName extended property to indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +

@@ -115,10 +115,10 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     "dropped":  { "tables": 0, "indexes": 1, "constraints": 0, "foreignKeys": 0 },
     "scriptsRan": 12,
     "details": [
-      { "objectType": "table",     "objectName": "sales.Orders",           "action": "created" },
-      { "objectType": "column",    "objectName": "sales.Orders.Region",    "action": "modified" },
-      { "objectType": "index",     "objectName": "sales.Orders.IX_Region", "action": "dropped" },
-      { "objectType": "procedure", "objectName": "Procedures/GetOrders.sql","action": "ran" }
+      { "objectType": "table",     "objectName": "sales.Orders",            "action": "created",  "server": "db01", "database": "Shop" },
+      { "objectType": "column",    "objectName": "sales.Orders.Region",     "action": "modified", "server": "db01", "database": "Shop" },
+      { "objectType": "index",     "objectName": "sales.Orders.IX_Region",  "action": "dropped",  "server": "db01", "database": "Shop" },
+      { "objectType": "procedure", "objectName": "Procedures/GetOrders.sql", "action": "ran",     "server": "db01", "database": "Shop" }
     ]
   },
   "unsupportedDowngrade": {         // null unless a feature was degraded for the target version
@@ -180,8 +180,9 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 
 **Applied before the failure.** Nothing a failed run applied is rolled back, so the Markdown of a failed or aborted run
 adds an "Applied Before The Failure" section: every migration script that ran, every object script that ran, and every
-table whose data was delivered before the run stopped. `--ResumeQuench` continues from there. The JSON carries the same
-facts in `migrationScripts[]` and `objectChanges.details[]`.
+table whose data was delivered before the run stopped, under a heading for each server and database (and schema, for a
+schema template) it reached, so a fleet run shows what each target had applied. `--ResumeQuench` continues from there.
+The JSON carries the same facts in `migrationScripts[]` and `objectChanges.details[]`.
 
 ### `timing`
 
@@ -253,6 +254,10 @@ Where the counts are the summary, `details[]` is the itemized list — one row p
 These appear as `details[]` rows with their real `objectType` and `action` even though no top-level count field aggregates them — the detail is preserved even where the summary doesn't bucket it.
 
 A row also carries `mode` when [`OnlineApply`](configuration.md#onlineapply) decided how the change ran: `online`, `instant` (MySQL and MariaDB), `resumable` (SQL Server), or `unavailable` for the plain statement where the online one could not be used. On MySQL and MariaDB a `WhatIf` row carries no `mode`, since only the engine can say which form it accepts. A row has no `mode` key at all when nothing chose a form, so a deploy with `OnlineApply` off reports exactly what it did before the field existed (schema version 1.2 added it).
+
+Each row also names where the change was made: `server` and `database`, plus `schema` on a schema template's iteration.
+A fleet run makes the same change in many places, and these say which. Server-level rows, such as a database created
+for `CreateIfMissing`, carry the server and the database they created. Schema version 1.2 added these keys too.
 
 ### `instrumented`
 

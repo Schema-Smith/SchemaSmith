@@ -65,6 +65,11 @@ public class ObjectChangeAuditIntegrationTests : BaseTableQuenchTests
             "expected column/modified for Name");
         Assert.That(changed.Any(r => r is { Type: "index", Action: "dropped" } && r.Name.Contains("IX_AuditChild")),
             "expected index/dropped for IX_AuditChild_Name");
+        // A dropped index was named as the catalog stores it, IX_AuditChild_Name, beside the bracketed name it was created
+        // under, so the two rows did not read as the same index.
+        Assert.That(changed.Single(r => r is { Type: "index", Action: "dropped" } && r.Name.Contains("IX_AuditChild")).Name,
+            Is.EqualTo(created.Single(r => r is { Type: "index", Action: "created" } && r.Name.Contains("IX_AuditChild")).Name),
+            "a dropped index is named as it was created");
         Assert.That(changed.Any(r => r is { Type: "foreignKey", Action: "dropped" }),
             "expected foreignKey/dropped for FK_AuditChild_Parent");
         Assert.That(changed.Any(r => r is { Type: "constraint", Action: "dropped" } && r.Name.Contains("CK_AuditChild")),
@@ -114,8 +119,8 @@ public class ObjectChangeAuditIntegrationTests : BaseTableQuenchTests
                 "expected index/wouldCreate for the new IX_AuditChild_Extra");
             Assert.That(wi.Any(r => r is { Type: "constraint", Action: "wouldCreate" } && r.Name.Contains("PK_AuditNew")),
                 "expected constraint/wouldCreate for PK_AuditNew");
-            Assert.That(wi.Any(r => r is { Type: "index", Action: "wouldDrop" } && r.Name.Contains("IX_AuditChild_Name")),
-                "expected index/wouldDrop for IX_AuditChild_Name");
+            Assert.That(wi.Any(r => r is { Type: "index", Action: "wouldDrop" } && r.Name == "[dbo].[AuditChild].[IX_AuditChild_Name]"),
+                "expected index/wouldDrop for [dbo].[AuditChild].[IX_AuditChild_Name], bracketed like every other row");
             Assert.That(wi.Any(r => r is { Type: "foreignKey", Action: "wouldDrop" }),
                 "expected foreignKey/wouldDrop for FK_AuditChild_Parent");
             Assert.That(wi.Any(r => r is { Type: "table", Action: "wouldDrop" } && r.Name.Contains("AuditDrop")),

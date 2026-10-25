@@ -195,7 +195,7 @@ public static class DeploymentSummaryAssembler
         // rows ARE previewed changes and stay in the detail.
         var details = rows
             .Where(r => r.Action != "dropSuppressed" && r.Action != "downgraded")
-            .Select(r => new ObjectChangeDetail(r.ObjectType, r.ObjectName, r.Action, r.Mode))
+            .Select(r => new ObjectChangeDetail(r.ObjectType, r.ObjectName, r.Action, r.Mode, r.Target?.Server, r.Target?.Database, r.Target?.Schema))
             .ToArray();
 
         return new ObjectChangeSummary(true, created, modified, dropped, scriptsRan, details, scriptsUnchanged);
