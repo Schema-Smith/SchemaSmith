@@ -450,7 +450,10 @@ WHERE tc.TABLE_SCHEMA = @v_ccSchema
   IF(VERSION() LIKE '%MariaDB%', '
   AND NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS col
                    WHERE col.TABLE_SCHEMA = tc.TABLE_SCHEMA AND col.TABLE_NAME = tc.TABLE_NAME
-                     AND SchemaSmith_NameKeyCI(col.COLUMN_NAME) = SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME))', ''));
+                     AND SchemaSmith_NameKeyCI(col.COLUMN_NAME) = SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME))
+  -- and one named after an application-time period is the period''s own (start < end), written with the period.
+  AND NOT JSON_CONTAINS(COALESCE(JSON_EXTRACT(SchemaSmith_TablePeriodsJson(tc.TABLE_SCHEMA, tc.TABLE_NAME), ''$[*].Name''), ''[]''),
+                        JSON_QUOTE(cc.CONSTRAINT_NAME))', ''));
         PREPARE stmt FROM @v_ccSql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
