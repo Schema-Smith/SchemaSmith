@@ -1,7 +1,9 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
+using System.Text.RegularExpressions;
 using System.Threading;
 using Microsoft.Data.SqlClient;
 
@@ -18,6 +20,34 @@ namespace Schema.IntegrationTests.SqlServer;
 /// </summary>
 public static class TestDatabaseDrop
 {
+
+    /// <summary>
+    /// A per-fixture test database is named <c>&lt;Prefix&gt;_&lt;hex&gt;</c> from a Guid. Requiring a hex letter keeps a
+    /// date-suffixed name such as <c>Archive_20240101</c> out.
+    /// </summary>
+    private static readonly Regex GeneratedName = new(@"^[A-Za-z][A-Za-z0-9]*_(?=[0-9a-f]*[a-f])[0-9a-f]{8,32}$", RegexOptions.Compiled);
+
+    internal static bool IsGeneratedTestDatabaseName(string database) => GeneratedName.IsMatch(database);
+
+    /// <summary>
+    /// Drops the per-fixture databases an earlier run leaked: a fixture's teardown does not run when its process is
+    /// killed, and a leaked CDC database keeps its capture jobs polling the server. Only a database the server says
+    /// is more than three hours old is touched, so a run in progress never loses one.
+    /// </summary>
+    public static void DropStaleGeneratedDatabases(IDbCommand master)
+    {
+        master.CommandText = "SELECT [name] FROM sys.databases WHERE database_id > 4 AND create_date < DATEADD(HOUR, -3, GETDATE())";
+        var stale = new List<string>();
+        using (var reader = master.ExecuteReader())
+            while (reader.Read())
+                if (IsGeneratedTestDatabaseName(reader.GetString(0))) stale.Add(reader.GetString(0));
+
+        foreach (var database in stale)
+        {
+            try { Drop(master, database); }
+            catch (SqlException) { /* in use by a live run; leave it */ }
+        }
+    }
     public static void Drop(IDbCommand master, string database)
     {
         SqlConnection.ClearAllPools();
