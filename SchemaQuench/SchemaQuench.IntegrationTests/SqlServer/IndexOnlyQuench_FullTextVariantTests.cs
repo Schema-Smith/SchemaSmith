@@ -232,6 +232,61 @@ SELECT COL_NAME(fc.[object_id], fc.type_column_id) FROM sys.fulltext_index_colum
         conn.Close();
     }
 
+    // A full-text index's columns are a set. Declared out of alphabetical order they compared unequal to the catalog's
+    // sorted list, so every deploy dropped the index and repopulated it; a real column change must still be seen.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void FullText_ColumnsDeclaredOutOfOrder_RedeployDoesNoFullTextWork_AndAColumnChangeStillApplies(bool indexOnly)
+    {
+        var tableName = indexOnly ? "FtOrder_IndexOnly" : "FtOrder_Main";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = (DbCommand)conn.CreateCommand();
+        cmd.CommandText = $"DROP TABLE IF EXISTS dbo.{tableName};";
+        cmd.ExecuteNonQuery();
+        string Json(string columns) => $$"""
+            [{
+                "Schema": "[dbo]",
+                "Name": "[{{tableName}}]",
+                "Columns": [
+                    { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                    { "Name": "[Title]", "DataType": "VARCHAR(200)", "Nullable": true },
+                    { "Name": "[Body]", "DataType": "VARCHAR(200)", "Nullable": true }
+                ],
+                "Indexes": [ { "Name": "[UDX_{{tableName}}]", "IndexColumns": "[Id]", "Unique": true } ],
+                "FullTextIndex": { "FullTextCatalog": "[FT_Catalog]", "KeyIndex": "[UDX_{{tableName}}]", "Columns": "{{columns}}", "ChangeTracking": "OFF" }
+            }]
+            """;
+        string WhatIf(string columns)
+        {
+            var captured = new StringBuilder();
+            SqlInfoMessageEventHandler handler = (_, e) => captured.Append(e.Message);
+            ((SqlConnection)conn).InfoMessage += handler;
+            try { RunTableQuenchProc(cmd, Json(columns), indexOnly: indexOnly, whatIf: true); }
+            finally { ((SqlConnection)conn).InfoMessage -= handler; }
+            return captured.ToString();
+        }
+
+        try
+        {
+            if (indexOnly) RunTableQuenchProc(cmd, Json("[Title],[Body]"));
+            RunTableQuenchProc(cmd, Json("[Title],[Body]"), indexOnly: indexOnly);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(WhatIf("[Title],[Body]"), Does.Not.Contain("Dropping fulltext index"), "the same columns in another order are not a change");
+                Assert.That(WhatIf("[Title]"), Does.Contain("Dropping fulltext index"), "a column removed from the index still is");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS dbo.{tableName};";
+            cmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+
     [Test]
     public void FullText_TypeColumnAndLanguage_KeepsBoth()
     {

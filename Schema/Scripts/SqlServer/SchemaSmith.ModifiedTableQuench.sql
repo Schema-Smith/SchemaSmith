@@ -2953,6 +2953,7 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
   
+  -- A full-text index's columns are a set: the order they are declared in is not a change.
   RAISERROR('Drop Modified or Removed FullText Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping fulltext index on ' + ei.[Schema] + '.' + ei.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'DROP FULLTEXT INDEX ON ' + ei.[Schema] + '.' + ei.[TableName] + ';' AS NVARCHAR(MAX))
@@ -2960,7 +2961,7 @@ BEGIN TRY
                            LEFT JOIN #FullTextIndexes fi WITH (NOLOCK) ON fi.[Schema] = ei.[Schema]
                                                                       AND fi.[TableName] = ei.[TableName]
                            JOIN sys.fulltext_indexes ft ON ft.[object_id] = OBJECT_ID(ei.[Schema] + '.' + ei.[TableName])
-                           WHERE RTRIM(ISNULL(fi.[Columns], '')) <> RTRIM(ISNULL(ei.[Columns], ''))
+                           WHERE (EXISTS (SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(fi.[Columns], ''), ',') EXCEPT SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(ei.[Columns], ''), ',')) OR EXISTS (SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(ei.[Columns], ''), ',') EXCEPT SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(fi.[Columns], ''), ',')))
                               OR SchemaSmith.fn_StripBracketWrapping(fi.[FullTextCatalog]) <> SchemaSmith.fn_StripBracketWrapping(ei.[FullTextCatalog])
                               OR SchemaSmith.fn_StripBracketWrapping(fi.[KeyIndex]) <> SchemaSmith.fn_StripBracketWrapping(ei.[KeyIndex])
                               OR fi.[ChangeTracking] <> ei.[ChangeTracking]
