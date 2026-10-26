@@ -58,8 +58,14 @@ public class ObjectChangeAuditIntegrationTests : BaseTableQuenchTests
 
         // Phase 2 — widen Name (column modify); drop the index, FK, and check by absence; drop the
         // AuditDrop table (removed from product).
+        var messages = new List<string>();
+        void Capture(object _, Microsoft.Data.SqlClient.SqlInfoMessageEventArgs e) => messages.AddRange(e.Errors.Cast<Microsoft.Data.SqlClient.SqlError>().Select(x => x.Message));
+        ((Microsoft.Data.SqlClient.SqlConnection)conn).InfoMessage += Capture;
         RunTableQuenchProc(cmd, ModifyJson, productName: Product, dropTablesRemovedFromProduct: true);
+        ((Microsoft.Data.SqlClient.SqlConnection)conn).InfoMessage -= Capture;
         var changed = ReadAudit(cmd);
+
+        Assert.That(messages, Does.Contain("  Dropping table [dbo].[AuditDrop]"), "the log names the table as the audit does");
 
         Assert.That(changed.Any(r => r is { Type: "column", Action: "modified" } && r.Name.Contains("Name")),
             "expected column/modified for Name");
