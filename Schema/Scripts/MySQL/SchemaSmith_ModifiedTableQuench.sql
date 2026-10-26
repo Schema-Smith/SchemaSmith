@@ -1666,7 +1666,7 @@ BEGIN
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         -- Staged, and written for each table once its ALTER has run: a refused or failed ALTER changed nothing.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColAudit;
-        CREATE TEMPORARY TABLE _SchemaSmith_ModifyColAudit (TableName VARCHAR(128) COLLATE utf8mb4_bin, ObjectName VARCHAR(512))
+        CREATE TEMPORARY TABLE _SchemaSmith_ModifyColAudit (RowId INT AUTO_INCREMENT PRIMARY KEY, TableName VARCHAR(128) COLLATE utf8mb4_bin, ObjectName VARCHAR(512))
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_ModifyColAudit (TableName, ObjectName)
         SELECT SchemaSmith_StripBacktickWrapping(c.TableName), CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName))
