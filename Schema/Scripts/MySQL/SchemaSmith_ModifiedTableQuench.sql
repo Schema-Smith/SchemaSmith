@@ -1658,120 +1658,6 @@ BEGIN
         WHERE t.NewTable = 0 AND c.NewColumn = 0 AND c.CompareCheckExpression IS NOT NULL
         ORDER BY c.TableName, c.ColumnName;
 
-        -- One progress message per table, the statement as execution below runs it: the columns of a table are
-        -- folded into one ALTER, and a line per column read as several statements under one OnlineApply form.
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
-        CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
-        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Modify column: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
-                      ' ', GROUP_CONCAT(CONCAT('MODIFY COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', '))
-        FROM _SchemaSmith_Columns c
-        INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
-        INNER JOIN _SchemaSmith_CatColumns isc
-            ON isc.TableKey = c.TableKey
-            AND isc.ColumnKey = c.ColumnKey
-        WHERE t.NewTable = 0
-          AND c.NewColumn = 0
-          -- Exclude columns where generated status is changing (regular->generated or generated->regular)
-          AND NOT (
-              -- Currently generated, wants to be regular
-              ((isc.GENERATION_EXPRESSION IS NOT NULL AND isc.GENERATION_EXPRESSION != '')
-               AND (c.GeneratedExpression IS NULL OR TRIM(c.GeneratedExpression) = ''))
-              OR
-              -- Currently regular, wants to be generated
-              ((isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '')
-               AND (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''))
-              OR
-              -- Generated both ways, but switching between VIRTUAL and STORED
-              (IFNULL(isc.GENERATION_EXPRESSION, '') != '' AND IFNULL(TRIM(c.GeneratedExpression), '') != ''
-               AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
-          )
-          -- A desired expression-form default this target cannot legally MODIFY into (below MySQL
-          -- 8.0.13 / see the degrade guard above) drops the whole column out of this pass; its
-          -- current default is left in place rather than emitting a MODIFY that would hit a syntax error.
-          AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)
-          AND (
-              -- Normalize whitespace adjacent to structural delimiters and the DECIMAL/NUMERIC
-              -- synonym so a hand-authored type that differs only by spacing/synonym is not a
-              -- false "modified". ENUM/SET take a separate branch: their parenthesized values are
-              -- case-sensitive DATA, so they compare keyword-case-insensitively but
-              -- value-case-sensitively (BINARY) via SchemaSmith_UpperDataType — the whitespace/
-              -- synonym normalization would wrongly fold a real value-case change.
-              CASE WHEN UPPER(c.CompareDataType) LIKE 'ENUM%' OR UPPER(c.CompareDataType) LIKE 'SET%'
-                     OR UPPER(isc.COLUMN_TYPE) LIKE 'ENUM%' OR UPPER(isc.COLUMN_TYPE) LIKE 'SET%'
-                   THEN CAST(SchemaSmith_UpperDataType(isc.COLUMN_TYPE) AS BINARY) != CAST(SchemaSmith_UpperDataType(c.CompareDataType) AS BINARY)
-                   ELSE SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(isc.COLUMN_TYPE), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
-                     != SchemaSmith_StripIntDisplayWidth(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c.CompareDataType), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')) END
-              OR (isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0)
-              OR (isc.IS_NULLABLE = 'NO' AND c.IsNullable = 1)
-              -- Default value changes (strip outer single quotes from JSON default for comparison,
-              -- since GenerateTableJson wraps string/enum defaults in quotes for DDL but INFORMATION_SCHEMA stores raw values)
-              OR (c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) != '' AND c.IsAutoIncrement = 0
-                  AND (SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NULL OR CAST(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) AS BINARY) != CAST(SchemaSmith_NormalizeDeclaredDefault(c.DefaultValue) AS BINARY))
-                  -- A DECIMAL default comes back at the column's scale ('0' declared, '0.00' stored), which
-                  -- never matched as text and re-ALTERed the column on every deploy.
-                  AND SchemaSmith_NumericDefaultsEqual(SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT),
-                                                      c.DefaultValue, isc.DATA_TYPE) = 0
-                  AND SchemaSmith_ExpressionDefaultsEqual(isc.COLUMN_DEFAULT, isc.EXTRA, c.DefaultValue) = 0
-                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
-                                                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'default',
-                                                        c.DefaultValue, IFNULL(isc.COLUMN_DEFAULT, '')) = 0)
-              OR ((c.DefaultValue IS NULL OR TRIM(c.DefaultValue) = '') AND SchemaSmith_NormalizeColumnDefault(isc.COLUMN_DEFAULT) IS NOT NULL)
-              -- Collation changes (only when JSON specifies a collation)
-              OR (c.Collation IS NOT NULL AND TRIM(c.Collation) != '' AND CAST(isc.COLLATION_NAME AS BINARY) != CAST(c.Collation AS BINARY))
-              OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
-                  AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
-                  != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
-              -- Generated expression changes (both sides are generated, but expression differs)
-              OR (c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
-                  AND (isc.GENERATION_EXPRESSION IS NULL OR CAST(TRIM(isc.GENERATION_EXPRESSION) AS BINARY) != CAST(TRIM(c.GeneratedExpression) AS BINARY))
-                  -- #242: the texts always differ once the engine has reformatted the expression; ask what was
-                  -- actually applied before calling it a change.
-                  AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
-                        'COLUMN', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'generated',
-                        c.GeneratedExpression, IFNULL(isc.GENERATION_EXPRESSION, '')) = 0)
-              -- AUTO_INCREMENT removal/addition (live EXTRA vs declared IsAutoIncrement) — parity with identity removal
-              OR ((isc.EXTRA LIKE '%auto_increment%') <> (c.IsAutoIncrement = 1))
-              -- Invisible-column visibility differs. Gated behind SchemaSmith_SupportsInvisibleColumn(): below
-              -- the floor (MySQL 8.0.23 / MariaDB 10.3) the column can never actually become invisible (the
-              -- degrade guard above already reports it), so ignore the difference there or it churns every run.
-              -- Symmetric in both directions -- a declared column newly marked invisible (visible -> invisible)
-              -- and one whose Invisible flag was removed (invisible -> visible) both trip this <> compare.
-              OR (SchemaSmith_SupportsInvisibleColumn() = 1 AND (isc.EXTRA LIKE '%INVISIBLE%') <> (c.IsInvisible = 1))
-          OR (SchemaSmith_SupportsSystemVersioning() = 1
-              AND EXISTS (SELECT 1 FROM _SchemaSmith_CatTables vt
-                           WHERE vt.TableKey = c.TableKey
-                             AND vt.TABLE_TYPE = 'SYSTEM VERSIONED')
-              AND (isc.EXTRA LIKE '%WITHOUT SYSTEM VERSIONING%') <> (c.IsWithoutSystemVersioning = 1))
-              -- Column SRID differs. Gated behind SchemaSmith_SupportsColumnSrid() (MySQL 8.0.3+; MariaDB
-              -- never -- the degrade guard above already reports it there), so ignore the difference below
-              -- the floor or it churns every run. isc.SRS_ID cannot be read directly here (absent on
-              -- MariaDB -- see SchemaSmith_ColumnSrid); <=> is null-safe so an unrestricted<->restricted
-              -- change (NULL on one side) is detected the same as a value change on both sides.
-              OR (SchemaSmith_SupportsColumnSrid() = 1
-                  AND NOT (SchemaSmith_ColumnSrid(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName)) <=> c.Srid))
-              -- Comment differs (symmetric: covers added, changed, and cleared -- a declared NULL
-              -- comment against a live comment counts as a difference the same as a value change).
-              OR (CAST(COALESCE(isc.COLUMN_COMMENT, '') AS BINARY) != CAST(COALESCE(c.Comment, '') AS BINARY))
-              -- ON UPDATE CURRENT_TIMESTAMP[(n)] differs (symmetric: added, changed -- e.g. a precision
-              -- change --, or removed). No SchemaSmith_Supports... gate: unlike Invisible/Srid above,
-              -- this clause predates both engines' hard floors, so it is always legal to compare/emit.
-              OR (CAST(COALESCE(SchemaSmith_ColumnOnUpdateClause(isc.EXTRA), '') AS BINARY) != CAST(COALESCE(c.OnUpdateCurrentTimestamp, '') AS BINARY))
-          OR (VERSION() LIKE '%MariaDB%'
-              AND CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '') AS BINARY)
-                  != CAST(COALESCE(SchemaSmith_NormalizeCheckExpression(c.CompareCheckExpression), '') AS BINARY)
-              AND SchemaSmith_ExpressionMapUnchanged(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName),
-                    'CHECK', SchemaSmith_StripBacktickWrapping(c.ColumnName), 'expression',
-                    COALESCE(c.CompareCheckExpression, ''),
-                    COALESCE(SchemaSmith_NormalizeCheckExpression(SchemaSmith_ColumnLevelCheck(p_DatabaseName, SchemaSmith_StripBacktickWrapping(c.TableName), SchemaSmith_StripBacktickWrapping(c.ColumnName))), '')) = 0)
-          -- A TABLE-level check carrying the column's name, which the name-based compare above cannot tell from the
-          -- column's own: the column is modified so its own check replaces it (see _SchemaSmith_TableLevelColumnChecks).
-          OR (c.CompareCheckExpression IS NOT NULL
-              AND EXISTS (SELECT 1 FROM _SchemaSmith_TableLevelColumnChecks tl
-                           WHERE tl.TableKey = c.TableKey AND tl.ColumnKey = c.ColumnKey))
-          )
-        GROUP BY c.TableName;
-
         -- Object-change audit (#243 E5): one row per column about to be modified. Same join +
         -- predicate as the fold below, evaluated before the ALTER (INFORMATION_SCHEMA still reflects
         -- the OLD definition); per-column (no GROUP BY). Same INFORMATION_SCHEMA read pattern the
@@ -2000,6 +1886,10 @@ BEGIN
         SET @v_modifycol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ModifyColStmts);
         WHILE @v_modifycol_id IS NOT NULL DO
             SELECT Stmt, OnlineMode, TableName INTO @exec_sql, @ss_online_mode, @ss_online_table FROM _SchemaSmith_ModifyColStmts WHERE RowId = @v_modifycol_id;
+            -- Each table's statement is logged just before it runs, so its form line follows it.
+            IF @ss_online_table IS NOT NULL THEN
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Modify column: ', @exec_sql));
+            END IF;
             CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
             SELECT CONNECTION_ID(), 'column', a.ObjectName, 'modified', @ss_online_form

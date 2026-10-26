@@ -2,6 +2,7 @@
 
 using System;
 using System.Data;
+using System.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -472,6 +473,26 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
             });
         }
         finally { Drop(cmd, "onl_type"); }
+    }
+
+    // With two tables' columns changed in one step, each table's statement is followed by the form it took.
+    [Test]
+    public void ColumnChangesOnTwoTables_EachStatementIsFollowedByItsForm()
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            Seed(cmd, "onl_ord1");
+            Seed(cmd, "onl_ord2");
+            string One(string table) => Table(table, string.Join(", ", Col("id", nullable: false), Col("a", "BIGINT"), Col("b")))[1..^1];
+            Deploy(cmd, "[" + One("onl_ord1") + ", " + One("onl_ord2") + "]", "PREFER");
+
+            var lines = Messages(cmd).Split('\n').Where(l => l.StartsWith("  Modify column:") || l.StartsWith("    (")).ToArray();
+            Assert.That(lines.Select(l => l.StartsWith("  Modify column:") ? (l.Contains("onl_ord1") ? "modify onl_ord1" : "modify onl_ord2") : "form"),
+                Is.EqualTo(new[] { "modify onl_ord1", "form", "modify onl_ord2", "form" }), string.Join(" | ", lines));
+        }
+        finally { Drop(cmd, "onl_ord1"); Drop(cmd, "onl_ord2"); }
     }
 
     // A key column's type change drops the foreign key first. Require refused only at the MODIFY, after the drop had
