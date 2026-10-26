@@ -81,7 +81,7 @@ public class StatusMessageMonitor : IDisposable
             if (_disposed) return;
             try
             {
-                PollOnce(_connection);
+                PollThrough(_connection);
             }
             catch (DbException e)
             {
@@ -102,12 +102,12 @@ public class StatusMessageMonitor : IDisposable
         TryReconnect();
     }
 
-    internal void PollOnce() => PollOnce(ReadConnection);
+    internal void PollOnce() => PollThrough(ReadConnection);
 
     private IDbConnection ReadConnection =>
         _sessionConnection is { State: ConnectionState.Open } ? _sessionConnection : _connection;
 
-    private void PollOnce(IDbConnection connection)
+    private void PollThrough(IDbConnection connection)
     {
         if (connection == null) return;
         using var command = connection.CreateCommand();
