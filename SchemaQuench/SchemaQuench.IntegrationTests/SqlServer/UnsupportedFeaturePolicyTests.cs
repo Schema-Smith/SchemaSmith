@@ -547,6 +547,38 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             });
         }
 
+        // A full-text index the table already has is left alone without Full-Text Search: only one that would have to be
+        // created is degraded. Degrading every declared index made an existing one read as removed, and dropped it.
+        [Test]
+        public void AnExistingFullTextIndex_WithoutFullTextSearch_IsKept_AndNotRecordedAsDowngraded()
+        {
+            var tableName = $"KeepFts_{Guid.NewGuid().ToString("N")[..8]}";
+            using var conn = KindleScratchDatabase("NoFtsBake", policy: "warn");
+            using var cmd = conn.CreateCommand();
+            var json = PlainFullTextJson(tableName).Replace("[ss_no_such_cat]", "[ss_keep_cat]");
+            try
+            {
+                cmd.CommandText = "IF NOT EXISTS (SELECT 1 FROM sys.fulltext_catalogs WHERE [name] = 'ss_keep_cat') CREATE FULLTEXT CATALOG [ss_keep_cat]";
+                cmd.ExecuteNonQuery();
+                RunTableQuenchProc(cmd, json, productName: tableName);
+                Assert.That(FullTextIndexCount(cmd, tableName), Is.EqualTo(1), "setup: the index exists");
+
+                SimulateNoFullTextSearch(cmd);
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: tableName));
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(FullTextIndexCount(cmd, tableName), Is.EqualTo(1), "the existing full-text index is kept");
+                    Assert.That(DowngradeRowCount(cmd, NoFullTextObjectType, $"[dbo].[{tableName}]"), Is.Zero, "nothing was skipped");
+                });
+            }
+            finally
+            {
+                cmd.CommandText = "SET CONTEXT_INFO 0x0";
+                cmd.ExecuteNonQuery();
+            }
+        }
+
         private static void SimulateNoFullTextSearch(IDbCommand cmd)
         {
             cmd.CommandText = "DECLARE @c VARBINARY(128) = 0x53534F56 + CONVERT(BINARY(4), CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))) + " +

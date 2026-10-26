@@ -13,27 +13,30 @@ BEGIN
   -- the caller's #FullTextIndexes, and is called once it is filled, on both the table and --IndexOnly paths.
   --
   -- Without Full-Text Search installed SQL Server refuses every full-text index, so under 'warn' the table deploys
-  -- without one and under 'fail' the deploy is refused, naming each table.
-  IF EXISTS (SELECT 1 FROM #FullTextIndexes WITH (NOLOCK)) AND SchemaSmith.fn_FullTextInstalled() = 0
+  -- without one and under 'fail' the deploy is refused, naming each table. Only an index the table does not have yet is
+  -- degraded: one it already has stays declared, so it compares equal and is neither dropped nor re-created.
+  IF EXISTS (SELECT 1 FROM #FullTextIndexes f WITH (NOLOCK) WHERE NOT EXISTS (SELECT 1 FROM sys.fulltext_indexes fi WHERE fi.[object_id] = OBJECT_ID(f.[Schema] + '.' + f.[TableName]))) AND SchemaSmith.fn_FullTextInstalled() = 0
   BEGIN
     DECLARE @v_Tables NVARCHAR(MAX) = STUFF((SELECT ', ' + f.[Schema] + '.' + f.[TableName] FROM #FullTextIndexes f WITH (NOLOCK)
+                                              WHERE NOT EXISTS (SELECT 1 FROM sys.fulltext_indexes fi WHERE fi.[object_id] = OBJECT_ID(f.[Schema] + '.' + f.[TableName]))
                                                ORDER BY f.[Schema], f.[TableName]
                                                FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF SchemaSmith.UnsupportedFeaturePolicy() = 'fail'
     BEGIN
       DECLARE @v_NotInstalled NVARCHAR(2048) = 'Full-text indexes require Full-Text Search, which is not installed on this server; table(s): ' +
                                                LEFT(@v_Tables, 1800) + '.'
-      RAISERROR(@v_NotInstalled, 16, 1)
+      RAISERROR('%s', 16, 1, @v_NotInstalled)
       RETURN
     END
 
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
       SELECT @@SPID, 'full-text index (Full-Text Search not installed)', f.[Schema] + '.' + f.[TableName], 'downgraded'
         FROM #FullTextIndexes f WITH (NOLOCK)
+       WHERE NOT EXISTS (SELECT 1 FROM sys.fulltext_indexes fi WHERE fi.[object_id] = OBJECT_ID(f.[Schema] + '.' + f.[TableName]))
     DECLARE @v_Skipped NVARCHAR(2048) = '  Full-text index skipped on ' + LEFT(@v_Tables, 1800) +
                                         ': Full-Text Search is not installed - the table deploys without it (downgraded)'
     RAISERROR('%s', 10, 100, @v_Skipped) WITH NOWAIT
-    DELETE FROM #FullTextIndexes
+    DELETE f FROM #FullTextIndexes f WHERE NOT EXISTS (SELECT 1 FROM sys.fulltext_indexes fi WHERE fi.[object_id] = OBJECT_ID(f.[Schema] + '.' + f.[TableName]))
     RETURN
   END
 
