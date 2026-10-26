@@ -186,6 +186,22 @@ public class LedgerTableDeployTests
             "an unchanged column must not be replaced");
     }
 
+    // SQL Server keeps a column dropped from a ledger table, hidden, as MSSQL_DroppedLedgerColumn_<name>_<guid>, and
+    // refuses to drop it again; the next deploy must leave it alone rather than fail.
+    [Test]
+    public void ADroppedLedgerColumn_DoesNotBreakTheNextDeploy()
+    {
+        var withoutBal = "[{ \"Schema\": \"[dbo]\", \"Name\": \"[LDropCol]\", \"Ledger\": \"Updatable\", \"Columns\": ["
+                         + " { \"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false } ], \"Indexes\": ["
+                         + " { \"Name\": \"[PK_LDropCol]\", \"IndexColumns\": \"[Id]\", \"PrimaryKey\": true, \"Unique\": true } ] }]";
+        Deploy(Package("LDropCol", "Updatable"));
+        Deploy(withoutBal);
+
+        Assert.DoesNotThrow(() => Deploy(withoutBal), "the unchanged package deploys again");
+        Assert.That(Scalar("SELECT COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.LDropCol') AND is_dropped_ledger_column = 1"),
+            Is.EqualTo(1), "the engine still holds the dropped column");
+    }
+
     [Test]
     public void ALedgerTable_RoundTripsThroughExtraction()
     {

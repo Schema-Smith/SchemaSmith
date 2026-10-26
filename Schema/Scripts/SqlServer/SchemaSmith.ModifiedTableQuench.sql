@@ -659,6 +659,15 @@ BEGIN TRY
             -- them, so an unchanged package fails on its second deploy. Identified by
             -- generated_always_type rather than by name -- the type codes are what actually mean it.
             OR c.generated_always_type IN (7, 8, 9, 10)'
+  -- A column dropped from a ledger table is retained by the engine (MSSQL_DroppedLedgerColumn_<name>_<guid>) and can
+  -- never be dropped again. The flag is 2022+, so it gets its own guard.
+  IF SchemaSmith.fn_ServerMajorVersion() >= 16
+    EXEC sp_executesql N'
+      INSERT INTO #EngineOwnedColumns (TableSchema, TableName, ColumnName)
+        SELECT SCHEMA_NAME(st.[schema_id]), st.[name], c.[name]
+          FROM sys.columns c
+          JOIN sys.tables st ON st.[object_id] = c.[object_id]
+         WHERE c.is_dropped_ledger_column = 1'
 
   RAISERROR('Detect Column Drops', 10, 100) WITH NOWAIT
   INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly], [DefinitionChanged], [TypeChanged], [OptionsBefore], [OptionsAfter])
