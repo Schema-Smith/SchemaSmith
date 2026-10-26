@@ -884,7 +884,9 @@ table and the count. At the limit the next change runs `INPLACE, LOCK=NONE`, whi
 count; the log says so.
 
 MySQL and MariaDB do not roll DDL back, so a `Require` refusal stops the deploy at that statement, with the changes
-before it in place. Full-text indexes, keys and foreign keys run as before. `OnlineApplyMaxDuration` does not apply.
+before it in place. Full-text indexes, keys and foreign keys run as before, outside `OnlineApply`; on MariaDB 10.4 and
+later, a full-text index added to a table that already has rows is built by copying the table, which blocks writes
+while it runs. `OnlineApplyMaxDuration` does not apply.
 
 ## System-versioned tables (MariaDB)
 
