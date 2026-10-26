@@ -5,6 +5,7 @@ using Schema.DataAccess;
 using Schema.Domain;
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 
 using NUnit.Framework;
@@ -77,6 +78,37 @@ public abstract class StatusMessageMonitorSharedTests
         Assert.That(capturedMessages, Has.Count.EqualTo(2));
         Assert.That(capturedMessages[0], Is.EqualTo("Test message 1"));
         Assert.That(capturedMessages[1], Is.EqualTo("Test message 2"));
+    }
+
+    // A polling connection that cannot be opened (a full server, a refused login) must not cost the log: each flush
+    // reads through the session's own connection, and the lost live progress is said once.
+    [Test]
+    public void StatusMessageMonitor_WithAPollingConnectionThatCannotOpen_StillLogsEveryMessage_AndWarnsOnce()
+    {
+        var captured = new List<string>();
+        var warnings = new List<string>();
+        var unreachable = MainConnectionString + ";Port=1;Connection Timeout=2";
+        using (var monitor = new StatusMessageMonitor(unreachable, _sessionId, msg => captured.Add(msg),
+                   sessionConnection: _connection, warn: msg => warnings.Add(msg)))
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.CommandText = $"INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES ({_sessionId}, 'Step one')";
+            cmd.ExecuteNonQuery();
+            monitor.Flush();
+            cmd.CommandText = $"INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES ({_sessionId}, 'Step two')";
+            cmd.ExecuteNonQuery();
+            monitor.Flush();
+        }
+
+        using var count = _connection.CreateCommand();
+        count.CommandText = $"SELECT COUNT(*) FROM SchemaSmith_StatusMessages WHERE SessionId = {_sessionId}";
+        Assert.Multiple(() =>
+        {
+            Assert.That(captured, Is.EqualTo(new[] { "Step one", "Step two" }));
+            Assert.That(warnings, Has.Count.EqualTo(1));
+            Assert.That(warnings.FirstOrDefault(), Does.StartWith("Live progress from the database is unavailable"));
+            Assert.That(Convert.ToInt32(count.ExecuteScalar()), Is.Zero, "the session's messages are still cleaned up");
+        });
     }
 
     [Test]

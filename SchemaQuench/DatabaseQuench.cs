@@ -2534,11 +2534,12 @@ SET NOCOUNT ON
                 using var sessionCmd = connection.CreateCommand();
                 sessionCmd.CommandText = "SELECT CONNECTION_ID()";
                 var sessionId = Convert.ToInt64(sessionCmd.ExecuteScalar());
-                _statusMonitor = new StatusMessageMonitor(connectionString, sessionId, msg => LogServerMessage($"    {msg}"));
+                _statusMonitor = new StatusMessageMonitor(connectionString, sessionId, msg => LogServerMessage($"    {msg}"),
+                    sessionConnection: connection, warn: msg => _progressLog.Warn(msg));
             }
-            catch
+            catch (DbException e)
             {
-                // Status monitoring is best-effort
+                _progressLog.Warn($"The database's step messages cannot be read ({e.Message}); this run's log has none of them.");
             }
         }
 
