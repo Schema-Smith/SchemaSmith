@@ -54,7 +54,7 @@ BEGIN TRY
   CREATE TABLE #OnlineForms ([Kind] VARCHAR(16) COLLATE DATABASE_DEFAULT, [Schema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
                              [IndexName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [Mode] VARCHAR(7) COLLATE DATABASE_DEFAULT,
                              [Form] VARCHAR(12) COLLATE DATABASE_DEFAULT, [Options] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Reason] NVARCHAR(400) COLLATE DATABASE_DEFAULT)
-  EXEC SchemaSmith.StageOnlineForms @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
+  IF EXISTS (SELECT 1 FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] <> 'OFF') EXEC SchemaSmith.StageOnlineForms @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
 
   EXEC SchemaSmith.ResolvePausedIndexBuilds @OnlineApplyMaxDuration = @OnlineApplyMaxDuration, @WhatIf = @WhatIf
   RAISERROR('Override table compression to match clustered index', 10, 100) WITH NOWAIT
@@ -915,19 +915,24 @@ BEGIN TRY
     DECLARE @v_FitSchema NVARCHAR(256), @v_FitTable NVARCHAR(256), @v_FitColumn NVARCHAR(256), @v_FitType NVARCHAR(MAX),
             @v_FitInstance SYSNAME, @v_FitChangeTable NVARCHAR(600), @v_FitError NVARCHAR(MAX), @v_FitSQL NVARCHAR(MAX),
             @v_FitLongest BIGINT
+    -- Staged first, for the same reason as the swap cursor's padding read: a cursor over the caller's #Tables recompiles.
+    IF OBJECT_ID('tempdb..#CdcFitProbes') IS NOT NULL DROP TABLE #CdcFitProbes
+    SELECT cc.[Schema], cc.[TableName], cc.[ColumnName], [FitType] = REPLACE(REPLACE(cc.[ColumnScript], ' SPARSE', ''), ' NOT NULL', ' NULL'),
+           [CaptureInstance] = ct.capture_instance, [ChangeTable] = QUOTENAME(OBJECT_SCHEMA_NAME(ct.[object_id])) + '.' + QUOTENAME(OBJECT_NAME(ct.[object_id]))
+      INTO #CdcFitProbes
+      FROM #ColumnChanges cc WITH (NOLOCK)
+      JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = cc.[Schema] AND t.[Name] = cc.[TableName]
+      JOIN sys.tables st ON st.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
+      JOIN cdc.change_tables ct WITH (NOLOCK) ON ct.source_object_id = st.[object_id]
+      JOIN cdc.captured_columns cap WITH (NOLOCK) ON cap.[object_id] = ct.[object_id]
+                                                 AND cap.column_name = SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName]) COLLATE DATABASE_DEFAULT
+     WHERE cc.[TypeChanged] = 1 AND cc.MustDropAndRecreate = 0 AND cc.MustSwapColumn = 0 AND cc.[DropOnly] = 0
+       AND cc.[ColumnScript] NOT LIKE '%ENCRYPTED WITH%'
+       AND ISNULL(t.EnableCDC, 1) = 1
     DECLARE fit_cur CURSOR LOCAL FAST_FORWARD FOR
-      SELECT cc.[Schema], cc.[TableName], cc.[ColumnName], REPLACE(REPLACE(cc.[ColumnScript], ' SPARSE', ''), ' NOT NULL', ' NULL'),
-             ct.capture_instance, QUOTENAME(OBJECT_SCHEMA_NAME(ct.[object_id])) + '.' + QUOTENAME(OBJECT_NAME(ct.[object_id]))
-        FROM #ColumnChanges cc WITH (NOLOCK)
-        JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = cc.[Schema] AND t.[Name] = cc.[TableName]
-        JOIN sys.tables st ON st.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
-        JOIN cdc.change_tables ct WITH (NOLOCK) ON ct.source_object_id = st.[object_id]
-        JOIN cdc.captured_columns cap WITH (NOLOCK) ON cap.[object_id] = ct.[object_id]
-                                                   AND cap.column_name = SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName]) COLLATE DATABASE_DEFAULT
-       WHERE cc.[TypeChanged] = 1 AND cc.MustDropAndRecreate = 0 AND cc.MustSwapColumn = 0 AND cc.[DropOnly] = 0
-         AND cc.[ColumnScript] NOT LIKE '%ENCRYPTED WITH%'
-         AND ISNULL(t.EnableCDC, 1) = 1
-       ORDER BY cc.[Schema], cc.[TableName], cc.[ColumnName], ct.capture_instance
+      SELECT [Schema], [TableName], [ColumnName], [FitType], [CaptureInstance], [ChangeTable]
+        FROM #CdcFitProbes WITH (NOLOCK)
+       ORDER BY [Schema], [TableName], [ColumnName], [CaptureInstance]
     OPEN fit_cur
     FETCH NEXT FROM fit_cur INTO @v_FitSchema, @v_FitTable, @v_FitColumn, @v_FitType, @v_FitInstance, @v_FitChangeTable
     WHILE @@FETCH_STATUS = 0 AND @v_FitError IS NULL
@@ -2318,16 +2323,18 @@ BEGIN TRY
   RAISERROR('Swap Columns Requiring Data-Preserving Replacement', 10, 100) WITH NOWAIT
   DECLARE @v_SwapSchema NVARCHAR(256), @v_SwapTable NVARCHAR(256), @v_SwapColumn NVARCHAR(256), @v_SwapColumnScript NVARCHAR(MAX), @v_SwapPaddingOff BIT
   DECLARE swap_cursor CURSOR LOCAL FAST_FORWARD FOR
-    SELECT cc.[Schema], cc.[TableName], SchemaSmith.fn_StripBracketWrapping(cc.ColumnName), cc.ColumnScript,
-           CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
-                                           WHERE c.[Schema] = cc.[Schema] AND c.[TableName] = cc.[TableName] AND c.[ColumnName] = cc.[ColumnName]
-                                             AND c.[PaddingApplies] = 1 AND c.[AnsiPadding] = 0) THEN 1 ELSE 0 END)
+    SELECT cc.[Schema], cc.[TableName], SchemaSmith.fn_StripBracketWrapping(cc.ColumnName), cc.ColumnScript
       FROM #ColumnChanges cc WITH (NOLOCK)
       WHERE cc.MustSwapColumn = 1
   OPEN swap_cursor
-  FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript, @v_SwapPaddingOff
+  FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript
   WHILE @@FETCH_STATUS = 0
   BEGIN
+    -- Read here, not in the cursor: a cursor over the caller's #Columns recompiles this procedure's temp-table reads on every call.
+    SET @v_SwapPaddingOff = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
+                                                          WHERE c.[Schema] = @v_SwapSchema AND c.[TableName] = @v_SwapTable
+                                                            AND SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]) = @v_SwapColumn
+                                                            AND c.[PaddingApplies] = 1 AND c.[AnsiPadding] = 0) THEN 1 ELSE 0 END)
     DECLARE @v_TempColName NVARCHAR(256) = @v_SwapColumn + '_swap_temp'
     -- The data type without NULL/NOT NULL
     DECLARE @v_SwapDataType NVARCHAR(MAX) = RTRIM(REPLACE(REPLACE(@v_SwapColumnScript, ' NOT NULL', ''), ' NULL', ''))
@@ -2364,7 +2371,7 @@ BEGIN TRY
     -- Step 5: Rename temp to original
     SET @v_SQL = 'EXEC sp_rename ''' + SchemaSmith.fn_StripBracketWrapping(@v_SwapSchema) + '.' + SchemaSmith.fn_StripBracketWrapping(@v_SwapTable) + '.' + QUOTENAME(@v_TempColName) + ''', ''' + @v_SwapColumn + ''', ''COLUMN'';'
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-    FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript, @v_SwapPaddingOff
+    FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript
   END
   CLOSE swap_cursor
   DEALLOCATE swap_cursor
