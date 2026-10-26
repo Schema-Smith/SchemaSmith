@@ -111,6 +111,30 @@ public abstract class StatusMessageMonitorSharedTests
         });
     }
 
+    // Before kindling the messages table does not exist yet; polling it then is not a lost message.
+    [Test]
+    public void StatusMessageMonitor_PollingBeforeTheTableExists_DoesNotWarn()
+    {
+        var warnings = new List<string>();
+        var db = "nokindle_" + Guid.NewGuid().ToString("N")[..12];
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = $"CREATE DATABASE `{db}`";
+        cmd.ExecuteNonQuery();
+        try
+        {
+            using (new StatusMessageMonitor(MainConnectionString + $";Database={db}", _sessionId, _ => { }, pollIntervalMs: 20,
+                       sessionConnection: _connection, warn: msg => warnings.Add(msg)))
+                Thread.Sleep(300);
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP DATABASE IF EXISTS `{db}`";
+            cmd.ExecuteNonQuery();
+        }
+
+        Assert.That(warnings, Is.Empty);
+    }
+
     [Test]
     public void StatusMessageMonitor_OnlyReadsOwnSessionMessages()
     {

@@ -4,6 +4,7 @@ using System;
 using System.Data;
 using System.Data.Common;
 using System.Threading;
+using MySqlConnector;
 using Schema.DataAccess;
 
 namespace Schema.Utility;
@@ -95,8 +96,9 @@ public class StatusMessageMonitor : IDisposable
 
     private void PollFailed(Exception failure)
     {
-        // A flush through the session's own connection still delivers what this poll missed.
-        if (_sessionConnection != null) WarnOnce(failure.Message);
+        // A flush through the session's own connection still delivers what this poll missed. Before kindling the
+        // table is not there yet, which is not a lost message.
+        if (_sessionConnection != null && failure is not MySqlException { ErrorCode: MySqlErrorCode.NoSuchTable }) WarnOnce(failure.Message);
         TryReconnect();
     }
 

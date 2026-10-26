@@ -244,6 +244,7 @@ public class DatabaseQuench
     private readonly string _dropRemovedStatistics;
     private readonly string _dropRemovedIndexes;
     private readonly bool _updateTables;
+
     private readonly bool _deliverData;
     private readonly ICheckpointing _checkpointing;
     private readonly string _dropUnknownIndexes;
@@ -2238,7 +2239,8 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
         {
             tableCommand.CommandText = $"CALL SchemaSmith_SequenceQuench('{EscapeMySqlLiteral(_databaseName)}', '{EscapeMySqlLiteral(sequences)}', {_whatIfOnly})";
             _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Sequences"), tableCommand.CommandText);
-            tableCommand.ExecuteNonQuery();
+            ExecuteNonQueryHandlingMessages(tableCommand);
+            _debugFileLocation = "";
             return;
         }
         tableCommand.CommandText =
