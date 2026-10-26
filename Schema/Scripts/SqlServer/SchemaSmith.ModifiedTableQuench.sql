@@ -947,8 +947,14 @@ BEGIN TRY
         IF ERROR_NUMBER() IN (2628, 8152)
         BEGIN
           SET @v_FitSQL = N'SELECT @l = MAX(' + CASE WHEN @v_FitType LIKE '%BINARY%' THEN N'DATALENGTH(' ELSE N'LEN(' END + @v_FitColumn + N')) FROM ' + @v_FitChangeTable + N' WITH (NOLOCK)'
-          EXEC sp_executesql @v_FitSQL, N'@l BIGINT OUTPUT', @l = @v_FitLongest OUTPUT
-          SET @v_FitError = 'the longest is ' + CONVERT(NVARCHAR(20), @v_FitLongest) + CASE WHEN @v_FitType LIKE '%BINARY%' THEN ' bytes' ELSE ' characters' END
+          -- LEN takes no text or ntext; for those the engine's own message stands.
+          BEGIN TRY
+            EXEC sp_executesql @v_FitSQL, N'@l BIGINT OUTPUT', @l = @v_FitLongest OUTPUT
+            SET @v_FitError = 'the longest is ' + CONVERT(NVARCHAR(20), @v_FitLongest) + CASE WHEN @v_FitType LIKE '%BINARY%' THEN ' bytes' ELSE ' characters' END
+          END TRY
+          BEGIN CATCH
+            SET @v_FitLongest = NULL
+          END CATCH
         END
       END CATCH
       IF @v_FitError IS NULL

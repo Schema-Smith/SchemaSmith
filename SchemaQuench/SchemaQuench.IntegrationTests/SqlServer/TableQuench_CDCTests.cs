@@ -896,6 +896,48 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNarrow
     }
 
     [Test]
+    public void ACapturedNtextColumnNarrowedPastItsHistory_IsRefusedWithTheCdcReason()
+    {
+        // The refusal measures the longest captured value to say how far over it is, and LEN takes no ntext; the refusal
+        // must still be the one that reaches the user.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.CdcNtext (Id INT NOT NULL CONSTRAINT PK_CdcNtext PRIMARY KEY, Val NTEXT NULL)
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNtext', @role_name = NULL";
+        ExecuteWithDeadlockRetry(cmd);
+        try
+        {
+            cmd.CommandText = "INSERT dbo.CdcNtext VALUES (1, N'a value longer than ten characters')";
+            cmd.ExecuteNonQuery();
+            WaitForCapture(cmd, "dbo_CdcNtext_CT", "Id = 1");
+            const string package = """
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[CdcNtext]",
+                    "EnableCDC": true,
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                        {"Name": "[Val]", "DataType": "NVARCHAR(10)", "Nullable": true}
+                    ],
+                    "Indexes": [ {"Name": "[PK_CdcNtext]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]"} ]
+                }
+                """;
+
+            var ex = Assert.Catch<Exception>(() => RunTableQuenchProc(cmd, package));
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain("CDC capture would stop on [dbo].[CdcNtext]: the change to column [Val] (NVARCHAR(10)"));
+                Assert.That(ex.Message, Does.Not.Contain("is invalid for argument 1 of len function"));
+                Assert.That(GetColumnDataType(cmd, "CdcNtext", "Val"), Is.EqualTo("NTEXT"), "nothing on the table changed");
+            });
+        }
+        finally { DropCdcTable(cmd, "CdcNtext"); }
+    }
+
+    [Test]
     public void ChangingAComputedColumnsExpression_DoesNotRotate()
     {
         // A captured computed column is always NULL (SQL Server documents it, and the probe agreed), so re-creating it with
