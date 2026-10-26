@@ -348,6 +348,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **SQL Server: a table removed from the product is named in full in the log.** `Dropping table [dbo].AuditEntry` (and the `CustomTableDrop` hand-off line) left the table name unbracketed, and `Dropping inbound foreign Key dbo.Customer.FK_Customer_Promotion` bracketed nothing; both now read as the summary does, `[dbo].[AuditEntry]`.
 - **SQL Server: making a period or ledger column hidden or visible is logged.** The `ALTER COLUMN ... ADD HIDDEN` / `DROP HIDDEN` ran with no line in the deploy log, though the summary listed the column; the log now says `Making period column [dbo].[Account].[SysStart] hidden` (or `ledger column`, or `visible`).
 - **SQL Server: delivery to an append-only ledger table logs what it left alone.** The rows that differ from the delivered data, and the rows a delete would have removed, were counted in a message the deploy log never showed, so the count the documentation promises was missing; both counts now appear, naming the table.
+- **SQL Server: turning CDC off on a table with two capture instances names each one, and counts the table once.** The log read `Disable CDC on [dbo].[Account]` twice, naming neither instance, and the summary counted the table's capture as dropped twice. Each line now names its capture instance, and the table is recorded once.
 
 ## [v2.7.3](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.7.3) — 2026-10-14
 

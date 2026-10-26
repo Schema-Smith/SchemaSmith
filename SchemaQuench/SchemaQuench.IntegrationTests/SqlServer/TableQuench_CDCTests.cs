@@ -556,6 +556,49 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCHistor
         cmd.ExecuteNonQuery();
         conn.Close();
     }
+    // Turning CDC off disables each capture instance; the log names each one, and the table is recorded as dropped once.
+    [Test]
+    public void DisablingCdc_OnATableWithTwoCaptureInstances_NamesEach_AndRecordsTheTableOnce()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.DisableTwoInstances (Id INT NOT NULL, Val NVARCHAR(100) NULL)
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'DisableTwoInstances', @role_name = NULL, @capture_instance = N'dbo_DisableTwoInstances_a'
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'DisableTwoInstances', @role_name = NULL, @capture_instance = N'dbo_DisableTwoInstances_b'
+DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+        ExecuteWithDeadlockRetry(cmd);
+        var messages = new System.Collections.Generic.List<string>();
+        ((Microsoft.Data.SqlClient.SqlConnection)conn).InfoMessage += (_, e) =>
+            messages.AddRange(System.Linq.Enumerable.Select(System.Linq.Enumerable.Cast<Microsoft.Data.SqlClient.SqlError>(e.Errors), m => m.Message));
+        try
+        {
+            RunTableQuenchProc(cmd, """
+                { "Schema": "[dbo]", "Name": "[DisableTwoInstances]", "EnableCDC": false,
+                  "Columns": [ {"Name": "[Id]", "DataType": "INT", "Nullable": false}, {"Name": "[Val]", "DataType": "NVARCHAR(100)"} ] }
+                """);
+
+            cmd.CommandText = "SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND ObjectType = 'changeDataCapture' AND ActionType = 'dropped'";
+            var auditRows = (int)cmd.ExecuteScalar()!;
+            Assert.Multiple(() =>
+            {
+                Assert.That(System.Linq.Enumerable.Where(messages, m => m.Contains("Disable CDC on")),
+                    Is.EquivalentTo(new[] { "  Disable CDC on [dbo].[DisableTwoInstances] (capture instance dbo_DisableTwoInstances_a)",
+                                            "  Disable CDC on [dbo].[DisableTwoInstances] (capture instance dbo_DisableTwoInstances_b)" }));
+                Assert.That(auditRows, Is.EqualTo(1), "the table's capture is dropped once, whatever it held");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = "IF OBJECTPROPERTY(OBJECT_ID('dbo.DisableTwoInstances'), 'TableHasCDC') IS NOT NULL AND EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('dbo.DisableTwoInstances') AND is_tracked_by_cdc = 1) " +
+                              "EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'DisableTwoInstances', @capture_instance = N'all'; DROP TABLE IF EXISTS dbo.DisableTwoInstances";
+            cmd.ExecuteNonQuery();
+            conn.Close();
+        }
+    }
+
     [Test]
     public void ShouldRefuseAColumnChangeWhenBothCaptureInstancesAreInUse()
     {
