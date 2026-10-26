@@ -61,7 +61,9 @@ public abstract class BaseTableQuenchTests
         // Was an inline copy of the same loop, narrower than it needed to be: it knew about deadlock and
         // lock-wait timeout and not about the concurrent-DDL skip (1684), which is how
         // RemovedFromProduct_DropsByDefault_WithUnknownIndexesOff failed a full run at two workers.
-        RetryingTransientConcurrency(() => cmd.ExecuteNonQuery(), beforeRetry);
+        // beforeRetry may use this same command, so each attempt sets the call again.
+        var call = cmd.CommandText;
+        RetryingTransientConcurrency(() => { cmd.CommandText = call; cmd.ExecuteNonQuery(); }, beforeRetry);
     }
 
     /// <summary>
