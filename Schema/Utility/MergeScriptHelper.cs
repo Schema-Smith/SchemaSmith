@@ -1077,7 +1077,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
             var compare = BuildUpdateCompareSqlServer(updateColumns);
             sb.Append(appendOnlyLedger
                 ? $"DECLARE @v_ss_Differ INT = (SELECT COUNT(*) FROM #v_ss_Source AS Source JOIN {target} AS Target ON {matchColumns} WHERE ({compare}));\r\n" +
-                  $"IF @v_ss_Differ > 0 RAISERROR('%d delivered rows differ from rows already in the append-only ledger table {target.Replace("'", "''")}, which cannot be updated; they were left as they are.', 10, 1, @v_ss_Differ) WITH NOWAIT;\r\n\r\n"
+                  $"IF @v_ss_Differ > 0 RAISERROR('%d delivered rows differ from rows already in the append-only ledger table {target.Replace("'", "''")}, which cannot be updated; they were left as they are.', 10, 100, @v_ss_Differ) WITH NOWAIT;\r\n\r\n"
                 : $"UPDATE Target SET\r\n{BuildUpdateAssignmentsSqlServer(updateColumns)}\r\n  FROM {target} AS Target{hint}\r\n  JOIN #v_ss_Source AS Source ON {matchColumns}\r\n WHERE ({compare});\r\n\r\n");
         }
 
@@ -1088,7 +1088,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         if (mergeDelete)
             sb.Append(appendOnlyLedger
                 ? $"DECLARE @v_ss_Stale INT = (SELECT COUNT(*) FROM {target} AS Target WHERE NOT EXISTS (SELECT 1 FROM #v_ss_Source AS Source WHERE {matchColumns}){filter});\r\n" +
-                  $"IF @v_ss_Stale > 0 RAISERROR('%d rows of the append-only ledger table {target.Replace("'", "''")} are not in the delivered data, and cannot be deleted; they were left as they are.', 10, 1, @v_ss_Stale) WITH NOWAIT;\r\n\r\n"
+                  $"IF @v_ss_Stale > 0 RAISERROR('%d rows of the append-only ledger table {target.Replace("'", "''")} are not in the delivered data, and cannot be deleted; they were left as they are.', 10, 100, @v_ss_Stale) WITH NOWAIT;\r\n\r\n"
                 : $"DELETE Target FROM {target} AS Target{hint}\r\n WHERE NOT EXISTS (SELECT 1 FROM #v_ss_Source AS Source WHERE {matchColumns}){filter};\r\n\r\n");
 
         sb.Append("DROP TABLE #v_ss_Source;\r\n");

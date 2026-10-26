@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using System.Text;
 using Microsoft.Data.SqlClient;
 using Schema.DataAccess;
@@ -120,8 +121,9 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
         if (Convert.ToInt32(cmd.ExecuteScalar()) < 16) Assert.Ignore("Ledger tables need SQL Server 2022.");
         cmd.CommandText = $"CREATE TABLE dbo.[{table}] (Id INT NOT NULL PRIMARY KEY, V NVARCHAR(20) NULL) WITH (LEDGER = ON (APPEND_ONLY = ON));";
         cmd.ExecuteNonQuery();
+        // What the deploy log shows: SQL Server's messages raised with state 100.
         var messages = new List<string>();
-        conn.InfoMessage += (_, e) => messages.Add(e.Message);
+        conn.InfoMessage += (_, e) => messages.AddRange(e.Errors.Cast<SqlError>().Where(m => m.State == 100).Select(m => m.Message));
         try
         {
             cmd.CommandText = $"INSERT dbo.[{table}] (Id, V) VALUES (1, 'a'), (9, 'z');";
@@ -134,8 +136,11 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
 
             cmd.CommandText = $"SELECT STRING_AGG(CONCAT(Id, ':', V), ',') WITHIN GROUP (ORDER BY Id) FROM dbo.[{table}]";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("1:a,2:c,9:z"), "new rows inserted, existing rows untouched");
-            Assert.That(string.Join("\n", messages), Does.Contain(table).And.Contain("append-only"),
-                "the rows left unchanged are reported: " + string.Join(" | ", messages));
+            Assert.Multiple(() =>
+            {
+                Assert.That(messages, Has.Some.StartsWith("1 delivered rows differ").And.Contains(table), "the row that differs is counted in the log: " + string.Join(" | ", messages));
+                Assert.That(messages, Has.Some.StartsWith("1 rows of the append-only ledger table").And.Contains(table), "and so is the row a delete would have removed");
+            });
         }
         finally
         {
