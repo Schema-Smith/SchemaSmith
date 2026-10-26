@@ -77,8 +77,8 @@ reports PASS over a missing or unusable object is worse than one that fails.
 | `vault_m1` | 1 · Applied at CREATE | `LedgerEntry`, partitioned by year — the create-time-only roster |
 | `vault_m2` | 2 · State you never described | `AuditTrail` + a schema-bound view — the rebuild guards and `DropSchemaBoundDependents` |
 | `vault_m3` | 3 · The refusal you did not ask for | A partitioned table and the drop-by-absence guard |
-| `vault_m4` | 4 · Unset means unmanaged | `RetainedDocument` — placement declared vs left alone |
-| `vault_m5` | 5 · What the database owns | `Customer` and `Payment` — Change Tracking and Change Data Capture (SQL Server) |
+| `vault_m4` | 5 · Unset means unmanaged | `RetainedDocument` — placement declared vs left alone |
+| `vault_m5` | 4 · What the database owns | `Customer` and `Payment` — Change Tracking and Change Data Capture (SQL Server) |
 
 ## Cleanup
 

@@ -131,7 +131,7 @@ Now remove the placement property from `baseline/` entirely — delete `Partitio
 That is not a bug and it is not a loophole. **Unset means SchemaSmith does not manage placement here.**
 It does not mean "the default", and it does not mean "move it back". A table a DBA placed by hand,
 in a package that never mentions placement, is left exactly where they put it — which is what makes
-this tool safe to point at a database you did not create. Module 4 comes back to this as the doctrine
+this tool safe to point at a database you did not create. Module 5 comes back to this as the doctrine
 that makes the whole course coherent; here, just notice that *declaring nothing* and *declaring
 something different* are two completely different requests.
 

@@ -1,140 +1,258 @@
-# Course 11, Module 4 — Unset means unmanaged (lab)
+# Course 11, Module 4 — What the database owns (lab)
 
-Goal: the doctrine underneath the whole course, in one A/B test.
+<!-- TRAINING-RELEASE-PIN 2.8.0 (the Setup slot; #509, #518; the #518 refusal names the longest value): delete the "merged, not yet released" note -->
 
-**Omitting a property means SchemaSmith does not manage it. It never means "set it to the default."**
+Goal: a package describes tables, but Change Data Capture and Change Tracking also need a switch that belongs to the
+**database**. Turning it on changes retention, cleanup jobs and storage for every table in the database, which is not a
+decision one table's JSON gets to make. So SchemaSmith doesn't make it: it records a downgrade and tells you. Then you
+give the database switch a home of its own in the package, the `Setup` slot, and both features come on in the same
+deploy. The rest of the module is CDC's sharpest operational rule, two capture instances per table, and the refusals
+that keep captured history from being thrown away.
 
-That one sentence is what lets you point a declarative deploy tool at a database somebody else has been
-tuning for years without it undoing their work on the first run. This module proves it on a single
-table, twice, changing exactly one thing.
+SQL Server only: `sqlserver/`, everything against `vault_m5`. The sandbox runs SQL Server Agent, so capture is real: the
+rows you see in the change tables were written by the capture job.
 
-Runs against `vault_m4`.
+> **Merged, not yet released.** This module teaches SchemaSmith 2.8 behaviour, which is merged to `main` and not yet
+> in a tagged release.
 
 ## Before you start
 
-- The [sandbox](../docker) is up and [`../course11-setup`](../course11-setup) has been run once — it
-  created the `vault_ts` tablespace this module uses.
-- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
+- The [sandbox](../docker) is up and [`../course11-setup`](../course11-setup) has been run (it creates `vault_m5`).
+- The sandbox's SQL Server runs SQL Server Agent (`MSSQL_AGENT_ENABLED` in `docker-compose.yml`). If you started the
+  sandbox before this module existed, run `docker compose up -d` in `../docker` once, then the setup script again.
+- The CLI is on your PATH: `schemaquench --version` answers **2.8.0 or later**.
 
-## Step 1: A DBA places a table by hand
+## Step 1: Ask for it without the database switch
 
-Before your package ever runs, someone put this table on a dedicated tablespace, for reasons of their
-own — storage, IO separation, a retention policy, an audit requirement. You were not consulted, and
-that is normal.
-
-```bash
-# from course11-module-04
-../lab-sql.sh postgres vault_m4 "CREATE TABLE public.retaineddocument (docid BIGINT NOT NULL PRIMARY KEY, body TEXT) TABLESPACE vault_ts"
-../lab-sql.sh postgres vault_m4 "SELECT COALESCE(t.spcname,'pg_default') FROM pg_class c LEFT JOIN pg_tablespace t ON t.oid=c.reltablespace WHERE c.relname='retaineddocument'"
-# → vault_ts
-```
-
-## Step 2: Deploy a package that never mentions placement
-
-`unmanaged/` declares the table — columns, primary key — and has **no `Tablespace` key at all**
-(the package already looks like this; nothing to edit):
+[`dbo.Customer.json`](sqlserver/Package/Templates/Main/Tables/dbo.Customer.json) asks for Change Tracking, columns
+included. [`dbo.Payment.json`](sqlserver/Package/Templates/Main/Tables/dbo.Payment.json) asks for CDC:
 
 ```json
-{
-  "Schema": "public", "Name": "retaineddocument",
-  "Columns": [ { "Name": "docid", "DataType": "int8", "Nullable": false },
-               { "Name": "body",  "DataType": "text", "Nullable": true } ],
-  "Indexes": [ { "Name": "pk_retaineddocument", "IndexColumns": "docid", "PrimaryKey": true, "Unique": true } ]
-}
+"EnableChangeTracking": true,
+"TrackColumnsUpdated": true
 ```
-
-```bash
-# from course11-module-04
-cd postgres && schemaquench --ConfigFile:quench.settings.unmanaged.json ; cd ..    # exit 0
-../lab-sql.sh postgres vault_m4 "SELECT COALESCE(t.spcname,'pg_default') FROM pg_class c LEFT JOIN pg_tablespace t ON t.oid=c.reltablespace WHERE c.relname='retaineddocument'"
-# → vault_ts
-```
-
-Exit 0, and **the table is still on `vault_ts`**.
-
-Sit with what did *not* happen. The obvious alternative reading of an absent property is "the default" —
-and under that reading, this deploy would have moved the table to `pg_default`, because the package
-implicitly said so by saying nothing. On a real archive, that is a rewrite of everything, on a Tuesday,
-triggered by a package that never mentioned tablespaces at all.
-
-## Step 3: Change exactly one thing
-
-`declared/` is the same file with **one key added** (already in the `declared/` package; nothing to
-edit):
 
 ```json
-{ "Tablespace": "pg_default" }
+"EnableCDC": true
+```
+
+```bash
+# from course11-module-04/sqlserver
+schemaquench --ConfigFile:quench.settings.json        # exit 1
+```
+
+```
+        CDC skipped: not enabled on this database (EXEC sys.sp_cdc_enable_db to allow it - downgraded)
+        Change Tracking skipped: not enabled on this database (ALTER DATABASE ... SET CHANGE_TRACKING = ON to allow it - downgraded)
+```
+
+Both tables deploy. Neither feature is on, and the run says so: exit 1, outcome `Incomplete`, and two downgrades in the
+summary, each with the statement that would allow it. The deploy could have run those statements itself. It didn't,
+because they reach beyond this package.
+
+## Step 2: Give the database switch a home
+
+[`setup-scripts/`](sqlserver/setup-scripts) holds the two statements, each guarded so it only acts when the switch is
+off:
+
+```sql
+IF NOT EXISTS (SELECT 1 FROM sys.change_tracking_databases WHERE database_id = DB_ID())
+  ALTER DATABASE CURRENT SET CHANGE_TRACKING = ON (CHANGE_RETENTION = 2 DAYS, AUTO_CLEANUP = ON);
+```
+
+```sql
+IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
+  EXEC sys.sp_cdc_enable_db;
+```
+
+Put them in a `Setup` folder and tell the template that folder runs in the `Setup` slot, ahead of every object and
+table:
+
+```bash
+# from course11-module-04/sqlserver
+mkdir -p Package/Templates/Main/Setup
+cp setup-scripts/*.sql Package/Templates/Main/Setup/
+```
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Template.json" set ScriptFolders '[{"FolderPath": "Setup", "QuenchSlot": "Setup"}]' -->
+```json
+"ScriptFolders": [ { "FolderPath": "Setup", "QuenchSlot": "Setup" } ]
+```
+
+```bash
+# from course11-module-04/sqlserver
+schemaquench --ConfigFile:quench.settings.json        # exit 0
+```
+
+```
+    Quenching .\Package\Templates\Main\Setup\01-change-tracking.sql
+    Quenching .\Package\Templates\Main\Setup\02-cdc.sql
+        Enable CDC on [dbo].[Payment]
+        Enable Change Tracking on [dbo].[Customer]
+```
+
+The switches come on first, so the same deploy can turn both features on. CDC brought its two Agent jobs with it:
+
+```bash
+# from course11-module-04
+../lab-sql.sh sqlserver vault_m5 "SELECT capture_instance FROM cdc.change_tables"
+# → dbo_Payment
+../lab-sql.sh sqlserver vault_m5 "SELECT name FROM msdb.dbo.sysjobs WHERE name LIKE 'cdc.vault_m5%' ORDER BY name"
+# → cdc.vault_m5_capture
+# → cdc.vault_m5_cleanup
+```
+
+Deploy again: exit 0, and both Setup scripts run again. The `Setup` slot runs on **every** deploy, unlike a migration
+script, which is why each script checks before it changes anything.
+
+## Step 3: Watch it capture
+
+```bash
+# from course11-module-04
+../lab-sql.sh sqlserver vault_m5 "INSERT dbo.Payment VALUES (1, 10.00, 'first'), (2, 20.00, 'second')"
+../lab-sql.sh sqlserver vault_m5 "UPDATE dbo.Payment SET Amount = 12.00 WHERE PaymentId = 1"
+../lab-sql.sh sqlserver vault_m5 "WAITFOR DELAY '00:00:10'; SELECT __\$operation, PaymentId, Amount FROM cdc.dbo_Payment_CT ORDER BY __\$start_lsn, __\$seqval"
+# → 2 1 10.00
+# → 2 2 20.00
+# → 3 1 10.00
+# → 4 1 12.00
+```
+
+The capture job reads the log every few seconds, hence the wait. Operation 2 is an insert, and 3 and 4 are an update's
+before and after images. That history is what the rest of this module protects.
+
+## Step 4: Two capture instances
+
+A capture instance records a fixed set of columns. Widen `Memo` first:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Tables/dbo.Payment.json" set "Columns[Name=[Memo]].DataType" '"VARCHAR(40)"' -->
+```bash
+# from course11-module-04/sqlserver
+schemaquench --ConfigFile:quench.settings.json        # exit 0
+#         Altering Column [dbo].[Payment].[Memo]
+```
+
+The column set didn't change, so the capture instance carries on. Now add a column:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Tables/dbo.Payment.json" append Columns '{"Name": "[Channel]", "DataType": "VARCHAR(10)", "Nullable": true}' -->
+```bash
+# from course11-module-04/sqlserver
+schemaquench --ConfigFile:quench.settings.json        # exit 0
+```
+
+```
+        CDC ROTATED on [dbo].[Payment]: new capture instance dbo_Payment_2 now captures the new column set. The previous instance dbo_Payment STILL HOLDS ITS HISTORY and was NOT dropped -- drain it, then drop it with EXEC sys.sp_cdc_disable_table @capture_instance = N'dbo_Payment'. Until then the next column change on this table WILL FAIL: SQL Server allows only two capture instances.
+```
+
+A new instance captures the new shape, and the old one keeps the history your downstream readers haven't consumed yet.
+SQL Server allows two per table, so add another column before draining:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Tables/dbo.Payment.json" append Columns '{"Name": "[Region]", "DataType": "VARCHAR(10)", "Nullable": true}' -->
+```bash
+# from course11-module-04/sqlserver
+schemaquench --ConfigFile:quench.settings.json        # exit 2
+```
+
+```
+CDC capture-instance limit reached on: [dbo].[Payment]. SQL Server permits two capture instances per table and both are already in use, so this new column, CdcFilegroup, CdcSupportsNetChanges or CdcIndexName change cannot rotate without discarding change history. Nothing has been changed. Drain the older instance on each listed table and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N'<schema>', @source_name = N'<table>', @capture_instance = N'<name>'), then re-run.
+```
+
+`Nothing has been changed.` That's the refusal, and it's the one you want: the alternative is dropping an instance and
+its history to make room. Take `Region` back out:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Tables/dbo.Payment.json" remove-where Columns "Name=[Region]" -->
+
+## Step 5: A change the change table can't hold
+
+Drain the old instance (here, by deciding nobody needs it) and drop it, as the rotation line said:
+
+```bash
+# from course11-module-04
+../lab-sql.sh sqlserver vault_m5 "EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'Payment', @capture_instance = N'dbo_Payment'"
+```
+
+Now write a long memo, and let the capture job record it:
+
+```bash
+# from course11-module-04
+../lab-sql.sh sqlserver vault_m5 "UPDATE dbo.Payment SET Memo = 'a memo of thirty characters!!' WHERE PaymentId = 2"
+../lab-sql.sh sqlserver vault_m5 "WAITFOR DELAY '00:00:10'; SELECT COUNT(*) FROM cdc.dbo_Payment_2_CT WHERE LEN(Memo) > 10"
+# → 1
+```
+
+Narrow `Memo` to `VARCHAR(10)`:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Tables/dbo.Payment.json" set "Columns[Name=[Memo]].DataType" '"VARCHAR(10)"' -->
+```bash
+# from course11-module-04/sqlserver
+schemaquench --ConfigFile:quench.settings.json        # exit 2
+```
+
+```
+CDC capture would stop on [dbo].[Payment]: the change to column [Memo] (VARCHAR(10) COLLATE SQL_Latin1_General_CP1_CI_AS NULL) cannot be applied to change table [cdc].[dbo_Payment_2_CT] of capture instance dbo_Payment_2, which holds values the new type does not take (the longest is 29 characters). SQL Server applies a column type change to every change table that captures the column, and the capture job for the whole database fails until it can. Nothing has been changed. Drain that instance and drop it (EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'Payment', @capture_instance = N'dbo_Payment_2'), then re-run.
+```
+
+The table could take the change (you'd lose nothing it holds today), but the change table can't. SQL Server would
+apply the narrowing to it too, fail, and stop capture for **every** table in the database. The deploy checks first and
+stops by name:
+
+```bash
+# from course11-module-04
+../lab-sql.sh sqlserver vault_m5 "SELECT TYPE_NAME(user_type_id), max_length FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Payment') AND name = 'Memo'"
+# → varchar 40
+```
+
+Put `Memo` back to `VARCHAR(40)`:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Tables/dbo.Payment.json" set "Columns[Name=[Memo]].DataType" '"VARCHAR(40)"' -->
+
+## Step 6: Leaving it out is not turning it off
+
+Take `EnableCDC` out of `dbo.Payment.json` entirely and deploy:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Tables/dbo.Payment.json" del EnableCDC -->
+```bash
+# from course11-module-04/sqlserver
+schemaquench --ConfigFile:quench.settings.json        # exit 0
 ```
 
 ```bash
 # from course11-module-04
-cd postgres && schemaquench --ConfigFile:quench.settings.declared.json ; echo "exit=$?" ; cd ..
+../lab-sql.sh sqlserver vault_m5 "SELECT is_tracked_by_cdc FROM sys.tables WHERE name = 'Payment'"
+# → 1
 ```
 
-```text
-P0001: table public.retaineddocument declares tablespace pg_default, but is currently deployed on
-vault_ts. SchemaSmith does not move an existing object to a different tablespace (that is a rewrite)
--- migrate it manually, or correct the declared tablespace to match.
+Still on. A table that says nothing about CDC leaves it as it is, so capture someone enabled outside the package survives
+a deploy. Turning it off drops the capture instances and their history, so it takes an explicit `false`:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Tables/dbo.Payment.json" set EnableCDC false -->
+```bash
+# from course11-module-04/sqlserver
+schemaquench --ConfigFile:quench.settings.json        # exit 0
+#         Disable CDC on [dbo].[Payment]
 ```
-
-Exit **2**. Same table, same database, same deployed state — and the opposite outcome, because the
-package now *claims* placement and disagrees about it.
-
-That is the whole module. **Silence is not a value.** Declaring nothing and declaring the default are
-different statements, and SchemaSmith treats them differently:
-
-| Package says | Meaning | Result here |
-| --- | --- | --- |
-| *nothing* | "placement is not mine to manage" | exit 0, left alone |
-| `"Tablespace": "pg_default"` | "placement is mine, and it should be `pg_default`" | exit 2, refused as a move |
-
-## Step 4: Where else the doctrine holds
-
-Not a special case for tablespaces — the same reading applies across the product:
-
-| Property | Unset means |
-| --- | --- |
-| `Tablespace` (PostgreSQL table + index, MySQL general) | placement unmanaged; a hand-placed object stays put |
-| `DataDirectory` (MySQL, MariaDB) | placement unmanaged, **not** "has none" |
-| `PartitionScheme` / `Partitioning` | partitioning unmanaged; a hand-partitioned table is left exactly as it is |
-| `Encryption` / `Encrypted` | encryption unmanaged; a tablespace someone encrypted stays encrypted |
-| `Compression` (MySQL), `PageCompressed` (MariaDB) | page compression unmanaged; an omitted value never uncompresses a table |
-| `ReplicaIdentity` (PostgreSQL) | leave the server's current setting alone |
-| `Statistics` | only named statistics your product defines; **auto-created statistics are never touched** |
-| `Enforced` / `Validated` on a key or check (SQL Server, PostgreSQL; MySQL check `Enforced`) | a constraint someone disabled (`NOCHECK`) or left untrusted (`NOT VALID`) stays that way (2.8) |
-| `EnableCDC` / `EnableChangeTracking` (SQL Server) | capture or tracking someone switched on by hand is left on |
-| `Description` (SQL Server, PostgreSQL) | a description a DBA typed in stays (2.8) |
-
-One honest exception, so the table doesn't oversell: on MySQL and MariaDB a comment is part of the column and
-table definition, so a package that leaves `Description` out of a table it manages clears the comment there.
-The engine gives no way to change a column without restating it.
-
-Read that list as one idea rather than seven: your package's authority extends exactly as far as what it
-declares, and no further.
-
-## Cleanup
 
 ```bash
 # from course11-module-04
-../lab-sql.sh postgres vault_m4 "DROP TABLE IF EXISTS public.retaineddocument"
+../lab-sql.sh sqlserver vault_m5 "SELECT is_tracked_by_cdc FROM sys.tables WHERE name = 'Payment'"
+# → 0
 ```
 
-## The principle — and the course
+## What you proved
 
-Four modules, four reasons a declarative tool stops, and one rule underneath all of them:
+- A table can ask for CDC or Change Tracking, but the database switch isn't the table's. Without it, the deploy records a
+  downgrade instead of reconfiguring the database.
+- The `Setup` slot is where the package says "this database needs these switches", ahead of everything, on every deploy.
+- A column change rotates to a new capture instance and keeps the old one's history. A third is refused, and so is a type
+  change the change table can't hold. Both say `Nothing has been changed`.
+- Leaving `EnableCDC` out is never destructive. Turning capture off takes `false`.
 
-> **SchemaSmith will rebuild what it declares, and will not destroy what it does not.**
+## Clean up
 
-Module 1: placement is applied at CREATE and refused on change, because a diff of two layouts cannot
-tell a SPLIT from a MERGE. Module 2: a rebuild is refused when the copy would discard state the package
-never described — and `DropSchemaBoundDependents` shows the tool acting freely where it *can* rebuild
-what it drops. Module 3: a partitioned table is never dropped by absence, even though you asked, because
-a deleted file is a likelier mistake than the loss is a decision.
+```bash
+# from course11-module-04
+rm -rf sqlserver/Package/Templates/Main/Setup
+bash -c '. ../lab-sql.sh && lab_remove_db sqlserver vault_m5 && lab_confirm_db sqlserver vault_m5'
+```
 
-And this module is why those three are coherent rather than arbitrary. Every one of them turns on the
-same question — *is the thing I am about to disturb written down in the model?* — and "unset means
-unmanaged" is what keeps the answer honest. A property you never declared was never yours to change, so
-it never enters the comparison, so it can never be lost to a deploy you did not intend.
-
-That is what makes a tool safe to point at a database you did not build: not that it does less, but
-that it knows exactly what it has been told to own.
+Put the package back with `git checkout -- sqlserver` if you want to run the module again.

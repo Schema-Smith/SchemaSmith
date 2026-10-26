@@ -532,7 +532,7 @@ schemaquench --ConfigFile:quench.settings.rename-declared.json   # exit 0
 ```
 
 Declaring the index adopted it. Now the package has the recipe, so the deploy drops the index ahead of
-the rename and builds it again over `Mail`. That is Module 4's rule arriving early: *unset means
+the rename and builds it again over `Mail`. That is Module 5's rule arriving early: *unset means
 unmanaged* — and unmanaged is something SchemaSmith will not destroy on your behalf.
 
 > **On 2.7.x** both renames fail with MySQL's own refusal ("has a functional index dependency"): 2.7
