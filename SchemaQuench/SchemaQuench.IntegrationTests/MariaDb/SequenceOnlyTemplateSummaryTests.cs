@@ -3,6 +3,7 @@
 using System;
 using System.Data.Common;
 using System.IO;
+using System.Linq;
 using log4net;
 using Newtonsoft.Json.Linq;
 using NSubstitute;
@@ -74,6 +75,9 @@ public class SequenceOnlyTemplateSummaryTests
                     if (hasSequences)
                     {
                         Assert.That((int?)summary["run"]?["exitCode"], Is.Zero);
+                        Assert.That(((JArray)summary.SelectToken("objectChanges.details") ?? [])
+                                .Any(d => ((string)d["objectName"] ?? "").Contains("small_no") && (string)d["action"] == "created"),
+                            Is.True, "the summary records the sequence the template created");
                     }
                     else
                     {
