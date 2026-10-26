@@ -1,0 +1,12 @@
+{
+  "$schema": ".json-schemas/products.sqlserver.schema",
+  "Name": "Routing",
+  "ValidationScript": "SELECT CAST(CASE WHEN DB_ID('ag_lab') IS NULL THEN 0 ELSE 1 END AS BIT)",
+  "TemplateOrder": ["Main"],
+  "ScriptFolders": [
+    { "FolderPath": "Both", "QuenchSlot": "After", "ServerToQuench": "Both" },
+    { "FolderPath": "Primary", "QuenchSlot": "After", "ServerToQuench": "Primary" },
+    { "FolderPath": "Secondary", "QuenchSlot": "After", "ServerToQuench": "Secondary" }
+  ],
+  "Platform": "SqlServer"
+}

@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "note",
+  "Columns": [
+    { "Name": "note_id", "DataType": "integer", "Nullable": false },
+    { "Name": "body", "DataType": "varchar(200)", "Nullable": false }
+  ],
+  "Indexes": [
+    { "Name": "note_pkey", "PrimaryKey": true, "Unique": true, "IndexColumns": "note_id" }
+  ]
+}

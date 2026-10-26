@@ -1,0 +1,6 @@
+{
+  "$schema": "../../.json-schemas/templates.postgresql.schema",
+  "Name": "Main",
+  "DatabaseIdentificationScript": "SELECT datname FROM pg_database WHERE datname IN ('tenant_rw', 'tenant_ro')",
+  "SkipIfReadOnly": true
+}

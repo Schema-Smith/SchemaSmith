@@ -1,0 +1,17 @@
+{
+  "Source": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "Database": "tenant_ro",
+    "Platform": "SqlServer",
+    "ConnectionProperties": {"TrustServerCertificate": "True"}
+  },
+  "Product": {
+    "Path": "./extracted",
+    "Name": "Tenants"
+  },
+  "Template": {
+    "Name": "Main"
+  }
+}
