@@ -245,6 +245,14 @@ public class DatabaseQuench
     private readonly string _dropRemovedIndexes;
     private readonly bool _updateTables;
 
+    /// <summary>
+    /// Whether this unit reads back and records what the database reported changing. Set from the UpdateTables setting
+    /// rather than from whether the template declares tables: a template of sequences or other objects writes the
+    /// manifest too. Defaults to the constructor's updateTables.
+    /// </summary>
+    internal bool? ReadsChangeAudit { get; init; }
+
+    private bool AuditIsRead => ReadsChangeAudit ?? _updateTables;
     private readonly bool _deliverData;
     private readonly ICheckpointing _checkpointing;
     private readonly string _dropUnknownIndexes;
@@ -605,7 +613,7 @@ public class DatabaseQuench
                 var effectiveSilentCmd = silentCommand ?? command;
                 // The table work is what writes the audit; a run that updates no tables (the datafix profile) need not have
                 // rights on SchemaSmith's own tables, so it neither reads them nor records the expression map.
-                if (ChangeAudit != null && _updateTables) ChangeAuditReader.DiscardStale(_product.Platform, effectiveTableCmd);
+                if (ChangeAudit != null && AuditIsRead) ChangeAuditReader.DiscardStale(_product.Platform, effectiveTableCmd);
 
                 // Detect the target version ONCE, up front (the connection is open) and BEFORE folder gates,
                 // since a folder ShouldApplyExpression may reference the version tokens (A1). One unified
@@ -1090,7 +1098,7 @@ public class DatabaseQuench
             {
                 _statusMonitor?.Dispose();
                 _statusMonitor = null;
-                if (_updateTables) DrainChangeAudit(tableCommand ?? command);
+                if (AuditIsRead) DrainChangeAudit(tableCommand ?? command);
                 // MySQL parses the table JSON into session-scoped temp tables that every table step
                 // consumes, so the drop belongs AFTER the last consumer -- foreign keys -- not between
                 // two of them. It used to run right after the index quench, which meant ForeignKeys

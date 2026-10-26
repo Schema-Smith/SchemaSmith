@@ -2193,6 +2193,7 @@ public class ProductQuench
             MigrationScripts = _migrationScripts,
             WhatIf = _whatIf,
             ChangeAudit = _changeAudit,
+            ReadsChangeAudit = _updateTables,
             CaptureWouldDrop = _protectedMode,
             CascadedRebuildPolicy = rebuildPolicy,
             DropPeriodsRemovedFromProduct = dropRemovedPeriods,
