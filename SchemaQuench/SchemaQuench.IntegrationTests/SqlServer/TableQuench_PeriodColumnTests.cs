@@ -186,9 +186,14 @@ public class TableQuench_PeriodColumnTests : BaseTableQuenchTests
             cmd.CommandText = $"INSERT dbo.{table} (Id, N) VALUES (1, 1); UPDATE dbo.{table} SET N = 2;";
             cmd.ExecuteNonQuery();
 
+            lock (_messages) _messages.Clear();
             RunTableQuenchProc(cmd, Json(table, Hidden7));
+            string[] hidden;
+            lock (_messages) hidden = _messages.Where(m => m.Contains("Making period column")).ToArray();
             Assert.Multiple(() =>
             {
+                Assert.That(hidden, Is.EqualTo(new[] { $"  Making period column [dbo].[{table}].[SysEnd] hidden", $"  Making period column [dbo].[{table}].[SysStart] hidden" }),
+                    "the log names each column made hidden: " + string.Join(" | ", hidden));
                 Assert.That(PeriodShape(cmd, table), Is.EqualTo("SysStart:1:1:7,SysEnd:2:1:7"), "renamed and hidden, in place");
                 Assert.That(TemporalType(cmd, table), Is.EqualTo(2), "still versioned");
                 Assert.That(Scalar(cmd, $"SELECT COUNT(*) FROM dbo.{table}_Hist"), Is.EqualTo("1"), "history kept");

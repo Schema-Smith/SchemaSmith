@@ -73,7 +73,8 @@ BEGIN
                      REPLACE(SchemaSmith.fn_StripBracketWrapping(x.[Declared]), '''', '''''') + ''', ''COLUMN'';' + CHAR(13) + CHAR(10)
            ELSE '' END +
       CASE WHEN x.[Hidden] <> x.[LiveHidden]
-           THEN 'ALTER TABLE ' + x.[Schema] + '.' + x.[Name] + ' ALTER COLUMN ' + x.[Declared] + CASE WHEN x.[Hidden] = 1 THEN ' ADD' ELSE ' DROP' END + ' HIDDEN;' + CHAR(13) + CHAR(10)
+           THEN 'RAISERROR(''  Making period column ' + REPLACE(REPLACE(x.[Schema] + '.' + x.[Name] + '.' + x.[Declared], '''', ''''''), '%', '%%') + CASE WHEN x.[Hidden] = 1 THEN ' hidden' ELSE ' visible' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                'ALTER TABLE ' + x.[Schema] + '.' + x.[Name] + ' ALTER COLUMN ' + x.[Declared] + CASE WHEN x.[Hidden] = 1 THEN ' ADD' ELSE ' DROP' END + ' HIDDEN;' + CHAR(13) + CHAR(10)
            ELSE '' END +
       'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''column'', ''' + REPLACE(x.[Schema] + '.' + x.[Name] + '.' + x.[Declared], '''', '''''') + ''', ''modified'');'
       AS NVARCHAR(MAX))

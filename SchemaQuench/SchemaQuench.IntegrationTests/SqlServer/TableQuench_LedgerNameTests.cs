@@ -136,6 +136,7 @@ public class TableQuench_LedgerNameTests : BaseTableQuenchTests
             RunTableQuenchProc(cmd, Updatable(table, CustomColumns, """, "LedgerView": { "Name": "[LedgerConvergeView]" }"""));
             Assert.That(Shape(cmd, table), Is.EqualTo("TxStart:7:1,TxEnd:8:1,SeqStart:9:0,ledger_end_sequence_number:10:1 | LedgerConvergeView:ledger_transaction_id,ledger_sequence_number,ledger_operation_type,ledger_operation_type_desc"),
                 "renamed, SeqStart made visible, the view renamed");
+            Assert.That(messages, Has.Some.Contains("Making ledger column dbo.LedgerConverge.SeqStart visible"), "and the log says so");
 
             messages.Clear();
             Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, Updatable(table, CustomColumns, View("LedgerConvergeView"))), "a name SQL Server cannot change does not fail the deploy");
