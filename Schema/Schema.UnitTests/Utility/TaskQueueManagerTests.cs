@@ -245,6 +245,21 @@ public class TaskQueueManagerTests
     }
 
     [Test]
+    public void SeveralRefusals_ReachTheWaiter_AsOneRefusalNamingEach()
+    {
+        using var manager = new TaskQueueManager<int>(maxTasks: 2);
+
+        manager.AddToQueue(1, _ => throw new RunFailedException("server one is unreachable"));
+        manager.AddToQueue(2, _ => throw new RunFailedException("server two is unreachable"));
+
+        var waitTask = Task.Run(() => manager.WaitForAll());
+        Assert.That(((IAsyncResult)waitTask).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(5)), Is.True);
+        Assert.That(waitTask.Exception?.InnerException, Is.TypeOf<RunFailedException>()
+            .And.Message.Contains("server one is unreachable").And.Message.Contains("server two is unreachable"),
+            "a refusal on two servers is one refusal, so the run stops with exit 2, not a stack trace");
+    }
+
+    [Test]
     public void DefaultMaxTasks_Is20()
     {
         using var manager = new TaskQueueManager<string>();

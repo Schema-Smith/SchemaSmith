@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -137,6 +138,9 @@ public class TaskQueueManager<T> : IDisposable
         var failures = _failures.ToArray();
         _failures.Clear();
         if (failures.Length == 1) ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        // Several refusals (two servers that cannot be reached) are still a refusal, reported as one.
+        if (failures.All(f => f is RunFailedException))
+            throw new RunFailedException(string.Join(Environment.NewLine, failures.Select(f => f.Message).Distinct()));
         throw new AggregateException(failures);
     }
 
