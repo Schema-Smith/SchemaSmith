@@ -1133,7 +1133,7 @@ public static class ForgeKindler
                                            () => currentStamp, expectedStamp);
 
         if (state == ReadOnlyKindleState.NotKindled)
-            throw new InvalidOperationException(
+            throw new RunFailedException(
                 "The SchemaSmith helper objects are not present on this read-only database, and they cannot be "
                 + "created here. Kindle on the primary (any deploy or extraction against a writable copy does "
                 + "it) and let the change reach this replica, then re-run. SchemaSmith does not attempt the "
