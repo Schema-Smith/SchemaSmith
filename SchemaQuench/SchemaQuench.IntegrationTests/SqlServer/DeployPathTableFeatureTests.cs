@@ -326,6 +326,38 @@ public class DeployPathTableFeatureTests
         });
     }
 
+    // A real deploy runs each table step as its own batch over temp tables the session created, not through the
+    // TableQuench wrapper; an unchanged redeploy that way reuses its plans too, and a step with nothing to do says so.
+    [Test]
+    public void AnUnchangedRedeploy_ReusesItsPlans_AndLogsTheStepsItSkips_ByARealDeploy()
+    {
+        const string table = """
+            { "Schema": "[dbo]", "Name": "[DeployProbe]",
+              "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                           { "Name": "[Code]", "DataType": "VARCHAR(20)", "Nullable": false },
+                           { "Name": "[Qty]", "DataType": "INT", "Nullable": true, "Default": "((0))", "CheckExpression": "[Qty] >= 0" } ],
+              "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" },
+                           { "Name": "[IX_DeployProbe_Code]", "IndexColumns": "[Code]" } ] }
+            """;
+        RunScenario("DeployPlanReuse", null, (deploy, db, cmd) =>
+        {
+            deploy(table);
+            deploy(table);
+
+            using var capture = RecompileCapture.ForThisDatabase(cmd);
+            deploy(table);
+            deploy(table);
+
+            var recompiles = capture.TempTableRecompiles();
+            Assert.That(recompiles, Is.Empty,
+                "an unchanged redeploy recompiled these statements because their caller re-created a temp table: " +
+                string.Join("; ", recompiles));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping extended properties: none declared")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping constraint enforcement and validation: no foreign key or check constraint declares it")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping index disabled state: no index is declared disabled and none is disabled")));
+        });
+    }
+
     // A package that says nothing about Disabled still means enabled, so an index someone disabled is rebuilt: the step
     // runs for what the database holds even when the package declares nothing it acts on.
     [Test]
