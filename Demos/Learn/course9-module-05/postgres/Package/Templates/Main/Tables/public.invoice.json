@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "invoice",
+  "Columns": [
+    { "Name": "invoice_id", "DataType": "integer", "Nullable": false },
+    { "Name": "tenant_id", "DataType": "integer", "Nullable": false },
+    { "Name": "amount", "DataType": "numeric(12,2)", "Nullable": false }
+  ],
+  "Indexes": [
+    { "Name": "invoice_pkey", "PrimaryKey": true, "Unique": true, "IndexColumns": "invoice_id" }
+  ]
+}

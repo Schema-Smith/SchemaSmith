@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "audit_event",
+  "Columns": [
+    { "Name": "event_id", "DataType": "bigint", "Nullable": false },
+    { "Name": "note", "DataType": "text", "Nullable": true }
+  ],
+  "Indexes": [
+    { "Name": "ux_audit_event_id", "Unique": true, "IndexColumns": "event_id" }
+  ]
+}

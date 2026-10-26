@@ -1,0 +1,18 @@
+{
+  "Source": {
+    "Server": "localhost",
+    "Port": "15432",
+    "User": "postgres",
+    "Password": "Learn!Passw0rd",
+    "Database": "catalog_repl",
+    "Platform": "PostgreSQL",
+    "ConnectionProperties": {}
+  },
+  "Product": {
+    "Path": "./extracted",
+    "Name": "Billing"
+  },
+  "Template": {
+    "Name": "Main"
+  }
+}

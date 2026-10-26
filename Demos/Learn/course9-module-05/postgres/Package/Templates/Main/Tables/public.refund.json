@@ -1,0 +1,13 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "refund",
+  "Columns": [
+    { "Name": "refund_id", "DataType": "integer", "Nullable": false },
+    { "Name": "invoice_id", "DataType": "integer", "Nullable": false },
+    { "Name": "amount", "DataType": "numeric(12,2)", "Nullable": false }
+  ],
+  "Indexes": [
+    { "Name": "refund_pkey", "PrimaryKey": true, "Unique": true, "IndexColumns": "refund_id" }
+  ]
+}
