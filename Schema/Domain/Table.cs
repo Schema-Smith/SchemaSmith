@@ -3,7 +3,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Schema.Utility;
@@ -161,7 +160,8 @@ namespace Schema.Domain
             var replacableTokens = scriptTokens
                 .Where(t => tokensToReplace.Any(tr => tr.EqualsIgnoringCase(t.Key)))
                 .ToList();
-            replacableTokens.ForEach(token => { script = Regex.Replace(script, $@"\{{\{{{token.Key}\}}\}}", token.Value, RegexOptions.IgnoreCase); });
+            // A plain replace: a token's name and value are free text, so neither may be read as a pattern.
+            replacableTokens.ForEach(token => { script = script.Replace($"{{{{{token.Key}}}}}", token.Value, StringComparison.OrdinalIgnoreCase); });
             return script;
         }
 

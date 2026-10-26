@@ -187,15 +187,17 @@ public class TaskQueueManagerTests
     }
 
     [Test]
-    public void WaitForAll_DoesNotHangWhenWorkThrows()
+    public void WaitForAll_DoesNotHangWhenWorkThrows_AndHandsTheFailureToTheWaiter()
     {
         using var manager = new TaskQueueManager<int>(maxTasks: 1);
 
         manager.AddToQueue(1, _ => throw new InvalidOperationException("boom"));
 
         var waitTask = Task.Run(() => manager.WaitForAll());
-        Assert.That(waitTask.Wait(TimeSpan.FromSeconds(5)), Is.True,
+        Assert.That(((IAsyncResult)waitTask).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(5)), Is.True,
             "WaitForAll should complete even when the work procedure throws");
+        Assert.That(waitTask.Exception?.InnerException, Is.TypeOf<InvalidOperationException>().And.Message.EqualTo("boom"),
+            "a worker's failure must reach the caller, not vanish with its task");
     }
 
     [Test]
@@ -212,8 +214,9 @@ public class TaskQueueManagerTests
         });
 
         var waitTask = Task.Run(() => manager.WaitForAll());
-        Assert.That(waitTask.Wait(TimeSpan.FromSeconds(5)), Is.True,
+        Assert.That(((IAsyncResult)waitTask).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(5)), Is.True,
             "WaitForAll should complete after the throwing work runs");
+        Assert.That(waitTask.Exception?.InnerException, Is.TypeOf<InvalidOperationException>());
         Assert.That(processed, Does.Contain(2),
             "Subsequent queue items should run even after an earlier item throws");
     }
@@ -233,8 +236,10 @@ public class TaskQueueManagerTests
         });
 
         var waitTask = Task.Run(() => manager.WaitForAll());
-        Assert.That(waitTask.Wait(TimeSpan.FromSeconds(5)), Is.True,
+        Assert.That(((IAsyncResult)waitTask).AsyncWaitHandle.WaitOne(TimeSpan.FromSeconds(5)), Is.True,
             "WaitForAll should complete after every worker slot's task has failed");
+        Assert.That(waitTask.Exception?.InnerException, Is.TypeOf<AggregateException>()
+            .And.Property(nameof(AggregateException.InnerExceptions)).Count.EqualTo(2), "both failures, not just the first");
         Assert.That(processed, Does.Contain(3),
             "New items should still execute after every worker slot has failed");
     }

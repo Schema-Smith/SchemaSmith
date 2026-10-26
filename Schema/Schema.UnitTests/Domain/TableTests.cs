@@ -251,5 +251,16 @@ namespace Schema.UnitTests.Domain
             Assert.That(table!.PreventDrop, Is.True);
         }
 
+        // A token's name and value are free text: a name such as a(b or a value holding $1 must replace as written.
+        [TestCase("a(b", "1 = 1")]
+        [TestCase("Gate)", "1 = 1")]
+        [TestCase("a[b", "1 = 1")]
+        [TestCase("Price", "$1 + $0")]
+        public void TableTokenReplace_TreatsTheNameAndValueAsText(string name, string value)
+        {
+            var result = Table.TableTokenReplace("WHERE {{" + name.ToUpperInvariant() + "}} AND {{" + name + "}}", [new(name, value)]);
+
+            Assert.That(result, Is.EqualTo("WHERE " + value + " AND " + value));
+        }
     }
 }
