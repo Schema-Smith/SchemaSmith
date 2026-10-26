@@ -1,0 +1,10 @@
+{
+  "$schema": ".json-schemas/products.postgresql.schema",
+  "Name": "Orders",
+  "ValidationScript": "SELECT EXISTS (SELECT 1 FROM pg_database WHERE datname = 'online_m7')",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptFolders": [],
+  "Platform": "PostgreSQL"
+}

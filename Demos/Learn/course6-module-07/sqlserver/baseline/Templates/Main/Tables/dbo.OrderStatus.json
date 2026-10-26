@@ -1,0 +1,26 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[dbo]",
+  "Name": "[OrderStatus]",
+  "Columns": [
+    {
+      "Name": "[StatusCode]",
+      "DataType": "VARCHAR(10)",
+      "Nullable": false
+    },
+    {
+      "Name": "[Label]",
+      "DataType": "VARCHAR(40)",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_OrderStatus]",
+      "PrimaryKey": true,
+      "IndexColumns": "[StatusCode]",
+      "Unique": true,
+      "Clustered": true
+    }
+  ]
+}

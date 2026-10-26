@@ -1,0 +1,35 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "orders",
+  "Columns": [
+    {
+      "Name": "order_id",
+      "DataType": "integer",
+      "Nullable": false
+    },
+    {
+      "Name": "customer_id",
+      "DataType": "integer",
+      "Nullable": false
+    },
+    {
+      "Name": "status",
+      "DataType": "varchar(10)",
+      "Nullable": false
+    },
+    {
+      "Name": "amount",
+      "DataType": "numeric(10,2)",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "orders_pkey",
+      "PrimaryKey": true,
+      "IndexColumns": "order_id",
+      "Unique": true
+    }
+  ]
+}

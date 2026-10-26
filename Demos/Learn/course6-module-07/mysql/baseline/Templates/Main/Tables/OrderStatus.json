@@ -1,0 +1,23 @@
+{
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
+  "Name": "`OrderStatus`",
+  "Columns": [
+    {
+      "Name": "`StatusCode`",
+      "DataType": "VARCHAR(10)",
+      "Nullable": false
+    },
+    {
+      "Name": "`Label`",
+      "DataType": "VARCHAR(40)",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "IndexColumns": "`StatusCode`"
+    }
+  ]
+}

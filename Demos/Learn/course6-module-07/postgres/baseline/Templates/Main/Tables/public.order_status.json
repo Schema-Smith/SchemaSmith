@@ -1,0 +1,25 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "order_status",
+  "Columns": [
+    {
+      "Name": "status_code",
+      "DataType": "varchar(10)",
+      "Nullable": false
+    },
+    {
+      "Name": "label",
+      "DataType": "varchar(40)",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "order_status_pkey",
+      "PrimaryKey": true,
+      "IndexColumns": "status_code",
+      "Unique": true
+    }
+  ]
+}

@@ -1,0 +1,36 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[dbo]",
+  "Name": "[Orders]",
+  "Columns": [
+    {
+      "Name": "[OrderId]",
+      "DataType": "INT",
+      "Nullable": false
+    },
+    {
+      "Name": "[CustomerId]",
+      "DataType": "INT",
+      "Nullable": false
+    },
+    {
+      "Name": "[Status]",
+      "DataType": "VARCHAR(10)",
+      "Nullable": false
+    },
+    {
+      "Name": "[Amount]",
+      "DataType": "DECIMAL(10,2)",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_Orders]",
+      "PrimaryKey": true,
+      "IndexColumns": "[OrderId]",
+      "Unique": true,
+      "Clustered": true
+    }
+  ]
+}

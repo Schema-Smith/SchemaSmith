@@ -1,0 +1,42 @@
+{
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
+  "Name": "`Orders`",
+  "Columns": [
+    {
+      "Name": "`OrderId`",
+      "DataType": "INT",
+      "Nullable": false
+    },
+    {
+      "Name": "`CustomerId`",
+      "DataType": "INT",
+      "Nullable": false
+    },
+    {
+      "Name": "`Channel`",
+      "DataType": "VARCHAR(20)",
+      "Nullable": true
+    },
+    {
+      "Name": "`Status`",
+      "DataType": "VARCHAR(20)",
+      "Nullable": false
+    },
+    {
+      "Name": "`Amount`",
+      "DataType": "DECIMAL(10,2)",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "IndexColumns": "`OrderId`"
+    },
+    {
+      "Name": "IX_Orders_Customer",
+      "IndexColumns": "`CustomerId`"
+    }
+  ]
+}
