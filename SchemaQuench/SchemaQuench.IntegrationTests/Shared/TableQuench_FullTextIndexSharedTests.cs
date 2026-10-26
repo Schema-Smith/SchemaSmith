@@ -335,6 +335,34 @@ public abstract class TableQuench_FullTextIndexSharedTests
         Assert.That(IndexAudits(command), Is.Empty, "then a redeploy is a no-op");
     }
 
+    // A full-text index the deploy re-creates or adds must find the rows already in the table. MariaDB 10.4 and later
+    // build one added in place over a table that has (or had) one without them.
+    [Test]
+    public void AFullTextIndexTheDeployReCreatesOrAdds_FindsTheRowsAlreadyInTheTable()
+    {
+        using var command = _connection.CreateCommand();
+        FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content" }"""));
+        command.CommandText = $"INSERT INTO `{_testDb}`.`{_testTableName}` (title, content, summary) VALUES "
+                              + "('Quenching steel', 'Plunge the hot blade into oil.', 'quenching'), "
+                              + "('Choosing an anvil', 'A heavy anvil returns more of each blow.', 'quenching comes later'), "
+                              + "('Forge safety', 'Wear leather.', 'aprons')";
+        command.ExecuteNonQuery();
+
+        FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary" }"""));
+        command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{_testTableName}` WHERE MATCH(content, summary) AGAINST ('quenching')";
+        var afterReCreate = Convert.ToInt32(command.ExecuteScalar());
+
+        FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary" }, { "Name": "ft_title", "Columns": "title" }"""));
+        command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{_testTableName}` WHERE MATCH(title) AGAINST ('anvil')";
+        var afterAdd = Convert.ToInt32(command.ExecuteScalar());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(afterReCreate, Is.EqualTo(2), "the re-created index covers the rows already in the table");
+            Assert.That(afterAdd, Is.EqualTo(1), "and so does a second index added beside it");
+        });
+    }
+
     [Test]
     public void TheFullTableQuench_KeepsADeclaredFullTextIndexBuiltByHand_UnderDropUnknownIndexes()
     {

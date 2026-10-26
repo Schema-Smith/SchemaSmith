@@ -1781,6 +1781,8 @@ MySQL allows **multiple** full-text indexes per table, so the property is `FullT
 
 A full-text index is created by every deploy, with or without `IndexOnlyTableQuenches`, and it is never dropped as unknown or removed while the package declares it. One whose `Columns` or `Description` changes is dropped and created again, since a full-text index cannot be altered in place. The `Parser` is used when the index is created but is not compared afterwards: MySQL and MariaDB report it only in `SHOW CREATE TABLE`. To change the parser of an existing index, rename the index or drop it.
 
+On MariaDB 10.4 and later, a full-text index the deploy adds to a table that already holds rows is built with `ALGORITHM=COPY`. Those versions build a full-text index added in place to an InnoDB table that has, or once had, a full-text index without the rows already in the table, so every search misses them until the table is rebuilt. The copy rebuilds the whole table, so it takes time and space in proportion to the table and blocks writes to it while it runs. An empty table is built in place as before, and the deploy log names each index built by copying. MariaDB 10.2 and 10.3 and MySQL are not affected.
+
 ---
 
 ## Exclude Constraints (PostgreSQL)

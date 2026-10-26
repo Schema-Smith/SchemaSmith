@@ -68,9 +68,9 @@ BEGIN
         -- the other loops in this file these do NOT fold multiple rows into one multi-clause ALTER —
         -- each row materializes as its own standalone ALTER TABLE ... ADD FULLTEXT INDEX statement.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FTCreateStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_FTCreateStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT, AuditName VARCHAR(257))
+        CREATE TEMPORARY TABLE _SchemaSmith_FTCreateStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT, AuditName VARCHAR(257), TableRef TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        INSERT INTO _SchemaSmith_FTCreateStmts (Stmt, AuditName)
+        INSERT INTO _SchemaSmith_FTCreateStmts (Stmt, AuditName, TableRef)
         SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', ft.TableName,
                       ' ADD FULLTEXT INDEX ', ft.IndexName,
                       ' (', ft.Columns, ')',
@@ -80,7 +80,8 @@ BEGIN
                       CASE WHEN ft.Parser IS NOT NULL AND ft.Parser != ''
                            THEN CONCAT(' WITH PARSER ', ft.Parser)
                            ELSE '' END),
-               CONCAT(SchemaSmith_StripBacktickWrapping(ft.TableName), '.', SchemaSmith_StripBacktickWrapping(ft.IndexName))
+               CONCAT(SchemaSmith_StripBacktickWrapping(ft.TableName), '.', SchemaSmith_StripBacktickWrapping(ft.IndexName)),
+               CONCAT('`', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', ft.TableName)
         FROM _SchemaSmith_FullTextIndexes ft
         WHERE NOT EXISTS (
             SELECT 1 FROM _SchemaSmith_IdxExist s
@@ -92,7 +93,22 @@ BEGIN
 
         SET @v_ftcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_FTCreateStmts);
         WHILE @v_ftcreate_id IS NOT NULL DO
-            SELECT Stmt, AuditName INTO @exec_sql, @ss_auditname FROM _SchemaSmith_FTCreateStmts WHERE RowId = @v_ftcreate_id;
+            SELECT Stmt, AuditName, TableRef INTO @exec_sql, @ss_auditname, @ss_ft_table FROM _SchemaSmith_FTCreateStmts WHERE RowId = @v_ftcreate_id;
+            -- MariaDB 10.4 and later leave the rows already in an InnoDB table out of a full-text index added to it in
+            -- place once the table has (or had) one, so a search misses them until the table is rebuilt. Copying the
+            -- table builds the index over every row; an empty table has nothing to miss and keeps the cheaper build.
+            IF VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1004 THEN
+                SET @ss_ft_rows = 0;
+                SET @ss_ft_check = CONCAT('SELECT EXISTS (SELECT 1 FROM ', @ss_ft_table, ') INTO @ss_ft_rows');
+                PREPARE ft_check FROM @ss_ft_check;
+                EXECUTE ft_check;
+                DEALLOCATE PREPARE ft_check;
+                IF @ss_ft_rows = 1 THEN
+                    SET @exec_sql = CONCAT(@exec_sql, ', ALGORITHM=COPY');
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  Building fulltext index ', @ss_auditname, ' by copying the table, so it covers the rows already in it'));
+                END IF;
+            END IF;
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
