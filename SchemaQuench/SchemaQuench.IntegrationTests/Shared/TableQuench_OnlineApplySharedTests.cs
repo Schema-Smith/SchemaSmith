@@ -456,7 +456,12 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
             if (!copyOnline)
             {
                 var refusal = Assert.Catch(() => Deploy(cmd, json, "REQUIRE"));
-                Assert.That(refusal!.Message, Does.Contain("OnlineApply is Require"));
+                Assert.Multiple(() =>
+                {
+                    Assert.That(refusal!.Message, Does.StartWith("OnlineApply is Require: onl_type cannot change online").And.EndWith("(the line above says why)"),
+                        "the refusal reads whole within the engine's 128-character limit");
+                    Assert.That(AuditCount(cmd, "onl_type.a", "modified"), Is.Zero, "a refused change is not reported as made");
+                });
             }
             Deploy(cmd, json, "PREFER");
             Assert.Multiple(() =>

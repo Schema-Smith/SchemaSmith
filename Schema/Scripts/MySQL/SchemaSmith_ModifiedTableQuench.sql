@@ -1374,7 +1374,7 @@ BEGIN
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
                     VALUES (CONNECTION_ID(), CONCAT('  OnlineApply is Require, and changing ', @ss_online_refuse,
                                                     ' rewrites its table and needs its foreign keys dropped first; nothing was changed'));
-                    SET @ss_online_msg = LEFT(CONCAT('OnlineApply is Require, and ', @ss_online_refuse, ' cannot change online: its type change rewrites the table'), 128);
+                    SET @ss_online_msg = LEFT(CONCAT('OnlineApply is Require: ', @ss_online_refuse, ' cannot change online (the line above says why)'), 128);
                     SIGNAL SQLSTATE 'HY000' SET MESSAGE_TEXT = @ss_online_msg;
                 END IF;
             END IF;
@@ -1778,9 +1778,12 @@ BEGIN
         -- statement-build below uses — not the #337 set-based-UPDATE shape.
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
-        SET @ss_modify_audit_mark := (SELECT COALESCE(MAX(Id), 0) FROM SchemaSmith_ChangeAudit);
-        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-        SELECT CONNECTION_ID(), 'column', CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName)), 'modified'
+        -- Staged, and written for each table once its ALTER has run: a refused or failed ALTER changed nothing.
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColAudit;
+        CREATE TEMPORARY TABLE _SchemaSmith_ModifyColAudit (TableName VARCHAR(128) COLLATE utf8mb4_bin, ObjectName VARCHAR(512))
+            ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        INSERT INTO _SchemaSmith_ModifyColAudit (TableName, ObjectName)
+        SELECT SchemaSmith_StripBacktickWrapping(c.TableName), CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
         INNER JOIN _SchemaSmith_CatColumns isc
@@ -1877,7 +1880,7 @@ BEGIN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColStmts;
         CREATE TEMPORARY TABLE _SchemaSmith_ModifyColStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT,
                                                             TableName VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
-                                                            OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF', Form VARCHAR(16) DEFAULT NULL)
+                                                            OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF')
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         -- The same-named table-level check goes first (a lower RowId drains first): from MariaDB 11.4.13 / 13.0.2 the
         -- MODIFY below is refused with it in place (1826), and below that the two coexist and the column stays text.
@@ -1998,15 +2001,13 @@ BEGIN
         WHILE @v_modifycol_id IS NOT NULL DO
             SELECT Stmt, OnlineMode, TableName INTO @exec_sql, @ss_online_mode, @ss_online_table FROM _SchemaSmith_ModifyColStmts WHERE RowId = @v_modifycol_id;
             CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
-            UPDATE _SchemaSmith_ModifyColStmts SET Form = @ss_online_form WHERE RowId = @v_modifycol_id;
+            INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
+            SELECT CONNECTION_ID(), 'column', a.ObjectName, 'modified', @ss_online_form
+              FROM _SchemaSmith_ModifyColAudit a
+             WHERE a.TableName = @ss_online_table;
             SET @v_modifycol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ModifyColStmts WHERE RowId > @v_modifycol_id);
         END WHILE;
-        UPDATE SchemaSmith_ChangeAudit a
-          JOIN _SchemaSmith_ModifyColStmts s
-            ON CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin LIKE CONCAT(s.TableName, '.%')
-           SET a.Mode = s.Form
-         WHERE a.SessionId = CONNECTION_ID() AND a.Id > @ss_modify_audit_mark
-           AND a.ObjectType = 'column' AND a.ActionType = 'modified' AND s.Form IS NOT NULL;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColAudit;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColStmts;
     END IF;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_TableLevelColumnChecks;
