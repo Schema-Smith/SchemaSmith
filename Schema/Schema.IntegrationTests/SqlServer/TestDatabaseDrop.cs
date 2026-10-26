@@ -32,7 +32,9 @@ public static class TestDatabaseDrop
     /// <summary>
     /// Drops the per-fixture databases an earlier run leaked: a fixture's teardown does not run when its process is
     /// killed, and a leaked CDC database keeps its capture jobs polling the server. Only a database the server says
-    /// is more than three hours old is touched, so a run in progress never loses one.
+    /// is more than three hours old is touched: a fixture's database lives as long as the fixture, minutes, so a
+    /// database that old belongs to no run still going. The drop forces single-user, so one that is somehow in use
+    /// loses its sessions.
     /// </summary>
     public static void DropStaleGeneratedDatabases(IDbCommand master)
     {
