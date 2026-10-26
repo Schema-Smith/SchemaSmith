@@ -84,8 +84,8 @@ public class DeployPathTableFeatureTests
             // 4. Only an explicit false turns it off.
             deploy(CdcTable(enableCdc: false, extraColumn: true));
             Assert.That(IsTrackedByCdc(cmd), Is.False, "EnableCDC false must disable CDC on the table");
-            // One row per capture instance: the rotation left two, and each is disabled.
-            Assert.That(CdcChanges(), Is.EqualTo(new[] { "dropped", "dropped" }), "the summary must record CDC being disabled");
+            // One row for the table, though the rotation left two capture instances: the summary counts tables.
+            Assert.That(CdcChanges(), Is.EqualTo(new[] { "dropped" }), "the summary must record CDC being disabled, once");
         });
     }
 
