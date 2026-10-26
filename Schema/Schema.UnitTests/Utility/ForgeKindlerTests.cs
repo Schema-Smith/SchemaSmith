@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Security.Cryptography;
@@ -1227,5 +1228,41 @@ public class ForgeKindlerTests
 
         Assert.That(executed.Any(s => s.Contains("CREATE")), "Force must kindle even when the stamp matches.");
         Assert.That(executed.Any(s => s.Contains("INSERT INTO [SchemaSmith].[KindleStamp]")), "Force must re-stamp.");
+    }
+
+    [Test]
+    public void AMySqlDropOfARoutineTheDatabaseDoesNotHave_IsSkipped()
+    {
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "SchemaSmith_Present" };
+
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP PROCEDURE IF EXISTS `SchemaSmith_Absent`;", existing), Is.True);
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP FUNCTION IF EXISTS SchemaSmith_Absent", existing), Is.True);
+        var withHeader = "-- Copyright header\n-- a second comment\n\nDROP FUNCTION IF EXISTS `SchemaSmith_Absent`;";
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine(withHeader, existing), Is.True,
+            "a script's header comments arrive in the same batch as its drop");
+    }
+
+    [Test]
+    public void AMySqlDropOfARoutineTheDatabaseHas_OrAnyOtherBatch_Runs()
+    {
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "SchemaSmith_Present" };
+
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP PROCEDURE IF EXISTS `schemasmith_present`;", existing), Is.False,
+            "routine names are case-insensitive, so a differently cased drop of an existing routine must run");
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP PROCEDURE IF EXISTS `SchemaSmith_Absent`; SELECT 1;", existing), Is.False);
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("CREATE PROCEDURE `SchemaSmith_Absent`() BEGIN END", existing), Is.False);
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP TABLE IF EXISTS `SchemaSmith_Absent`;", existing), Is.False);
+    }
+
+    [Test]
+    public void AMySqlRoutineTheKindleCreates_IsDroppedByALaterScript()
+    {
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        ForgeKindler.RecordCreatedRoutine("CREATE FUNCTION `SchemaSmith_Made`(x INT) RETURNS INT DETERMINISTIC RETURN x", existing);
+        ForgeKindler.RecordCreatedRoutine("CREATE DEFINER = CURRENT_USER PROCEDURE SchemaSmith_Also() BEGIN END", existing);
+
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP FUNCTION IF EXISTS `SchemaSmith_Made`;", existing), Is.False);
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP PROCEDURE IF EXISTS `SchemaSmith_Also`;", existing), Is.False);
     }
 }

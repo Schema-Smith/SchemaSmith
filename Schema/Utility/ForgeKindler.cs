@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using log4net;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -117,9 +118,39 @@ public static class ForgeKindler
     private static void KindleScripts(IDbCommand command, Platform platform, IngestEncoding encoding,
         int serverMajorVersion, string policy, bool? xmlCompressionReadable, bool? checkConstraintsReadable)
     {
+        var existingRoutines = platform.GetBasePlatform() == Platform.MySQL ? ReadMySqlRoutines(command) : null;
         foreach (var s in GetKindlingScripts(platform, encoding))
             KindleOneFile(command, s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
-                serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable);
+                serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable, existingRoutines);
+    }
+
+    // Every MySQL-family routine script drops before it creates. On a fresh database none of them exists, and those
+    // drops were a round trip each, a third of the kindle; a drop is skipped only for a routine the database lacks.
+    private static HashSet<string> ReadMySqlRoutines(IDbCommand command)
+    {
+        command.CommandText = "SELECT ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE()";
+        var routines = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) routines.Add(reader.GetString(0));
+        return routines;
+    }
+
+    private static readonly Regex MySqlDropRoutine = new(@"^DROP\s+(?:PROCEDURE|FUNCTION)\s+IF\s+EXISTS\s+`?(?<name>[A-Za-z0-9_$]+)`?\s*;?$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex MySqlCreateRoutine = new(@"^\s*CREATE\s+(?:DEFINER\s*=\s*\S+\s+)?(?:PROCEDURE|FUNCTION)\s+`?(?<name>[A-Za-z0-9_$]+)`?",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
+
+    internal static bool IsDropOfAbsentRoutine(string batch, ISet<string> existingRoutines)
+    {
+        var statement = string.Join("\n", batch.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith("--")));
+        var drop = MySqlDropRoutine.Match(statement);
+        return drop.Success && !existingRoutines.Contains(drop.Groups["name"].Value);
+    }
+
+    internal static void RecordCreatedRoutine(string batch, ISet<string> existingRoutines)
+    {
+        var create = MySqlCreateRoutine.Match(batch);
+        if (create.Success) existingRoutines.Add(create.Groups["name"].Value);
     }
 
     // Whether sys.partitions carries xml_compression on this server. COL_LENGTH reads metadata only, so the question is
@@ -265,7 +296,7 @@ public static class ForgeKindler
     public static void KindleOneFile(IDbCommand command, string fileName, Platform platform,
         bool replaceParseJsonToken = false, bool replaceTableDefToken = false,
         IngestEncoding encoding = IngestEncoding.Json, int serverMajorVersion = 0, string policy = "warn",
-        bool? xmlCompressionReadable = null, bool? checkConstraintsReadable = null)
+        bool? xmlCompressionReadable = null, bool? checkConstraintsReadable = null, ISet<string> existingRoutines = null)
     {
         try
         {
@@ -276,8 +307,10 @@ public static class ForgeKindler
             {
                 foreach (var batch in BatchSplitter.Split(script))
                 {
+                    if (existingRoutines != null && IsDropOfAbsentRoutine(batch, existingRoutines)) continue;
                     command.CommandText = batch;
                     command.ExecuteNonQuery();
+                    if (existingRoutines != null) RecordCreatedRoutine(batch, existingRoutines);
                 }
             }
             else if (platform == Platform.PostgreSQL)

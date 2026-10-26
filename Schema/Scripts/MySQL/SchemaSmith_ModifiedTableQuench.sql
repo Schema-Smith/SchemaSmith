@@ -843,7 +843,7 @@ BEGIN
             'FROM INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc ',
             'JOIN _SchemaSmith_Columns col ON col.TableKey = SchemaSmith_IdentifierKey(cc.TABLE_NAME) ',
             '                            AND col.ColumnKey = SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) ',
-            'WHERE SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = SchemaSmith_IdentifierKey(', QUOTE(p_DatabaseName), ') ',
+            'WHERE cc.CONSTRAINT_SCHEMA = CONVERT(', QUOTE(p_DatabaseName), ' USING utf8mb4) COLLATE utf8mb4_general_ci AND SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = SchemaSmith_IdentifierKey(', QUOTE(p_DatabaseName), ') ',
             '  AND cc.LEVEL = ''Table''');
         PREPARE stmt FROM @exec_sql;
         EXECUTE stmt;
@@ -2191,7 +2191,7 @@ BEGIN
             AND SchemaSmith_IdentifierKey(kcu.TABLE_NAME) = ctd.TableKey
             AND SchemaSmith_NameKeyCI(kcu.COLUMN_NAME) = ctd.ColumnKey
         INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            ON SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA)
+            ON tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA)
             AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(kcu.TABLE_NAME)
             AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = SchemaSmith_NameKeyCI(kcu.CONSTRAINT_NAME)
             AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
@@ -2207,7 +2207,7 @@ BEGIN
             AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = ctd.TableKey
             AND SchemaSmith_NameKeyCI(kcu.REFERENCED_COLUMN_NAME) = ctd.ColumnKey
         INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            ON SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA)
+            ON tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA)
             AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(kcu.TABLE_NAME)
             AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = SchemaSmith_NameKeyCI(kcu.CONSTRAINT_NAME)
             AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
@@ -3366,7 +3366,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             ON kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
            AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = SchemaSmith_IdentifierKey(po.ObjectName)
         INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
-            ON SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA)
+            ON tc.TABLE_SCHEMA = kcu.TABLE_SCHEMA AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(kcu.TABLE_SCHEMA)
            AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(kcu.TABLE_NAME)
            AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = SchemaSmith_NameKeyCI(kcu.CONSTRAINT_NAME)
            AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY'

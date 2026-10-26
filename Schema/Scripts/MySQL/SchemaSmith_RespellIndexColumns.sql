@@ -44,7 +44,7 @@ BEGIN
                       LIMIT 1);
     IF v_spelled IS NULL THEN
       SET v_spelled = (SELECT COLUMN_NAME FROM information_schema.COLUMNS
-                        WHERE SchemaSmith_IdentifierKey(TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
+                        WHERE TABLE_SCHEMA = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci AND SchemaSmith_IdentifierKey(TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
                           AND SchemaSmith_IdentifierKey(TABLE_NAME) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(p_TableName))
                           AND SchemaSmith_NameKeyCI(COLUMN_NAME) = SchemaSmith_NameKeyCI(v_name)
                         LIMIT 1);

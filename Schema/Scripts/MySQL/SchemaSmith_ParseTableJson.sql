@@ -762,7 +762,7 @@ BEGIN
         UPDATE _SchemaSmith_SystemPeriods sp
            SET sp.LiveEndColumn = (SELECT CONCAT('`', c.COLUMN_NAME, '`')
                                      FROM INFORMATION_SCHEMA.COLUMNS c
-                                    WHERE SchemaSmith_IdentifierKey(c.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
+                                    WHERE c.TABLE_SCHEMA = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci AND SchemaSmith_IdentifierKey(c.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
                                       AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(sp.TableName))
                                       AND c.GENERATION_EXPRESSION = 'ROW END' LIMIT 1);
         DELETE c FROM _SchemaSmith_Columns c
