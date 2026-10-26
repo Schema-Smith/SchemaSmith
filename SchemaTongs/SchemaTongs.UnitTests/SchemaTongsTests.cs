@@ -57,7 +57,7 @@ public class SchemaTongsTests
     /// query-specific values, so those per-test stubs (which replace this one) are
     /// last-installed and therefore win.
     /// </summary>
-    private void StubMySqlKindleGate() => KindleGateTestHelpers.StubMySqlKindleGate(_command);
+    private void StubMySqlKindleGate(Platform platform = Platform.MySQL) => KindleGateTestHelpers.StubMySqlKindleGate(_command, platform);
 
     private void RegisterConfig(Platform platform, Dictionary<string, string> overrides = null)
     {
@@ -2174,7 +2174,7 @@ public class SchemaTongsTests
         lock (FactoryContainer.SharedLockObject)
         {
             SetUpMocks();
-            StubMySqlKindleGate();
+            StubMySqlKindleGate(Platform.MariaDb);
             RegisterConfig(Platform.MariaDb, new Dictionary<string, string>
             {
                 ["Source:Database"] = "testdb",

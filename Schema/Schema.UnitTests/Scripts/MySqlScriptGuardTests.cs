@@ -78,7 +78,7 @@ public class MySqlScriptGuardTests
             {
                 comparisons++;
                 var before = code[Math.Max(0, key.Index - 200)..key.Index];
-                var prefilter = $@"{Regex.Escape(key.Groups["col"].Value)}\s*=\s*[^=]+?\s+AND\s*$";
+                var prefilter = $@"(?<![\w.]){Regex.Escape(key.Groups["col"].Value)}\s*=\s*[^=]+?\s+AND\s*$";
                 if (!Regex.IsMatch(before, prefilter, RegexOptions.IgnoreCase))
                     offenders.Add($"{name}: {Regex.Replace(code.Substring(key.Index, Math.Min(110, code.Length - key.Index)), @"\s+", " ")}");
             }

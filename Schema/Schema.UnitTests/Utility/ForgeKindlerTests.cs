@@ -1265,4 +1265,31 @@ public class ForgeKindlerTests
         Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP FUNCTION IF EXISTS `SchemaSmith_Made`;", existing), Is.False);
         Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP PROCEDURE IF EXISTS `SchemaSmith_Also`;", existing), Is.False);
     }
+
+    // The drop skip only saves anything if the real scripts' drops are the batches it recognizes: every routine a
+    // MySQL-family kindle creates is dropped first by a batch the skip would leave out on a fresh database.
+    [TestCase(Platform.MySQL)]
+    [TestCase(Platform.MariaDb)]
+    public void EveryKindledRoutine_IsDroppedFirstByABatchTheSkipRecognizes(Platform platform)
+    {
+        var none = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var unrecognized = new List<string>();
+        var routines = 0;
+        foreach (var s in ForgeKindler.GetKindlingScripts(platform))
+        {
+            var batches = Schema.DataAccess.BatchSplitter.Split(
+                ForgeKindler.ResolveKindleScript(s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef));
+            for (var i = 0; i < batches.Count; i++)
+            {
+                var created = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                ForgeKindler.RecordCreatedRoutine(batches[i], created);
+                if (created.Count == 0) continue;
+                routines++;
+                if (i == 0 || !ForgeKindler.IsDropOfAbsentRoutine(batches[i - 1], none)) unrecognized.Add(s.FileName);
+            }
+        }
+
+        Assert.That(routines, Is.GreaterThan(80), "too few routines found; the scan is broken");
+        Assert.That(unrecognized, Is.Empty, "these scripts create a routine whose drop the skip does not recognize");
+    }
 }
