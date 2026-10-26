@@ -68,7 +68,8 @@ BEGIN TRY
         WHERE c.NewColumn = 1 AND RTRIM(ISNULL(c.[ComputedExpression], '')) <> ''
 
   -- Before the indexes, so an index may name a period column: the pair and PERIOD FOR SYSTEM_TIME exist from here on.
-  EXEC SchemaSmith.PeriodColumnQuench @WhatIf
+  IF EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE [IsTemporal] = 1) EXEC SchemaSmith.PeriodColumnQuench @WhatIf
+  ELSE RAISERROR('Skipping period columns: no table is declared temporal', 10, 100) WITH NOWAIT
 
   RAISERROR('Add Missing Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Creating ' + CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + CASE WHEN RTRIM(ISNULL(i.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(i.[VariantName]), '''', '''''') + ')' ELSE '' END + CASE WHEN ol.[Form] = 'online' THEN ' (online)' WHEN ol.[Form] = 'resumable' THEN ' (online, resumable)' WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +

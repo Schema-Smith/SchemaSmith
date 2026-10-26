@@ -240,10 +240,10 @@ BEGIN
   -- Columnstore (nonclustered 2012 / clustered 2014) -- drops the unsupported index rows from #Indexes.
   -- Shared with the --IndexOnly path, which calls this proc directly (it has only #Indexes).
   EXEC SchemaSmith.DegradeUnsupportedColumnStore
-  EXEC SchemaSmith.DegradeUnsupportedFullText
-  EXEC SchemaSmith.DegradeUnsupportedSpatialIndexes
-  EXEC SchemaSmith.DegradeUnsupportedSelectiveXmlIndexes
-  EXEC SchemaSmith.DegradeUnsupportedJsonIndexes
+  IF EXISTS (SELECT 1 FROM #FullTextIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedFullText
+  IF EXISTS (SELECT 1 FROM #SpatialIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedSpatialIndexes
+  IF EXISTS (SELECT 1 FROM #XmlIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedSelectiveXmlIndexes
+  IF EXISTS (SELECT 1 FROM #JsonIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedJsonIndexes
 
   -- Table compression where the edition lacks it: below SQL Server 2016 SP1, Standard, Web and Express refuse
   -- DATA_COMPRESSION with 7738. The table is created uncompressed; index compression is handled with the indexes above.

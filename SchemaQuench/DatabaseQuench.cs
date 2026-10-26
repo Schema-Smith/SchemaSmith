@@ -1853,11 +1853,39 @@ END CATCH";
     /// index, a FILESTREAM column needs its ROWGUIDCOL constraint, CDC must see every column (computed and FILESTREAM
     /// included), and Change Tracking needs the primary key. Same order as the <c>SchemaSmith.TableQuench</c> wrapper.
     /// </summary>
+    // A step whose inputs are all empty is skipped and says so: the package declares nothing it acts on, and the database
+    // holds nothing of its kind it would converge. Its procedure is then never compiled, which on a fresh database is most
+    // of what the step would have cost.
+    private string SqlServerIndexStateStep(string db) => $"""
+        IF EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Disabled] = 1)
+             OR EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK) JOIN [{db}].sys.indexes si ON si.[object_id] = OBJECT_ID(N'[{db}].' + i.[Schema] + N'.' + i.[TableName]) WHERE si.is_disabled = 1)
+          EXEC [{db}].SchemaSmith.IndexStateQuench @WhatIf = {_whatIfOnly}
+        ELSE RAISERROR('Skipping index disabled state: no index is declared disabled and none is disabled', 10, 100) WITH NOWAIT
+        """;
+
+    private string SqlServerConstraintFollowUps(string db) => $"""
+        IF [{db}].SchemaSmith.fn_ServerMajorVersion() >= 15
+          IF EXISTS (SELECT 1 FROM #EdgeConstraints WITH (NOLOCK))
+               OR EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) JOIN [{db}].sys.objects o ON o.parent_object_id = OBJECT_ID(N'[{db}].' + t.[Schema] + N'.' + t.[Name]) WHERE o.[type] = 'EC')
+            EXEC [{db}].SchemaSmith.EdgeConstraintQuench @WhatIf = {_whatIfOnly}
+          ELSE RAISERROR('Skipping edge constraints: none declared and none on a declared table', 10, 100) WITH NOWAIT
+        IF EXISTS (SELECT 1 FROM #ForeignKeys WITH (NOLOCK) WHERE [Enforced] IS NOT NULL OR [Validated] IS NOT NULL)
+             OR EXISTS (SELECT 1 FROM #CheckConstraints WITH (NOLOCK) WHERE [Enforced] IS NOT NULL OR [Validated] IS NOT NULL)
+          EXEC [{db}].SchemaSmith.ConstraintStateQuench @WhatIf = {_whatIfOnly}
+        ELSE RAISERROR('Skipping constraint enforcement and validation: no foreign key or check constraint declares it', 10, 100) WITH NOWAIT
+        IF EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+             OR EXISTS (SELECT 1 FROM #Columns WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+             OR EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+             OR EXISTS (SELECT 1 FROM #ExtendedProperties WITH (NOLOCK))
+          EXEC [{db}].SchemaSmith.ExtendedPropertyQuench @WhatIf = {_whatIfOnly}
+        ELSE RAISERROR('Skipping extended properties: none declared', 10, 100) WITH NOWAIT
+        """;
+
     internal void QuenchSqlServerTableFeatures(IDbCommand tableCommand)
     {
         SafeProgressLog("  Quenching index state, FILESTREAM columns, CDC and Change Tracking");
         var db = Identifier.EscapeDelimited(_databaseName, _product.Platform);
-        tableCommand.CommandText = $@"EXEC [{db}].SchemaSmith.IndexStateQuench @WhatIf = {_whatIfOnly}
+        tableCommand.CommandText = $@"{SqlServerIndexStateStep(db)}
 EXEC [{db}].SchemaSmith.FileStreamColumnQuench @WhatIf = {_whatIfOnly}
 EXEC [{db}].SchemaSmith.CdcQuench @WhatIf = {_whatIfOnly}
 EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
@@ -2057,7 +2085,7 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
         {
             case Platform.SqlServer:
                 // One batch, which a severity-16 error does not end: the TRY stops it at a key that fails, as PostgreSQL does.
-                tableCommand.CommandText = $"BEGIN TRY\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ForeignKeyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}, @OnlineApply = '{OnlineApply}'\nIF [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.fn_ServerMajorVersion() >= 15 EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.EdgeConstraintQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ConstraintStateQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExtendedPropertyQuench @WhatIf = {_whatIfOnly}\nEND TRY\nBEGIN CATCH\nDECLARE @v_Error NVARCHAR(2047) = ERROR_MESSAGE()\nRAISERROR('%s', 16, 1, @v_Error)\nEND CATCH";
+                tableCommand.CommandText = $"BEGIN TRY\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ForeignKeyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}, @OnlineApply = '{OnlineApply}'\n{SqlServerConstraintFollowUps(Identifier.EscapeDelimited(_databaseName, _product.Platform))}\nEND TRY\nBEGIN CATCH\nDECLARE @v_Error NVARCHAR(2047) = ERROR_MESSAGE()\nRAISERROR('%s', 16, 1, @v_Error)\nEND CATCH";
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ForeignKeyQuench""(p_WhatIf := {_whatIfOnly}, p_OnlineApply := '{OnlineApply}');

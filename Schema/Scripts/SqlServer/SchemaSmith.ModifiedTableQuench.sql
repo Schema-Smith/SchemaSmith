@@ -1761,7 +1761,7 @@ BEGIN TRY
                       AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
       AND ei.IndexScript <> d.[Script]
 
-  EXEC SchemaSmith.RebuildOptionOnlyIndexChanges @WhatIf = @WhatIf
+  IF EXISTS (SELECT 1 FROM #IndexChanges WITH (NOLOCK)) EXEC SchemaSmith.RebuildOptionOnlyIndexChanges @WhatIf = @WhatIf
 
   RAISERROR('Detect Index Renames', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexRenames') IS NOT NULL DROP TABLE #IndexRenames
@@ -2117,7 +2117,7 @@ BEGIN TRY
   -- MissingIndexesAndConstraintsQuench turns versioning back on once the key exists again. Recorded in the database
   -- rather than in this run, so a run that fails part-way is resumed by the next one.
   -- OnlineApply REQUIRE: refused before any index is dropped.
-  EXEC SchemaSmith.RefuseUnmetOnlineRequire
+  IF EXISTS (SELECT 1 FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] = 'REQUIRE') EXEC SchemaSmith.RefuseUnmetOnlineRequire
 
   RAISERROR('Suspend System Versioning On Temporal Tables Losing Their Primary Key', 10, 100) WITH NOWAIT
   IF SchemaSmith.fn_ServerMajorVersion() >= 13

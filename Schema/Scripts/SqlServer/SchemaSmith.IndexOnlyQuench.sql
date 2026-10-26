@@ -246,12 +246,12 @@ BEGIN TRY
                            WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   EXEC(@v_SQL)
-  EXEC SchemaSmith.DegradeUnsupportedSpatialIndexes
+  IF EXISTS (SELECT 1 FROM #SpatialIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedSpatialIndexes
 
 {{JsonIndexesTable}}
 {{ParseJsonIndexesJson}}
-  EXEC SchemaSmith.DegradeUnsupportedJsonIndexes
-  EXEC SchemaSmith.DegradeUnsupportedSelectiveXmlIndexes
+  IF EXISTS (SELECT 1 FROM #JsonIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedJsonIndexes
+  IF EXISTS (SELECT 1 FROM #XmlIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedSelectiveXmlIndexes
 
   RAISERROR('Parse Statistics from Json', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #Statistics
@@ -340,7 +340,7 @@ BEGIN TRY
     THROW 51000, @v_FTDupMsg, 1;
   END
 
-  EXEC SchemaSmith.DegradeUnsupportedFullText
+  IF EXISTS (SELECT 1 FROM #FullTextIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedFullText
 
   -- Handle index compression changes
   -- OnlineApply: each table's mode (OFF for one the deploy does not find), how each index is built, a REQUIRE this server
@@ -841,7 +841,7 @@ BEGIN TRY
                           AND i.TableName = xp.TableName
                           AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = xp.IndexName)
                       
-  EXEC SchemaSmith.RebuildOptionOnlyIndexChanges @WhatIf = @WhatIf
+  IF EXISTS (SELECT 1 FROM #IndexChanges WITH (NOLOCK)) EXEC SchemaSmith.RebuildOptionOnlyIndexChanges @WhatIf = @WhatIf
 
   RAISERROR('Identify unknown and modified indexes to drop', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #IndexesToDrop
@@ -942,7 +942,7 @@ BEGIN TRY
 
   
   -- OnlineApply REQUIRE: refused before any index is dropped.
-  EXEC SchemaSmith.RefuseUnmetOnlineRequire
+  IF EXISTS (SELECT 1 FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] = 'REQUIRE') EXEC SchemaSmith.RefuseUnmetOnlineRequire
 
   RAISERROR('Drop FullText Indexes Referencing Unique Indexes That Will Be Dropped', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STRING_AGG(CAST('RAISERROR(''  Dropping fulltext index on ' + ef.[Schema] + '.' + ef.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -1423,10 +1423,16 @@ BEGIN TRY
         WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
 
   -- Once every index exists: a declared Disabled state is state on an index that must already be there.
-  EXEC SchemaSmith.IndexStateQuench @WhatIf
+  IF EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Disabled] = 1)
+       OR EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK) JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) WHERE si.is_disabled = 1)
+    EXEC SchemaSmith.IndexStateQuench @WhatIf
+  ELSE RAISERROR('Skipping index disabled state: no index is declared disabled and none is disabled', 10, 100) WITH NOWAIT
 
   -- Index descriptions, once every index exists.
-  EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf = @WhatIf, @IndexesOnly = 1
+  IF EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #ExtendedProperties WITH (NOLOCK) WHERE [ObjectType] = 'index')
+    EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf = @WhatIf, @IndexesOnly = 1
+  ELSE RAISERROR('Skipping extended properties: none declared', 10, 100) WITH NOWAIT
 
   -- #242: record here, not in the caller -- this proc's temp tables are gone the moment it returns.
   EXEC SchemaSmith.ExpressionMapRecord @WhatIf

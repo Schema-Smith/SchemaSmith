@@ -62,7 +62,10 @@ BEGIN TRY
   -- Once every index exists: a declared Disabled state is state on an index that must already be there. Before the
   -- foreign keys and constraint states, because disabling a key's index disables the keys that reference it, and
   -- ConstraintStateQuench is what puts a declared Enforced back.
-  EXEC SchemaSmith.IndexStateQuench @WhatIf
+  IF EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Disabled] = 1)
+       OR EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK) JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) WHERE si.is_disabled = 1)
+    EXEC SchemaSmith.IndexStateQuench @WhatIf
+  ELSE RAISERROR('Skipping index disabled state: no index is declared disabled and none is disabled', 10, 100) WITH NOWAIT
   -- Also after the indexes/constraints pass, and for a closely related reason: SQL Server refuses a
   -- FILESTREAM column unless the table already has a ROWGUIDCOL column covered by a unique CONSTRAINT.
   EXEC SchemaSmith.FileStreamColumnQuench @WhatIf
@@ -73,12 +76,24 @@ BEGIN TRY
   EXEC SchemaSmith.ChangeTrackingQuench @WhatIf
   EXEC SchemaSmith.ForeignKeyQuench @ProductName, @WhatIf, @OnlineApply = @OnlineApply
   -- Edge constraints need their node tables, which exist by now; the procedure is floor-safe, the guard only saves the call.
-  IF SchemaSmith.fn_ServerMajorVersion() >= 15 EXEC SchemaSmith.EdgeConstraintQuench @WhatIf
+  IF SchemaSmith.fn_ServerMajorVersion() >= 15
+    IF EXISTS (SELECT 1 FROM #EdgeConstraints WITH (NOLOCK))
+           OR EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) JOIN sys.objects o ON o.parent_object_id = OBJECT_ID(t.[Schema] + '.' + t.[Name]) WHERE o.[type] = 'EC')
+      EXEC SchemaSmith.EdgeConstraintQuench @WhatIf
+    ELSE RAISERROR('Skipping edge constraints: none declared and none on a declared table', 10, 100) WITH NOWAIT
   -- After the keys exist: enforcement and validation are state on a constraint that must already be there.
-  EXEC SchemaSmith.ConstraintStateQuench @WhatIf
+  IF EXISTS (SELECT 1 FROM #ForeignKeys WITH (NOLOCK) WHERE [Enforced] IS NOT NULL OR [Validated] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #CheckConstraints WITH (NOLOCK) WHERE [Enforced] IS NOT NULL OR [Validated] IS NOT NULL)
+    EXEC SchemaSmith.ConstraintStateQuench @WhatIf
+  ELSE RAISERROR('Skipping constraint enforcement and validation: no foreign key or check constraint declares it', 10, 100) WITH NOWAIT
   -- After every pass that creates an object: an extended property, a description included, belongs to something
   -- that must already exist, and a foreign key's only exists from the line above.
-  EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf
+  IF EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #Columns WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #ExtendedProperties WITH (NOLOCK))
+    EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf
+  ELSE RAISERROR('Skipping extended properties: none declared', 10, 100) WITH NOWAIT
   -- #242: last, so anything the passes above created is recorded on this run rather than churning once more.
   EXEC SchemaSmith.ExpressionMapRecord @WhatIf
   SET NOCOUNT OFF

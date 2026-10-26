@@ -326,6 +326,59 @@ public class DeployPathTableFeatureTests
         });
     }
 
+    // A package that says nothing about Disabled still means enabled, so an index someone disabled is rebuilt: the step
+    // runs for what the database holds even when the package declares nothing it acts on.
+    [Test]
+    public void AnIndexDisabledByHand_IsRebuiltByARealDeploy_ThoughThePackageSaysNothingAboutIt()
+    {
+        const string table = """
+            { "Schema": "[dbo]", "Name": "[DeployProbe]",
+              "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[Code]", "DataType": "INT", "Nullable": true } ],
+              "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" },
+                           { "Name": "[IX_DeployProbe_Code]", "IndexColumns": "[Code]" } ] }
+            """;
+        RunScenario("DeployReenableIndex", null, (deploy, db, cmd) =>
+        {
+            deploy(table);
+            cmd.CommandText = "ALTER INDEX [IX_DeployProbe_Code] ON dbo.DeployProbe DISABLE";
+            cmd.ExecuteNonQuery();
+
+            deploy(table);
+
+            cmd.CommandText = "SELECT is_disabled FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'IX_DeployProbe_Code'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "an index disabled by hand is enabled again");
+        });
+    }
+
+    // The last edge constraint leaving the package is still dropped: the package then declares none, and the step runs
+    // because the table holds one.
+    [Test]
+    public void TheLastEdgeConstraint_LeavingThePackage_IsDroppedByARealDeploy()
+    {
+        using (var conn = OpenMaster())
+        using (var probe = conn.CreateCommand())
+        {
+            probe.CommandText = "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))";
+            if (Convert.ToInt32(probe.ExecuteScalar()) < 15) Assert.Ignore("Edge constraints are SQL Server 2019.");
+        }
+        const string setup = "CREATE TABLE dbo.ProbePerson ([Id] INT NOT NULL) AS NODE; CREATE TABLE dbo.ProbeCity ([Id] INT NOT NULL) AS NODE;";
+        RunScenario("DeployEdgeConstraintGone", setup, (deploy, db, cmd) =>
+        {
+            deploy("""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]", "GraphType": "Edge",
+                  "Columns": [ { "Name": "[Since]", "DataType": "DATE", "Nullable": true } ],
+                  "EdgeConstraints": [ { "Name": "[EC_DeployProbe]", "Clauses": [ { "FromTable": "[dbo].[ProbePerson]", "ToTable": "[dbo].[ProbeCity]" } ] } ] }
+                """);
+            deploy("""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]", "GraphType": "Edge",
+                  "Columns": [ { "Name": "[Since]", "DataType": "DATE", "Nullable": true } ] }
+                """);
+
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.edge_constraints WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero, "the edge constraint the package no longer declares is dropped");
+        }, freshDatabase: true);
+    }
+
     [Test]
     public void AnEdgeConstraint_IsCreatedByARealDeploy()
     {
