@@ -83,6 +83,14 @@ Those six rows are one tenant's worth — the list repeats them once per tenant,
 
 Now prove it did nothing. Query `fleet_tenant_001` — the first tenant this preview says it would touch — and the after-objects are still absent:
 
+```bash
+# from course7-module-06
+../lab-sql.sh sqlserver fleet_tenant_001 "SELECT 'ShipmentEvent exists', COUNT(*) FROM sys.tables WHERE name = 'ShipmentEvent' UNION ALL SELECT 'Customer.Region exists', COUNT(*) FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Customer') AND name = 'Region' UNION ALL SELECT 'IX_Customer_FullName exists', COUNT(*) FROM sys.indexes WHERE name = 'IX_Customer_FullName'"
+../lab-sql.sh postgres fleet_tenant_001 "SELECT 'ShipmentEvent exists', COUNT(*) FROM pg_tables WHERE schemaname = 'public' AND tablename = 'shipmentevent' UNION ALL SELECT 'Customer.Region exists', COUNT(*) FROM information_schema.columns WHERE table_schema = 'public' AND table_name = 'customer' AND column_name = 'region' UNION ALL SELECT 'IX_Customer_FullName exists', COUNT(*) FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'ix_customer_fullname'"
+../lab-sql.sh mysql fleet_tenant_001 "SELECT 'ShipmentEvent exists', COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ShipmentEvent' UNION ALL SELECT 'Customer.Region exists', COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Customer' AND COLUMN_NAME = 'Region' UNION ALL SELECT 'IX_Customer_FullName exists', COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME = 'IX_Customer_FullName'"
+../lab-sql.sh mariadb fleet_tenant_001 "SELECT 'ShipmentEvent exists', COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'ShipmentEvent' UNION ALL SELECT 'Customer.Region exists', COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'Customer' AND COLUMN_NAME = 'Region' UNION ALL SELECT 'IX_Customer_FullName exists', COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() AND INDEX_NAME = 'IX_Customer_FullName'"
+```
+
 ```
 ShipmentEvent exists        0
 Customer.Region exists      0
