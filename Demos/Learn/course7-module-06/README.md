@@ -1,6 +1,6 @@
 # Course 7, Module 6 — Reading the deployment summary report (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (unchanged object scripts skipped; Applied Before The Failure; artifactPath): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (unchanged object scripts skipped; Applied Before The Failure; artifactPath; details rows name server and database): delete the "On 2.7.x" callouts -->
 
 Goal: roll a real, mixed change across the whole fleet — a new table, a new unique index, a widened column, a new column, a dropped index, and a re-applied view — with one tenant pre-seeded to fail, then read the run's structured receipt end to end. You'll pull apart `SchemaQuench - Summary.json`: the run verdict, every target's outcome, where the milliseconds went, the failure as data, and — the centerpiece — the verified `objectChanges` audit. SQL Server, then PostgreSQL, MySQL, and MariaDB.
 
@@ -68,18 +68,20 @@ Now `out/whatif-summary.json` — same section, structured, with the mode that m
   "dropped":  { "tables": 0, "indexes": 5, "constraints": 0, "foreignKeys": 0 },
   "scriptsRan": 0,
   "details": [
-    { "objectType": "table",      "objectName": "[dbo].[ShipmentEvent]",                    "action": "wouldCreate" },
-    { "objectType": "constraint", "objectName": "[dbo].[ShipmentEvent].[PK_ShipmentEvent]", "action": "wouldCreate" },
-    { "objectType": "index",      "objectName": "[dbo].[Customer].[UQ_Customer_Email]",     "action": "wouldCreate" },
-    { "objectType": "column",     "objectName": "[dbo].[Customer].[Region]",                "action": "wouldCreate" },
-    { "objectType": "column",     "objectName": "[dbo].[Customer].[FullName]",              "action": "wouldModify" },
-    { "objectType": "index",      "objectName": "[dbo].[Customer].IX_Customer_FullName",    "action": "wouldDrop" }
+    { "objectType": "table",      "objectName": "[dbo].[ShipmentEvent]",                    "action": "wouldCreate", "server": "localhost,11433", "database": "fleet_tenant_001" },
+    { "objectType": "column",     "objectName": "[dbo].[Customer].[Region]",                "action": "wouldCreate", "server": "localhost,11433", "database": "fleet_tenant_001" },
+    { "objectType": "index",      "objectName": "[dbo].[Customer].[IX_Customer_FullName]",  "action": "wouldDrop",   "server": "localhost,11433", "database": "fleet_tenant_001" },
+    { "objectType": "column",     "objectName": "[dbo].[Customer].[FullName]",              "action": "wouldModify", "server": "localhost,11433", "database": "fleet_tenant_001" },
+    { "objectType": "index",      "objectName": "[dbo].[Customer].[UQ_Customer_Email]",     "action": "wouldCreate", "server": "localhost,11433", "database": "fleet_tenant_001" },
+    { "objectType": "constraint", "objectName": "[dbo].[ShipmentEvent].[PK_ShipmentEvent]", "action": "wouldCreate", "server": "localhost,11433", "database": "fleet_tenant_001" }
   ],
   "scriptsUnchanged": 0
 }
 ```
 
-Those six rows are one tenant's worth — the list repeats them once per tenant, so each count above is the fleet-wide total across all five.
+Those six rows are `fleet_tenant_001`'s — every row names its `server` and `database`, and the list repeats them once per tenant, so each count above is the fleet-wide total across all five.
+
+> **On 2.7.x** the rows carry only `objectType`, `objectName` and `action`.
 
 Now prove it did nothing. Query `fleet_tenant_001` — the first tenant this preview says it would touch — and the after-objects are still absent:
 
@@ -132,7 +134,7 @@ Read the report top to bottom — it's built to be read in that order:
 - **`targets[]`** — five entries; four `Success`, `fleet_tenant_003` `Failed`. Filter on `outcome != "Success"` for your failed set.
 - **`timing`** — `bySlot` rolls per-slot time fleet-wide (watch the `targetCount`: `ModifiedTables` reaches all 5, the later slots only the 4 that got past the failure); `bottlenecks` lists the slot-on-a-target measurements over your threshold.
 - **`failures[]`** — one entry: the same duplicate-key error and phase trail Module 5 chased through `Failures.log`, now as structured data (`artifactPath` is `null` unless the run asked for `--WriteDebugSql`).
-- **Applied Before The Failure** (Markdown only) — a failed run rolls nothing back, so `deploy-summary.md` lists what it *did* apply before it stopped: `## Applied Before The Failure (28)`, then `Nothing here was rolled back. --ResumeQuench continues from where the run stopped.` and one line per change (`- table [dbo].[ShipmentEvent] created`, `- column [dbo].[Customer].[FullName] modified`, …). It's the answer to "what state did that leave us in?" before you decide between fixing forward and resuming.
+- **Applied Before The Failure** (Markdown only) — a failed run rolls nothing back, so `deploy-summary.md` lists what it *did* apply before it stopped: `## Applied Before The Failure (33)`, then `Nothing here was rolled back. --ResumeQuench continues from where the run stopped.`, then a `### localhost,11433 / fleet_tenant_001` heading per target with one line per change under it (`- table [dbo].[ShipmentEvent] created`, `- column [dbo].[Customer].[FullName] modified`, …). It's the answer to "what state did that leave us in?" before you decide between fixing forward and resuming.
 
   > **On 2.7.x** the Markdown has no such section.
 - **`objectChanges`** — the centerpiece. `instrumented: true` means the counts are real. Read them as **fleet-wide totals**: on SQL Server this run reports `created` tables `5` / columns `5` / indexes `4` / constraints `4`, `modified.columns 5`, `dropped.indexes 5`, and `scriptsRan 5`. The two `created` buckets that read `4` instead of `5` (`UQ_Customer_Email`, `PK_ShipmentEvent`) are short by exactly the one tenant that died at the index phase — the counts name the failure before you read a single error. Note `created.views` stays `0` even though the view ran on every tenant: an object script is reported as **`scriptsRan`** / `"action": "ran"`, never "created", because a re-applied script can't be known to have changed anything. `created.columns` and `modified.columns` count different work on different columns — the new `Customer.Region` versus the widened `Customer.FullName` — so a release that adds and reshapes shows both.
