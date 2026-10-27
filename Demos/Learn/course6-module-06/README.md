@@ -256,7 +256,7 @@ schemaquench --Validate --SchemaPackagePath:./<engine>/Package
 Four engines, three verdicts:
 
 ```
-SQL Server  ERROR [SS-FK-006] Template 'Main': Foreign key 'FK_OrderItem_Product' is declared on tables '[OrderItem]', '[SalesOrder]'. SqlServer names foreign keys per schema, so the second one fails the deploy. Rename one.
+SQL Server  ERROR [SS-FK-006] Template 'Main': Foreign key 'FK_OrderItem_Product' is declared on tables '[OrderItem]', '[SalesOrder]'. SQL Server names foreign keys per schema, so the second one fails the deploy. Rename one.
 MySQL       ERROR [SS-FK-006] Template 'Main': Foreign key 'FK_OrderItem_Product' is declared on tables '`OrderItem`', '`SalesOrder`'. MySQL names foreign keys per database, so the second one fails the deploy. Rename one.
 MariaDB     WARN [SS-FK-006] Template 'Main': Foreign key 'FK_OrderItem_Product' is declared on tables '`OrderItem`', '`SalesOrder`'. MariaDB names foreign keys per database before 12.1, so the deploy fails on an older server. Rename one, or set the product's MinimumVersion to 12.1 or later.
 PostgreSQL  PASS - no issues found
@@ -358,14 +358,13 @@ schemaquench --Validate --SchemaPackagePath:./Package
 
 ```
 ERROR [SS-JSON-001] .../Product.json: unexpected property 'CheckExpression' at #/Columns[3].CheckExpression
-WARN [SS-FK-002] Template 'Main' / Table '`OrderItem`' / FK 'FK_OrderItem_Product': RelatedTable '`Product`' does not resolve to any table in the package (resolved schema ''). The deploy succeeds only if it already exists on the target.
-1 error(s), 1 warning(s)
+1 error(s), 0 warning(s)
 ```
 
 Exit `2`. On MySQL the property is retired: the file no longer loads, and the error names the property and the
-file. Read the warning under it as a consequence, not a second problem. `Product.json` didn't load, so for the
-rest of the checks there is no `Product` table, and the foreign key into it looks dangling. Fix the error and
-the warning goes with it. The way to say this on MySQL is a table-level `CheckConstraints` entry.
+file. That is the whole board: `Product.json` didn't load, but the foreign key into it isn't reported as
+dangling, because a table whose file failed is still a table the package declares.
+The way to say this on MySQL is a table-level `CheckConstraints` entry.
 
 Run the same edit from `mariadb/`:
 
