@@ -11,6 +11,7 @@ using Schema.Utility;
 using log4net;
 using NSubstitute;
 using System.IO;
+using System.Collections.Generic;
 
 namespace SchemaTongs.IntegrationTests.PostgreSQL;
 
@@ -350,6 +351,80 @@ ALTER TABLE ""Test"".""TestTable"" DROP CONSTRAINT IF EXISTS ""chk_column2_not_b
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
         conn.Close();
+    }
+
+    // The aggregate query joins pg_proc to itself eight times; with JIT on, PostgreSQL spent ~2.3 s compiling it on every
+    // extraction and once ran past the command timeout.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void EveryExtractionSession_RunsWithJitOff(bool connectionStringSwitch)
+    {
+        var errorLog = Substitute.For<ILog>();
+        var progressLog = Substitute.For<ILog>();
+        var file = Substitute.For<IFile>();
+        var directory = Substitute.For<IDirectory>();
+        var jitSettings = new List<string>();
+        var factory = Substitute.For<IDbConnectionFactory>();
+        factory.GetDbConnection(Arg.Any<string>()).Returns(ci =>
+            new JitReportingConnection(new PostgreSqlConnectionFactory().GetDbConnection(ci.Arg<string>()), jitSettings));
+        lock (FactoryContainer.SharedLockObject)
+        {
+            LogFactory.Register("ErrorLog", errorLog);
+            LogFactory.Register("ProgressLog", progressLog);
+            var environment = Substitute.For<IEnvironment>();
+            FactoryContainer.Register(environment);
+            FactoryContainer.Register(file);
+            FactoryContainer.Register(directory);
+            FactoryContainer.Register(factory);
+            var config = SetupConfig();
+            if (connectionStringSwitch)
+                environment.CommandLine.Returns($"SchemaTongs.exe \"--ConnectionString:{ConnectionString.RetargetDatabase(_connectionString, _integrationDb, Platform.PostgreSQL)}\"");
+            config["ShouldCast:Aggregates"] = "true";
+            try
+            {
+                new SchemaTongs(Platform.PostgreSQL).CastTemplate();
+
+                Assert.That(jitSettings, Is.Not.Empty, "the extraction opened its connections through the factory");
+                Assert.That(jitSettings, Is.All.EqualTo("off"), "JIT setting of each extraction session");
+            }
+            finally
+            {
+                config["ShouldCast:Aggregates"] = "false";
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+            }
+        }
+    }
+
+    private sealed class JitReportingConnection(IDbConnection inner, List<string> jitSettings) : IDbConnection
+    {
+        [System.Diagnostics.CodeAnalysis.AllowNull]
+        public string ConnectionString { get => inner.ConnectionString; set => inner.ConnectionString = value; }
+        public int ConnectionTimeout => inner.ConnectionTimeout;
+        public string Database => inner.Database;
+        public ConnectionState State => inner.State;
+        public IDbTransaction BeginTransaction() => inner.BeginTransaction();
+        public IDbTransaction BeginTransaction(IsolationLevel il) => inner.BeginTransaction(il);
+        public void ChangeDatabase(string databaseName) => inner.ChangeDatabase(databaseName);
+        public IDbCommand CreateCommand() => inner.CreateCommand();
+        public void Open() => inner.Open();
+
+        public void Close()
+        {
+            if (inner.State == ConnectionState.Open)
+            {
+                using var cmd = inner.CreateCommand();
+                cmd.CommandText = "SHOW jit";
+                jitSettings.Add(cmd.ExecuteScalar()?.ToString());
+            }
+            inner.Close();
+        }
+
+        public void Dispose()
+        {
+            Close();
+            inner.Dispose();
+        }
     }
 
     [OneTimeTearDown]

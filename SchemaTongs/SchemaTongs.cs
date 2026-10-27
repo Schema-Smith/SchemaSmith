@@ -229,7 +229,7 @@ public class SchemaTongs
             var overrideFactory = GetConnectionFactory();
             var overrideConnection = overrideFactory.GetDbConnection(connectionStringOverride);
             overrideConnection.Open();
-            return overrideConnection;
+            return Prepared(overrideConnection);
         }
 
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
@@ -247,6 +247,11 @@ public class SchemaTongs
         var connectionFactory = GetConnectionFactory();
         var connection = connectionFactory.GetDbConnection(connectionString);
         connection.Open();
+        return Prepared(connection);
+    }
+
+    private IDbConnection Prepared(IDbConnection connection)
+    {
         // The extraction routines say what they leave out through a warning message (a temporal foreign key on
         // PostgreSQL, a bound rule on SQL Server); without a listener the message dies in the driver and the package
         // is silently short of it.
@@ -263,6 +268,14 @@ public class SchemaTongs
                     if (error.Class <= 10 && error.Message.StartsWith("WARNING: ", StringComparison.Ordinal))
                         _progressLog.Warn($"    {error.Message}");
             };
+        // A catalog query that joins pg_proc to itself several times is estimated past the JIT thresholds, and
+        // compiling it costs seconds for a query that runs in milliseconds.
+        if (_platform.GetBasePlatform() == Platform.PostgreSQL)
+        {
+            using var jitOff = connection.CreateCommand();
+            jitOff.CommandText = "SET jit = off";
+            jitOff.ExecuteNonQuery();
+        }
         return connection;
     }
 
