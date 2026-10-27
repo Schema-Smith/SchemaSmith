@@ -29,23 +29,40 @@ IF NOT EXISTS (SELECT 1 FROM sys.partition_schemes WHERE name = 'ps_vault_year_a
     return ($n -eq '2')
 }
 
+function New-VaultTablespace {
+    Invoke-LabSql -Engine postgres -Database 'postgres' -Sql "COPY (SELECT 1) TO PROGRAM 'mkdir -p /var/lib/postgresql/vault_ts'" | Out-Null
+    Invoke-LabSql -Engine postgres -Database 'postgres' -Sql "CREATE TABLESPACE vault_ts LOCATION '/var/lib/postgresql/vault_ts'" | Out-Null
+}
+
+function Test-VaultTablespace {
+    Invoke-LabSql -Engine postgres -Database 'vault_m1' -Sql "DROP TABLE IF EXISTS vault_ts_probe; CREATE TABLE vault_ts_probe (id INT) TABLESPACE vault_ts; DROP TABLE vault_ts_probe;" | Out-Null
+}
+
 function Seed-PostgresTablespace {
     # CREATE TABLESPACE has no IF NOT EXISTS, so check first rather than swallowing the error --
     # a swallowed failure and an already-present tablespace must not look the same.
     $have = (Invoke-LabSql -Engine postgres -Database 'postgres' -Sql "SELECT COUNT(*) FROM pg_tablespace WHERE spcname = 'vault_ts'") -replace '\D',''
     if ($have -ne '1') {
-        Invoke-LabSql -Engine postgres -Database 'postgres' -Sql "COPY (SELECT 1) TO PROGRAM 'mkdir -p /var/lib/postgresql/vault_ts'" | Out-Null
-        Invoke-LabSql -Engine postgres -Database 'postgres' -Sql "CREATE TABLESPACE vault_ts LOCATION '/var/lib/postgresql/vault_ts'" | Out-Null
+        New-VaultTablespace
     }
     $n = (Invoke-LabSql -Engine postgres -Database 'postgres' -Sql "SELECT COUNT(*) FROM pg_tablespace WHERE spcname = 'vault_ts'") -replace '\D',''
     if ($n -ne '1') { $script:tsErr = 'vault_ts tablespace could not be confirmed.'; return $false }
     # Catalogued is not usable: a tablespace whose directory is gone or unwritable still has its
-    # pg_tablespace row, and Module 1's deploy would be the first thing to find out.
+    # pg_tablespace row, and Module 1's deploy would be the first thing to find out. The directory sits
+    # outside the data volume, so recreating the container loses it while the catalog keeps the row; an
+    # empty tablespace in that state is dropped and made again (DROP refuses one that still holds anything).
     try {
-        Invoke-LabSql -Engine postgres -Database 'vault_m1' -Sql "DROP TABLE IF EXISTS vault_ts_probe; CREATE TABLE vault_ts_probe (id INT) TABLESPACE vault_ts; DROP TABLE vault_ts_probe;" | Out-Null
+        Test-VaultTablespace
     } catch {
-        $script:tsErr = 'no table can be created in the vault_ts tablespace: ' + ($_.Exception.Message -replace '\r?\n',' ')
-        return $false
+        $probeErr = $_.Exception.Message -replace '\r?\n',' '
+        try {
+            Invoke-LabSql -Engine postgres -Database 'postgres' -Sql "DROP TABLESPACE vault_ts" | Out-Null
+            New-VaultTablespace
+            Test-VaultTablespace
+        } catch {
+            $script:tsErr = 'no table can be created in the vault_ts tablespace: ' + $probeErr
+            return $false
+        }
     }
     return $true
 }

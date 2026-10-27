@@ -67,7 +67,10 @@ Both script twins **confirm every object exists** after creating it rather than 
 worked, and guard `CREATE TABLESPACE` with an existence check rather than discarding the error — a
 swallowed failure and an already-present tablespace must not look the same. For the tablespace they
 go one step further: a catalogued tablespace is not necessarily a usable one, so they create and drop
-a small table in `vault_ts` and report `FAIL` with the reason if that does not work. A setup that
+a small table in `vault_ts`. If that fails because the directory is gone (it sits outside the
+container's data volume, so recreating the container loses it while the catalog keeps the
+tablespace), they drop the empty tablespace and make it again; anything else reports `FAIL` with the
+reason. A setup that
 reports PASS over a missing or unusable object is worse than one that fails.
 
 ## What each module uses

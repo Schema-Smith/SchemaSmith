@@ -53,13 +53,21 @@ IF NOT EXISTS (SELECT 1 FROM sys.partition_schemes WHERE name = 'ps_vault_year_a
 # directory itself ("directory ... does not exist"), and a lab cannot assume one is there -- so we make
 # the server create it over the same connection. COPY ... TO PROGRAM is superuser-only, which costs
 # nothing here because CREATE TABLESPACE is too. Same technique the product's own tablespace tests use.
+create_vault_ts() {
+  lab_sql postgres postgres "COPY (SELECT 1) TO PROGRAM 'mkdir -p /var/lib/postgresql/vault_ts'" >/dev/null 2>&1
+  lab_sql postgres postgres "CREATE TABLESPACE vault_ts LOCATION '/var/lib/postgresql/vault_ts'" >/dev/null 2>&1
+}
+
+probe_vault_ts() {
+  probe="$(lab_sql postgres vault_m1 "DROP TABLE IF EXISTS vault_ts_probe; CREATE TABLE vault_ts_probe (id INT) TABLESPACE vault_ts; DROP TABLE vault_ts_probe;" 2>&1)"
+}
+
 seed_postgres_tablespace() {
   # CREATE TABLESPACE has no IF NOT EXISTS, so check first rather than relying on the error being
   # discarded -- a swallowed failure and an already-present tablespace must not look the same.
   have="$(lab_sql postgres postgres "SELECT COUNT(*) FROM pg_tablespace WHERE spcname = 'vault_ts'" 2>/dev/null | tr -dc '0-9')"
   if [ "$have" != "1" ]; then
-    lab_sql postgres postgres "COPY (SELECT 1) TO PROGRAM 'mkdir -p /var/lib/postgresql/vault_ts'" >/dev/null 2>&1
-    lab_sql postgres postgres "CREATE TABLESPACE vault_ts LOCATION '/var/lib/postgresql/vault_ts'" >/dev/null 2>&1
+    create_vault_ts
   fi
   # Confirm rather than assume -- a tablespace that silently failed to create must not report PASS.
   n="$(lab_sql postgres postgres "SELECT COUNT(*) FROM pg_tablespace WHERE spcname = 'vault_ts'" 2>/dev/null | tr -dc '0-9')"
@@ -68,8 +76,14 @@ seed_postgres_tablespace() {
     return 1
   fi
   # Catalogued is not usable: a tablespace whose directory is gone or unwritable still has its
-  # pg_tablespace row, and Module 1's deploy would be the first thing to find out.
-  if ! probe="$(lab_sql postgres vault_m1 "DROP TABLE IF EXISTS vault_ts_probe; CREATE TABLE vault_ts_probe (id INT) TABLESPACE vault_ts; DROP TABLE vault_ts_probe;" 2>&1)"; then
+  # pg_tablespace row, and Module 1's deploy would be the first thing to find out. The directory sits
+  # outside the data volume, so recreating the container loses it while the catalog keeps the row; an
+  # empty tablespace in that state is dropped and made again (DROP refuses one that still holds anything).
+  if ! probe_vault_ts; then
+    if lab_sql postgres postgres "DROP TABLESPACE vault_ts" >/dev/null 2>&1; then
+      create_vault_ts
+      probe_vault_ts && return 0
+    fi
     ts_err="no table can be created in the vault_ts tablespace: $(printf '%s' "$probe" | tr '\n' ' ')"
     return 1
   fi
