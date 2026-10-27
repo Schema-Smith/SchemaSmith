@@ -108,7 +108,7 @@ schemashears --Source:Package --Manifest:patch-manifest.txt --Output:patch
 ```
 
 ```
-SchemaShears: 3 files into 'patch' (1 from manifest).
+SchemaShears: 3 files into '…\course6-module-05\sqlserver\patch' (1 from manifest).
 ```
 
 It emits only the changed object plus scaffolding — `patch/patch-build-report.txt` shows why each file is in:
