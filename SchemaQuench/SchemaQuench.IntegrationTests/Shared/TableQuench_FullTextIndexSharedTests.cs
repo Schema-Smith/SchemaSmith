@@ -361,6 +361,15 @@ public abstract class TableQuench_FullTextIndexSharedTests
             Assert.That(afterReCreate, Is.EqualTo(2), "the re-created index covers the rows already in the table");
             Assert.That(afterAdd, Is.EqualTo(1), "and so does a second index added beside it");
         });
+        command.CommandText = "SELECT VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1004";
+        if (Convert.ToInt32(command.ExecuteScalar()) == 1)
+        {
+            command.CommandText = "SELECT Message FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%by copying the table%' ORDER BY Id";
+            var copyLines = new List<string>();
+            using (var reader = command.ExecuteReader()) while (reader.Read()) copyLines.Add(reader.GetString(0).Trim());
+            Assert.That(copyLines, Has.Some.StartsWith($"Building fulltext index `{_testTableName}`.`ft_title` by copying"),
+                "named as the create line names it: " + string.Join(" | ", copyLines));
+        }
     }
 
     [Test]
