@@ -87,9 +87,9 @@ product* and drops them:
 
 ```
       Drop tables removed from the product
-        Dropping table [dbo].Customer
-        Dropping table [dbo].Product
-        Dropping table [dbo].SalesOrder
+        Dropping table [dbo].[Customer]
+        Dropping table [dbo].[Product]
+        Dropping table [dbo].[SalesOrder]
 FAILED to quench:
 Could not create constraint or index. See previous errors.
 ```

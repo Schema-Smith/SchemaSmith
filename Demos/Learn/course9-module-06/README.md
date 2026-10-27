@@ -36,7 +36,7 @@ Catalog currently carries three shipping regions: `NA`, `EMEA`, and `LEGACY`. Th
 
 Start with every service at its initial state. These three deploys are independent of each other and can run in any order. Every deploy in this module runs from its service's engine folder (`postgres` for Catalog, `sqlserver` for Orders, `mysql` for Sessions); the comment on each block names it.
 
-This module is the same three products as the earlier modules, so each baseline deploy drops whatever an earlier module's package left in that service's database (on SQL Server, for example, `Dropping table [dbo].Customer`).
+This module is the same three products as the earlier modules, so each baseline deploy drops whatever an earlier module's package left in that service's database (on SQL Server, for example, `Dropping table [dbo].[Customer]`).
 
 ### Catalog (PostgreSQL)
 

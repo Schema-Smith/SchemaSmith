@@ -277,7 +277,7 @@ Take `AuditEntry` out of the package, and turn on `DropTablesRemovedFromProduct`
 ```bash
 # from course4-recipe-19/sqlserver
 schemaquench --ConfigFile:deploy.settings.json        # exit 0
-#         Dropping table [dbo].AuditEntry
+#         Dropping table [dbo].[AuditEntry]
 ```
 
 ```bash

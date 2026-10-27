@@ -77,7 +77,8 @@ Run the deploy again. Exit 0, and nothing under any step: the table is what the 
 
 ```bash
 # from course4-recipe-18
-../lab-sql.sh sqlserver cookbook_r18 "INSERT dbo.Price (PriceId, Amount) VALUES (1, 10.00); UPDATE dbo.Price SET Amount = 12.00 WHERE PriceId = 1"
+../lab-sql.sh sqlserver cookbook_r18 "INSERT dbo.Price (PriceId, Amount) VALUES (1, 10.00)"
+../lab-sql.sh sqlserver cookbook_r18 "UPDATE dbo.Price SET Amount = 12.00 WHERE PriceId = 1"
 ../lab-sql.sh sqlserver cookbook_r18 "SELECT * FROM dbo.Price"
 # → 1 12.00
 ../lab-sql.sh sqlserver cookbook_r18 "SELECT PriceId, Amount FROM dbo.Price FOR SYSTEM_TIME ALL ORDER BY SysStart"
@@ -86,7 +87,9 @@ Run the deploy again. Exit 0, and nothing under any step: the table is what the 
 ```
 
 `SELECT *` shows two columns, because the period columns are hidden. `FOR SYSTEM_TIME ALL` shows both versions: the
-old one came from `PriceHistory`. Nobody wrote a trigger.
+old one came from `PriceHistory`. Nobody wrote a trigger. (The insert and the update are two calls on purpose. In one
+batch they can land in the same hundredth of a second, the precision of `SysStart`, and a version that lasted no time
+at all is kept in `PriceHistory` but left out of every `FOR SYSTEM_TIME` query.)
 
 ## Step 3: Change a versioned table — what moves and what doesn't
 

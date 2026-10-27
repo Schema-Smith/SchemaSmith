@@ -38,10 +38,10 @@ Every modern application stores flexible JSON alongside structured columns. How 
 - **This module is not additive.** Each Module 2 package is the same product as its Module 1 package (`Orders`, `Catalog`, `Sessions`), and it declares only the one new table. To SchemaQuench, Module 1's tables are now tables removed from the product, so deploying Module 2 over Module 1 drops them. If you deployed Module 1, you will see:
 
   ```text
-  SQL Server:  [localhost,11433].[orders]         Dropping table [dbo].Customer
-               [localhost,11433].[orders]         Dropping table [dbo].OrderItem
-               [localhost,11433].[orders]         Dropping table [dbo].SalesOrder
-               [localhost,11433].[orders]         Dropping table [dbo].OrderStatus
+  SQL Server:  [localhost,11433].[orders]         Dropping table [dbo].[Customer]
+               [localhost,11433].[orders]         Dropping table [dbo].[OrderItem]
+               [localhost,11433].[orders]         Dropping table [dbo].[SalesOrder]
+               [localhost,11433].[orders]         Dropping table [dbo].[OrderStatus]
   PostgreSQL:  [localhost].[catalog]       Drop tables removed from the product
                [localhost].[catalog]         Table public.product no longer in product
                [localhost].[catalog]         Table public.category no longer in product
