@@ -1,6 +1,6 @@
 # Course 4, Recipe 12 — Declared, not scripted: scheduled events (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (event log lines; #593 MariaDB comment churn note): delete the "On 2.7.x" callouts, and the #593 note once it is fixed -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (event log lines): delete the "On 2.7.x" callouts -->
 
 Goal: the companion to [Recipe 11](../course4-recipe-11), on the other side of the family. MySQL and
 MariaDB **scheduled events** can be declared — compared, converged, and removed by absence — instead
@@ -114,10 +114,6 @@ The first deploy names each event it creates:
 ```
 
 The second prints `Quenching scheduled events` with nothing under it — nothing to do.
-
-> **On MariaDB** the second deploy currently logs ``Replace changed event `archive_old_sessions` `` too, on every run:
-> that event's comment is longer than the 64 characters MariaDB keeps, so the comparison always sees a difference
-> (#593). The event still works.
 
 > **On 2.7.x** no line follows `Quenching scheduled events`, whatever the deploy did.
 

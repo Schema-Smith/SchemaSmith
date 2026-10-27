@@ -222,7 +222,7 @@ The 2025 deploy exits `0`:
 The 2022 deploy exits `1` — the `warn` policy's "finished, but something was relaxed":
 
 ```
-  JSON index skipped: requires SQL Server 2025 - the table deploys without it (downgraded)
+  JSON index skipped: requires SQL Server 2025 - the table deploys without it (downgraded): [dbo].[Event].[JX_Event_Payload]
 ```
 
 and its summary's **Unsupported Feature Downgrades** names it: `JSON index (SQL Server 2025): [dbo].[Event].[JX_Event_Payload]`.

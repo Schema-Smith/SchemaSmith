@@ -42,8 +42,8 @@ schemaquench --ConfigFile:quench.settings.json        # exit 1
 ```
 
 ```
-        CDC skipped: not enabled on this database (EXEC sys.sp_cdc_enable_db to allow it - downgraded)
-        Change Tracking skipped: not enabled on this database (ALTER DATABASE ... SET CHANGE_TRACKING = ON to allow it - downgraded)
+        CDC skipped: not enabled on this database (EXEC sys.sp_cdc_enable_db to allow it - downgraded): [dbo].[Payment]
+        Change Tracking skipped: not enabled on this database (ALTER DATABASE ... SET CHANGE_TRACKING = ON to allow it - downgraded): [dbo].[Customer]
 ```
 
 Both tables deploy. Neither feature is on, and the run says so: exit 1, outcome `Incomplete`, and two downgrades in the
