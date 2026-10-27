@@ -71,7 +71,7 @@ Expected (SQL Server shown):
 
 ```
 [localhost,11433].[learn]       ALTER TABLE [dbo].[Widget] ADD [Price] DECIMAL(10,2) NULL;
-[localhost,11433].[learn]       ALTER TABLE [dbo].[Widget] ALTER COLUMN [Name] NVARCHAR(200) NOT NULL;
+[localhost,11433].[learn]       ALTER TABLE [dbo].[Widget] ALTER COLUMN [Name] NVARCHAR(200) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL;
 [localhost,11433].[learn] Successfully Quenched
 ```
 

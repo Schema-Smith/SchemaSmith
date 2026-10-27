@@ -141,9 +141,9 @@ table — routed through the recyclebin's `CustomTableDrop` hook rather than a r
 **SQL Server** (each statement is previewed with the log line it will print, shown here as the `RAISERROR` text):
 
 ```
-  RAISERROR('  Dropping inbound foreign Key dbo.Customer.FK_Customer_Promotion', 10, 100) WITH NOWAIT;
+  RAISERROR('  Dropping inbound foreign key [dbo].[Customer].[FK_Customer_Promotion]', 10, 100) WITH NOWAIT;
   IF OBJECT_ID('[dbo].[FK_Customer_Promotion]') IS NOT NULL ALTER TABLE [dbo].[Customer] DROP CONSTRAINT [FK_Customer_Promotion];
-  RAISERROR('  Handing table [dbo].Promotion to SchemaSmith.CustomTableDrop (no longer in product)', 10, 100) WITH NOWAIT;
+  RAISERROR('  Handing table [dbo].[Promotion] to SchemaSmith.CustomTableDrop (no longer in product)', 10, 100) WITH NOWAIT;
   EXEC SchemaSmith.CustomTableDrop 'dbo', 'Promotion';
   RAISERROR('  Dropping columns from [dbo].[Customer] ([PromotionId])', 10, 100) WITH NOWAIT;
   ALTER TABLE [dbo].[Customer] DROP COLUMN [PromotionId];
@@ -270,8 +270,8 @@ The rollback log drops the inbound foreign key first, then says plainly that the
 rather than being dropped. SQL Server:
 
 ```
-  Dropping inbound foreign Key dbo.Customer.FK_Customer_Promotion
-  Handing table [dbo].Promotion to SchemaSmith.CustomTableDrop (no longer in product)
+  Dropping inbound foreign key [dbo].[Customer].[FK_Customer_Promotion]
+  Handing table [dbo].[Promotion] to SchemaSmith.CustomTableDrop (no longer in product)
   Dropping columns from [dbo].[Customer] ([PromotionId])
 ```
 
