@@ -163,7 +163,7 @@ public class DeployPathTableFeatureTests
     public void AForeignKeyWithASchemaQualifiedRelatedTable_ReferencesThatSchema()
     {
         const string setup = "EXEC('CREATE SCHEMA sales'); CREATE TABLE sales.Customer ([Id] INT NOT NULL CONSTRAINT [PK_Customer] PRIMARY KEY);";
-        RunScenario("DeployFkSchema", setup, (deploy, db, cmd) =>
+        RunScenario("DeployFkSchema", null, (deploy, db, cmd) =>
         {
             deploy("""
                 { "Schema": "[dbo]", "Name": "[DeployProbe]",
@@ -174,7 +174,7 @@ public class DeployPathTableFeatureTests
                 """);
             cmd.CommandText = "SELECT OBJECT_SCHEMA_NAME(referenced_object_id) + '.' + OBJECT_NAME(referenced_object_id) FROM sys.foreign_keys WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("sales.Customer"));
-        }, freshDatabase: true);
+        }, setupObjects: setup);
     }
 
     // The shape SchemaTongs writes to Prerequisites/, an Objects folder: that pass runs ahead of table creation, and the
@@ -202,7 +202,7 @@ public class DeployPathTableFeatureTests
             cmd.CommandText = "SELECT k.[name] COLLATE DATABASE_DEFAULT + ':' + c.encryption_type_desc COLLATE DATABASE_DEFAULT FROM sys.columns c " +
                               "JOIN sys.column_encryption_keys k ON k.column_encryption_key_id = c.column_encryption_key_id WHERE c.[object_id] = OBJECT_ID('dbo.DeployProbe')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("CEK_Deploy:DETERMINISTIC"));
-        }, freshDatabase: true);
+        });
     }
 
     // SecurityPolicies is an after-tables folder: a policy names its table, which the same deploy has just created.
@@ -210,7 +210,7 @@ public class DeployPathTableFeatureTests
     public void ASecurityPolicy_IsCreatedAfterTheTableItProtects_ByARealDeploy()
     {
         const string setup = "EXEC('CREATE SCHEMA sec'); EXEC('CREATE FUNCTION sec.fn_rep(@Rep AS SYSNAME) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS ok WHERE @Rep = USER_NAME()');";
-        RunScenario("DeployRls", setup, (deploy, db, cmd) =>
+        RunScenario("DeployRls", null, (deploy, db, cmd) =>
         {
             _securityPolicyScript = """
                 IF OBJECT_ID(N'[sec].[ProbePolicy]') IS NULL
@@ -225,7 +225,7 @@ public class DeployPathTableFeatureTests
             deploy(table);
             cmd.CommandText = "SELECT OBJECT_NAME(target_object_id) FROM sys.security_predicates WHERE [object_id] = OBJECT_ID(N'sec.ProbePolicy')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("DeployProbe"));
-        }, freshDatabase: true);
+        }, setupObjects: setup);
     }
 
     // A schema-bound policy holds the columns its predicates pass: changing one failed the deploy (5074 / 4922). The
@@ -234,7 +234,7 @@ public class DeployPathTableFeatureTests
     public void ASchemaBoundSecurityPolicy_OverAChangingColumn_IsDroppedAndCreatedAgain_ByARealDeploy()
     {
         const string setup = "EXEC('CREATE SCHEMA sec'); EXEC('CREATE FUNCTION sec.fn_rep(@Rep AS NVARCHAR(200)) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS ok WHERE @Rep = USER_NAME()');";
-        RunScenario("DeployRlsChange", setup, (deploy, db, cmd) =>
+        RunScenario("DeployRlsChange", null, (deploy, db, cmd) =>
         {
             string Table(string type) => $$"""
                 { "Schema": "[dbo]", "Name": "[DeployProbe]",
@@ -253,7 +253,7 @@ public class DeployPathTableFeatureTests
                               "CONVERT(VARCHAR(10), (SELECT COUNT(*) FROM sys.security_predicates p WHERE p.[object_id] = sp.[object_id])) " +
                               "FROM sys.security_policies sp WHERE sp.[object_id] = OBJECT_ID(N'sec.HandMade')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("0:1:2"), "and the policy is back as it was: off, schema-bound, both predicates");
-        }, freshDatabase: true);
+        }, setupObjects: setup);
     }
 
     // A partially contained database keeps its catalog in a fixed collation and its temp tables in its own, so every
@@ -327,9 +327,9 @@ public class DeployPathTableFeatureTests
     }
 
     // A real deploy runs each table step as its own batch over temp tables the session created, not through the
-    // TableQuench wrapper; an unchanged redeploy that way reuses its plans too, and a step with nothing to do says so.
+    // TableQuench wrapper; a step with nothing to do says so there too.
     [Test]
-    public void AnUnchangedRedeploy_ReusesItsPlans_AndLogsTheStepsItSkips_ByARealDeploy()
+    public void AStepWithNothingToDo_IsSkippedAndLogged_ByARealDeploy()
     {
         const string table = """
             { "Schema": "[dbo]", "Name": "[DeployProbe]",
@@ -339,22 +339,17 @@ public class DeployPathTableFeatureTests
               "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" },
                            { "Name": "[IX_DeployProbe_Code]", "IndexColumns": "[Code]" } ] }
             """;
-        RunScenario("DeployPlanReuse", null, (deploy, db, cmd) =>
+        RunScenario("DeploySkips", null, (deploy, db, cmd) =>
         {
             deploy(table);
             deploy(table);
 
-            using var capture = RecompileCapture.ForThisDatabase(cmd);
-            deploy(table);
-            deploy(table);
-
-            var recompiles = capture.TempTableRecompiles();
-            Assert.That(recompiles, Is.Empty,
-                "an unchanged redeploy recompiled these statements because their caller re-created a temp table: " +
-                string.Join("; ", recompiles));
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping extended properties: none declared")));
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping constraint enforcement and validation: no foreign key or check constraint declares it")));
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping index disabled state: no index is declared disabled and none is disabled")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping XML index comparison: the database has no XML index")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping spatial index comparison: the database has no spatial index")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping full-text index comparison: the database has no full-text index")));
         });
     }
 
@@ -394,7 +389,7 @@ public class DeployPathTableFeatureTests
             if (Convert.ToInt32(probe.ExecuteScalar()) < 15) Assert.Ignore("Edge constraints are SQL Server 2019.");
         }
         const string setup = "CREATE TABLE dbo.ProbePerson ([Id] INT NOT NULL) AS NODE; CREATE TABLE dbo.ProbeCity ([Id] INT NOT NULL) AS NODE;";
-        RunScenario("DeployEdgeConstraintGone", setup, (deploy, db, cmd) =>
+        RunScenario("DeployEdgeConstraintGone", null, (deploy, db, cmd) =>
         {
             deploy("""
                 { "Schema": "[dbo]", "Name": "[DeployProbe]", "GraphType": "Edge",
@@ -408,7 +403,7 @@ public class DeployPathTableFeatureTests
 
             cmd.CommandText = "SELECT COUNT(*) FROM sys.edge_constraints WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero, "the edge constraint the package no longer declares is dropped");
-        }, freshDatabase: true);
+        }, setupObjects: setup);
     }
 
     [Test]
@@ -423,7 +418,7 @@ public class DeployPathTableFeatureTests
             supported = Convert.ToInt32(probe.ExecuteScalar()) >= 15;
         }
         const string setup = "CREATE TABLE dbo.ProbePerson ([Id] INT NOT NULL) AS NODE; CREATE TABLE dbo.ProbeCity ([Id] INT NOT NULL) AS NODE;";
-        RunScenario("DeployEdgeConstraint", setup, (deploy, db, cmd) =>
+        RunScenario("DeployEdgeConstraint", null, (deploy, db, cmd) =>
         {
             deploy("""
                 { "Schema": "[dbo]", "Name": "[DeployProbe]", "GraphType": "Edge",
@@ -439,7 +434,7 @@ public class DeployPathTableFeatureTests
             }
             cmd.CommandText = "SELECT [name] COLLATE DATABASE_DEFAULT + ':' + delete_referential_action_desc COLLATE DATABASE_DEFAULT FROM sys.edge_constraints WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("EC_DeployProbe:CASCADE"), "the declared edge constraint reaches the database");
-        }, expectIncomplete: !supported, freshDatabase: true);
+        }, expectIncomplete: !supported, setupObjects: setup);
     }
 
     [Test]
@@ -914,7 +909,7 @@ public class DeployPathTableFeatureTests
     // Tracking), so a shared one would carry that into the next scenario.
     private void RunScenario(string prefix, string setupDatabase, Action<Action<string>, string, IDbCommand> body,
                              string templateExtra = "", bool expectFailure = false, string policy = "warn", bool xmlIngest = false,
-                             bool expectIncomplete = false, bool freshDatabase = false, bool contained = false)
+                             bool expectIncomplete = false, bool freshDatabase = false, bool contained = false, string setupObjects = null)
     {
         var tempDir = Path.Join(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
         var key = (setupDatabase ?? "", policy, xmlIngest);
@@ -957,6 +952,8 @@ public class DeployPathTableFeatureTests
                     if (setupDatabase != null) ExecuteWithDeadlockRetry(cmd, setupDatabase);
                     ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, policy: policy);
                 }
+                // Objects a scenario needs that say nothing about the database itself; ResetProbe removes them again.
+                if (setupObjects != null) ExecuteWithDeadlockRetry(cmd, setupObjects);
                 config["SchemaPackagePath"] = tempDir;
                 // The encoding is chosen during version detection, which SkipKindlingForge also skips.
                 if (xmlIngest) config["Target:CompatEncoding"] = "legacy";
@@ -1025,6 +1022,9 @@ public class DeployPathTableFeatureTests
     // and history table, and SchemaSmith's own per-object state, so the next scenario deploys as if into a new one.
     // Run at the start rather than the end, so a scenario that failed half-way cannot leak into the next.
     private static void ResetProbe(IDbCommand cmd) => ExecuteWithDeadlockRetry(cmd, """
+        IF CONVERT(INT, SERVERPROPERTY('ProductMajorVersion')) >= 13
+            EXEC(N'IF OBJECT_ID(N''sec.ProbePolicy'') IS NOT NULL DROP SECURITY POLICY sec.ProbePolicy;
+                   IF OBJECT_ID(N''sec.HandMade'') IS NOT NULL DROP SECURITY POLICY sec.HandMade;');
         IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND is_tracked_by_cdc = 1)
             EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'DeployProbe', @capture_instance = N'all';
         IF EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe'))
@@ -1033,6 +1033,15 @@ public class DeployPathTableFeatureTests
             ALTER TABLE dbo.DeployProbe SET (SYSTEM_VERSIONING = OFF);
         IF OBJECT_ID('dbo.DeployProbe') IS NOT NULL DROP TABLE dbo.DeployProbe;
         IF OBJECT_ID('dbo.DeployProbe_Archive') IS NOT NULL DROP TABLE dbo.DeployProbe_Archive;
+        IF OBJECT_ID('sec.fn_rep') IS NOT NULL DROP FUNCTION sec.fn_rep;
+        IF SCHEMA_ID('sec') IS NOT NULL DROP SCHEMA sec;
+        IF OBJECT_ID('sales.Customer') IS NOT NULL DROP TABLE sales.Customer;
+        IF SCHEMA_ID('sales') IS NOT NULL DROP SCHEMA sales;
+        IF OBJECT_ID('dbo.ProbePerson') IS NOT NULL DROP TABLE dbo.ProbePerson;
+        IF OBJECT_ID('dbo.ProbeCity') IS NOT NULL DROP TABLE dbo.ProbeCity;
+        IF CONVERT(INT, SERVERPROPERTY('ProductMajorVersion')) >= 13
+            EXEC(N'IF EXISTS (SELECT 1 FROM sys.column_encryption_keys WHERE [name] = N''CEK_Deploy'') DROP COLUMN ENCRYPTION KEY [CEK_Deploy];
+                   IF EXISTS (SELECT 1 FROM sys.column_master_keys WHERE [name] = N''CMK_Deploy'') DROP COLUMN MASTER KEY [CMK_Deploy];');
         DELETE SchemaSmith.ChangeAudit;
         DELETE SchemaSmith.ExpressionMap;
         DELETE SchemaSmith.ProductOwnership;

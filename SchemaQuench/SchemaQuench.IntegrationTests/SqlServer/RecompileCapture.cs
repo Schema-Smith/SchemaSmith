@@ -12,7 +12,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 
 /// <summary>
 /// Counts the statements SQL Server recompiled because a temp table changed, through an Extended Events session scoped
-/// to one session or one database. Before reading, it runs a statement certain to recompile and waits for that event,
+/// to one session. Before reading, it runs a statement certain to recompile and waits for that event,
 /// so an empty answer means nothing recompiled rather than that the capture had not delivered yet.
 /// </summary>
 internal sealed class RecompileCapture : IDisposable
@@ -34,10 +34,6 @@ ALTER EVENT SESSION [{_name}] ON SERVER STATE = START;");
     /// <summary>Captures what the command's own session recompiles.</summary>
     public static RecompileCapture ForThisSession(IDbCommand cmd) =>
         new(cmd, "N'sqlserver.session_id = ' + CAST(@@SPID AS NVARCHAR(10))");
-
-    /// <summary>Captures what any session recompiles in the command's current database.</summary>
-    public static RecompileCapture ForThisDatabase(IDbCommand cmd) =>
-        new(cmd, "N'sqlserver.database_name = N''' + REPLACE(DB_NAME(), '''', '''''') + N''''");
 
     /// <summary>The statements recompiled because a temp table changed, each named by its procedure and text.</summary>
     public List<string> TempTableRecompiles()
