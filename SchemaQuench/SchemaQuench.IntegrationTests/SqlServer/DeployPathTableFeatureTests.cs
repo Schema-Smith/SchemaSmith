@@ -38,6 +38,7 @@ public class DeployPathTableFeatureTests
     private string _beforeScript;
     private string _prerequisiteScript;
     private string _securityPolicyScript;
+    private string _tableData;
     private bool _nextDeployFails;
 
     // A new database costs CREATE DATABASE, sp_cdc_enable_db, a full kindle and a cold plan compile on the first
@@ -350,6 +351,33 @@ public class DeployPathTableFeatureTests
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping XML index comparison: the database has no XML index")));
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping spatial index comparison: the database has no spatial index")));
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping full-text index comparison: the database has no full-text index")));
+        });
+    }
+
+    // The merge reports what an append-only ledger table kept as it was; those counts are only worth anything in the log.
+    [Test]
+    public void AnAppendOnlyLedgerDelivery_CountsWhatItLeftAlone_InTheDeployLog()
+    {
+        const string table = """
+            { "Schema": "[dbo]", "Name": "[DeployProbe]", "Ledger": "AppendOnly",
+              "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                           { "Name": "[V]", "DataType": "NVARCHAR(20)", "Nullable": true } ],
+              "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ],
+              "DataDelivery": { "ContentFile": "DeployProbe.tabledata", "MergeType": "Insert/Update/Delete" } }
+            """;
+        RunScenario("DeployLedgerData", null, (deploy, db, cmd) =>
+        {
+            cmd.CommandText = "SELECT CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(50)), 4) AS INT)";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) < 16) Assert.Ignore("Ledger tables need SQL Server 2022.");
+            _tableData = """[{"Id":1,"V":"a"},{"Id":9,"V":"z"}]""";
+            deploy(table);
+            _tableData = """[{"Id":1,"V":"b"},{"Id":2,"V":"c"}]""";
+            deploy(table);
+
+            cmd.CommandText = "SELECT STRING_AGG(CONCAT(Id, ':', V), ',') WITHIN GROUP (ORDER BY Id) FROM dbo.DeployProbe";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("1:a,2:c,9:z"), "new rows inserted, existing rows untouched");
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("1 delivered rows differ from rows already in the append-only ledger table")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("1 rows of the append-only ledger table") && m.Contains("are not in the delivered data")));
         });
     }
 
@@ -960,7 +988,7 @@ public class DeployPathTableFeatureTests
 
                 body(tableJson =>
                 {
-                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript, _prerequisiteScript, _securityPolicyScript);
+                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript, _prerequisiteScript, _securityPolicyScript, _tableData);
                     _environment.ClearReceivedCalls();
                     var reportBase = Path.Join(tempDir, "summary");
                     if (expectIncomplete) _environment.CommandLine.Returns($"SchemaQuench.exe --report:{reportBase}");
@@ -1109,7 +1137,8 @@ public class DeployPathTableFeatureTests
     }
 
     private static void WritePackage(string dir, string db, string tableJson, string templateExtra = "", string betweenScript = null,
-                                     string beforeScript = null, string prerequisiteScript = null, string securityPolicyScript = null)
+                                     string beforeScript = null, string prerequisiteScript = null, string securityPolicyScript = null,
+                                     string tableData = null)
     {
         var tables = Path.Join(dir, "Templates", "Main", "Tables");
         Directory.CreateDirectory(tables);
@@ -1152,6 +1181,9 @@ public class DeployPathTableFeatureTests
         File.WriteAllText(Path.Join(dir, "Templates", "Main", "Template.json"),
             "{ \"Name\": \"Main\", \"DatabaseIdentificationScript\": "
             + $"\"SELECT [name] FROM sys.databases WHERE [name] = '{db}'\", \"ScriptFolders\": [{folders}]{templateExtra} }}");
+        var dataFile = Path.Join(dir, "Templates", "Main", "DeployProbe.tabledata");
+        if (tableData != null) File.WriteAllText(dataFile, tableData);
+        else if (File.Exists(dataFile)) File.Delete(dataFile);
         File.WriteAllText(Path.Join(tables, "dbo.DeployProbe.json"), tableJson);
     }
 
@@ -1164,6 +1196,7 @@ public class DeployPathTableFeatureTests
         _beforeScript = null;
         _prerequisiteScript = null;
         _securityPolicyScript = null;
+        _tableData = null;
         _nextDeployFails = false;
         FactoryContainer.Register(_environment);
         LogFactory.Register("ErrorLog", _errorLog);

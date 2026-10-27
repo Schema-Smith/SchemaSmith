@@ -576,6 +576,7 @@ public class DatabaseQuench
             IDbCommand objectsCommand = null;
             IDbConnection silentConnection = null;
             IDbCommand silentCommand = null;
+            IDbConnection deliveryConnection = null;
 
             if (_product.Platform.GetBasePlatform() != Platform.MySQL)
             {
@@ -901,6 +902,14 @@ public class DatabaseQuench
                         var tableDataDeliverySw = Stopwatch.StartNew();
                         _checkpointing.Track(DbScope, "TableDataDelivery", () =>
                         {
+                            // Not the silent connection: the merge counts what an append-only ledger table kept in state-100 messages.
+                            IDbCommand deliveryCmd = command;
+                            if (_product.Platform.GetBasePlatform() != Platform.MySQL)
+                            {
+                                deliveryConnection = GetConnection(fireInfoMessageEventOnUserErrors: false);
+                                deliveryCmd = deliveryConnection.CreateCommand();
+                                deliveryCmd.CommandTimeout = 0;
+                            }
                             // Register platform-specific script helper if not already registered
                             if (FactoryContainer.Resolve<IMergeScriptHelper>() is not MergeScriptHelperAdapter adapter || adapter.Platform != _product.Platform)
                                 FactoryContainer.Register<IMergeScriptHelper>(new MergeScriptHelperAdapter(_product.Platform));
@@ -908,7 +917,7 @@ public class DatabaseQuench
                             DataDeliveryProcessor.GetFromFactory().DeliverTables(new DataDeliveryContext
                             {
                                 Tables = _template.Tables.Cast<IDeliverableTable>().ToList(),
-                                Command = effectiveSilentCmd,
+                                Command = deliveryCmd,
                                 // MariaDb is delivered as its MySQL base — the delivery subsystem dispatches on
                                 // this platform string and has no MariaDb-specific behavior (the enum-typed
                                 // ScriptHelper still carries the true platform for SQL generation).
@@ -922,7 +931,7 @@ public class DatabaseQuench
                                 TemplateRootPath = Path.GetDirectoryName(_template.FilePath) ?? "",
                                 ScriptHelper = FactoryContainer.Resolve<IMergeScriptHelper>(),
                                 ReadFileContent = path => ProductFileWrapper.GetFromFactory().ReadAllText(path),
-                                ExecuteScript = (name, script) => { effectiveSilentCmd.CommandText = script; effectiveSilentCmd.ExecuteNonQuery(); },
+                                ExecuteScript = (name, script) => { deliveryCmd.CommandText = script; deliveryCmd.ExecuteNonQuery(); },
                                 ProgressLog = SafeProgressLog,
                                 ProgressLogError = SafeProgressLogError,
                                 RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded", target: AuditTarget),
@@ -1113,6 +1122,7 @@ public class DatabaseQuench
                 tableConnection?.Close();
                 objectsConnection?.Close();
                 silentConnection?.Close();
+                deliveryConnection?.Close();
             }
 
             SafeProgressLog("Successfully Quenched");
