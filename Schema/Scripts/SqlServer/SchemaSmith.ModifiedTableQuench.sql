@@ -1523,7 +1523,6 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
   
-  RAISERROR('Collect Existing FullText Indexes', 10, 100) WITH NOWAIT
   -- sys.fulltext_index_columns.statistical_semantics is a 2012 column. This proc is NOT swapped on the
   -- legacy tier (see ForgeKindler's SqlServerXmlSwaps) so it is kindled on the 2008 floor too, where a
   -- static reference is a CREATE-time 'invalid column' error -- the whole proc fails to deploy, not just
@@ -1540,6 +1539,8 @@ BEGIN TRY
                                          [KeyIndex] NVARCHAR(258) COLLATE DATABASE_DEFAULT, [ChangeTracking] NVARCHAR(60) COLLATE DATABASE_DEFAULT,
                                          [StopList] NVARCHAR(258) COLLATE DATABASE_DEFAULT)
   IF @v_HasFullTextIndexes = 1
+  BEGIN
+  RAISERROR('Collect Existing FullText Indexes', 10, 100) WITH NOWAIT
   INSERT #ExistingFullTextIndexes ([Schema], [TableName], [Columns], [FullTextCatalog], [KeyIndex], [ChangeTracking], [StopList])
   SELECT t.[Schema], [TableName] = t.[Name],
          STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)) +
@@ -1574,6 +1575,7 @@ BEGIN TRY
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.fulltext_indexes fi ON fi.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
     WHERE t.NewTable = 0
+  END
   ELSE RAISERROR('Skipping full-text index comparison: the database has no full-text index', 10, 100) WITH NOWAIT
   
   RAISERROR('Identify Indexes To Drop Based On Column Changes', 10, 100) WITH NOWAIT
@@ -1854,12 +1856,13 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
-  RAISERROR('Collect Existing XML Index Definitions', 10, 100) WITH NOWAIT
   {{CollectSelectiveXmlIndexes}}
   IF OBJECT_ID('tempdb..#ExistingXmlIndexes') IS NOT NULL DROP TABLE #ExistingXmlIndexes
   CREATE TABLE #ExistingXmlIndexes ([xSchema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [xTableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
                                     [xIndexName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [IndexScript] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT)
   IF EXISTS (SELECT 1 FROM sys.xml_indexes)
+  BEGIN
+  RAISERROR('Collect Existing XML Index Definitions', 10, 100) WITH NOWAIT
   INSERT #ExistingXmlIndexes ([xSchema], [xTableName], [xIndexName], [IndexScript])
   SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(i.[Name] COLLATE DATABASE_DEFAULT AS NVARCHAR(500)),
          IndexScript = 'CREATE ' + ISNULL(s.[KindPrefix], CASE WHEN i.using_xml_index_id IS NULL THEN 'PRIMARY ' ELSE '' END) +
@@ -1880,6 +1883,7 @@ BEGIN TRY
     JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
     LEFT JOIN #SelectiveXmlIndexes s ON s.[object_id] = i.[object_id] AND s.index_id = i.index_id
     WHERE t.NewTable = 0
+  END
   ELSE RAISERROR('Skipping XML index comparison: the database has no XML index', 10, 100) WITH NOWAIT
 
   RAISERROR('Detect Xml Index Changes', 10, 100) WITH NOWAIT
@@ -1942,7 +1946,6 @@ BEGIN TRY
   -- Spatial indexes (sys.spatial_indexes and its tessellation, both 2008). A declared attribute that differs from the
   -- live index re-creates it; an attribute the package omits is not compared, so an index declared by its column alone
   -- keeps whatever the engine chose. fill_factor 0 is the server default, read as 100.
-  RAISERROR('Collect Existing Spatial Index Definitions', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ExistingSpatialIndexes') IS NOT NULL DROP TABLE #ExistingSpatialIndexes
   CREATE TABLE #ExistingSpatialIndexes ([xSchema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [xTableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
                                         [xIndexName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [xColumn] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
@@ -1951,6 +1954,8 @@ BEGIN TRY
                                         [xLevel3] NVARCHAR(60) COLLATE DATABASE_DEFAULT, [xLevel4] NVARCHAR(60) COLLATE DATABASE_DEFAULT,
                                         [xCellsPerObject] INT, [xFillFactor] INT, [xCompression] NVARCHAR(60) COLLATE DATABASE_DEFAULT)
   IF EXISTS (SELECT 1 FROM sys.spatial_indexes)
+  BEGIN
+  RAISERROR('Collect Existing Spatial Index Definitions', 10, 100) WITH NOWAIT
   INSERT #ExistingSpatialIndexes ([xSchema], [xTableName], [xIndexName], [xColumn], [xTessellation], [xXMin], [xYMin], [xXMax], [xYMax],
                                   [xLevel1], [xLevel2], [xLevel3], [xLevel4], [xCellsPerObject], [xFillFactor], [xCompression])
   SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(i.[name] COLLATE DATABASE_DEFAULT AS NVARCHAR(500)),
@@ -1969,6 +1974,7 @@ BEGIN TRY
     JOIN sys.spatial_index_tessellations tz ON tz.[object_id] = i.[object_id] AND tz.index_id = i.index_id
     JOIN sys.index_columns ic ON ic.[object_id] = i.[object_id] AND ic.index_id = i.index_id
     WHERE t.NewTable = 0
+  END
   ELSE RAISERROR('Skipping spatial index comparison: the database has no spatial index', 10, 100) WITH NOWAIT
 
   RAISERROR('Detect Spatial Index Changes', 10, 100) WITH NOWAIT
@@ -2835,7 +2841,6 @@ BEGIN TRY
   -- With versioning suspended, a column change reaches the current table only, and versioning cannot come back on until
   -- the history table matches it by name, type, collation and nullability (probed: nullability is checked too). Make it
   -- match: drop what the current table no longer has, add what it gained, and restate what differs.
-  RAISERROR('Mirror column changes onto the history tables of suspended temporal tables', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#SuspendedTemporal') IS NOT NULL DROP TABLE #SuspendedTemporal
   SELECT [CurrentId] = ep.major_id, [HistoryName] = CAST(ep.[value] AS NVARCHAR(600)),
          [HistoryId] = OBJECT_ID(CAST(ep.[value] AS NVARCHAR(600)))
@@ -2845,6 +2850,7 @@ BEGIN TRY
     WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.[name] = N'SchemaSmith_SuspendedHistory'
   IF EXISTS (SELECT 1 FROM #SuspendedTemporal WITH (NOLOCK))
   BEGIN
+  RAISERROR('Mirror column changes onto the history tables of suspended temporal tables', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(x.Stmt AS NVARCHAR(MAX))
                            FROM (SELECT 1 AS Ord, 'ALTER TABLE ' + s.HistoryName + ' DROP COLUMN ' + QUOTENAME(hc.[name]) + ';' AS Stmt
                                    FROM #SuspendedTemporal s WITH (NOLOCK)

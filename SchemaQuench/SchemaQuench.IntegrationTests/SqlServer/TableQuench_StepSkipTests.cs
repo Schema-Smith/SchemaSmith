@@ -40,8 +40,33 @@ public class TableQuench_StepSkipTests : BaseTableQuenchTests
             Assert.That(messages, Does.Contain("Skipping table modifications: every declared table is new to this database"));
             Assert.That(messages, Does.Contain("Skipping online column forms: OnlineApply is Off for every table"));
             Assert.That(messages, Does.Contain("Skipping history tables: no temporal table has versioning suspended"));
+            Assert.That(messages, Does.Not.Contain("Mirror column changes onto the history tables of suspended temporal tables"));
             Assert.That(messages, Does.Not.Contain("Converge extended properties"));
             Assert.That(messages, Does.Not.Contain("Converge declared period columns"));
+        });
+    }
+
+    private const string Indexed = """
+[ { "Schema": "[dbo]", "Name": "[StepSkipProbe]",
+    "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                 { "Name": "[Doc]", "DataType": "XML", "Nullable": true },
+                 { "Name": "[Place]", "DataType": "GEOGRAPHY", "Nullable": true } ],
+    "Indexes": [ { "Name": "[PK_StepSkipProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ],
+    "XmlIndexes": [ { "Name": "[XI_StepSkipProbe]", "Column": "[Doc]", "IsPrimary": true } ],
+    "SpatialIndexes": [ { "Name": "[SX_StepSkipProbe]", "Column": "[Place]", "Tessellation": "GEOGRAPHY_GRID" } ] } ]
+""";
+
+    [Test]
+    public void ADeployOverExistingXmlAndSpatialIndexes_CollectsThem_AndDoesNotSkip()
+    {
+        var messages = Deploy(Indexed);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(messages, Does.Contain("Collect Existing XML Index Definitions"));
+            Assert.That(messages, Does.Contain("Collect Existing Spatial Index Definitions"));
+            Assert.That(messages, Does.Not.Contain("Skipping XML index comparison: the database has no XML index"));
+            Assert.That(messages, Does.Not.Contain("Skipping spatial index comparison: the database has no spatial index"));
         });
     }
 

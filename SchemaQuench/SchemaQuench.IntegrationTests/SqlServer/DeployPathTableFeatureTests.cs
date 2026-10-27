@@ -351,6 +351,9 @@ public class DeployPathTableFeatureTests
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping XML index comparison: the database has no XML index")));
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping spatial index comparison: the database has no spatial index")));
             _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping full-text index comparison: the database has no full-text index")));
+            _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("Collect Existing XML Index Definitions")));
+            _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("Collect Existing Spatial Index Definitions")));
+            _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("Collect Existing FullText Indexes")));
         });
     }
 
@@ -899,6 +902,8 @@ public class DeployPathTableFeatureTests
             Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("DeployProbe:Latin1_General_CI_AS,DeployProbe_Archive:Latin1_General_CI_AS"));
             cmd.CommandText = "SELECT COUNT(*) FROM sys.extended_properties WHERE major_id = OBJECT_ID('dbo.DeployProbe') AND [name] = 'SchemaSmith_SuspendedHistory'";
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "the suspension marker must be removed once versioning is back on");
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Mirror column changes onto the history tables of suspended temporal tables")));
+            _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("Skipping history tables")));
         });
     }
 
