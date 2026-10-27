@@ -352,7 +352,8 @@ public class ForgeKindlerTests
         // +1 on SQL Server = ValidateTableOwnership (the ownership refusal, before anything is created or renamed).
         // +1 on SQL Server = fn_FullTextInstalled (#594: without Full-Text Search a full-text index is skipped).
         // +1 on SQL Server = PrintDowngrade (each degrade line names what it applied to).
-        Assert.That(sqlServer.Length, Is.EqualTo(77));
+        // +1 on SQL Server = StampTableOwnership (a deploy whose tables are all new stamps them without the modify pass).
+        Assert.That(sqlServer.Length, Is.EqualTo(78));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns

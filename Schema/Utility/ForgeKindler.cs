@@ -581,12 +581,14 @@ public static class ForgeKindler
             "SELECT j.[object_id], j.index_id, j.[name], QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)), j.optimize_for_array_search, NULLIF(j.fill_factor, 0) " +
             "FROM sys.json_indexes j JOIN sys.index_columns ic ON ic.[object_id] = j.[object_id] AND ic.index_id = j.index_id; " +
             "INSERT #LiveJsonIndexPaths ([object_id], index_id, [Path]) SELECT p.[object_id], p.index_id, p.[path] FROM sys.json_index_paths p").Replace("'", "''") + "')\n" +
+        // Only an index the database has is described, so with none the two reads are never compiled.
+        "IF EXISTS (SELECT 1 FROM #LiveJsonIndexes)\nBEGIN\n" +
         "UPDATE l SET [ForClause] = " + JsonIndexForClause("#LiveJsonIndexPaths p WHERE p.[object_id] = l.[object_id] AND p.index_id = l.index_id") + "\n" +
         "  FROM #LiveJsonIndexes l\n" +
         // DATA_COMPRESSION lands on the index's internal table, not on the index.
         "UPDATE l SET [Compression] = (SELECT MAX(p.data_compression_desc) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1\n" +
         "                              WHERE it.parent_object_id = l.[object_id] AND it.parent_minor_id = l.index_id)\n" +
-        "  FROM #LiveJsonIndexes l";
+        "  FROM #LiveJsonIndexes l\nEND";
 
     // The declared side's working set. On the JSON tier it is created before the ingest split, so it outlives the fill.
     internal const string SqlServerJsonIndexesTable =
@@ -755,6 +757,8 @@ public static class ForgeKindler
                 new("SchemaSmith.ValidateDeclaredTableAttributes.sql"),
                 // Must precede ModifiedTableQuench, which CALLs it, for the same compile-cost reason.
                 new("SchemaSmith.CdcIndexGuard.sql"),
+                // Must precede ModifiedTableQuench, which CALLs it, also on a deploy whose tables are all new.
+                new("SchemaSmith.StampTableOwnership.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 // A temporal table's period columns; MissingIndexesAndConstraintsQuench CALLs it before its index pass.
                 new("SchemaSmith.PeriodColumnQuench.sql"),
