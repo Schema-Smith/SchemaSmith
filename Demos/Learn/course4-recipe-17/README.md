@@ -1,6 +1,6 @@
 # Course 4, Recipe 17 — Search you declare (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (MySQL/MariaDB full-text indexes outside index-only templates, #530; the re-create's drop line; SQL Server downgrade, #594; #601 and #602 notes once those fixes ship): delete the "merged, not yet released" note, and the "Pending #601" and "Pending #602" notes -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (MySQL/MariaDB full-text indexes outside index-only templates, #530; the re-create's drop line; SQL Server downgrade, #594; MariaDB copy build, #602; SQL Server column order, #601): delete the "merged, not yet released" note -->
 
 Goal: full-text search is the index family most packages leave as a hand-run script. It has its own objects (a
 catalog on SQL Server) and its own rules (one per table on SQL Server, as many as you like on MySQL and MariaDB). This
@@ -79,24 +79,24 @@ for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.j
       Create fulltext index: `Article`.`ft_article_title`
 ```
 
-A full-text index can't be altered, so a changed one is dropped and created again. Both lines are in the log. Search
-both columns:
+A full-text index can't be altered, so a changed one is dropped and created again. Both lines are in the log. The
+MariaDB log has one more, after them:
+
+```
+      Building fulltext index Article.ft_article_title by copying the table, so it covers the rows already in it
+```
+
+MariaDB 10.4 and later have an engine bug here: a full-text index added in place to a table that has (or had) one
+leaves out the rows already in the table, so every search would miss them. The deploy works around it by building the
+index with `ALGORITHM=COPY`. That rebuilds the whole table, and **writes to it wait until the copy finishes**, so treat
+a full-text change to a big, busy MariaDB table like any other table rebuild and schedule it. An empty table has no rows
+to miss and keeps the in-place build. Search both columns:
 
 ```bash
 # from course4-recipe-17
 ../lab-sql.sh mysql cookbook_r17 "SELECT ArticleId FROM Article WHERE MATCH(Title, Body) AGAINST ('quenching') ORDER BY ArticleId"
 # → 1
 # → 2
-```
-
-> **Pending #602.** On MariaDB 10.4 and later the same search returns nothing today. A full-text index added to a table
-> that already has one doesn't index the rows already there: an engine bug, which the deploy will work around. Until
-> then, rebuild the table and the index catches up:
-
-```bash
-# from course4-recipe-17
-../lab-sql.sh mariadb cookbook_r17 "SELECT ArticleId FROM Article WHERE MATCH(Title, Body) AGAINST ('quenching') ORDER BY ArticleId"
-../lab-sql.sh mariadb cookbook_r17 "OPTIMIZE TABLE Article"
 ../lab-sql.sh mariadb cookbook_r17 "SELECT ArticleId FROM Article WHERE MATCH(Title, Body) AGAINST ('quenching') ORDER BY ArticleId"
 # → 1
 # → 2
@@ -230,10 +230,17 @@ LEARN_CONTAINER=learn-sqlserver-fts ../lab-sql.sh sqlserver cookbook_r17 "WAITFO
 # → 2
 ```
 
-> **Pending #601.** Run the deploy again and today it logs `Dropping fulltext index on [dbo].[Article]` and
-> `Adding fulltext index on [dbo].[Article]`, on every deploy, though nothing changed. The comparison is sensitive to
-> the order of `Columns`: `[Body],[Title]` (alphabetical) is left alone, `[Title],[Body]` isn't. Until the fix ships,
-> list full-text columns alphabetically. On a big table each re-create is a full repopulation.
+Run the deploy again:
+
+```bash
+# from course4-recipe-17/sqlserver
+schemaquench --ConfigFile:deploy.settings.json        # exit 0
+```
+
+No `Dropping fulltext index` line and no `Adding` line: the index matches its declaration and is left alone. That
+matters more here than for an ordinary index, because each re-create is a full repopulation. `Columns` lists
+`[Title],[Body]`, and SQL Server's catalog lists them the other way round. The order you write them in doesn't matter,
+because they're compared as a set.
 
 ## Step 6: Catch a bad key index before it deploys
 

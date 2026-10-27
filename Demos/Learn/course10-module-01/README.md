@@ -1,6 +1,6 @@
 # Course 10 · Module 1 — Let the engine adapt
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (warn downgrade exits 1; --ExitNonZeroOnWarning; PostgreSQL Skipping line; newest tier, and its #598 note once that fix ships): delete the "On 2.7.x" callouts -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (warn downgrade exits 1; --ExitNonZeroOnWarning; PostgreSQL Skipping line; newest tier; {{ServerMajorVersion}} in MySQL/MariaDB table and column expressions, #598): delete the "On 2.7.x" callouts -->
 
 You author one modern feature per engine and deploy the same package to a **floor-version**
 target that predates it. SchemaSmith detects the target version, emits the degraded form the
@@ -262,10 +262,6 @@ LEARN_CONTAINER=learn-mariadb-118 ../lab-sql.sh mariadb learn "SELECT GROUP_CONC
 ../lab-sql.sh mariadb learn "SELECT COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'learn' AND TABLE_NAME = 'Item' AND COLUMN_NAME = 'Embedding'"
 # → varbinary(12)
 ```
-
-> **Pending #598:** on MySQL and MariaDB, `{{ServerMajorVersion}}` is not yet expanded in a table or column
-> `ShouldApplyExpression`, so the MariaDB package fails both deploys with `You have an error in your SQL syntax … near
-> '{ServerMajorVersion}} >= 1107)'` until the fix ships. The SQL Server half is unaffected.
 
 ### What the sandbox can't show: edition degrades
 

@@ -251,9 +251,9 @@ Open `sqlserver/extracted/Templates/Main/Tables/dbo.Price.json`. It holds `IsTem
 `IsSystemVersioned`, `rs` and `re` by role and `Invisible`, `WithoutSystemVersioning` on `Note`, the keys without
 `re`, the `Validity` period, and `WithoutOverlaps` on its key.
 
-`Rate.json` also comes back with a check constraint named `Validity` (`` `ValidFrom` < `ValidTo` ``). That's the
-constraint MariaDB creates for every period. The catalog lists it as a check constraint, and the extracted package
-redeploys unchanged with it.
+`Rate.json` has no check constraints. MariaDB creates one for every period (`` `ValidFrom` < `ValidTo` ``, named
+after the period), and the catalog lists it beside your own checks, but the period owns it. Extraction leaves it out,
+so the package doesn't declare a check the period already brings.
 
 One version caveat for your own servers: MariaDB periods work from 10.4.3, but the catalog only *reports* them from
 11.4. Extracting from a server in between returns no periods even where the table has them. Deploying works on every

@@ -1,6 +1,6 @@
 # Course 4, Recipe 19 — History you can't rewrite (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (ledger columns and view by role, #523; rebuild refusal, #591; #600 note once that fix ships): delete the "merged, not yet released" note, and the "Pending #600" note in Step 9 -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (ledger columns and view by role, #523; rebuild refusal, #591; retained ledger columns left alone, #600): delete the "merged, not yet released" note -->
 
 Goal: [Recipe 18](../course4-recipe-18) kept old versions of a row so you could ask what it used to say. A **ledger
 table** answers a harder question: *has anyone rewritten it?* SQL Server 2022 chains every change to a ledger table
@@ -322,9 +322,16 @@ schematongs --ConfigFile:SchemaTongs.settings.json        # exit 0
 "Updatable"` and `"LedgerView": { "Name": "[AccountLedger]" }`. The retained column isn't in it, so the package
 doesn't try to build the engine's leftovers on the next database it deploys to.
 
-> **Pending #600.** Right now the *next* deploy after a ledger column drop tries to drop the retained column too, and
-> fails with `cannot be dropped because it is already a dropped ledger column`. The fix leaves it out of the
-> comparison, as extraction already does. Until it ships, start this table over (below) rather than deploying again.
+The deploy reads it the same way. Deploy again:
+
+```bash
+# from course4-recipe-19/sqlserver
+schemaquench --ConfigFile:deploy.settings.json        # exit 0
+```
+
+No `Dropping columns` line. The retained column isn't in the package and it isn't yours to drop: SQL Server refuses
+(`cannot be dropped because it is already a dropped ledger column`), so the comparison leaves it out, just as
+extraction does.
 
 ## What you proved
 

@@ -1,6 +1,6 @@
 # Course 7, Module 8 — The servers you don't write to (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (#596 secondaries on host,port; #597 a Secondary folder with no secondaries is skipped): delete the "merged, not yet released" note -->
+<!-- TRAINING-RELEASE-PIN 2.8.0 (#596 secondaries on host,port; #597 a Secondary folder with no secondaries is skipped; the cold read-only refusal exits 2): delete the "merged, not yet released" note -->
 
 Goal: a fleet has targets you must not write to the way you write to the rest. A read-only copy of a tenant should be
 **skipped**, with a line saying so, not counted as a failure. A replica should be **read from** without SchemaSmith trying
@@ -130,16 +130,16 @@ bash -c '. ../lab-sql.sh && lab_confirm_db sqlserver tenant_cold'
 
 ```bash
 # from course7-module-08/sqlserver
-schematongs --ConfigFile:SchemaTongs.cold.json        # exit 3
+schematongs --ConfigFile:SchemaTongs.cold.json        # exit 2
 ```
 
 ```
-The SchemaSmith helper objects are not present on this read-only database, and they cannot be created here. Kindle on the primary (any deploy or extraction against a writable copy does it) and let the change reach this replica, then re-run. SchemaSmith does not attempt the install because a read-only target rejects every write it would need.
+FAILED: The SchemaSmith helper objects are not present on this read-only database, and they cannot be created here. Kindle on the primary (any deploy or extraction against a writable copy does it) and let the change reach this replica, then re-run. SchemaSmith does not attempt the install because a read-only target rejects every write it would need.
 ```
 
 The tool refuses before it writes anything. On a real replica, the fix is to kindle the primary and let the helpers
-replicate. It verifies the helpers on the replica and never installs them there. (The message arrives wrapped in an
-`EXCEPTION - See the error log:` line and a stack trace, which is louder than it needs to be.)
+replicate. It verifies the helpers on the replica and never installs them there. Exit 2 is the code for a refused
+target, the same one a deploy gives.
 
 ## Part 3: Scripts for the primary, the secondaries, or both
 
