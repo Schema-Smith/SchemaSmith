@@ -83,7 +83,7 @@ A full-text index can't be altered, so a changed one is dropped and created agai
 MariaDB log has one more, after them:
 
 ```
-      Building fulltext index Article.ft_article_title by copying the table, so it covers the rows already in it
+      Building fulltext index `Article`.`ft_article_title` by copying the table, so it covers the rows already in it
 ```
 
 MariaDB 10.4 and later have an engine bug here: a full-text index added in place to a table that has (or had) one
