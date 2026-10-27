@@ -32,6 +32,9 @@ so you can diff your own extract against it.
 
 Four shop tables and Flyway's history table. That history table is the thing you're walking away from.
 
+On MySQL and MariaDB the list also has `SchemaSmith_DemoProvisioned`, an empty table the lab helper adds to
+mark a database it created; those engines have no database-level comment to carry the mark.
+
 ## Step 2: Extract — name the tables you keep
 
 Open your engine folder's `SchemaTongs.settings.json`. The whitelist is the whole trick — the
