@@ -91,6 +91,29 @@ public class MySqlScriptGuardTests
             + string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// With lower_case_table_names=1, MySQL 8.0's catalog schema columns carry an explicit utf8mb3_tolower_ci, so
+    /// comparing one to an explicit COLLATE is an illegal mix of collations and the procedure fails. The value goes
+    /// through a variable declared in utf8mb4_general_ci, whose collation is implicit and gives way.
+    /// </summary>
+    [Test]
+    public void NoCatalogSchemaColumn_IsComparedToAnInlineCollate()
+    {
+        var offenders = new List<string>();
+        foreach (var (name, sql) in Scripts())
+        {
+            var code = Regex.Replace(sql, @"--[^\r\n]*", string.Empty);
+            foreach (Match m in Regex.Matches(code,
+                         @"(?<![\w.])(?:\w+\.)?(?:TABLE_SCHEMA|CONSTRAINT_SCHEMA|REFERENCED_TABLE_SCHEMA|ROUTINE_SCHEMA|EVENT_SCHEMA|TRIGGER_SCHEMA|INDEX_SCHEMA|SCHEMA_NAME)\s*=\s*(?:(?!\bAND\b)[^;\r\n])*?\bCOLLATE\b",
+                         RegexOptions.IgnoreCase))
+                offenders.Add($"{name}: {Regex.Replace(m.Value, @"\s+", " ")}");
+        }
+
+        Assert.That(offenders, Is.Empty,
+            "A catalog schema column is compared to an inline COLLATE, which fails with lower_case_table_names=1 on "
+            + "MySQL 8.0. Compare it to a variable instead (`<column> = v_DbCi`):\n  " + string.Join("\n  ", offenders));
+    }
+
     private static int ClosingParen(string text, int open)
     {
         var depth = 0;

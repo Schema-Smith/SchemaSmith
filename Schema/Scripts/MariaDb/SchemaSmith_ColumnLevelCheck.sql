@@ -15,6 +15,7 @@ CREATE FUNCTION SchemaSmith_ColumnLevelCheck(
 ) RETURNS TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
 READS SQL DATA
 BEGIN
+    DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
     DECLARE v_Clause TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
     IF SchemaSmith_SupportsCheckConstraints() = 0 THEN
         RETURN NULL;
@@ -26,7 +27,7 @@ BEGIN
        AND tc.CONSTRAINT_NAME = cc.CONSTRAINT_NAME
        AND tc.TABLE_NAME = cc.TABLE_NAME
        AND tc.CONSTRAINT_TYPE = 'CHECK'
-     WHERE tc.TABLE_SCHEMA = CONVERT(p_Schema USING utf8mb4) COLLATE utf8mb4_general_ci AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_Schema)
+     WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_Schema)
        AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
        AND SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) = SchemaSmith_NameKeyCI(p_Column)
      LIMIT 1;

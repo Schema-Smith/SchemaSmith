@@ -14,6 +14,7 @@ CREATE PROCEDURE SchemaSmith_ValidateTableOwnership(
 )
 SQL SECURITY DEFINER
 BEGIN
+    DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
     DECLARE v_ConflictingTable VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_ConflictingOwner VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
@@ -34,7 +35,7 @@ BEGIN
             OR (COALESCE(t.OldName, '') <> ''
                 AND SchemaSmith_IdentifierKey(po.ObjectName) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.OldName))
                 AND NOT EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLES it
-                                 WHERE it.TABLE_SCHEMA = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci AND SchemaSmith_IdentifierKey(it.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
+                                 WHERE it.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(it.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
                                    AND SchemaSmith_IdentifierKey(it.TABLE_NAME) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)))))
         AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
         AND po.ObjectType = 'TABLE'

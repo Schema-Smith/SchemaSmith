@@ -19,6 +19,7 @@ CREATE FUNCTION `SchemaSmith_RespellIndexColumns`(
 NOT DETERMINISTIC
 READS SQL DATA
 BEGIN
+  DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
   DECLARE v_rest TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT p_IndexColumns;
   DECLARE v_part TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
   DECLARE v_out TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT '';
@@ -44,7 +45,7 @@ BEGIN
                       LIMIT 1);
     IF v_spelled IS NULL THEN
       SET v_spelled = (SELECT COLUMN_NAME FROM information_schema.COLUMNS
-                        WHERE TABLE_SCHEMA = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci AND SchemaSmith_IdentifierKey(TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
+                        WHERE TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
                           AND SchemaSmith_IdentifierKey(TABLE_NAME) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(p_TableName))
                           AND SchemaSmith_NameKeyCI(COLUMN_NAME) = SchemaSmith_NameKeyCI(v_name)
                         LIMIT 1);

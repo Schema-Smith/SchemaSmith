@@ -16,6 +16,7 @@ BEGIN
     -- compatible replacement for JSON_TABLE, which does not exist on those versions). One outer/inner
     -- counter pair per JSON_TABLE call this procedure used to make; grouped here because MySQL requires
     -- all DECLAREs at the top of the BEGIN block, before any executable statement.
+    DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
     DECLARE v_TblCnt INT;
     DECLARE v_TblIdx INT;
     DECLARE v_ColOuterCnt INT;
@@ -762,7 +763,7 @@ BEGIN
         UPDATE _SchemaSmith_SystemPeriods sp
            SET sp.LiveEndColumn = (SELECT CONCAT('`', c.COLUMN_NAME, '`')
                                      FROM INFORMATION_SCHEMA.COLUMNS c
-                                    WHERE c.TABLE_SCHEMA = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci AND SchemaSmith_IdentifierKey(c.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
+                                    WHERE c.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(c.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
                                       AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(sp.TableName))
                                       AND c.GENERATION_EXPRESSION = 'ROW END' LIMIT 1);
         DELETE c FROM _SchemaSmith_Columns c

@@ -837,13 +837,14 @@ BEGIN
         PRIMARY KEY (TableKey, ColumnKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     IF VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1005 THEN
+        SET @v_mtDbCi = v_DbCi;
         SET @exec_sql = CONCAT(
             'INSERT IGNORE INTO _SchemaSmith_TableLevelColumnChecks (TableKey, ColumnKey, TableName, ConstraintName) ',
             'SELECT col.TableKey, col.ColumnKey, CONVERT(cc.TABLE_NAME USING utf8mb4), CONVERT(cc.CONSTRAINT_NAME USING utf8mb4) ',
             'FROM INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc ',
             'JOIN _SchemaSmith_Columns col ON col.TableKey = SchemaSmith_IdentifierKey(cc.TABLE_NAME) ',
             '                            AND col.ColumnKey = SchemaSmith_NameKeyCI(cc.CONSTRAINT_NAME) ',
-            'WHERE cc.CONSTRAINT_SCHEMA = CONVERT(', QUOTE(p_DatabaseName), ' USING utf8mb4) COLLATE utf8mb4_general_ci AND SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = SchemaSmith_IdentifierKey(', QUOTE(p_DatabaseName), ') ',
+            'WHERE cc.CONSTRAINT_SCHEMA = @v_mtDbCi AND SchemaSmith_IdentifierKey(cc.CONSTRAINT_SCHEMA) = SchemaSmith_IdentifierKey(', QUOTE(p_DatabaseName), ') ',
             '  AND cc.LEVEL = ''Table''');
         PREPARE stmt FROM @exec_sql;
         EXECUTE stmt;
