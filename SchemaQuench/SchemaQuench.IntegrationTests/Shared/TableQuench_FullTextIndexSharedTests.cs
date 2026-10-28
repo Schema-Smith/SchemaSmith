@@ -367,7 +367,10 @@ public abstract class TableQuench_FullTextIndexSharedTests
             command.CommandText = "SELECT Message FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%by copying the table%' ORDER BY Id";
             var copyLines = new List<string>();
             using (var reader = command.ExecuteReader()) while (reader.Read()) copyLines.Add(reader.GetString(0).Trim());
-            Assert.That(copyLines, Has.Some.StartsWith($"Building fulltext index `{_testTableName}`.`ft_title` by copying"),
+            command.CommandText = "SELECT Message FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%Create fulltext index: %ft_title%' ORDER BY Id DESC LIMIT 1";
+            var createdAs = (command.ExecuteScalar() as string)?.Trim()["Create fulltext index: ".Length..];
+            Assert.That(createdAs, Does.EndWith("`ft_title`"), "the create line names the index");
+            Assert.That(copyLines, Has.Some.StartsWith($"Building fulltext index {createdAs} by copying"),
                 "named as the create line names it: " + string.Join(" | ", copyLines));
         }
     }

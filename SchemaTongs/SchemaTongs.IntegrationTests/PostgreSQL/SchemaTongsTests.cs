@@ -359,6 +359,13 @@ ALTER TABLE ""Test"".""TestTable"" DROP CONSTRAINT IF EXISTS ""chk_column2_not_b
     [TestCase(true)]
     public void EveryExtractionSession_RunsWithJitOff(bool connectionStringSwitch)
     {
+        using (var plain = new PostgreSqlConnectionFactory().GetDbConnection(_connectionString))
+        {
+            plain.Open();
+            using var show = plain.CreateCommand();
+            show.CommandText = "SHOW jit";
+            if (show.ExecuteScalar()?.ToString() == "off") Assert.Ignore("the server's default is already jit = off, so this test cannot tell");
+        }
         var errorLog = Substitute.For<ILog>();
         var progressLog = Substitute.For<ILog>();
         var file = Substitute.For<IFile>();
@@ -392,6 +399,58 @@ ALTER TABLE ""Test"".""TestTable"" DROP CONSTRAINT IF EXISTS ""chk_column2_not_b
                 config["ShouldCast:Aggregates"] = "false";
                 FactoryContainer.Clear();
                 LogFactory.Clear();
+            }
+        }
+    }
+
+    // A WARNING the extraction raises reaches the log on either connection path; the --ConnectionString one returned
+    // its connection before the listener was attached.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AnExtractionWarning_ReachesTheLog(bool connectionStringSwitch)
+    {
+        using var conn = new PostgreSqlConnectionFactory().GetDbConnection(ConnectionString.RetargetDatabase(_connectionString, _integrationDb, Platform.PostgreSQL));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SHOW server_version_num";
+        if (int.Parse(cmd.ExecuteScalar()!.ToString()!) < 180000) Assert.Ignore("a NOT VALID NOT NULL constraint needs PostgreSQL 18");
+
+        var errorLog = Substitute.For<ILog>();
+        var progressLog = Substitute.For<ILog>();
+        var warnings = new List<string>();
+        progressLog.When(l => l.Warn(Arg.Any<object>())).Do(ci => warnings.Add(ci.ArgAt<object>(0)?.ToString() ?? ""));
+        lock (FactoryContainer.SharedLockObject)
+        {
+            cmd.CommandText = """
+                CREATE SCHEMA warnprobe;
+                CREATE TABLE warnprobe.probe (id INT PRIMARY KEY, val INT);
+                INSERT INTO warnprobe.probe VALUES (1, NULL);
+                ALTER TABLE warnprobe.probe ADD CONSTRAINT probe_val_nn NOT NULL val NOT VALID;
+                """;
+            cmd.ExecuteNonQuery();
+            LogFactory.Register("ErrorLog", errorLog);
+            LogFactory.Register("ProgressLog", progressLog);
+            var environment = Substitute.For<IEnvironment>();
+            FactoryContainer.Register(environment);
+            FactoryContainer.Register(Substitute.For<IFile>());
+            FactoryContainer.Register(Substitute.For<IDirectory>());
+            var config = SetupConfig();
+            if (connectionStringSwitch)
+                environment.CommandLine.Returns($"SchemaTongs.exe \"--ConnectionString:{ConnectionString.RetargetDatabase(_connectionString, _integrationDb, Platform.PostgreSQL)}\"");
+            config["ShouldCast:Tables"] = "true";
+            try
+            {
+                new SchemaTongs(Platform.PostgreSQL).CastTemplate();
+
+                Assert.That(warnings, Has.Some.Contains("probe_val_nn").And.Contains("is NOT VALID"), string.Join(" | ", warnings));
+            }
+            finally
+            {
+                config["ShouldCast:Tables"] = "false";
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+                cmd.CommandText = "DROP SCHEMA warnprobe CASCADE";
+                cmd.ExecuteNonQuery();
             }
         }
     }
