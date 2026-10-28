@@ -433,7 +433,7 @@ BEGIN TRY
   -- every table it declares only stamps their ownership. Nothing below is then compiled.
   IF NOT EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE [NewTable] = 0)
   BEGIN
-    RAISERROR('Skipping table modifications: every declared table is new to this database', 10, 100) WITH NOWAIT
+    RAISERROR('Skipping table modifications: no declared table existed before this deploy', 10, 100) WITH NOWAIT
     EXEC SchemaSmith.StampTableOwnership @ProductName = @ProductName, @WhatIf = @WhatIf
     RETURN
   END

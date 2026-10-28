@@ -37,7 +37,7 @@ public class TableQuench_StepSkipTests : BaseTableQuenchTests
             Assert.That(messages, Does.Contain("Skipping period columns: no table is declared temporal"));
             Assert.That(messages, Does.Contain("Skipping constraint enforcement and validation: no foreign key or check constraint declares it"));
             Assert.That(messages, Does.Contain("Skipping index disabled state: no index is declared disabled and none is disabled"));
-            Assert.That(messages, Does.Contain("Skipping table modifications: every declared table is new to this database"));
+            Assert.That(messages, Does.Contain("Skipping table modifications: no declared table existed before this deploy"));
             Assert.That(messages, Does.Contain("Skipping online column forms: OnlineApply is Off for every table"));
             Assert.That(messages, Does.Contain("Skipping history tables: no temporal table has versioning suspended"));
             Assert.That(messages, Does.Not.Contain("Mirror column changes onto the history tables of suspended temporal tables"));
