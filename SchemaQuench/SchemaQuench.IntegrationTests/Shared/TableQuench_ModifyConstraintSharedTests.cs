@@ -783,9 +783,9 @@ VALUES ('{_productName}', '', '{TestSchema}', 'FOREIGN KEY', 'ModFKCascUpd.FK_Mo
     private void DropPrivateDdlDatabase(System.Data.IDbCommand cmd, string schema, string product)
     {
         cmd.CommandText = $"DROP DATABASE IF EXISTS `{schema}`";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.CommandText = $"DELETE FROM `{_mainDb}`.SchemaSmith_ProductOwnership WHERE ProductName = '{product}'";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private void RunFullQuench(System.Data.IDbCommand cmd, string json, string product, string schema)

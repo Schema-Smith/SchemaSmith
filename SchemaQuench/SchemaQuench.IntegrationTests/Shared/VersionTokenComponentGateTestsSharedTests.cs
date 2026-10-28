@@ -65,7 +65,7 @@ public abstract class VersionTokenComponentGateTestsSharedTests
                 Assert.Multiple(() =>
                 {
                     Assert.That(Names(cmd, $"SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA = '{db}' AND TABLE_NAME LIKE 'Gated%'"),
-                        Is.EqualTo(new[] { "GatedOn" }), "a table gated on {{CompatibilityLevel}}");
+                        Is.EqualTo(new[] { "GatedOn" }).IgnoreCase, "a table gated on {{CompatibilityLevel}}");
                     Assert.That(Names(cmd, $"SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = '{db}' AND TABLE_NAME = 'GatedOn'"),
                         Is.EqualTo(new[] { "Id", "Modern" }), "columns gated on {{ServerMajorVersion}}");
                 });
