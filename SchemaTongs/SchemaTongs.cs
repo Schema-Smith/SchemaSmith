@@ -1630,7 +1630,7 @@ SELECT SCHEMA_NAME(p.[schema_id]), p.[name], p.is_enabled, p.is_schema_bound, p.
             var script =
                 "SET QUOTED_IDENTIFIER ON\r\n" +
                 "IF OBJECT_ID('sys.security_policies') IS NULL\r\n" +
-                $"  RAISERROR('  Security policy {EscapeSql(qualified)} skipped: row-level security needs SQL Server 2016', 10, 1) WITH NOWAIT\r\n" +
+                $"  RAISERROR('  Security policy {EscapeSql(qualified).Replace("%", "%%")} skipped: row-level security needs SQL Server 2016', 10, 1) WITH NOWAIT\r\n" +
                 "ELSE\r\nBEGIN\r\n" +
                 $"  DECLARE @policy NVARCHAR(600) = N'{EscapeSql(qualified)}', @v_Live NVARCHAR(MAX)\r\n" +
                 $"  SET @v_Live = ({SecurityPolicySignatureSql})\r\n" +

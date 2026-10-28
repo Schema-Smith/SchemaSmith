@@ -113,7 +113,8 @@ EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' 
     [Test]
     public void Delivery_ToAnAppendOnlyLedgerTable_InsertsAndWarns()
     {
-        var table = $"LedgerData_{Guid.NewGuid():N}"[..24];
+        // A pattern character in the name must reach the log as written, not be read as a format specification.
+        var table = $"Ledger%d_{Guid.NewGuid():N}"[..24];
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
