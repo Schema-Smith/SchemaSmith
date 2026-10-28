@@ -379,8 +379,60 @@ public class DeployPathTableFeatureTests
 
             cmd.CommandText = "SELECT STRING_AGG(CONCAT(Id, ':', V), ',') WITHIN GROUP (ORDER BY Id) FROM dbo.DeployProbe";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("1:a,2:c,9:z"), "new rows inserted, existing rows untouched");
-            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("1 delivered rows differ from rows already in the append-only ledger table")));
-            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("1 rows of the append-only ledger table") && m.Contains("are not in the delivered data")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("1 delivered rows differ from rows already in the append-only ledger table [dbo].[DeployProbe]")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("1 rows of the append-only ledger table [dbo].[DeployProbe] are not in the delivered data")));
+        });
+    }
+
+    // Delivery runs on a connection of its own; a deploy that delivers nothing must not hold one more connection for it.
+    [Test]
+    public void ADeployThatDeliversNothing_HoldsNoConnectionForDelivery()
+    {
+        const string plain = """
+            { "Schema": "[dbo]", "Name": "[DeployProbe]",
+              "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false } ],
+              "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }
+            """;
+        const string delivered = """
+            { "Schema": "[dbo]", "Name": "[DeployProbe]",
+              "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false } ],
+              "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ],
+              "DataDelivery": { "ContentFile": "DeployProbe.tabledata", "MergeType": "Insert/Update/Delete" } }
+            """;
+        RunScenario("DeployConnections", null, (deploy, db, cmd) =>
+        {
+            var gate = new object();
+            int open = 0, peak = 0;
+            var factory = Substitute.For<IDbConnectionFactory>();
+            factory.GetDbConnection(Arg.Any<string>()).Returns(ci =>
+            {
+                var connection = (DbConnection)new SqlServerConnectionFactory().GetDbConnection(ci.Arg<string>());
+                connection.StateChange += (_, e) =>
+                {
+                    lock (gate)
+                    {
+                        if (e.CurrentState == ConnectionState.Open) peak = Math.Max(peak, ++open);
+                        else if (e.OriginalState == ConnectionState.Open) open--;
+                    }
+                };
+                return connection;
+            });
+            deploy(plain);
+            FactoryContainer.Register(factory);
+            try
+            {
+                deploy(plain);
+                var withoutDelivery = peak;
+                peak = 0;
+                _tableData = """[{"Id":1}]""";
+                deploy(delivered);
+
+                Assert.That(withoutDelivery, Is.LessThan(peak), "connections held at once, delivering nothing vs delivering a table");
+            }
+            finally
+            {
+                FactoryContainer.Unregister<IDbConnectionFactory>();
+            }
         });
     }
 

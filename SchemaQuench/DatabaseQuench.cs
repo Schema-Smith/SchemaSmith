@@ -903,8 +903,9 @@ public class DatabaseQuench
                         _checkpointing.Track(DbScope, "TableDataDelivery", () =>
                         {
                             // Not the silent connection: the merge counts what an append-only ledger table kept in state-100 messages.
+                            // Opened only when a table delivers, and closed as soon as delivery ends.
                             IDbCommand deliveryCmd = command;
-                            if (_product.Platform.GetBasePlatform() != Platform.MySQL)
+                            if (_product.Platform.GetBasePlatform() != Platform.MySQL && _template.Tables.Any(t => t.DataDeliveries.Count > 0))
                             {
                                 deliveryConnection = GetConnection(fireInfoMessageEventOnUserErrors: false);
                                 deliveryCmd = deliveryConnection.CreateCommand();
@@ -966,6 +967,8 @@ public class DatabaseQuench
                                     }
                                 }
                             });
+                            deliveryConnection?.Close();
+                            deliveryConnection = null;
                         });
                         tableDataDeliverySw.Stop();
                         RunTiming?.Record(LogPrefix, _databaseName, "TableDataDelivery", tableDataDeliverySw.ElapsedMilliseconds, 0);
