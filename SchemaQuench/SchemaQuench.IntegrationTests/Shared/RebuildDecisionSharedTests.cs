@@ -49,11 +49,11 @@ public abstract class RebuildDecisionSharedTests : BaseTableQuenchTests
 
     private static string Uid() => Guid.NewGuid().ToString("N")[..8];
 
-    private static void Exec(IDbCommand cmd, string sql)
+    private static void Exec(IDbCommand cmd, string sql, Action? beforeRetry = null)
     {
         cmd.CommandTimeout = 300;
         cmd.CommandText = sql;
-        TransientRetry.Run(() => cmd.ExecuteNonQuery());
+        TransientRetry.Run(() => cmd.ExecuteNonQuery(), beforeRetry);
     }
 
     /// <summary>
@@ -65,15 +65,33 @@ public abstract class RebuildDecisionSharedTests : BaseTableQuenchTests
     private void Quench(IDbCommand cmd, string json, string? mode = null, int? threshold = null, bool whatIf = false)
     {
         var whatIfVal = whatIf ? 1 : 0;
-        Exec(cmd, $"CALL SchemaSmith_ParseTableJson({Lit(_mainDb)}, {Lit(json)})");
-        Exec(cmd, $"CALL SchemaSmith_MissingTableAndColumnQuench({Lit(_mainDb)}, {whatIfVal})");
+        Call(cmd, $"CALL SchemaSmith_ParseTableJson({Lit(_mainDb)}, {Lit(json)})", whatIf);
+        Call(cmd, $"CALL SchemaSmith_MissingTableAndColumnQuench({Lit(_mainDb)}, {whatIfVal})", whatIf);
         Exec(cmd, $"SET @ss_rebuild_policy_mode = {Lit(mode ?? "NEVER")}, "
                   + $"@ss_rebuild_policy_threshold = {(threshold.HasValue ? threshold.Value.ToString() : "NULL")}, "
                   + "@ss_rebuild_policy_on_order_mismatch = 0");
         // Trailing 0, 0 are p_DropUnknownIndexes / p_DropIndexesRemovedFromProduct: the marker index is
         // deliberately unknown to the package, and dropping it by absence would destroy the very signal
         // these tests read.
-        Exec(cmd, $"CALL SchemaSmith_ModifiedTableQuench({Lit(_productName)}, {Lit(_mainDb)}, {whatIfVal}, 0, 1, 1, 1, 1, 0, 0, 0)");
+        Call(cmd, $"CALL SchemaSmith_ModifiedTableQuench({Lit(_productName)}, {Lit(_mainDb)}, {whatIfVal}, 0, 1, 1, 1, 1, 0, 0, 0)", whatIf);
+    }
+
+    /// <summary>A preview changes nothing but the audit rows it writes, so a retried preview call first removes the
+    /// rows its failed attempt wrote; left in place, a preview reports its rebuild twice.</summary>
+    private static void Call(IDbCommand cmd, string sql, bool whatIf)
+    {
+        if (!whatIf)
+        {
+            Exec(cmd, sql);
+            return;
+        }
+        var mark = Long(cmd, "SELECT COALESCE(MAX(Id), 0) FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()");
+        Exec(cmd, sql, () =>
+        {
+            using var clear = cmd.Connection!.CreateCommand();
+            clear.CommandText = $"DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND Id > {mark}";
+            clear.ExecuteNonQuery();
+        });
     }
 
     private static object? Scalar(IDbCommand cmd, string sql)
