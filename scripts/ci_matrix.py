@@ -57,5 +57,7 @@ if __name__ == '__main__':
     found = list(legs(workflow, sys.argv[1]))
     if not found:
         raise SystemExit(f"ci_matrix: the {sys.argv[1]} matrix is empty")
+    # The sweeps read the last field up to the newline, so Windows' \r\n would leave a \r in it.
+    sys.stdout.reconfigure(newline='\n')
     for row in found:
         print('\t'.join(row))

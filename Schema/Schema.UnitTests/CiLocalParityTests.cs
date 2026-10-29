@@ -24,6 +24,15 @@ public class CiLocalParityTests
         return output.Split('\n', System.StringSplitOptions.RemoveEmptyEntries | System.StringSplitOptions.TrimEntries);
     }
 
+    [Test]
+    public void TheMatrixReader_EndsEachLineWithANewlineAlone()
+    {
+        var (exit, output) = CiTestedPathsTests.Python(Path.Join(RepoSources.Root, "scripts", "ci_matrix.py"), "sqlserver");
+        Assert.That(exit, Is.EqualTo(0), $"ci_matrix.py sqlserver: {output}");
+        Assert.That(output, Does.Not.Contain('\r'),
+            "a carriage return ends up in the last field, the SQL Server band's collation, and the server refuses it as invalid");
+    }
+
     [TestCase("sqlserver", 4)]
     [TestCase("postgres", 7)]
     [TestCase("mysql", 7)]
