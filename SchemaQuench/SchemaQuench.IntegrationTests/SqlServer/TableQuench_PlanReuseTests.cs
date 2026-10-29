@@ -1,5 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System;
 using System.Data;
 using NUnit.Framework;
 using Schema.DataAccess;
@@ -38,6 +39,8 @@ public class TableQuench_PlanReuseTests : BaseTableQuenchTests
         conn.Open();
         conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))";
+        if (Convert.ToInt32(cmd.ExecuteScalar()) < 15) Assert.Ignore("Before SQL Server 2019, a statement reading its caller's temp table recompiles on every call.");
         try
         {
             DropTables(cmd);
