@@ -34,6 +34,7 @@ BEGIN
     -- Name keys, computed once. The catalog may spell the database and table differently from the package and
     -- from DATABASE() when lower_case_table_names >= 1, so every catalog read compares keys, never spellings.
     DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+    DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
     DECLARE v_TableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
     DECLARE v_OldTableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
     DECLARE v_StatusTableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
@@ -104,6 +105,7 @@ BEGIN
     SET v_TableName = TRIM(BOTH FROM JSON_UNQUOTE(JSON_EXTRACT(p_TableDefinitions, '$.Name')));
     SET v_Db = DATABASE();
     SET v_DbKey = SchemaSmith_IdentifierKey(v_Db);
+    SET v_DbCi = v_Db;
     SET v_TableKey = SchemaSmith_IdentifierKey(v_TableName);
     SET v_StatusTableKey = SchemaSmith_IdentifierKey('SchemaSmith_StatusMessages');
 
@@ -120,9 +122,9 @@ BEGIN
     IF v_OldTableName IS NOT NULL AND SchemaSmith_IdentifierKey(v_OldTableName) <> v_TableKey THEN
         SET v_OldTableKey = SchemaSmith_IdentifierKey(v_OldTableName);
         SELECT COUNT(*) INTO v_TableRenameOldExists FROM information_schema.tables
-         WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_OldTableKey;
+         WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_OldTableKey;
         SELECT COUNT(*) INTO v_TableRenameNewExists FROM information_schema.tables
-         WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey;
+         WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey;
 
         IF v_TableRenameOldExists > 0 AND v_TableRenameNewExists > 0 THEN
             -- MESSAGE_TEXT has a hard 128-char limit; a message that exceeds it is replaced by MySQL's
@@ -137,7 +139,7 @@ BEGIN
                                        '` (OldName) and `', v_Db, '`.`', v_TableName,
                                        '` already exist; resolve manually before bootstrap can rename.');
             SELECT COUNT(*) INTO v_HasStatusTable FROM information_schema.tables
-             WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_StatusTableKey;
+             WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_StatusTableKey;
             IF v_HasStatusTable > 0 THEN
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), v_ClashDetail);
             END IF;
@@ -248,16 +250,16 @@ BEGIN
         -- from whatever spelling the table holds, and only when that differs from the declared one.
         IF v_RenOldName IS NOT NULL AND SchemaSmith_NameKeyCI(v_RenOldName) = SchemaSmith_NameKeyCI(v_RenNewName) THEN
             SET v_RenOldName = (SELECT MIN(column_name) FROM information_schema.columns
-                                 WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
+                                 WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
                                    AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_RenNewName)
                                    AND CAST(column_name AS BINARY) <> CAST(v_RenNewName AS BINARY));
             SET v_RenOldExists = IF(v_RenOldName IS NULL, 0, 1);
             SET v_RenNewExists = 0;
         ELSEIF v_RenOldName IS NOT NULL THEN
             SELECT COUNT(*) INTO v_RenOldExists FROM information_schema.columns
-             WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_RenOldName);
+             WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_RenOldName);
             SELECT COUNT(*) INTO v_RenNewExists FROM information_schema.columns
-             WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_RenNewName);
+             WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_RenNewName);
         END IF;
 
         IF v_RenOldName IS NOT NULL THEN
@@ -269,7 +271,7 @@ BEGIN
                                            v_RenOldName, '` (OldName) and `', v_RenNewName,
                                            '` already exist; resolve manually before bootstrap can rename.');
                 SELECT COUNT(*) INTO v_HasStatusTable FROM information_schema.tables
-                 WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_StatusTableKey;
+                 WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_StatusTableKey;
                 IF v_HasStatusTable > 0 THEN
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), v_ClashDetail);
                 END IF;
@@ -316,7 +318,7 @@ BEGIN
     -- version and by lower_case_table_names) never meets a proc variable's in a bare '='.
     INSERT INTO _SchemaSmith_BootstrapExistingCols (ColumnName)
     SELECT column_name FROM information_schema.columns
-    WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey;
+    WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapAddColStmts;
     CREATE TEMPORARY TABLE _SchemaSmith_BootstrapAddColStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
@@ -389,7 +391,7 @@ BEGIN
             SET v_LiveCollation = NULL;
             SELECT collation_name INTO v_LiveCollation
             FROM information_schema.columns
-            WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey
+            WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey
               AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
               AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_AcColName)
             LIMIT 1;
@@ -434,7 +436,7 @@ BEGIN
             SET v_ShapeKeys = NULL;
             SELECT GROUP_CONCAT(column_name ORDER BY seq_in_index SEPARATOR ',') INTO v_ShapeKeys
               FROM information_schema.statistics
-             WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey
+             WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey
                AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
                AND index_name = 'PRIMARY';
 
@@ -473,7 +475,7 @@ BEGIN
                 SET v_PkReplacedIndex = NULL;
                 SELECT MIN(index_name) INTO v_PkReplacedIndex
                   FROM information_schema.statistics
-                 WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey
+                 WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey
                    AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
                    AND index_name <> 'PRIMARY'
                    AND SchemaSmith_NameKeyCI(index_name) = SchemaSmith_NameKeyCI(v_AiIndexName);
@@ -506,7 +508,7 @@ BEGIN
                    SUM(column_name IS NULL)
               INTO v_ShapeUnique, v_ShapeKeys, v_ShapeParts, v_ShapeExprParts
               FROM information_schema.statistics
-             WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey
+             WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey
                AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
                AND SchemaSmith_NameKeyCI(index_name) = SchemaSmith_NameKeyCI(v_AiIndexName);
 
@@ -578,7 +580,7 @@ BEGIN
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT IGNORE INTO _SchemaSmith_BootstrapExistingIdxs (IndexName)
     SELECT index_name FROM information_schema.statistics
-    WHERE SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey;
+    WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey AND SchemaSmith_IdentifierKey(table_name) = v_TableKey;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapAddIdxStmts;
     CREATE TEMPORARY TABLE _SchemaSmith_BootstrapAddIdxStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)

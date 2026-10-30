@@ -31,10 +31,13 @@ BEGIN TRY
                      ELSE '' END +
                 ISNULL(', @index_name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName), '''', '''''') + '''', '') + ';' + CHAR(13) + CHAR(10) +
                 'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE(t.[Schema] + '.' + t.[Name], '''', '''''') + ''', ''created'');' + CHAR(13) + CHAR(10)
+           -- One row per capture instance: each is named, and the table is recorded once.
            WHEN t.EnableCDC = 0 AND st.is_tracked_by_cdc = 1
-           THEN 'RAISERROR(''  Disable CDC on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+           THEN 'RAISERROR(''  Disable CDC on ' + t.[Schema] + '.' + t.[Name] + ' (capture instance ' + REPLACE(REPLACE(ct.capture_instance, '''', ''''''), '%', '%%') + ')'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                 'EXEC sys.sp_cdc_disable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @capture_instance = N''' + ct.capture_instance + ''';' + CHAR(13) + CHAR(10) +
-                'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE(t.[Schema] + '.' + t.[Name], '''', '''''') + ''', ''dropped'');' + CHAR(13) + CHAR(10)
+                CASE WHEN ct.capture_instance = (SELECT MIN(c2.capture_instance) FROM cdc.change_tables c2 WITH (NOLOCK) WHERE c2.source_object_id = st.[object_id])
+                     THEN 'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE(t.[Schema] + '.' + t.[Name], '''', '''''') + ''', ''dropped'');' + CHAR(13) + CHAR(10)
+                     ELSE '' END
            ELSE '' END
       FROM #Tables t WITH (NOLOCK)
       JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])

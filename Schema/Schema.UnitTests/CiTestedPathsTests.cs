@@ -121,7 +121,7 @@ public class CiTestedPathsTests
         return files;
     }
 
-    private static (int Exit, string Output) Python(params string[] args)
+    internal static (int Exit, string Output) Python(params string[] args)
     {
         foreach (var exe in new[] { "python3", "python" })
         {

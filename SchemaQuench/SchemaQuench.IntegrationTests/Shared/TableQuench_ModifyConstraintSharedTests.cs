@@ -529,6 +529,226 @@ VALUES ('{_productName}', '', '{TestSchema}', 'FOREIGN KEY', 'ModFKCascUpd.FK_Mo
         conn.Close();
     }
 
+    // MySQL, and MariaDB before 10.4.31, 10.5.22, 10.6.15, 10.11.5, 11.0.3 and 11.1.2, widen a VARCHAR or VARBINARY in place
+    // under a foreign key and keep the key, while the length stays on the same side of 255 bytes. The deploy counted every
+    // type change as blocking, so a widening 2.7 made refused under a key the package does not declare. Whether the engine
+    // makes the change is asked of the engine, here, rather than of the gate under test.
+    private bool EngineWidensUnderAForeignKey(System.Data.IDbCommand cmd, string schema)
+    {
+        cmd.CommandText = $@"CREATE TABLE `{schema}`.`probe_p` (Code VARCHAR(10) NOT NULL, UNIQUE KEY uq (Code));
+                             CREATE TABLE `{schema}`.`probe_c` (Code VARCHAR(10), CONSTRAINT fk_probe FOREIGN KEY (Code) REFERENCES `{schema}`.`probe_p`(Code))";
+        cmd.ExecuteNonQuery();
+        try
+        {
+            cmd.CommandText = $"ALTER TABLE `{schema}`.`probe_p` MODIFY Code VARCHAR(20) NOT NULL";
+            cmd.ExecuteNonQuery();
+            return true;
+        }
+        catch (MySqlConnector.MySqlException e) when (e.Number is 1832 or 1833)
+        {
+            return false;
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{schema}`.`probe_c`; DROP TABLE IF EXISTS `{schema}`.`probe_p`";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    private static string AccountJson(string length) => $$"""
+        [ { "Name": "fkw_account",
+            "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false },
+                         { "Name": "Code", "DataType": "VARCHAR({{length}})", "Nullable": false } ],
+            "Indexes": [ { "Name": "PK_fkw_account", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" },
+                         { "Name": "uq_fkw_account_code", "Unique": true, "IndexColumns": "Code" } ] } ]
+        """;
+
+    private void SeedAccountAndUndeclaredPayment(System.Data.IDbCommand cmd, string schema)
+    {
+        cmd.CommandText = $@"CREATE TABLE `{schema}`.`fkw_account` (Id INT NOT NULL, Code VARCHAR(10) CHARACTER SET utf8mb4 NOT NULL,
+                                CONSTRAINT PK_fkw_account PRIMARY KEY (Id), UNIQUE KEY uq_fkw_account_code (Code));
+                             CREATE TABLE `{schema}`.`fkw_payment` (Id INT NOT NULL PRIMARY KEY, Code VARCHAR(10) CHARACTER SET utf8mb4 NOT NULL,
+                                CONSTRAINT fk_fkw_payment_account FOREIGN KEY (Code) REFERENCES `{schema}`.`fkw_account`(Code));
+                             INSERT INTO `{schema}`.`fkw_account` VALUES (1, 'A-1');
+                             INSERT INTO `{schema}`.`fkw_payment` VALUES (1, 'A-1')";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static string CodeType(System.Data.IDbCommand cmd, string schema)
+    {
+        cmd.CommandText = $"SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{schema}' AND TABLE_NAME = 'fkw_account' AND COLUMN_NAME = 'Code'";
+        return Convert.ToString(cmd.ExecuteScalar());
+    }
+
+    private static int KeyCount(System.Data.IDbCommand cmd, string schema)
+    {
+        cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '{schema}' AND CONSTRAINT_NAME = 'fk_fkw_payment_account'";
+        return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    [Test]
+    public void TableQuench_VarcharWideningUnderAnUndeclaredForeignKey_AppliesWhereTheEngineKeepsTheKey_AndStopsWhereItCannot()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        var schema = CreatePrivateDdlDatabase(cmd, "fkwiden");
+        var product = $"FkWidenProduct_{Guid.NewGuid():N}"[..24];
+        try
+        {
+            var engineWidens = EngineWidensUnderAForeignKey(cmd, schema);
+            SeedAccountAndUndeclaredPayment(cmd, schema);
+
+            if (engineWidens)
+            {
+                Assert.DoesNotThrow(() => RunFullQuench(cmd, AccountJson("20"), product, schema), "the engine widens the column under the key");
+                Assert.Multiple(() =>
+                {
+                    Assert.That(CodeType(cmd, schema), Is.EqualTo("varchar(20)"), "the declared length is applied");
+                    Assert.That(KeyCount(cmd, schema), Is.EqualTo(1), "and the key the package does not declare is still there");
+                });
+            }
+            else
+            {
+                var ex = Assert.Catch(() => RunFullQuench(cmd, AccountJson("20"), product, schema));
+                Assert.That(ex!.Message, Does.Contain("fk_fkw_payment_account").And.Contain("is not in the package"),
+                    "this engine cannot widen under the key, so the deploy stops and names it, rather than leaving the engine to refuse");
+                Assert.Multiple(() =>
+                {
+                    Assert.That(CodeType(cmd, schema), Is.EqualTo("varchar(10)"), "nothing was changed");
+                    Assert.That(KeyCount(cmd, schema), Is.EqualTo(1), "and the key is still there");
+                });
+            }
+        }
+        finally
+        {
+            DropPrivateDdlDatabase(cmd, schema, product);
+        }
+        conn.Close();
+    }
+
+    // Past 255 bytes the length prefix grows to two bytes, which no engine does in place under a key: utf8mb4's VARCHAR(64)
+    // is 256 bytes (the seeded columns name utf8mb4, since MySQL 5.7 and MariaDB 10.2 default to latin1, where it is 64).
+    // Still refused, naming the key, on every engine.
+    [Test]
+    public void TableQuench_VarcharWideningPast255BytesUnderAnUndeclaredForeignKey_StopsNamingIt()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        var schema = CreatePrivateDdlDatabase(cmd, "fkwide255");
+        var product = $"FkWide255Product_{Guid.NewGuid():N}"[..24];
+        try
+        {
+            SeedAccountAndUndeclaredPayment(cmd, schema);
+
+            var ex = Assert.Catch(() => RunFullQuench(cmd, AccountJson("64"), product, schema));
+            Assert.That(ex!.Message, Does.Contain("fk_fkw_payment_account").And.Contain("is not in the package"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(CodeType(cmd, schema), Is.EqualTo("varchar(10)"), "nothing was changed");
+                Assert.That(KeyCount(cmd, schema), Is.EqualTo(1), "and the key is still there");
+            });
+        }
+        finally
+        {
+            DropPrivateDdlDatabase(cmd, schema, product);
+        }
+        conn.Close();
+    }
+
+    // Dropping and re-adding a declared key re-validates every row of the referencing table, so where the engine widens
+    // the column in place and keeps the key, the key is left in place.
+    [Test]
+    public void TableQuench_VarcharWideningUnderADeclaredForeignKey_LeavesTheKeyInPlace_WhereTheEngineKeepsIt()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        var schema = CreatePrivateDdlDatabase(cmd, "fkwdecl");
+        var product = $"FkWideDeclProduct_{Guid.NewGuid():N}"[..24];
+        try
+        {
+            if (!EngineWidensUnderAForeignKey(cmd, schema))
+                Assert.Ignore("This engine cannot widen a column under a foreign key, so the key must be dropped first.");
+            SeedAccountAndUndeclaredPayment(cmd, schema);
+            var json = AccountJson("20").TrimEnd().TrimEnd(']') + """
+                , { "Name": "fkw_payment",
+                    "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "Code", "DataType": "VARCHAR(10)", "Nullable": false } ],
+                    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" },
+                                 { "Name": "fk_fkw_payment_account", "IndexColumns": "Code" } ],
+                    "ForeignKeys": [ { "Name": "fk_fkw_payment_account", "Columns": "Code", "RelatedTable": "fkw_account", "RelatedColumns": "Code" } ] } ]
+                """;
+
+            RunFullQuench(cmd, json, product, schema);
+
+            cmd.CommandText = "SELECT COALESCE(GROUP_CONCAT(Message SEPARATOR ' | '), '') FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            var messages = Convert.ToString(cmd.ExecuteScalar());
+            Assert.Multiple(() =>
+            {
+                Assert.That(CodeType(cmd, schema), Is.EqualTo("varchar(20)"));
+                Assert.That(KeyCount(cmd, schema), Is.EqualTo(1));
+                Assert.That(messages, Does.Not.Contain("Drop FK for column collation change"), "the key was not dropped to make the change");
+            });
+        }
+        finally
+        {
+            DropPrivateDdlDatabase(cmd, schema, product);
+        }
+        conn.Close();
+    }
+
+    // A character set declared without a collation changes the column as a collation would, and the engine refuses it
+    // on either side of a foreign key until the key is dropped; the foreign-key phase puts it back.
+    [Test]
+    public void TableQuench_ACharacterSetChangeOnAForeignKeyPair_WithNoCollation_DropsAndRestoresTheKey()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        var schema = CreatePrivateDdlDatabase(cmd, "fkcs");
+        var product = $"FkCharsetProduct_{Guid.NewGuid():N}"[..24];
+        try
+        {
+            cmd.CommandText = $"CREATE TABLE `{schema}`.cs_account (Code VARCHAR(10) CHARACTER SET latin1 NOT NULL PRIMARY KEY); " +
+                              $"CREATE TABLE `{schema}`.cs_payment (Id INT NOT NULL PRIMARY KEY, Code VARCHAR(10) CHARACTER SET latin1 NOT NULL, " +
+                              "KEY fk_cs_payment_account (Code), CONSTRAINT fk_cs_payment_account FOREIGN KEY (Code) REFERENCES cs_account (Code))";
+            cmd.ExecuteNonQuery();
+            const string json = """
+                [ { "Name": "cs_account",
+                    "Columns": [ { "Name": "Code", "DataType": "VARCHAR(10)", "Nullable": false, "CharacterSet": "utf8mb4" } ],
+                    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Code" } ] },
+                  { "Name": "cs_payment",
+                    "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false },
+                                 { "Name": "Code", "DataType": "VARCHAR(10)", "Nullable": false, "CharacterSet": "utf8mb4" } ],
+                    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" },
+                                 { "Name": "fk_cs_payment_account", "IndexColumns": "Code" } ],
+                    "ForeignKeys": [ { "Name": "fk_cs_payment_account", "Columns": "Code", "RelatedTable": "cs_account", "RelatedColumns": "Code" } ] } ]
+                """;
+
+            Assert.DoesNotThrow(() => RunFullQuench(cmd, json, product, schema));
+
+            cmd.CommandText = $"SELECT GROUP_CONCAT(CONCAT(TABLE_NAME, ':', CHARACTER_SET_NAME) ORDER BY TABLE_NAME) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{schema}' AND COLUMN_NAME = 'Code'";
+            var charsets = Convert.ToString(cmd.ExecuteScalar());
+            cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = '{schema}' AND CONSTRAINT_NAME = 'fk_cs_payment_account'";
+            var keys = Convert.ToInt32(cmd.ExecuteScalar());
+            Assert.Multiple(() =>
+            {
+                Assert.That(charsets, Is.EqualTo("cs_account:utf8mb4,cs_payment:utf8mb4"));
+                Assert.That(keys, Is.EqualTo(1), "the key is back");
+            });
+        }
+        finally
+        {
+            DropPrivateDdlDatabase(cmd, schema, product);
+        }
+        conn.Close();
+    }
+
     /// <summary>
     /// A private target database for a test that runs DDL.
     /// <para>The fixture's six read-only tests happily share <c>TestSchema</c>, but the two collation
@@ -563,9 +783,9 @@ VALUES ('{_productName}', '', '{TestSchema}', 'FOREIGN KEY', 'ModFKCascUpd.FK_Mo
     private void DropPrivateDdlDatabase(System.Data.IDbCommand cmd, string schema, string product)
     {
         cmd.CommandText = $"DROP DATABASE IF EXISTS `{schema}`";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
         cmd.CommandText = $"DELETE FROM `{_mainDb}`.SchemaSmith_ProductOwnership WHERE ProductName = '{product}'";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private void RunFullQuench(System.Data.IDbCommand cmd, string json, string product, string schema)

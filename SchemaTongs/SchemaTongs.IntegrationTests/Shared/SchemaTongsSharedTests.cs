@@ -60,6 +60,7 @@ public abstract class SchemaTongsSharedTests
             file.Received().WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("product.json")), Arg.Any<string>());
             file.Received().WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("template.json")), Arg.Any<string>());
             file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Tables") && s.EndsWithIgnoringCase(".json")), Arg.Any<string>());
+            ExtractedJson.HasNoEmptyValues(file);
 
             config["ShouldCast:Tables"] = "false";
             FactoryContainer.Clear();

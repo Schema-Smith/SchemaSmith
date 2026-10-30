@@ -139,7 +139,8 @@ public class ReadOnlyTargetKindleTests
         var db = MakeDatabase(kindle: false);
         try
         {
-            var ex = Assert.Catch(() => OnTheDatabase(db, cmd =>
+            // A refusal the user acts on, so the tool prints it in one line and exits 2, not as a defect with a stack trace.
+            var ex = Assert.Catch<RunFailedException>(() => OnTheDatabase(db, cmd =>
                 ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, allowReadOnlyTarget: true)));
 
             Assert.That(ex, Is.Not.Null,

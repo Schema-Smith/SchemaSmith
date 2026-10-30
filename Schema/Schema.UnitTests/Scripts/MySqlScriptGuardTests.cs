@@ -58,6 +58,62 @@ public class MySqlScriptGuardTests
             + "the table:\n  " + string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// A catalog read that compares the schema through SchemaSmith_IdentifierKey alone calls the function on every row
+    /// of every database on the server, so its cost grows with the server rather than the target. Each such comparison
+    /// is preceded by a plain comparison of the same column, which the catalog serves for one database; the key still
+    /// decides, because the plain comparison is case-insensitive and can only let more rows through.
+    /// </summary>
+    [Test]
+    public void EveryCatalogSchemaKeyComparison_IsPrefiltered()
+    {
+        var offenders = new List<string>();
+        var comparisons = 0;
+        foreach (var (name, sql) in Scripts())
+        {
+            var code = Regex.Replace(sql, @"--[^\r\n]*", string.Empty);
+            foreach (Match key in Regex.Matches(code,
+                         @"SchemaSmith_IdentifierKey\((?<col>(?:\w+\.)?(?:TABLE_SCHEMA|CONSTRAINT_SCHEMA|REFERENCED_TABLE_SCHEMA|ROUTINE_SCHEMA|EVENT_SCHEMA|TRIGGER_SCHEMA|INDEX_SCHEMA|SCHEMA_NAME))\)\s*=",
+                         RegexOptions.IgnoreCase))
+            {
+                comparisons++;
+                var before = code[Math.Max(0, key.Index - 200)..key.Index];
+                var prefilter = $@"(?<![\w.]){Regex.Escape(key.Groups["col"].Value)}\s*=\s*[^=]+?\s+AND\s*$";
+                if (!Regex.IsMatch(before, prefilter, RegexOptions.IgnoreCase))
+                    offenders.Add($"{name}: {Regex.Replace(code.Substring(key.Index, Math.Min(110, code.Length - key.Index)), @"\s+", " ")}");
+            }
+        }
+
+        Assert.That(comparisons, Is.GreaterThan(80), "too few schema-key comparisons found; the scan is broken");
+        Assert.That(offenders, Is.Empty,
+            "A catalog schema is compared only through SchemaSmith_IdentifierKey, which reads every database on the "
+            + "server. Put a plain comparison of the same column in front of it (`<column> = v_DbCi AND ...`):\n  "
+            + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>
+    /// With lower_case_table_names=1, MySQL 8.0's catalog schema columns carry an explicit utf8mb3_tolower_ci, so
+    /// comparing one to an explicit COLLATE is an illegal mix of collations and the procedure fails. The value goes
+    /// through a variable declared in utf8mb4_general_ci, whose collation is implicit and gives way.
+    /// </summary>
+    [Test]
+    public void NoCatalogSchemaColumn_IsComparedToAnInlineCollate()
+    {
+        var offenders = new List<string>();
+        foreach (var (name, sql) in Scripts())
+        {
+            var code = Regex.Replace(sql, @"--[^\r\n]*", string.Empty);
+            foreach (Match m in Regex.Matches(code,
+                         @"(?<![\w.])(?:\w+\.)?(?:TABLE_SCHEMA|CONSTRAINT_SCHEMA|REFERENCED_TABLE_SCHEMA|ROUTINE_SCHEMA|EVENT_SCHEMA|TRIGGER_SCHEMA|INDEX_SCHEMA|SCHEMA_NAME)\s*=\s*(?:(?!\bAND\b)[^;\r\n])*?\bCOLLATE\b",
+                         RegexOptions.IgnoreCase))
+                offenders.Add($"{name}: {Regex.Replace(m.Value, @"\s+", " ")}");
+        }
+
+        Assert.That(offenders, Is.Empty,
+            "A catalog schema column is compared to an inline COLLATE, which fails with lower_case_table_names=1 on "
+            + "MySQL 8.0. Compare it to a variable instead (`<column> = v_DbCi`):\n  " + string.Join("\n  ", offenders));
+    }
+
     private static int ClosingParen(string text, int open)
     {
         var depth = 0;

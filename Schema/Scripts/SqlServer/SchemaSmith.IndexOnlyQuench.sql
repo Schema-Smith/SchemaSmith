@@ -246,12 +246,12 @@ BEGIN TRY
                            WHERE RTRIM(ISNULL([ShouldApplyExpression], '')) <> ''
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   EXEC(@v_SQL)
-  EXEC SchemaSmith.DegradeUnsupportedSpatialIndexes
+  IF EXISTS (SELECT 1 FROM #SpatialIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedSpatialIndexes
 
 {{JsonIndexesTable}}
 {{ParseJsonIndexesJson}}
-  EXEC SchemaSmith.DegradeUnsupportedJsonIndexes
-  EXEC SchemaSmith.DegradeUnsupportedSelectiveXmlIndexes
+  IF EXISTS (SELECT 1 FROM #JsonIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedJsonIndexes
+  IF EXISTS (SELECT 1 FROM #XmlIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedSelectiveXmlIndexes
 
   RAISERROR('Parse Statistics from Json', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #Statistics
@@ -340,7 +340,7 @@ BEGIN TRY
     THROW 51000, @v_FTDupMsg, 1;
   END
 
-  EXEC SchemaSmith.DegradeUnsupportedFullText
+  IF EXISTS (SELECT 1 FROM #FullTextIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedFullText
 
   -- Handle index compression changes
   -- OnlineApply: each table's mode (OFF for one the deploy does not find), how each index is built, a REQUIRE this server
@@ -359,7 +359,7 @@ BEGIN TRY
   CREATE TABLE #OnlineForms ([Kind] VARCHAR(16) COLLATE DATABASE_DEFAULT, [Schema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
                              [IndexName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [Mode] VARCHAR(7) COLLATE DATABASE_DEFAULT,
                              [Form] VARCHAR(12) COLLATE DATABASE_DEFAULT, [Options] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Reason] NVARCHAR(400) COLLATE DATABASE_DEFAULT)
-  EXEC SchemaSmith.StageOnlineForms @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
+  IF EXISTS (SELECT 1 FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] <> 'OFF') EXEC SchemaSmith.StageOnlineForms @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
   EXEC SchemaSmith.ResolvePausedIndexBuilds @OnlineApplyMaxDuration = @OnlineApplyMaxDuration, @WhatIf = @WhatIf
 
   RAISERROR('Fixup Index Compression', 10, 100) WITH NOWAIT
@@ -841,7 +841,7 @@ BEGIN TRY
                           AND i.TableName = xp.TableName
                           AND SchemaSmith.fn_StripBracketWrapping(i.IndexName) = xp.IndexName)
                       
-  EXEC SchemaSmith.RebuildOptionOnlyIndexChanges @WhatIf = @WhatIf
+  IF EXISTS (SELECT 1 FROM #IndexChanges WITH (NOLOCK)) EXEC SchemaSmith.RebuildOptionOnlyIndexChanges @WhatIf = @WhatIf
 
   RAISERROR('Identify unknown and modified indexes to drop', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #IndexesToDrop
@@ -942,7 +942,7 @@ BEGIN TRY
 
   
   -- OnlineApply REQUIRE: refused before any index is dropped.
-  EXEC SchemaSmith.RefuseUnmetOnlineRequire
+  IF EXISTS (SELECT 1 FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] = 'REQUIRE') EXEC SchemaSmith.RefuseUnmetOnlineRequire
 
   RAISERROR('Drop FullText Indexes Referencing Unique Indexes That Will Be Dropped', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STRING_AGG(CAST('RAISERROR(''  Dropping fulltext index on ' + ef.[Schema] + '.' + ef.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -977,7 +977,7 @@ BEGIN TRY
   BEGIN
     RAISERROR('Capture indexes suppressed by PreventDrop (would drop by absence)', 10, 100) WITH NOWAIT
     SELECT @v_SQL = STRING_AGG(CAST(
-      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + w.[ObjectType] + ''', ''' + w.[Schema] + '.' + w.[TableName] + '.' + w.[IndexName] + ''', ''dropSuppressed'');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
+      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + w.[ObjectType] + ''', ''' + w.[Schema] + '.' + w.[TableName] + '.' + QUOTENAME(w.[IndexName]) + ''', ''dropSuppressed'');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
       FROM (
         -- Indexes removed from the product (minus the @DropIndexesRemovedFromProduct gate; per-table opt-out kept)
         SELECT [Schema] = CAST(ir.[Schema] AS NVARCHAR(500)), [TableName] = CAST(ir.[TableName] AS NVARCHAR(500)),
@@ -1023,7 +1023,7 @@ BEGIN TRY
                                        THEN 'ALTER TABLE ' + di.[Schema] + '.' + di.[TableName] + ' DROP CONSTRAINT IF EXISTS ' + QUOTENAME(di.[IndexName]) + od.[With] + ';'
                                        ELSE 'DROP INDEX IF EXISTS ' + QUOTENAME(di.[IndexName]) + ' ON ' + di.[Schema] + '.' + di.[TableName] + od.[With] + ';'
                                        END + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + REPLACE(di.[Schema] + '.' + di.[TableName] + '.' + di.[IndexName], '''', '''''') + ''', ''dropped'', ' + CASE WHEN od.[With] <> '' THEN '''online''' ELSE 'NULL' END + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10)) WITHIN GROUP (ORDER BY CASE WHEN [IsClustered] = 0 THEN 0 ELSE 1 END)
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + REPLACE(di.[Schema] + '.' + di.[TableName] + '.' + QUOTENAME(di.[IndexName]), '''', '''''') + ''', ''dropped'', ' + CASE WHEN od.[With] <> '' THEN '''online''' ELSE 'NULL' END + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10)) WITHIN GROUP (ORDER BY CASE WHEN [IsClustered] = 0 THEN 0 ELSE 1 END)
     FROM #IndexesToDrop di WITH (NOLOCK)
     -- Only a clustered index can be dropped online (3745); its heap is then built without blocking.
     CROSS APPLY (SELECT [With] = CASE WHEN di.[IsClustered] = 1 AND SchemaSmith.fn_OnlineOperationsAvailable() = 1
@@ -1033,7 +1033,7 @@ BEGIN TRY
 
   IF @WhatIf = 1
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
-      SELECT @@SPID, CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END, di.[Schema] + '.' + di.[TableName] + '.' + di.[IndexName], 'wouldDrop',
+      SELECT @@SPID, CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END, di.[Schema] + '.' + di.[TableName] + '.' + QUOTENAME(di.[IndexName]), 'wouldDrop',
              CASE WHEN od.[With] <> '' THEN 'online' END
         FROM #IndexesToDrop di WITH (NOLOCK)
         -- Only a clustered index can be dropped online (3745); its heap is then built without blocking.
@@ -1255,7 +1255,7 @@ BEGIN TRY
               -- Under WhatIf a modified index was not really dropped, but the real run re-creates it.
               OR EXISTS (SELECT 1 FROM SchemaSmith.ChangeAudit a
                           WHERE a.SessionId = @@SPID AND a.ActionType = 'wouldDrop' AND a.ObjectType IN ('index', 'constraint')
-                            AND a.ObjectName = i.[Schema] + '.' + i.[TableName] + '.' + SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
+                            AND a.ObjectName = i.[Schema] + '.' + i.[TableName] + '.' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
 
   RAISERROR('Add missing ProductName extended property to indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STRING_AGG(CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +
@@ -1373,6 +1373,7 @@ BEGIN TRY
                           AND ss.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName]))
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
+  -- A full-text index's columns are a set: the order they are declared in is not a change.
   RAISERROR('Drop Modified or Removed FullText Indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STRING_AGG(CAST('RAISERROR(''  Dropping fulltext index on ' + ei.[Schema] + '.' + ei.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'DROP FULLTEXT INDEX ON ' + ei.[Schema] + '.' + ei.[TableName] + ';' + CHAR(13) + CHAR(10) +
@@ -1381,7 +1382,7 @@ BEGIN TRY
     LEFT JOIN #FullTextIndexes fi WITH (NOLOCK) ON fi.[Schema] = ei.[Schema]
                                                AND fi.[TableName] = ei.[TableName]
     JOIN sys.fulltext_indexes ft ON ft.[object_id] = OBJECT_ID(ei.[Schema] + '.' + ei.[TableName])
-    WHERE RTRIM(ISNULL(fi.[Columns], '')) <> RTRIM(ISNULL(ei.[Columns], ''))
+    WHERE (EXISTS (SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(fi.[Columns], ''), ',') EXCEPT SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(ei.[Columns], ''), ',')) OR EXISTS (SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(ei.[Columns], ''), ',') EXCEPT SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(fi.[Columns], ''), ',')))
        OR SchemaSmith.fn_StripBracketWrapping(fi.[FullTextCatalog]) <> SchemaSmith.fn_StripBracketWrapping(ei.[FullTextCatalog])
        OR SchemaSmith.fn_StripBracketWrapping(fi.[KeyIndex]) <> SchemaSmith.fn_StripBracketWrapping(ei.[KeyIndex])
        OR fi.[ChangeTracking] <> ei.[ChangeTracking]
@@ -1397,7 +1398,7 @@ BEGIN TRY
         LEFT JOIN #FullTextIndexes fi WITH (NOLOCK) ON fi.[Schema] = ei.[Schema]
                                                    AND fi.[TableName] = ei.[TableName]
         JOIN sys.fulltext_indexes ft ON ft.[object_id] = OBJECT_ID(ei.[Schema] + '.' + ei.[TableName])
-        WHERE RTRIM(ISNULL(fi.[Columns], '')) <> RTRIM(ISNULL(ei.[Columns], ''))
+        WHERE (EXISTS (SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(fi.[Columns], ''), ',') EXCEPT SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(ei.[Columns], ''), ',')) OR EXISTS (SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(ei.[Columns], ''), ',') EXCEPT SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(fi.[Columns], ''), ',')))
            OR SchemaSmith.fn_StripBracketWrapping(fi.[FullTextCatalog]) <> SchemaSmith.fn_StripBracketWrapping(ei.[FullTextCatalog])
            OR SchemaSmith.fn_StripBracketWrapping(fi.[KeyIndex]) <> SchemaSmith.fn_StripBracketWrapping(ei.[KeyIndex])
            OR fi.[ChangeTracking] <> ei.[ChangeTracking]
@@ -1422,10 +1423,16 @@ BEGIN TRY
         WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
 
   -- Once every index exists: a declared Disabled state is state on an index that must already be there.
-  EXEC SchemaSmith.IndexStateQuench @WhatIf
+  IF EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Disabled] = 1)
+       OR EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK) JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) WHERE si.is_disabled = 1)
+    EXEC SchemaSmith.IndexStateQuench @WhatIf
+  ELSE RAISERROR('Skipping index disabled state: no index is declared disabled and none is disabled', 10, 100) WITH NOWAIT
 
   -- Index descriptions, once every index exists.
-  EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf = @WhatIf, @IndexesOnly = 1
+  IF EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #ExtendedProperties WITH (NOLOCK) WHERE [ObjectType] = 'index')
+    EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf = @WhatIf, @IndexesOnly = 1
+  ELSE RAISERROR('Skipping extended properties: none declared', 10, 100) WITH NOWAIT
 
   -- #242: record here, not in the caller -- this proc's temp tables are gone the moment it returns.
   EXEC SchemaSmith.ExpressionMapRecord @WhatIf

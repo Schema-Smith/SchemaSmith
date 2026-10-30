@@ -51,7 +51,7 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | `Target:Port` | string | platform default | TCP port. SQL Server `1433`, PostgreSQL `5432`, MySQL `3306`. |
 | `Target:User` | string | _(empty)_ | Login username. SQL Server allows blank for Windows auth. |
 | `Target:Password` | string | _(empty)_ | Login password. |
-| `Target:SecondaryServers` | string | _(empty)_ | **SQL Server only.** Comma-separated list of additional servers (Availability Group secondaries) to quench in parallel with the primary. See [Secondary Servers](#secondary-servers). |
+| `Target:SecondaryServers` | string or array | _(empty)_ | **SQL Server only.** Additional servers (Availability Group secondaries) to quench in parallel with the primary: a JSON array, one server per item (`["replica-1,14330", "replica-2"]`), or a comma-separated string, where an all-digit item is the port of the server before it. See [Secondary Servers](#secondary-servers). |
 | `Target:ConnectionProperties` | object | `{}` | Arbitrary key-value pairs appended to the connection string. Platform-specific keys -- see the [Configuration Reference](configuration.md#connection-configuration). |
 
 ### Behavior Settings
@@ -127,7 +127,9 @@ SQL Server deployments targeting Availability Groups can quench to a primary plu
 }
 ```
 
-When a secondary list is configured, SchemaQuench routes each product-level folder to the right server based on its `ServerToQuench` setting (`Primary`, `Secondary`, or `Both`). Templates target the primary; product-level scripts can target either side. See [Schema Packages -- Secondary Servers](schema-packages.md#secondary-servers) for the package side of the configuration.
+A secondary on another port is named `host,port`, as for `Target:Server`. Use an array to list such servers, one per item: `"SecondaryServers": ["replica-1,14330", "replica-2,14330"]`. In the comma-separated string an all-digit item is read as the port of the server before it, so `"replica-1,14330,replica-2"` names two servers.
+
+When a secondary list is configured, SchemaQuench routes each product-level folder to the right server based on its `ServerToQuench` setting (`Primary`, `Secondary`, or `Both`). Templates target the primary; product-level scripts can target either side. Without a secondary list, a `Secondary` folder is skipped (and logged), never run on the primary. See [Schema Packages -- Secondary Servers](schema-packages.md#secondary-servers) for the package side of the configuration.
 
 > **PostgreSQL, MySQL, and MariaDB** deployments use a single connection. Replication and read-only standbys are typically managed at the database engine level, not by the deployment tool.
 
@@ -493,6 +495,8 @@ One further case is compatibility-level gated rather than version gated: a `Json
 **Two are gated on the server's *edition*.** Before SQL Server 2016 SP1, **Data compression** (`CompressionType` `ROW` or `PAGE`) and **columnstore indexes** need Enterprise or Developer edition; Standard, Web and Express refuse them. There, the table or index is created uncompressed and a columnstore index is skipped, each with a downgrade recorded. From 2016 SP1 every edition has both.
 
 **Full-text statistical semantics** (`STATISTICAL_SEMANTICS` on a full-text column) needs a semantic language statistics database registered on the server; without one, SQL Server refuses the whole full-text index. The index is created without semantic statistics and a downgrade is recorded.
+
+**Full-text indexes without Full-Text Search** fail on a server that has no Full-Text Search installed, which includes the stock SQL Server Linux container images until the `mssql-server-fts` package is added. The table deploys without its full-text index and a downgrade is recorded; under `fail` the deploy is refused before any change, naming each table. A later deploy to a server that has it creates the index.
 
 **Three more route through the same policy but are gated on server *state*, not version** — every supported version can do them, if the feature is turned on. **Change Data Capture** and **Change Tracking** need the feature enabled on the database; **FILESTREAM** columns need FILESTREAM enabled on the server *and* a FILESTREAM filegroup on the database. Where the prerequisite is absent, the object is deployed without that aspect and a downgrade is recorded, exactly as a version degrade would be — so a package that assumes CDC is on does not fail, it quietly deploys without it under the default `warn`. Enable the prerequisite, or set `Target:UnsupportedFeaturePolicy=fail`, if that is not what you want.
 

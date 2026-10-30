@@ -221,6 +221,31 @@ public class ScriptObjectFidelityTests
         }
     }
 
+    // An edited script must change a publication that already exists. The target holds it as it was before the edit:
+    // one table, insert only.
+    [Test]
+    public void Publication_AnExistingOne_IsConvergedToTheScript()
+    {
+        using var conn = Open(_targetDb);
+        using var cmd = conn.CreateCommand();
+        Run(cmd, "DROP PUBLICATION IF EXISTS pub_conv");
+        Run(cmd, "CREATE PUBLICATION pub_conv FOR TABLE pgp.t WITH (publish = 'insert')");
+        var script = Script("Publications", "pub_conv");
+
+        Deploy(cmd, script);
+        Deploy(cmd, script);
+
+        cmd.CommandText = "SELECT STRING_AGG(schemaname || '.' || tablename, ',' ORDER BY tablename) FROM pg_publication_tables WHERE pubname = 'pub_conv'";
+        var tables = cmd.ExecuteScalar()?.ToString();
+        cmd.CommandText = "SELECT pubinsert::text || pubupdate::text || pubdelete::text || pubtruncate::text FROM pg_publication WHERE pubname = 'pub_conv'";
+        var publish = cmd.ExecuteScalar()?.ToString().ToLowerInvariant();
+        Assert.Multiple(() =>
+        {
+            Assert.That(tables, Is.EqualTo("pgp.t,pgp.u"), script);
+            Assert.That(publish, Is.EqualTo("truetruetruefalse"), script);
+        });
+    }
+
     // ---- fixture ---------------------------------------------------------------------------------------------
 
     private string Script(string folder, string name)
@@ -302,6 +327,7 @@ public class ScriptObjectFidelityTests
             conn.ChangeDatabase(db);
             Run(cmd, "CREATE SCHEMA pgp");
             Run(cmd, "CREATE TABLE pgp.t (a int PRIMARY KEY, b int, c text)");
+            Run(cmd, "CREATE TABLE pgp.u (a int PRIMARY KEY)");
             Run(cmd, "CREATE FUNCTION pgp.tf() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$");
             Run(cmd, "CREATE FUNCTION pgp.sf(int, int) RETURNS int LANGUAGE sql IMMUTABLE AS 'SELECT $1 + $2'");
             Run(cmd, "CREATE FUNCTION pgp.ff(int) RETURNS text LANGUAGE sql IMMUTABLE AS 'SELECT $1::text'");
@@ -330,6 +356,7 @@ public class ScriptObjectFidelityTests
         if (AtLeast(160000)) Run(cmd, "CREATE COLLATION coll_rules (PROVIDER = icu, LOCALE = 'und', RULES = '&V << w')");
         if (AtLeast(170000)) Run(cmd, "CREATE COLLATION coll_builtin (PROVIDER = builtin, LOCALE = 'C.UTF-8')");
         Run(cmd, "CREATE PUBLICATION pub_empty WITH (publish = 'insert')");
+        Run(cmd, "CREATE PUBLICATION pub_conv FOR TABLE t, u WITH (publish = 'insert, update, delete')");
         if (AtLeast(150000))
         {
             Run(cmd, "CREATE PUBLICATION pub_tbl FOR TABLE t (a, b) WHERE (a > 10) WITH (publish = 'insert, update', publish_via_partition_root = true)");

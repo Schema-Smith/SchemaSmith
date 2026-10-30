@@ -37,6 +37,7 @@ TEST_USER='TestUser'
 TEST_PASSWORD='aCa2d805-41E5@40c4!98e7#92F93zzxo176'
 SDK_IMAGE='mcr.microsoft.com/dotnet/sdk:10.0'
 NUGET_VOLUME='schemasmith-linux-leg-nuget'
+. scripts/ci-steps-local.sh
 
 legs=("$@")
 [ ${#legs[@]} -eq 0 ] && legs=(mysql57 mariadb102)
@@ -110,26 +111,11 @@ for leg in "${legs[@]}"; do
   echo "== $leg ($image)"
   docker run -d --name "$engine" --memory 2g --memory-swap 2g "${dbenv[@]}" "$image" "${args[@]}" >/dev/null || { overall=1; continue; }
 
-  cli='{ command -v mariadb >/dev/null && C=mariadb || C=mysql; } ; $C -h 127.0.0.1 -u root -p"$0" -N "$@"'
-  ready=0
-  for _ in $(seq 1 60); do
-    docker exec "$engine" sh -c "$cli" "$TEST_PASSWORD" -e "SELECT 1" >/dev/null 2>&1 && ready=1 && break
-    sleep 5
-  done
-  if [ $ready -ne 1 ]; then echo "  never became ready -- NOT RUN"; overall=1; continue; fi
-  granted=""
-  for _ in $(seq 1 30); do
-    granted=$(docker exec "$engine" sh -c "$cli" "$TEST_PASSWORD" -e "
-      GRANT ALL PRIVILEGES ON *.* TO '$TEST_USER'@'%' WITH GRANT OPTION;
-      FLUSH PRIVILEGES;
-      SET GLOBAL max_connections = 2000;
-      SELECT @@lower_case_table_names;" 2>/dev/null | tail -1)
-    [ -n "$granted" ] && break
-    sleep 2
-  done
-  if [ -z "$granted" ]; then echo "  grant failed -- NOT RUN"; overall=1; continue; fi
-  if [ ${#args[@]} -gt 0 ] && [ "$granted" != "1" ]; then
-    echo "  the server reports lower_case_table_names=$granted, not 1 -- NOT RUN"; overall=1; continue
+  # CI's own setup step, through CI's client, inside the engine's network namespace.
+  if ! setup_out=$(ci_mysql_family_setup "container:$engine" 127.0.0.1 3306 "$image" ${args:+lctn1} 2>&1); then
+    echo "  CI's setup step failed -- NOT RUN"
+    echo "$setup_out" | tail -3 | sed 's/^/    /'
+    overall=1; continue
   fi
 
   # MSYS_NO_PATHCONV keeps Git Bash from rewriting the container-side paths; pwd -W gives Docker a Windows path.

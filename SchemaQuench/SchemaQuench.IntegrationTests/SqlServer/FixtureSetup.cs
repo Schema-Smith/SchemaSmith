@@ -109,6 +109,7 @@ public class FixtureSetup
             {
                 try { Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db); } catch (DbException) { /* in use by a live run; leave it */ }
             }
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.DropStaleGeneratedDatabases(cmd);
         }
         catch (DbException)
         {

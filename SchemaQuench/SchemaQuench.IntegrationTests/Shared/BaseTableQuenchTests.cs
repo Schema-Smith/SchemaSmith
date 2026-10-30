@@ -41,7 +41,7 @@ public abstract class BaseTableQuenchTests
     /// <param name="cmd">The database command to use</param>
     /// <param name="json">JSON array of table definitions</param>
     /// <param name="indexOnly">If true, runs IndexOnlyQuench instead of full TableQuench</param>
-    protected void RunTableQuenchProc(IDbCommand cmd, string json, bool indexOnly = false, bool dropTablesRemovedFromProduct = false, bool whatIf = false, string productName = "")
+    protected void RunTableQuenchProc(IDbCommand cmd, string json, bool indexOnly = false, bool dropTablesRemovedFromProduct = false, bool whatIf = false, string productName = "", Action? beforeRetry = null)
     {
         var prod = string.IsNullOrEmpty(productName) ? _productName : productName;
         cmd.CommandTimeout = 300;
@@ -61,7 +61,9 @@ public abstract class BaseTableQuenchTests
         // Was an inline copy of the same loop, narrower than it needed to be: it knew about deadlock and
         // lock-wait timeout and not about the concurrent-DDL skip (1684), which is how
         // RemovedFromProduct_DropsByDefault_WithUnknownIndexesOff failed a full run at two workers.
-        RetryingTransientConcurrency(() => cmd.ExecuteNonQuery());
+        // beforeRetry may use this same command, so each attempt sets the call again.
+        var call = cmd.CommandText;
+        RetryingTransientConcurrency(() => { cmd.CommandText = call; cmd.ExecuteNonQuery(); }, beforeRetry);
     }
 
     /// <summary>
@@ -99,7 +101,7 @@ public abstract class BaseTableQuenchTests
     protected static bool IsTransientConcurrency(Exception e) => TransientRetry.IsTransient(e);
 
     /// <summary>Run <paramref name="action"/>, retrying only the contention a deploy also retries.</summary>
-    protected static void RetryingTransientConcurrency(Action action) => TransientRetry.Run(action);
+    protected static void RetryingTransientConcurrency(Action action, Action? beforeRetry = null) => TransientRetry.Run(action, beforeRetry);
 
     /// <summary>
     /// Gets the data type string for a column in a table.

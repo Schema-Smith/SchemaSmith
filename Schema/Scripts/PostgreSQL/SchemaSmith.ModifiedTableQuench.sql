@@ -1731,7 +1731,11 @@ BEGIN
                   OR (COALESCE(ic."Compression", '') != '' AND COALESCE(ic."Compression", '') != COALESCE(iec."Compression", ''))
                   -- Declared identity sequence options that differ from the live sequence (only the ones declared).
                   OR (COALESCE(ic."Generated", '') LIKE 'GENERATED%IDENTITY%' AND COALESCE(iec."Generated", '') LIKE 'GENERATED%IDENTITY%'
-                      AND "SchemaSmith"."IdentityOptionChanges"(ic."Generated", ic."TableSchema", ic."TableName", ic."Name") <> ''))) || ')'';' || CHR(10) ||
+                      AND "SchemaSmith"."IdentityOptionChanges"(ic."Generated", ic."TableSchema", ic."TableName", ic."Name") <> ''))) || ')' ||
+           -- OnlineApply has no lower-lock form for a column change here (a type change rewrites the table), so under
+           -- Prefer or Require it runs as written and says so.
+           CASE WHEN "SchemaSmith"."OnlineApplyMode"(p_OnlineApply, c."TableSchema", c."TableName") <> 'OFF'
+                THEN ' (not covered by OnlineApply)' ELSE '' END || ''';' || CHR(10) ||
            -- A column converging to serial needs its sequence first: created and owned by the column here, made the
            -- default by the ALTER below. IF NOT EXISTS keeps an earlier half-applied run harmless.
            COALESCE((SELECT STRING_AGG('CREATE SEQUENCE IF NOT EXISTS ' || QUOTE_IDENT(sc."TableSchema") || '.' || QUOTE_IDENT(sc."TableName" || '_' || sc."Name" || '_seq') ||
@@ -1846,8 +1850,9 @@ BEGIN
     -- modified-column predicate; temp_existing_columns is a stable snapshot, so it stays valid
     -- after the ALTER ran (per-column, not folded per-table like the ALTER).
     -- #363: runs regardless of p_WhatIf; the action carries the mode (wouldModify under WhatIf).
-    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
-        SELECT pg_backend_pid(), 'column', c."TableSchema" || '.' || c."TableName" || '.' || c."Name", CASE WHEN p_WhatIf THEN 'wouldModify' ELSE 'modified' END
+    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode")
+        SELECT pg_backend_pid(), 'column', c."TableSchema" || '.' || c."TableName" || '.' || c."Name", CASE WHEN p_WhatIf THEN 'wouldModify' ELSE 'modified' END,
+               CASE WHEN "SchemaSmith"."OnlineApplyMode"(p_OnlineApply, c."TableSchema", c."TableName") <> 'OFF' THEN 'notCovered' END
           FROM temp_columns c
           JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema"
                                        AND ec."TableName" = c."TableName"

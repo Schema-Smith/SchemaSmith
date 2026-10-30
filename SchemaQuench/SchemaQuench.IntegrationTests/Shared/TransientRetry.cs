@@ -23,11 +23,14 @@ internal static class TransientRetry
         || e.Message.ContainsIgnoringCase("Deadlock found when trying to get lock")
         || e.Message.ContainsIgnoringCase("Lock wait timeout exceeded")
         || e.Message.ContainsIgnoringCase("is being modified by concurrent DDL statement")   // 1684
-        || e.Message.ContainsIgnoringCase("Failed to read auto-increment value");            // 1467
+        || e.Message.ContainsIgnoringCase("Failed to read auto-increment value")             // 1467
+        || e.Message.ContainsIgnoringCase("Prepared statement needs to be re-prepared");     // 1615
 
-    public static void Run(Action action) => Run(() => { action(); return 0; });
+    // beforeRetry restores the starting state for a test whose claim depends on it: a retried deploy finds what the
+    // failed attempt already created, which is a different deploy from the one the test describes.
+    public static void Run(Action action, Action beforeRetry = null) => Run(() => { action(); return 0; }, beforeRetry);
 
-    public static T Run<T>(Func<T> func)
+    public static T Run<T>(Func<T> func, Action beforeRetry = null)
     {
         for (var attempt = 1; attempt < Attempts; attempt++)
         {
@@ -39,8 +42,12 @@ internal static class TransientRetry
             catch (Exception e) when (IsTransient(e))
             {
                 // A retried call that had already changed something can explain an assertion that fails only in a full run.
-                TestContext.Progress.WriteLine($"TransientRetry: attempt {attempt} of {TestContext.CurrentContext.Test.Name} failed: {e.Message}");
+                // Out as well as Progress: the console logger hides Progress, and Out lands in the test's TRX output.
+                var note = $"TransientRetry: attempt {attempt} of {TestContext.CurrentContext.Test.Name} failed: {e.Message}";
+                TestContext.Progress.WriteLine(note);
+                TestContext.Out.WriteLine(note);
                 Thread.Sleep(1000);
+                beforeRetry?.Invoke();
             }
         }
         return func();

@@ -179,6 +179,7 @@
     "Tables",
     "Target:Databases",
     "Target:Schemas",
+    "Target:SecondaryServers",
     "Target:Templates"
   ]
 }

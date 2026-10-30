@@ -303,4 +303,62 @@ public class DuplicationCheckTests
         Assert.That(findings.Count, Is.EqualTo(expected ? 1 : 0));
         if (expected) Assert.That(findings[0].Message, Does.Contain("policy"));
     }
+    // PostgreSQL deploys every name quoted, so names that differ only in case are two objects there, and a package declaring
+    // both deploys both. The other two engines fold case, so there they are still one name declared twice.
+    private static Product PostgresProduct() => new() { Name = "Acme", Platform = Platform.PostgreSQL, TemplateOrder = ["Main"] };
+
+    [Test]
+    public void OnPostgreSql_NamesThatDifferOnlyInCase_AreNotDuplicates()
+    {
+        var table = new PostgreSqlTable
+        {
+            Name = "invoice",
+            Columns = { new PostgreSqlColumn { Name = "Id", DataType = "int" }, new PostgreSqlColumn { Name = "id", DataType = "int" } },
+            Indexes = { new PostgreSqlIndex { Name = "ix_a", IndexColumns = "Id" }, new PostgreSqlIndex { Name = "IX_A", IndexColumns = "id" } },
+            Policies = { new PostgreSqlPolicy { Name = "p" }, new PostgreSqlPolicy { Name = "P" } }
+        };
+        var template = new Template { Name = "Main" };
+        template.Tables.Add(table);
+        template.Tables.Add(new PostgreSqlTable { Name = "Invoice" });
+        Modeled("enum type").Add(template, "public", "order_status", null);
+        Modeled("enum type").Add(template, "public", "ORDER_STATUS", null);
+
+        var findings = new DuplicationCheck().Run(Context(PostgresProduct(), template)).ToList();
+
+        Assert.That(findings, Is.Empty);
+    }
+
+    [Test]
+    public void OnPostgreSql_TheSameSpellingTwice_IsStillADuplicate()
+    {
+        var table = new PostgreSqlTable { Name = "invoice", Policies = { new PostgreSqlPolicy { Name = "p" }, new PostgreSqlPolicy { Name = "p" } } };
+        var template = new Template { Name = "Main" };
+        template.Tables.Add(table);
+        Modeled("enum type").Add(template, "public", "order_status", null);
+        Modeled("enum type").Add(template, "public", "order_status", null);
+
+        var findings = new DuplicationCheck().Run(Context(PostgresProduct(), template)).ToList();
+
+        Assert.That(findings.Select(f => f.Message), Has.Exactly(1).Contains("Duplicate policy name 'p'")
+            .And.Exactly(1).Contains("Duplicate enum type name 'public.order_status'"));
+    }
+
+    [Test]
+    public void OnMySql_NamesThatDifferOnlyInCase_AreStillDuplicates()
+    {
+        var table = new MySqlTable
+        {
+            Name = "invoice",
+            Columns = { new MySqlColumn { Name = "Id", DataType = "int" }, new MySqlColumn { Name = "ID", DataType = "int" } }
+        };
+        var template = new Template { Name = "Main" };
+        template.Tables.Add(table);
+        template.Tables.Add(new MySqlTable { Name = "INVOICE" });
+        var product = new Product { Name = "Acme", Platform = Platform.MySQL, TemplateOrder = ["Main"] };
+
+        var findings = new DuplicationCheck().Run(Context(product, template)).ToList();
+
+        Assert.That(findings.Select(f => f.Message), Has.Exactly(1).Contains("Duplicate column name")
+            .And.Exactly(1).Contains("Duplicate table name"));
+    }
 }

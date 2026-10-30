@@ -5,7 +5,11 @@ using System.Collections.Generic;
 namespace SchemaQuench;
 
 // Mode is the form a statement ran in under OnlineApply (online, resumable, unavailable); null for everything else.
-public sealed record ChangeAuditRow(string ObjectType, string ObjectName, string Action, string Mode = null);
+// Target is where the change was made; a fleet run records the same change once per target.
+public sealed record ChangeAuditRow(string ObjectType, string ObjectName, string Action, string Mode = null, ChangeTarget Target = null);
+
+// Schema is set only for a schema template's iteration.
+public sealed record ChangeTarget(string Server, string Database, string Schema = null);
 
 /// <summary>
 /// Run-level collector for object-change audit rows (#243 E5). The 4 table quench procs write rows
@@ -25,19 +29,19 @@ public sealed class ChangeAuditCapture
 
     public void MarkInstrumented() => _instrumented = true;
 
-    public void Record(string objectType, string objectName, string action, string mode = null)
+    public void Record(string objectType, string objectName, string action, string mode = null, ChangeTarget target = null)
     {
-        lock (_gate) _rows.Add(new ChangeAuditRow(objectType, objectName, action, mode));
+        lock (_gate) _rows.Add(new ChangeAuditRow(objectType, objectName, action, mode, target));
     }
 
-    public void RecordRan(string objectType, string objectName) => Record(objectType, objectName, "ran");
+    public void RecordRan(string objectType, string objectName, ChangeTarget target = null) => Record(objectType, objectName, "ran", target: target);
 
     /// <summary>Withdraws one row recorded earlier, for a script skipped as unchanged that this run then runs after all.</summary>
-    public void Retract(string objectType, string objectName, string action)
+    public void Retract(string objectType, string objectName, string action, ChangeTarget target = null)
     {
         lock (_gate)
         {
-            var index = _rows.FindLastIndex(r => r.ObjectType == objectType && r.ObjectName == objectName && r.Action == action);
+            var index = _rows.FindLastIndex(r => r.ObjectType == objectType && r.ObjectName == objectName && r.Action == action && r.Target == target);
             if (index >= 0) _rows.RemoveAt(index);
         }
     }

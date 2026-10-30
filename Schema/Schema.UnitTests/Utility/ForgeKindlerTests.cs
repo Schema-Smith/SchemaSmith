@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Security.Cryptography;
@@ -349,7 +350,10 @@ public class ForgeKindlerTests
         // +1 on SQL Server = DegradeUnsupportedSelectiveXmlIndexes (below 2012 SP1 a selective XML index is skipped).
         // +1 on SQL Server = DegradeUnsupportedJsonIndexes (below 2025 a JSON index is skipped).
         // +1 on SQL Server = ValidateTableOwnership (the ownership refusal, before anything is created or renamed).
-        Assert.That(sqlServer.Length, Is.EqualTo(75));
+        // +1 on SQL Server = fn_FullTextInstalled (#594: without Full-Text Search a full-text index is skipped).
+        // +1 on SQL Server = PrintDowngrade (each degrade line names what it applied to).
+        // +1 on SQL Server = StampTableOwnership (a deploy whose tables are all new stamps them without the modify pass).
+        Assert.That(sqlServer.Length, Is.EqualTo(78));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -549,7 +553,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_ValidateTableOwnership (the ownership refusal, before anything is created or renamed).
         // +1 = SchemaSmith_SupportsGeneratedColumnCollation (a generated column's COLLATE, refused by early MariaDB patches).
         // +1 = SchemaSmith_DegradeUnsupportedColumnFeatures (column degrades reported once ShouldApply has settled).
-        Assert.That(mysql.Length, Is.EqualTo(111));
+        // +1 = SchemaSmith_TypeChangeKeepsForeignKey (a widening the engine makes under a foreign key keeps the key).
+        Assert.That(mysql.Length, Is.EqualTo(112));
     }
 
     [Test]
@@ -1224,5 +1229,68 @@ public class ForgeKindlerTests
 
         Assert.That(executed.Any(s => s.Contains("CREATE")), "Force must kindle even when the stamp matches.");
         Assert.That(executed.Any(s => s.Contains("INSERT INTO [SchemaSmith].[KindleStamp]")), "Force must re-stamp.");
+    }
+
+    [Test]
+    public void AMySqlDropOfARoutineTheDatabaseDoesNotHave_IsSkipped()
+    {
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "SchemaSmith_Present" };
+
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP PROCEDURE IF EXISTS `SchemaSmith_Absent`;", existing), Is.True);
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP FUNCTION IF EXISTS SchemaSmith_Absent", existing), Is.True);
+        var withHeader = "-- Copyright header\n-- a second comment\n\nDROP FUNCTION IF EXISTS `SchemaSmith_Absent`;";
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine(withHeader, existing), Is.True,
+            "a script's header comments arrive in the same batch as its drop");
+    }
+
+    [Test]
+    public void AMySqlDropOfARoutineTheDatabaseHas_OrAnyOtherBatch_Runs()
+    {
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "SchemaSmith_Present" };
+
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP PROCEDURE IF EXISTS `schemasmith_present`;", existing), Is.False,
+            "routine names are case-insensitive, so a differently cased drop of an existing routine must run");
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP PROCEDURE IF EXISTS `SchemaSmith_Absent`; SELECT 1;", existing), Is.False);
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("CREATE PROCEDURE `SchemaSmith_Absent`() BEGIN END", existing), Is.False);
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP TABLE IF EXISTS `SchemaSmith_Absent`;", existing), Is.False);
+    }
+
+    [Test]
+    public void AMySqlRoutineTheKindleCreates_IsDroppedByALaterScript()
+    {
+        var existing = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        ForgeKindler.RecordCreatedRoutine("CREATE FUNCTION `SchemaSmith_Made`(x INT) RETURNS INT DETERMINISTIC RETURN x", existing);
+        ForgeKindler.RecordCreatedRoutine("CREATE DEFINER = CURRENT_USER PROCEDURE SchemaSmith_Also() BEGIN END", existing);
+
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP FUNCTION IF EXISTS `SchemaSmith_Made`;", existing), Is.False);
+        Assert.That(ForgeKindler.IsDropOfAbsentRoutine("DROP PROCEDURE IF EXISTS `SchemaSmith_Also`;", existing), Is.False);
+    }
+
+    // The drop skip only saves anything if the real scripts' drops are the batches it recognizes: every routine a
+    // MySQL-family kindle creates is dropped first by a batch the skip would leave out on a fresh database.
+    [TestCase(Platform.MySQL)]
+    [TestCase(Platform.MariaDb)]
+    public void EveryKindledRoutine_IsDroppedFirstByABatchTheSkipRecognizes(Platform platform)
+    {
+        var none = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var unrecognized = new List<string>();
+        var routines = 0;
+        foreach (var s in ForgeKindler.GetKindlingScripts(platform))
+        {
+            var batches = Schema.DataAccess.BatchSplitter.Split(
+                ForgeKindler.ResolveKindleScript(s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef));
+            for (var i = 0; i < batches.Count; i++)
+            {
+                var created = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                ForgeKindler.RecordCreatedRoutine(batches[i], created);
+                if (created.Count == 0) continue;
+                routines++;
+                if (i == 0 || !ForgeKindler.IsDropOfAbsentRoutine(batches[i - 1], none)) unrecognized.Add(s.FileName);
+            }
+        }
+
+        Assert.That(routines, Is.GreaterThan(80), "too few routines found; the scan is broken");
+        Assert.That(unrecognized, Is.Empty, "these scripts create a routine whose drop the skip does not recognize");
     }
 }

@@ -338,4 +338,24 @@ public class DeploymentSummaryJsonTests
             Assert.That(((JObject)details[1]).ContainsKey("mode"), Is.False);
         });
     }
+
+    [Test]
+    public void Serialize_WritesWhereEachChangeWasMade_OnlyWhenItIsKnown()
+    {
+        var summary = BuildFullyPopulatedSummary() with
+        {
+            ObjectChanges = new ObjectChangeSummary(true, new CreatedCounts(1, 0, 0, 0, 0, 0, 0, 0), new ModifiedCounts(0, 0),
+                new DroppedCounts(0, 0, 0, 0), 0,
+                [new ObjectChangeDetail("table", "[dbo].[T]", "created", Server: "srv", Database: "tenant_003", Schema: "sales"),
+                 new ObjectChangeDetail("table", "[dbo].[U]", "created")])
+        };
+        var details = (JArray)JObject.Parse(DeploymentSummaryJson.Serialize(summary)).SelectToken("objectChanges.details")!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(details[0]["server"]?.Value<string>(), Is.EqualTo("srv"));
+            Assert.That(details[0]["database"]?.Value<string>(), Is.EqualTo("tenant_003"));
+            Assert.That(details[0]["schema"]?.Value<string>(), Is.EqualTo("sales"));
+            Assert.That(((JObject)details[1]).ContainsKey("server") || ((JObject)details[1]).ContainsKey("database"), Is.False);
+        });
+    }
 }

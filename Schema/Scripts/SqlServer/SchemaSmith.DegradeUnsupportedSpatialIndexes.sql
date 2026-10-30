@@ -45,7 +45,10 @@ BEGIN
       SELECT @@SPID, 'spatial AUTO_GRID tessellation (SQL Server 2012)', s.[Schema] + '.' + s.[TableName] + '.' + s.[IndexName], 'downgraded'
         FROM #SpatialIndexes s WITH (NOLOCK)
         WHERE s.[Tessellation] LIKE '%[_]AUTO[_]GRID'
-    RAISERROR('  Spatial AUTO_GRID tessellation created as GRID (requires SQL Server 2012 - downgraded)', 10, 100) WITH NOWAIT
+    DECLARE @v_AutoGridList NVARCHAR(MAX) = STUFF((SELECT ', ' + s.[Schema] + '.' + s.[TableName] + '.' + s.[IndexName] FROM #SpatialIndexes s WITH (NOLOCK)
+                                                     WHERE s.[Tessellation] LIKE '%[_]AUTO[_]GRID'
+                                                     FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+    EXEC SchemaSmith.PrintDowngrade N'  Spatial AUTO_GRID tessellation created as GRID (requires SQL Server 2012 - downgraded)', @v_AutoGridList
     UPDATE #SpatialIndexes SET [Tessellation] = REPLACE([Tessellation], '_AUTO_GRID', '_GRID') WHERE [Tessellation] LIKE '%[_]AUTO[_]GRID'
   END
 
@@ -55,7 +58,10 @@ BEGIN
       SELECT @@SPID, 'spatial index compression (SQL Server 2012)', s.[Schema] + '.' + s.[TableName] + '.' + s.[IndexName], 'downgraded'
         FROM #SpatialIndexes s WITH (NOLOCK)
         WHERE s.[CompressionType] IN ('ROW', 'PAGE')
-    RAISERROR('  Spatial index created uncompressed (requires SQL Server 2012 - downgraded)', 10, 100) WITH NOWAIT
+    DECLARE @v_CompressedList NVARCHAR(MAX) = STUFF((SELECT ', ' + s.[Schema] + '.' + s.[TableName] + '.' + s.[IndexName] FROM #SpatialIndexes s WITH (NOLOCK)
+                                                       WHERE s.[CompressionType] IN ('ROW', 'PAGE')
+                                                       FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+    EXEC SchemaSmith.PrintDowngrade N'  Spatial index created uncompressed (requires SQL Server 2012 - downgraded)', @v_CompressedList
     UPDATE #SpatialIndexes SET [CompressionType] = NULL WHERE [CompressionType] IN ('ROW', 'PAGE')
   END
 END

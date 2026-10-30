@@ -92,7 +92,13 @@ public class TableQuench_ExpressionMapAdoptTests : BaseTableQuenchTests
             cmd.ExecuteNonQuery();
             var before = Identity(cmd, t);
 
-            RunTableQuenchProc(cmd, Json(t));
+            // A failed attempt has already recorded the map, so its retry would be a second deploy, not a first.
+            RunTableQuenchProc(cmd, Json(t), beforeRetry: () =>
+            {
+                using var reset = cmd.Connection!.CreateCommand();
+                reset.CommandText = $"DELETE FROM SchemaSmith.ExpressionMap WHERE [ObjectTable] = '{t}'; DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+                reset.ExecuteNonQuery();
+            });
             Assert.Multiple(() =>
             {
                 Assert.That(Audits(cmd, t), Is.Empty, "nothing re-applied: the CHECK, computed column, default, filtered index and filtered statistic are the declared ones");

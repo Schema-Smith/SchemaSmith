@@ -26,7 +26,9 @@ BEGIN
   INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
     SELECT @@SPID, 'JSON index (SQL Server 2025)', j.[Schema] + '.' + j.[TableName] + '.' + j.[IndexName], 'downgraded'
       FROM #JsonIndexes j WITH (NOLOCK)
-  RAISERROR('  JSON index skipped: requires SQL Server 2025 - the table deploys without it (downgraded)', 10, 100) WITH NOWAIT
+  DECLARE @v_Skipped NVARCHAR(MAX) = STUFF((SELECT ', ' + j.[Schema] + '.' + j.[TableName] + '.' + j.[IndexName] FROM #JsonIndexes j WITH (NOLOCK)
+                                                FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  EXEC SchemaSmith.PrintDowngrade N'  JSON index skipped: requires SQL Server 2025 - the table deploys without it (downgraded)', @v_Skipped
 
   DELETE FROM #JsonIndexes
 END

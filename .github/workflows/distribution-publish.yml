@@ -76,8 +76,8 @@ jobs:
 
   winget:
     # Submit/update the SchemaSmith.SchemaSmith manifest in microsoft/winget-pkgs from the
-    # published Windows release zips. Skipped when WINGET_PAT is absent, and skipped while the
-    # channel is PARKED (see the gate step).
+    # published Windows release zips. Skipped when WINGET_PAT is absent, or when the channel is
+    # parked (see the gate step).
     runs-on: windows-latest
     needs: version
     environment: release
@@ -85,11 +85,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # winget is PARKED behind an unresolved upstream blocker, but the PAT is still configured --
-      # so the job used to attempt the channel on every release and fail, turning the whole publish
-      # run red. A run that is always red is a run nobody reads, and this one fires on
-      # `release: published`, AFTER the irreversible step, where a real Docker or AUR failure is
-      # exactly what would get lost in the noise.
+      # Parking the channel must not turn the whole publish run red: a run that is always red is a
+      # run nobody reads, and this one fires on `release: published`, AFTER the irreversible step,
+      # where a real Docker or AUR failure is exactly what would get lost in the noise.
       #
       # Gated rather than `continue-on-error: true` on purpose: a SKIPPED job says "deliberately
       # off", while a green-with-errors job says nothing at all and hides a genuine regression the

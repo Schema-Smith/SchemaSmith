@@ -55,6 +55,7 @@ namespace Schema.Domain
         public string BeforeBranchNameMask { get; set; } = "ref: refs/heads/";
 
         [JsonProperty(Order = 8)]
+        [DefaultValue("")]
         public string AfterBranchNameMask { get; set; } = "";
 
         [JsonProperty(Order = 9)]

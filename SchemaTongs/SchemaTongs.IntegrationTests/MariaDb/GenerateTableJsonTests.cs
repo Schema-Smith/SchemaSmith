@@ -173,6 +173,8 @@ CREATE TABLE `{_integrationDb}`.`OrdinaryTable` (`Id` INT NOT NULL PRIMARY KEY) 
             Assert.That(p.StartColumn, Is.EqualTo("ValidFrom"));
             Assert.That(p.EndColumn, Is.EqualTo("ValidTo"),
                 "Start and end must not be transposed -- the interval would silently invert.");
+            Assert.That(periodTable.CheckConstraints.Select(c => c.Name), Does.Not.Contain("Validity"),
+                "the engine's own check for the period (ValidFrom < ValidTo) is the period's, not a declared check");
 
             Assert.That(versionedTable.Periods, Is.Empty,
                 "SYSTEM_TIME is listed in PERIODS for an explicitly-versioned table, but it is already "

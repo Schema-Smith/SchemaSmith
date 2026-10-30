@@ -892,9 +892,9 @@
   EXEC(@v_SQL)
 
   -- The declared period columns go onto their table row and off #Columns, so no ordinary column pass sees them.
-  EXEC SchemaSmith.LiftPeriodColumns
+  IF EXISTS (SELECT 1 FROM #Columns WITH (NOLOCK) WHERE UPPER([GeneratedAlways]) IN ('ROWSTART', 'ROWEND')) EXEC SchemaSmith.LiftPeriodColumns
   -- A ledger table's declared generated columns, by role; on an existing table they converge in LedgerQuench.
-  EXEC SchemaSmith.LiftLedgerColumns
+  IF EXISTS (SELECT 1 FROM #Columns WITH (NOLOCK) WHERE UPPER([GeneratedAlways]) IN ('TRANSACTIONIDSTART', 'TRANSACTIONIDEND', 'SEQUENCENUMBERSTART', 'SEQUENCENUMBEREND')) EXEC SchemaSmith.LiftLedgerColumns
 
   -- Don't try to apply tables without columns
   DELETE FROM #Tables

@@ -127,21 +127,28 @@ public static class DeploymentSummaryText
     private static void RenderAppliedBeforeTheFailure(DeploymentSummary summary, List<string> lines)
     {
         if (summary.Run.Outcome is not (RunOutcome.PartialFailure or RunOutcome.Aborted)) return;
-        var migrations = summary.MigrationScripts.Where(m => m.Outcome == "Ran").Select(m => $"migration script {m.Path}");
+        var migrations = summary.MigrationScripts.Where(m => m.Outcome == "Ran")
+            .Select(m => (Target: FormatScope(m.Server, m.Database, m.Schema) ?? "", Item: $"migration script {m.Path}"));
         var details = summary.ObjectChanges?.Details ?? [];
         var changes = details
             .Where(d => !d.Action.StartsWith("would", StringComparison.Ordinal) && !NotAChange.Contains(d.Action))
-            .Select(d => d.Action switch
+            .Select(d => (Target: FormatScope(d.Server, d.Database, d.Schema) ?? "", Item: d.Action switch
             {
                 "ran" => $"{d.ObjectType} {d.ObjectName}",
                 "delivered" when d.ObjectType == "dataDelivery" => $"data {d.ObjectName}",
                 _ => $"{d.ObjectType} {d.ObjectName} {d.Action}"
-            });
+            }));
         var applied = migrations.Concat(changes).ToList();
         lines.Add($"## Applied Before The Failure ({applied.Count})");
         lines.Add("Nothing here was rolled back. `--ResumeQuench` continues from where the run stopped.");
-        foreach (var item in applied)
-            lines.Add($"- {item}");
+        // Grouped by target, in the order each was first reached: on a fleet run the same change is made in many places,
+        // and what matters for recovery is which ones. A change with no recorded target is listed first, ungrouped.
+        foreach (var group in applied.GroupBy(a => a.Target).OrderBy(g => g.Key.Length == 0 ? 0 : 1))
+        {
+            if (group.Key.Length > 0) lines.Add($"### {group.Key}");
+            foreach (var item in group)
+                lines.Add($"- {item.Item}");
+        }
         lines.Add("");
     }
 

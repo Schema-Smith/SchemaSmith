@@ -53,6 +53,7 @@ public static class SettingsContract
         SettingsKeys.Target.Templates,
         SettingsKeys.Target.Databases,
         SettingsKeys.Target.Schemas,
+        SettingsKeys.Target.SecondaryServers,
         SettingsKeys.TablesToExtract
     ];
 

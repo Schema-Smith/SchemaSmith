@@ -229,7 +229,7 @@ public class SchemaTongs
             var overrideFactory = GetConnectionFactory();
             var overrideConnection = overrideFactory.GetDbConnection(connectionStringOverride);
             overrideConnection.Open();
-            return overrideConnection;
+            return Prepared(overrideConnection);
         }
 
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
@@ -247,6 +247,11 @@ public class SchemaTongs
         var connectionFactory = GetConnectionFactory();
         var connection = connectionFactory.GetDbConnection(connectionString);
         connection.Open();
+        return Prepared(connection);
+    }
+
+    private IDbConnection Prepared(IDbConnection connection)
+    {
         // The extraction routines say what they leave out through a warning message (a temporal foreign key on
         // PostgreSQL, a bound rule on SQL Server); without a listener the message dies in the driver and the package
         // is silently short of it.
@@ -263,6 +268,14 @@ public class SchemaTongs
                     if (error.Class <= 10 && error.Message.StartsWith("WARNING: ", StringComparison.Ordinal))
                         _progressLog.Warn($"    {error.Message}");
             };
+        // A catalog query that joins pg_proc to itself several times is estimated past the JIT thresholds, and
+        // compiling it costs seconds for a query that runs in milliseconds.
+        if (_platform.GetBasePlatform() == Platform.PostgreSQL)
+        {
+            using var jitOff = connection.CreateCommand();
+            jitOff.CommandText = "SET jit = off";
+            jitOff.ExecuteNonQuery();
+        }
         return connection;
     }
 
@@ -1617,7 +1630,7 @@ SELECT SCHEMA_NAME(p.[schema_id]), p.[name], p.is_enabled, p.is_schema_bound, p.
             var script =
                 "SET QUOTED_IDENTIFIER ON\r\n" +
                 "IF OBJECT_ID('sys.security_policies') IS NULL\r\n" +
-                $"  RAISERROR('  Security policy {EscapeSql(qualified)} skipped: row-level security needs SQL Server 2016', 10, 1) WITH NOWAIT\r\n" +
+                $"  RAISERROR('  Security policy {EscapeSql(qualified).Replace("%", "%%")} skipped: row-level security needs SQL Server 2016', 10, 1) WITH NOWAIT\r\n" +
                 "ELSE\r\nBEGIN\r\n" +
                 $"  DECLARE @policy NVARCHAR(600) = N'{EscapeSql(qualified)}', @v_Live NVARCHAR(MAX)\r\n" +
                 $"  SET @v_Live = ({SecurityPolicySignatureSql})\r\n" +
@@ -3382,6 +3395,9 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
         // with no tables is written without a FOR clause. CREATE PUBLICATION has no IF NOT EXISTS form, so the guarded
         // create goes through a DO $$ ... $$ block. The column list comes from pg_publication_rel.prattrs, which is
         // NULL when none was declared; pg_publication_tables.attnames lists every column either way.
+        // The guard skips the create once the publication exists, so ALTER PUBLICATION ... SET follows it for the tables
+        // and options. SET TABLE keeps the members it already has, and the options are written out in full, so a change
+        // back to a default is applied too. FOR ALL TABLES cannot be altered.
         var version = PostgreSqlServerVersionNum(command);
         var columnList = version >= 150000
             ? "COALESCE(' (' || (SELECT STRING_AGG(QUOTE_IDENT(att.attname), ', ' ORDER BY att.attnum) FROM pg_attribute att WHERE att.attrelid = pr.prrelid AND att.attnum = ANY(pr.prattrs)) || ')', '')"
@@ -3392,6 +3408,13 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
             : "NULL::text";
         var viaRoot = version >= 130000 ? "CASE WHEN p.pubviaroot THEN ', publish_via_partition_root = true' ELSE '' END" : "''";
         var generated = version >= 180000 ? "CASE WHEN p.pubgencols = 's' THEN ', publish_generated_columns = stored' ELSE '' END" : "''";
+        var setViaRoot = version >= 130000 ? "', publish_via_partition_root = ' || CASE WHEN p.pubviaroot THEN 'true' ELSE 'false' END" : "''";
+        var setGenerated = version >= 180000 ? "', publish_generated_columns = ' || CASE WHEN p.pubgencols = 's' THEN 'stored' ELSE 'none' END" : "''";
+        const string publish = @"QUOTE_LITERAL(CONCAT_WS(', ',
+            CASE WHEN p.pubinsert THEN 'insert' END,
+            CASE WHEN p.pubupdate THEN 'update' END,
+            CASE WHEN p.pubdelete THEN 'delete' END,
+            CASE WHEN p.pubtruncate THEN 'truncate' END))";
         command.CommandText = $@"
 SELECT 'Publications' AS Folder,
        p.pubname AS FullName,
@@ -3401,13 +3424,13 @@ SELECT 'Publications' AS Folder,
             WHEN t.tables IS NULL AND s.schemas IS NULL THEN ''
             ELSE ' FOR ' || CONCAT_WS(', ', 'TABLE ' || t.tables, 'TABLES IN SCHEMA ' || s.schemas)
        END ||
-       ' WITH (publish = ' || QUOTE_LITERAL(CONCAT_WS(', ',
-            CASE WHEN p.pubinsert THEN 'insert' END,
-            CASE WHEN p.pubupdate THEN 'update' END,
-            CASE WHEN p.pubdelete THEN 'delete' END,
-            CASE WHEN p.pubtruncate THEN 'truncate' END)) ||
+       ' WITH (publish = ' || {publish} ||
        {viaRoot} || {generated} ||
-       E');\n    END IF;\nEND\n$$;' AS Code
+       E');\n    END IF;\nEND\n$$;' ||
+       CASE WHEN p.puballtables OR (t.tables IS NULL AND s.schemas IS NULL) THEN ''
+            ELSE E'\nALTER PUBLICATION ' || QUOTE_IDENT(p.pubname) || ' SET ' || CONCAT_WS(', ', 'TABLE ' || t.tables, 'TABLES IN SCHEMA ' || s.schemas) || ';'
+       END ||
+       E'\nALTER PUBLICATION ' || QUOTE_IDENT(p.pubname) || ' SET (publish = ' || {publish} || {setViaRoot} || {setGenerated} || ');' AS Code
   FROM pg_publication p
   LEFT JOIN LATERAL (
        SELECT STRING_AGG(QUOTE_IDENT(rn.nspname) || '.' || QUOTE_IDENT(rc.relname) || {columnList} || {rowFilter}, ', ' ORDER BY rn.nspname, rc.relname) AS tables
@@ -4593,8 +4616,10 @@ SELECT cc.name AS [Name],
                         PromoteCheckConstraintsToTableLevel(sqlTable, allConstraints);
                     }
 
-                    var oldTableFile = ResolveOutputPath(tableDir, EncodeObjectFileName(tableSchema, tableObj.OldName.Trim('"'), ".json"));
-                    if (FileWrapper.GetFromFactory().Exists(filename) || FileWrapper.GetFromFactory().Exists(oldTableFile))
+                    var oldTableFile = !string.IsNullOrEmpty(tableObj.OldName)
+                        ? ResolveOutputPath(tableDir, EncodeObjectFileName(tableSchema, tableObj.OldName.Trim('"'), ".json"))
+                        : null;
+                    if (FileWrapper.GetFromFactory().Exists(filename) || (oldTableFile != null && FileWrapper.GetFromFactory().Exists(oldTableFile)))
                     {
                         var original = LoadOriginalForPreservation(FileWrapper.GetFromFactory().Exists(filename) ? filename : oldTableFile);
                         ImportTableHelper.PreserveDataDeliveryAndCustomProperties(tableObj, original, IsVariantActive, SourceCanReportXmlCompression);

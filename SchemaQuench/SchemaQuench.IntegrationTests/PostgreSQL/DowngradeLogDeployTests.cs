@@ -50,4 +50,30 @@ public class DowngradeLogDeployTests : ObjectScriptDeployFixture
             CleanUp();
         }
     }
+
+    // A column change is named in the deploy log under OnlineApply Off, the default, as it is under Prefer and Require.
+    [Test]
+    public void AColumnChange_IsNamedInTheDeployLog_WithOnlineApplyOff()
+    {
+        CleanUp();
+        try
+        {
+            string Table(string type) => $$"""
+                { "Schema": "public", "Name": "downgrade_log_probe",
+                  "Columns": [ { "Name": "a", "DataType": "integer", "Nullable": false }, { "Name": "b", "DataType": "{{type}}" } ] }
+                """;
+            WritePackage("");
+            WriteFile("Tables", "public.downgrade_log_probe.json", Table("integer"));
+            Deploy();
+            WriteFile("Tables", "public.downgrade_log_probe.json", Table("bigint"));
+
+            var run = Deploy();
+
+            Assert.That(run.Log, Has.Some.Contains("Modified columns found in public.downgrade_log_probe(b)"), string.Join(" | ", run.Log));
+        }
+        finally
+        {
+            CleanUp();
+        }
+    }
 }

@@ -439,7 +439,8 @@ BEGIN
   -- ALTER POLICY (the pass immediately above), compared through the expression map so PostgreSQL's rewrite of
   -- the text is not mistaken for a change.
   RAISE NOTICE 'Add Missing Row Level Security Policies';
-  SELECT STRING_AGG('CREATE POLICY ' || QUOTE_IDENT(tp."Name") ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Creating policy ' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''';' || CHR(10) ||
+                    'CREATE POLICY ' || QUOTE_IDENT(tp."Name") ||
                     ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") ||
                     ' AS ' || tp."Permissive" ||
                     ' FOR ' || tp."Command" ||
@@ -474,7 +475,8 @@ BEGIN
   -- removing a clause. An expression-only change is the ALTER POLICY pass above. Roles is compared as a
   -- normalised, order-insensitive, lower-cased set.
   RAISE NOTICE 'Re-converge Changed Row Level Security Policies';
-  SELECT STRING_AGG('DROP POLICY ' || QUOTE_IDENT(tp."Name") || ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") || ';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Re-creating policy ' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''';' || CHR(10) ||
+                    'DROP POLICY ' || QUOTE_IDENT(tp."Name") || ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") || ';' || CHR(10) ||
                     'CREATE POLICY ' || QUOTE_IDENT(tp."Name") ||
                     ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") ||
                     ' AS ' || tp."Permissive" ||

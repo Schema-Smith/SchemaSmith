@@ -89,9 +89,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                    WHEN 'x' THEN 'EXTENDED'
                                    ELSE 'DEFAULT' END AS "Storage",
                                "SchemaSmith"."ColumnCompression"(a.attrelid, a.attnum) AS "Compression",
-                               COL_DESCRIPTION(a.attrelid, a.attnum) AS "Description",
-                               '' AS "ShouldApplyExpression",
-                               '' AS "OldName"
+                               COL_DESCRIPTION(a.attrelid, a.attnum) AS "Description"
                           FROM information_schema.columns c
                           JOIN pg_attribute a ON a.attrelid = ("SchemaSmith"."QuoteName"(c.table_schema) || '.' || "SchemaSmith"."QuoteName"(c.table_name))::regclass
                                              AND a.attname = c.column_name
@@ -148,7 +146,6 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                CASE WHEN "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid) THEN NULL
                                     ELSE (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') END AS "AccessMethod",
                                "SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)) AS "FilterExpression",
-                               '' AS "ShouldApplyExpression",
                                -- Only a fill factor someone set is declared; an index without the option is on the
                                -- engine's default for its access method, which is not an authored value and would
                                -- give a hash or SP-GiST index the btree 90 if written.
@@ -191,7 +188,6 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                   CROSS JOIN LATERAL UNNEST(con.confkey) WITH ORDINALITY AS u(element, idx)
                                   WHERE a.attrelid = frel.oid
                                     AND a.attnum = element) AS "RelatedColumns",
-                               '' AS "ShouldApplyExpression",
                                CASE con.confdeltype WHEN 'a' THEN '' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' END AS "DeleteAction",
                                NULLIF("SchemaSmith"."ForeignKeySetNullColumns"(con.oid), '') AS "SetNullColumns",
                                CASE con.confupdtype WHEN 'a' THEN '' WHEN 'c' THEN 'CASCADE' WHEN 'n' THEN 'SET NULL' WHEN 'r' THEN 'RESTRICT' WHEN 'd' THEN 'SET DEFAULT' END AS "UpdateAction",
@@ -218,7 +214,6 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                -- pg_get_constraintdef renders the state suffixes after the predicate; they are attributes,
                                -- not expression text, so they are stripped here and read from the catalog flags below.
                                "SchemaSmith"."CheckPredicate"(con.oid) AS "Expression",
-                               '' AS "ShouldApplyExpression",
                                CASE WHEN NOT COALESCE(con.convalidated, TRUE) THEN FALSE END AS "Validated",
                                CASE WHEN con.connoinherit THEN TRUE END AS "NoInherit",
                                CASE WHEN NOT "SchemaSmith"."ConstraintEnforced"(con.oid) THEN FALSE END AS "Enforced"
@@ -261,7 +256,6 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                           LEFT JOIN pg_namespace nsp ON nsp.oid = o.oprnamespace AND nsp.nspname != 'pg_catalog'
                                           ORDER BY k.idx) cols) AS "ExcludeColumns",
                                "SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)) AS "FilterExpression",
-                               '' AS "ShouldApplyExpression",
                                COALESCE(con.condeferrable, FALSE) AS "Deferrable",
                                COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred",
                                -- The backing index's extras, as an index's: covering columns, every storage parameter
@@ -294,8 +288,6 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                           FROM pg_policies pol
                           WHERE pol.schemaname = t.table_schema
                             AND pol.tablename = t.table_name) sub) AS "Policies",
-               '' AS "ShouldApplyExpression",
-               '' AS "OldName",
                rls.relrowsecurity AS "RowLevelSecurity",
                rls.relforcerowsecurity AS "ForceRowLevelSecurity",
                -- Emit the sticky drop-protection marker first-class (only when set true; FormatJson strips the null key

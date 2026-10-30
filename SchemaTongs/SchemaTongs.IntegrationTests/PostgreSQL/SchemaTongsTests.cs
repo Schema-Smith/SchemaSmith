@@ -11,6 +11,7 @@ using Schema.Utility;
 using log4net;
 using NSubstitute;
 using System.IO;
+using System.Collections.Generic;
 
 namespace SchemaTongs.IntegrationTests.PostgreSQL;
 
@@ -64,6 +65,7 @@ public class SchemaTongsTests
             file.Received(1).WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("product.json")), Arg.Any<string>());
             file.Received(1).WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("template.json")), Arg.Any<string>());
             file.Received(1).WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase(Path.Join("Tables", "Test.TestTable.json"))), Arg.Any<string>());
+            Shared.ExtractedJson.HasNoEmptyValues(file);
 
             config["ShouldCast:Tables"] = "false";
             FactoryContainer.Clear();
@@ -349,6 +351,139 @@ ALTER TABLE ""Test"".""TestTable"" DROP CONSTRAINT IF EXISTS ""chk_column2_not_b
         cmd.CommandText = sql;
         cmd.ExecuteNonQuery();
         conn.Close();
+    }
+
+    // The aggregate query joins pg_proc to itself eight times; with JIT on, PostgreSQL spent ~2.3 s compiling it on every
+    // extraction and once ran past the command timeout.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void EveryExtractionSession_RunsWithJitOff(bool connectionStringSwitch)
+    {
+        using (var plain = new PostgreSqlConnectionFactory().GetDbConnection(_connectionString))
+        {
+            plain.Open();
+            using var show = plain.CreateCommand();
+            show.CommandText = "SHOW jit";
+            if (show.ExecuteScalar()?.ToString() == "off") Assert.Ignore("the server's default is already jit = off, so this test cannot tell");
+        }
+        var errorLog = Substitute.For<ILog>();
+        var progressLog = Substitute.For<ILog>();
+        var file = Substitute.For<IFile>();
+        var directory = Substitute.For<IDirectory>();
+        var jitSettings = new List<string>();
+        var factory = Substitute.For<IDbConnectionFactory>();
+        factory.GetDbConnection(Arg.Any<string>()).Returns(ci =>
+            new JitReportingConnection(new PostgreSqlConnectionFactory().GetDbConnection(ci.Arg<string>()), jitSettings));
+        lock (FactoryContainer.SharedLockObject)
+        {
+            LogFactory.Register("ErrorLog", errorLog);
+            LogFactory.Register("ProgressLog", progressLog);
+            var environment = Substitute.For<IEnvironment>();
+            FactoryContainer.Register(environment);
+            FactoryContainer.Register(file);
+            FactoryContainer.Register(directory);
+            FactoryContainer.Register(factory);
+            var config = SetupConfig();
+            if (connectionStringSwitch)
+                environment.CommandLine.Returns($"SchemaTongs.exe \"--ConnectionString:{ConnectionString.RetargetDatabase(_connectionString, _integrationDb, Platform.PostgreSQL)}\"");
+            config["ShouldCast:Aggregates"] = "true";
+            try
+            {
+                new SchemaTongs(Platform.PostgreSQL).CastTemplate();
+
+                Assert.That(jitSettings, Is.Not.Empty, "the extraction opened its connections through the factory");
+                Assert.That(jitSettings, Is.All.EqualTo("off"), "JIT setting of each extraction session");
+            }
+            finally
+            {
+                config["ShouldCast:Aggregates"] = "false";
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+            }
+        }
+    }
+
+    // A WARNING the extraction raises reaches the log on either connection path; the --ConnectionString one returned
+    // its connection before the listener was attached.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AnExtractionWarning_ReachesTheLog(bool connectionStringSwitch)
+    {
+        using var conn = new PostgreSqlConnectionFactory().GetDbConnection(ConnectionString.RetargetDatabase(_connectionString, _integrationDb, Platform.PostgreSQL));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SHOW server_version_num";
+        if (int.Parse(cmd.ExecuteScalar()!.ToString()!) < 180000) Assert.Ignore("a NOT VALID NOT NULL constraint needs PostgreSQL 18");
+
+        var errorLog = Substitute.For<ILog>();
+        var progressLog = Substitute.For<ILog>();
+        var warnings = new List<string>();
+        progressLog.When(l => l.Warn(Arg.Any<object>())).Do(ci => warnings.Add(ci.ArgAt<object>(0)?.ToString() ?? ""));
+        lock (FactoryContainer.SharedLockObject)
+        {
+            cmd.CommandText = """
+                CREATE SCHEMA warnprobe;
+                CREATE TABLE warnprobe.probe (id INT PRIMARY KEY, val INT);
+                INSERT INTO warnprobe.probe VALUES (1, NULL);
+                ALTER TABLE warnprobe.probe ADD CONSTRAINT probe_val_nn NOT NULL val NOT VALID;
+                """;
+            cmd.ExecuteNonQuery();
+            LogFactory.Register("ErrorLog", errorLog);
+            LogFactory.Register("ProgressLog", progressLog);
+            var environment = Substitute.For<IEnvironment>();
+            FactoryContainer.Register(environment);
+            FactoryContainer.Register(Substitute.For<IFile>());
+            FactoryContainer.Register(Substitute.For<IDirectory>());
+            var config = SetupConfig();
+            if (connectionStringSwitch)
+                environment.CommandLine.Returns($"SchemaTongs.exe \"--ConnectionString:{ConnectionString.RetargetDatabase(_connectionString, _integrationDb, Platform.PostgreSQL)}\"");
+            config["ShouldCast:Tables"] = "true";
+            try
+            {
+                new SchemaTongs(Platform.PostgreSQL).CastTemplate();
+
+                Assert.That(warnings, Has.Some.Contains("probe_val_nn").And.Contains("is NOT VALID"), string.Join(" | ", warnings));
+            }
+            finally
+            {
+                config["ShouldCast:Tables"] = "false";
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+                cmd.CommandText = "DROP SCHEMA warnprobe CASCADE";
+                cmd.ExecuteNonQuery();
+            }
+        }
+    }
+
+    private sealed class JitReportingConnection(IDbConnection inner, List<string> jitSettings) : IDbConnection
+    {
+        [System.Diagnostics.CodeAnalysis.AllowNull]
+        public string ConnectionString { get => inner.ConnectionString; set => inner.ConnectionString = value; }
+        public int ConnectionTimeout => inner.ConnectionTimeout;
+        public string Database => inner.Database;
+        public ConnectionState State => inner.State;
+        public IDbTransaction BeginTransaction() => inner.BeginTransaction();
+        public IDbTransaction BeginTransaction(IsolationLevel il) => inner.BeginTransaction(il);
+        public void ChangeDatabase(string databaseName) => inner.ChangeDatabase(databaseName);
+        public IDbCommand CreateCommand() => inner.CreateCommand();
+        public void Open() => inner.Open();
+
+        public void Close()
+        {
+            if (inner.State == ConnectionState.Open)
+            {
+                using var cmd = inner.CreateCommand();
+                cmd.CommandText = "SHOW jit";
+                jitSettings.Add(cmd.ExecuteScalar()?.ToString());
+            }
+            inner.Close();
+        }
+
+        public void Dispose()
+        {
+            Close();
+            inner.Dispose();
+        }
     }
 
     [OneTimeTearDown]

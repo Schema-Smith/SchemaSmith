@@ -1434,6 +1434,9 @@ public class DataTongsTests
             // A skipped table is an incomplete run: exit 1, and the reason is in Errors.log.
             Assert.That(dt.ExitCode, Is.EqualTo(1));
             errorLog.Received().Error(Arg.Is<object>(o => o.ToString().Contains("Invalid KeyColumns")));
+            // The summary said only "Tables processed: 0" and "DataTongs completed." before exiting 1.
+            progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Skipped: 1")));
+            progressLog.Received().Info(Arg.Is<string>(s => s.StartsWith("Exit code 1:") && s.Contains("1 table(s) skipped")));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -1605,7 +1608,8 @@ public class DataTongsTests
 
             progressLog.Received().Error(Arg.Is<string>(s =>
                 s.Contains("Error processing table") && s.Contains("Simulated database error")));
-            progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Errors: 1")));
+            progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Failed: 1")));
+            progressLog.Received().Info(Arg.Is<string>(s => s.StartsWith("Exit code 2:") && s.Contains("1 table(s) failed")));
 
             FactoryContainer.Clear();
             LogFactory.Clear();

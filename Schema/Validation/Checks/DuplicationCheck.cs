@@ -36,6 +36,7 @@ public sealed class DuplicationCheck : ISchemaCheck
         {
             foreach (var table in template.Tables)
                 findings.AddRange(CheckTableLevels(template, table));
+            var names = NameComparer(ctx.Platform);
 
             // Per-template: table-name collisions, keyed by schema-qualified identity so two
             // explicitly-different-schema tables sharing a bare name are not false positives.
@@ -47,9 +48,10 @@ public sealed class DuplicationCheck : ISchemaCheck
                 t => t.ShouldApplyExpression,
                 t => t.VariantName,
                 "table",
-                $"Template '{template.Name}'"));
+                $"Template '{template.Name}'",
+                names));
 
-            findings.AddRange(CheckModeledObjects(template));
+            findings.AddRange(CheckModeledObjects(template, names));
         }
 
         // Per-product: TemplateOrder has no gate concept — any repeated name is unconditionally
@@ -61,7 +63,8 @@ public sealed class DuplicationCheck : ISchemaCheck
             _ => "",
             _ => null,
             "template",
-            $"Product '{ctx.Product.Name}' / TemplateOrder"));
+            $"Product '{ctx.Product.Name}' / TemplateOrder",
+            StringComparer.OrdinalIgnoreCase));
 
         return findings;
     }
@@ -69,32 +72,33 @@ public sealed class DuplicationCheck : ISchemaCheck
     private static IEnumerable<Finding> CheckTableLevels(Template template, Table table)
     {
         var location = $"Template '{template.Name}' / Table '{table.Name}'";
+        var names = CoherenceCheck.NameComparer(table);
         var findings = new List<Finding>();
 
-        findings.AddRange(CheckNamedGroup(table.Columns, c => c.Name, c => c.ShouldApplyExpression, c => c.VariantName, "column", location));
-        findings.AddRange(CheckNamedGroup(table.Indexes, i => i.Name, i => i.ShouldApplyExpression, i => i.VariantName, "index", location));
-        findings.AddRange(CheckNamedGroup(table.ForeignKeys, f => f.Name, f => f.ShouldApplyExpression, f => f.VariantName, "foreign key", location));
-        findings.AddRange(CheckNamedGroup(table.CheckConstraints, c => c.Name, c => c.ShouldApplyExpression, c => c.VariantName, "check constraint", location));
+        findings.AddRange(CheckNamedGroup(table.Columns, c => c.Name, c => c.ShouldApplyExpression, c => c.VariantName, "column", location, names));
+        findings.AddRange(CheckNamedGroup(table.Indexes, i => i.Name, i => i.ShouldApplyExpression, i => i.VariantName, "index", location, names));
+        findings.AddRange(CheckNamedGroup(table.ForeignKeys, f => f.Name, f => f.ShouldApplyExpression, f => f.VariantName, "foreign key", location, names));
+        findings.AddRange(CheckNamedGroup(table.CheckConstraints, c => c.Name, c => c.ShouldApplyExpression, c => c.VariantName, "check constraint", location, names));
 
         switch (table)
         {
             case SqlServerTable ssTable:
-                findings.AddRange(CheckNamedGroup(ssTable.XmlIndexes, x => x.Name, x => x.ShouldApplyExpression, x => x.VariantName, "XML index", location));
-                findings.AddRange(CheckNamedGroup(ssTable.SpatialIndexes, x => x.Name, x => x.ShouldApplyExpression, x => x.VariantName, "spatial index", location));
-                findings.AddRange(CheckNamedGroup(ssTable.JsonIndexes, x => x.Name, x => x.ShouldApplyExpression, x => x.VariantName, "JSON index", location));
-                findings.AddRange(CheckNamedGroup(ssTable.Statistics, s => s.Name, s => s.ShouldApplyExpression, s => s.VariantName, "statistic", location));
+                findings.AddRange(CheckNamedGroup(ssTable.XmlIndexes, x => x.Name, x => x.ShouldApplyExpression, x => x.VariantName, "XML index", location, names));
+                findings.AddRange(CheckNamedGroup(ssTable.SpatialIndexes, x => x.Name, x => x.ShouldApplyExpression, x => x.VariantName, "spatial index", location, names));
+                findings.AddRange(CheckNamedGroup(ssTable.JsonIndexes, x => x.Name, x => x.ShouldApplyExpression, x => x.VariantName, "JSON index", location, names));
+                findings.AddRange(CheckNamedGroup(ssTable.Statistics, s => s.Name, s => s.ShouldApplyExpression, s => s.VariantName, "statistic", location, names));
                 // SqlServer FullTextIndex has no Name property (hand-authored conditional config —
                 // see ImportTableHelper's own comment on the same limitation) — skipped, nothing to
                 // group same-name entries on.
                 break;
             case PostgreSqlTable pgTable:
-                findings.AddRange(CheckNamedGroup(pgTable.Statistics, s => s.Name, s => s.ShouldApplyExpression, s => s.VariantName, "statistic", location));
-                findings.AddRange(CheckNamedGroup(pgTable.ExcludeConstraints, e => e.Name, e => e.ShouldApplyExpression, e => e.VariantName, "exclude constraint", location));
+                findings.AddRange(CheckNamedGroup(pgTable.Statistics, s => s.Name, s => s.ShouldApplyExpression, s => s.VariantName, "statistic", location, names));
+                findings.AddRange(CheckNamedGroup(pgTable.ExcludeConstraints, e => e.Name, e => e.ShouldApplyExpression, e => e.VariantName, "exclude constraint", location, names));
                 // #570: two that both apply fail the deploy with 42710.
-                findings.AddRange(CheckNamedGroup(pgTable.Policies, p => p.Name, p => p.ShouldApplyExpression, p => p.VariantName, "policy", location));
+                findings.AddRange(CheckNamedGroup(pgTable.Policies, p => p.Name, p => p.ShouldApplyExpression, p => p.VariantName, "policy", location, names));
                 break;
             case MySqlTable myTable:
-                findings.AddRange(CheckNamedGroup(myTable.FullTextIndexes, f => f.Name, f => f.ShouldApplyExpression, f => f.VariantName, "full-text index", location));
+                findings.AddRange(CheckNamedGroup(myTable.FullTextIndexes, f => f.Name, f => f.ShouldApplyExpression, f => f.VariantName, "full-text index", location, names));
                 break;
         }
 
@@ -103,17 +107,22 @@ public sealed class DuplicationCheck : ISchemaCheck
 
     // Declared objects outside Tables/ get the same rule. Their Schema is already resolved by load
     // (SchemaDefaultResolver), so an explicit "public" and an omitted schema are correctly one identity.
-    private static IEnumerable<Finding> CheckModeledObjects(Template template)
+    private static IEnumerable<Finding> CheckModeledObjects(Template template, StringComparer names)
     {
         var location = $"Template '{template.Name}'";
-        return CheckNamedGroup(template.EnumTypes, e => Qualified(e.Schema, e.Name), e => e.ShouldApplyExpression, e => e.VariantName, "enum type", location)
-            .Concat(CheckNamedGroup(template.DomainTypes, d => Qualified(d.Schema, d.Name), d => d.ShouldApplyExpression, d => d.VariantName, "domain type", location))
-            .Concat(CheckNamedGroup(template.Sequences, s => Qualified(s.Schema, s.Name), s => s.ShouldApplyExpression, s => s.VariantName, "sequence", location))
-            .Concat(CheckNamedGroup(template.MariaDbSequences, s => s.Name, s => s.ShouldApplyExpression, s => s.VariantName, "sequence", location))
-            .Concat(CheckNamedGroup(template.MaterializedViews, v => Qualified(v.Schema, v.Name), v => v.ShouldApplyExpression, v => v.VariantName, "materialized view", location))
-            .Concat(CheckNamedGroup(template.IndexedViews, v => Qualified(v.Schema, v.Name), v => v.ShouldApplyExpression, v => v.VariantName, "indexed view", location))
-            .Concat(CheckNamedGroup(template.Events, e => e.Name, e => e.ShouldApplyExpression, e => e.VariantName, "event", location));
+        return CheckNamedGroup(template.EnumTypes, e => Qualified(e.Schema, e.Name), e => e.ShouldApplyExpression, e => e.VariantName, "enum type", location, names)
+            .Concat(CheckNamedGroup(template.DomainTypes, d => Qualified(d.Schema, d.Name), d => d.ShouldApplyExpression, d => d.VariantName, "domain type", location, names))
+            .Concat(CheckNamedGroup(template.Sequences, s => Qualified(s.Schema, s.Name), s => s.ShouldApplyExpression, s => s.VariantName, "sequence", location, names))
+            .Concat(CheckNamedGroup(template.MariaDbSequences, s => s.Name, s => s.ShouldApplyExpression, s => s.VariantName, "sequence", location, names))
+            .Concat(CheckNamedGroup(template.MaterializedViews, v => Qualified(v.Schema, v.Name), v => v.ShouldApplyExpression, v => v.VariantName, "materialized view", location, names))
+            .Concat(CheckNamedGroup(template.IndexedViews, v => Qualified(v.Schema, v.Name), v => v.ShouldApplyExpression, v => v.VariantName, "indexed view", location, names))
+            .Concat(CheckNamedGroup(template.Events, e => e.Name, e => e.ShouldApplyExpression, e => e.VariantName, "event", location, names));
     }
+
+    // PostgreSQL deploys every name quoted, so names that differ only in case are two objects there (as CoherenceCheck
+    // compares them); the other engines fold case.
+    private static StringComparer NameComparer(Platform platform) =>
+        platform == Platform.PostgreSQL ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
 
     // A blank name stays blank so CheckNamedGroup's blank-name filter still drops it.
     private static string Qualified(string schema, string name) =>
@@ -130,7 +139,7 @@ public sealed class DuplicationCheck : ISchemaCheck
     }
 
     /// <summary>
-    /// Groups <paramref name="items"/> by <paramref name="name"/> (case-insensitive, blank names
+    /// Groups <paramref name="items"/> by <paramref name="name"/> (compared as the engine compares them, blank names
     /// ignored) and applies the ShouldApply-aware duplication rule to every group of size > 1:
     /// every member gated → valid variant set (warn if any lacks a VariantName label); any member
     /// ungated → accidental duplicate (Error).
@@ -141,11 +150,12 @@ public sealed class DuplicationCheck : ISchemaCheck
         Func<T, string> gate,
         Func<T, string> variantName,
         string level,
-        string location)
+        string location,
+        StringComparer names)
     {
         var groups = items
             .Where(i => !string.IsNullOrWhiteSpace(name(i)))
-            .GroupBy(i => name(i), StringComparer.OrdinalIgnoreCase);
+            .GroupBy(i => name(i), names);
 
         foreach (var group in groups)
         {

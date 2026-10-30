@@ -9,6 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using log4net;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -117,9 +118,39 @@ public static class ForgeKindler
     private static void KindleScripts(IDbCommand command, Platform platform, IngestEncoding encoding,
         int serverMajorVersion, string policy, bool? xmlCompressionReadable, bool? checkConstraintsReadable)
     {
+        var existingRoutines = platform.GetBasePlatform() == Platform.MySQL ? ReadMySqlRoutines(command) : null;
         foreach (var s in GetKindlingScripts(platform, encoding))
             KindleOneFile(command, s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
-                serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable);
+                serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable, existingRoutines);
+    }
+
+    // Every MySQL-family routine script drops before it creates. On a fresh database none of them exists, and those
+    // drops were a round trip each, a third of the kindle; a drop is skipped only for a routine the database lacks.
+    private static HashSet<string> ReadMySqlRoutines(IDbCommand command)
+    {
+        command.CommandText = "SELECT ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE()";
+        var routines = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) routines.Add(reader.GetString(0));
+        return routines;
+    }
+
+    private static readonly Regex MySqlDropRoutine = new(@"^DROP\s+(?:PROCEDURE|FUNCTION)\s+IF\s+EXISTS\s+`?(?<name>[A-Za-z0-9_$]+)`?\s*;?$",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    private static readonly Regex MySqlCreateRoutine = new(@"^\s*CREATE\s+(?:DEFINER\s*=\s*\S+\s+)?(?:PROCEDURE|FUNCTION)\s+`?(?<name>[A-Za-z0-9_$]+)`?",
+        RegexOptions.IgnoreCase | RegexOptions.Multiline | RegexOptions.Compiled);
+
+    internal static bool IsDropOfAbsentRoutine(string batch, ISet<string> existingRoutines)
+    {
+        var statement = string.Join("\n", batch.Split('\n').Select(l => l.Trim()).Where(l => l.Length > 0 && !l.StartsWith("--")));
+        var drop = MySqlDropRoutine.Match(statement);
+        return drop.Success && !existingRoutines.Contains(drop.Groups["name"].Value);
+    }
+
+    internal static void RecordCreatedRoutine(string batch, ISet<string> existingRoutines)
+    {
+        var create = MySqlCreateRoutine.Match(batch);
+        if (create.Success) existingRoutines.Add(create.Groups["name"].Value);
     }
 
     // Whether sys.partitions carries xml_compression on this server. COL_LENGTH reads metadata only, so the question is
@@ -265,7 +296,7 @@ public static class ForgeKindler
     public static void KindleOneFile(IDbCommand command, string fileName, Platform platform,
         bool replaceParseJsonToken = false, bool replaceTableDefToken = false,
         IngestEncoding encoding = IngestEncoding.Json, int serverMajorVersion = 0, string policy = "warn",
-        bool? xmlCompressionReadable = null, bool? checkConstraintsReadable = null)
+        bool? xmlCompressionReadable = null, bool? checkConstraintsReadable = null, ISet<string> existingRoutines = null)
     {
         try
         {
@@ -276,8 +307,10 @@ public static class ForgeKindler
             {
                 foreach (var batch in BatchSplitter.Split(script))
                 {
+                    if (existingRoutines != null && IsDropOfAbsentRoutine(batch, existingRoutines)) continue;
                     command.CommandText = batch;
                     command.ExecuteNonQuery();
+                    if (existingRoutines != null) RecordCreatedRoutine(batch, existingRoutines);
                 }
             }
             else if (platform == Platform.PostgreSQL)
@@ -548,12 +581,14 @@ public static class ForgeKindler
             "SELECT j.[object_id], j.index_id, j.[name], QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)), j.optimize_for_array_search, NULLIF(j.fill_factor, 0) " +
             "FROM sys.json_indexes j JOIN sys.index_columns ic ON ic.[object_id] = j.[object_id] AND ic.index_id = j.index_id; " +
             "INSERT #LiveJsonIndexPaths ([object_id], index_id, [Path]) SELECT p.[object_id], p.index_id, p.[path] FROM sys.json_index_paths p").Replace("'", "''") + "')\n" +
+        // Only an index the database has is described, so with none the two reads are never compiled.
+        "IF EXISTS (SELECT 1 FROM #LiveJsonIndexes)\nBEGIN\n" +
         "UPDATE l SET [ForClause] = " + JsonIndexForClause("#LiveJsonIndexPaths p WHERE p.[object_id] = l.[object_id] AND p.index_id = l.index_id") + "\n" +
         "  FROM #LiveJsonIndexes l\n" +
         // DATA_COMPRESSION lands on the index's internal table, not on the index.
         "UPDATE l SET [Compression] = (SELECT MAX(p.data_compression_desc) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1\n" +
         "                              WHERE it.parent_object_id = l.[object_id] AND it.parent_minor_id = l.index_id)\n" +
-        "  FROM #LiveJsonIndexes l";
+        "  FROM #LiveJsonIndexes l\nEND";
 
     // The declared side's working set. On the JSON tier it is created before the ingest split, so it outlives the fill.
     internal const string SqlServerJsonIndexesTable =
@@ -677,6 +712,8 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_RebuildBlockedReason.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.fn_EnterpriseFeaturesUnavailable.sql"),
+                new("SchemaSmith.fn_FullTextInstalled.sql"),
+                new("SchemaSmith.PrintDowngrade.sql"),
                 new("SchemaSmith.fn_OnlineOperationsAvailable.sql"),
                 new("SchemaSmith.fn_OnlineIndexForm.sql"),
                 new("SchemaSmith.fn_OnlineAlterColumnForm.sql"),
@@ -720,6 +757,8 @@ public static class ForgeKindler
                 new("SchemaSmith.ValidateDeclaredTableAttributes.sql"),
                 // Must precede ModifiedTableQuench, which CALLs it, for the same compile-cost reason.
                 new("SchemaSmith.CdcIndexGuard.sql"),
+                // Must precede ModifiedTableQuench, which CALLs it, also on a deploy whose tables are all new.
+                new("SchemaSmith.StampTableOwnership.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 // A temporal table's period columns; MissingIndexesAndConstraintsQuench CALLs it before its index pass.
                 new("SchemaSmith.PeriodColumnQuench.sql"),
@@ -971,6 +1010,8 @@ public static class ForgeKindler
                 new("SchemaSmith_GeneratedKindChanged.sql"),
                 // Read by ModifiedTableQuench STEP 2.9: a type change takes down the foreign keys on its column first (MA-054).
                 new("SchemaSmith_ColumnTypeDiffers.sql"),
+                // Read by the same step: a widening the engine makes under the key leaves the key in place.
+                new("SchemaSmith_TypeChangeKeepsForeignKey.sql"),
                 // Read by the index detectors: a case-only respelling a foreign key blocks is a no-op on these MariaDB patches.
                 new("SchemaSmith_CaseRespellKeepsOldSpelling.sql"),
                 new("SchemaSmith_SupportsExplicitSystemTimeConversion.sql"),
@@ -1129,7 +1170,7 @@ public static class ForgeKindler
                                            () => currentStamp, expectedStamp);
 
         if (state == ReadOnlyKindleState.NotKindled)
-            throw new InvalidOperationException(
+            throw new RunFailedException(
                 "The SchemaSmith helper objects are not present on this read-only database, and they cannot be "
                 + "created here. Kindle on the primary (any deploy or extraction against a writable copy does "
                 + "it) and let the change reach this replica, then re-run. SchemaSmith does not attempt the "

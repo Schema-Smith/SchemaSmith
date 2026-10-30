@@ -118,7 +118,7 @@ BEGIN
             IF p_Mode = 'REQUIRE' THEN
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
                 VALUES (CONNECTION_ID(), CONCAT('  OnlineApply is Require, and this cannot run online: ', p_Sql, ' (', v_reason, ')'));
-                SET @ss_online_msg = LEFT(CONCAT('OnlineApply is Require, and ', p_TableName, ' cannot change online: ', v_reason), 128);
+                SET @ss_online_msg = LEFT(CONCAT('OnlineApply is Require: ', p_TableName, ' cannot change online (the line above says why)'), 128);
                 SIGNAL SQLSTATE 'HY000' SET MESSAGE_TEXT = @ss_online_msg;
             END IF;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)

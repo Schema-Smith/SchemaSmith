@@ -109,6 +109,9 @@ public class DatabaseQuench
     /// </summary>
     public ChangeAuditCapture ChangeAudit { get; init; }
 
+    // Where this unit's changes are made, carried on every row it records.
+    private ChangeTarget AuditTarget => new(_server, _databaseName, string.IsNullOrEmpty(_schemaName) ? null : _schemaName);
+
     /// <summary>
     /// No-drop protection tier (#270 Slice E): when true, the ModifiedTableQuench proc records the
     /// tables it would have dropped by absence (but is suppressing) to the ChangeAudit seam as
@@ -241,6 +244,15 @@ public class DatabaseQuench
     private readonly string _dropRemovedStatistics;
     private readonly string _dropRemovedIndexes;
     private readonly bool _updateTables;
+
+    /// <summary>
+    /// Whether this unit reads back and records what the database reported changing. Set from the UpdateTables setting
+    /// rather than from whether the template declares tables: a template of sequences or other objects writes the
+    /// manifest too. Defaults to the constructor's updateTables.
+    /// </summary>
+    internal bool? ReadsChangeAudit { get; init; }
+
+    private bool AuditIsRead => ReadsChangeAudit ?? _updateTables;
     private readonly bool _deliverData;
     private readonly ICheckpointing _checkpointing;
     private readonly string _dropUnknownIndexes;
@@ -564,6 +576,7 @@ public class DatabaseQuench
             IDbCommand objectsCommand = null;
             IDbConnection silentConnection = null;
             IDbCommand silentCommand = null;
+            IDbConnection deliveryConnection = null;
 
             if (_product.Platform.GetBasePlatform() != Platform.MySQL)
             {
@@ -601,7 +614,7 @@ public class DatabaseQuench
                 var effectiveSilentCmd = silentCommand ?? command;
                 // The table work is what writes the audit; a run that updates no tables (the datafix profile) need not have
                 // rights on SchemaSmith's own tables, so it neither reads them nor records the expression map.
-                if (ChangeAudit != null && _updateTables) ChangeAuditReader.DiscardStale(_product.Platform, effectiveTableCmd);
+                if (ChangeAudit != null && AuditIsRead) ChangeAuditReader.DiscardStale(_product.Platform, effectiveTableCmd);
 
                 // Detect the target version ONCE, up front (the connection is open) and BEFORE folder gates,
                 // since a folder ShouldApplyExpression may reference the version tokens (A1). One unified
@@ -889,6 +902,15 @@ public class DatabaseQuench
                         var tableDataDeliverySw = Stopwatch.StartNew();
                         _checkpointing.Track(DbScope, "TableDataDelivery", () =>
                         {
+                            // Not the silent connection: the merge counts what an append-only ledger table kept in state-100 messages.
+                            // Opened only when a table delivers.
+                            IDbCommand deliveryCmd = command;
+                            if (_product.Platform.GetBasePlatform() != Platform.MySQL && _template.Tables.Cast<IDeliverableTable>().Any(DataDeliveryHelper.HasDeliverable))
+                            {
+                                deliveryConnection = GetConnection(fireInfoMessageEventOnUserErrors: false);
+                                deliveryCmd = deliveryConnection.CreateCommand();
+                                deliveryCmd.CommandTimeout = 0;
+                            }
                             // Register platform-specific script helper if not already registered
                             if (FactoryContainer.Resolve<IMergeScriptHelper>() is not MergeScriptHelperAdapter adapter || adapter.Platform != _product.Platform)
                                 FactoryContainer.Register<IMergeScriptHelper>(new MergeScriptHelperAdapter(_product.Platform));
@@ -896,7 +918,7 @@ public class DatabaseQuench
                             DataDeliveryProcessor.GetFromFactory().DeliverTables(new DataDeliveryContext
                             {
                                 Tables = _template.Tables.Cast<IDeliverableTable>().ToList(),
-                                Command = effectiveSilentCmd,
+                                Command = deliveryCmd,
                                 // MariaDb is delivered as its MySQL base — the delivery subsystem dispatches on
                                 // this platform string and has no MariaDb-specific behavior (the enum-typed
                                 // ScriptHelper still carries the true platform for SQL generation).
@@ -910,10 +932,10 @@ public class DatabaseQuench
                                 TemplateRootPath = Path.GetDirectoryName(_template.FilePath) ?? "",
                                 ScriptHelper = FactoryContainer.Resolve<IMergeScriptHelper>(),
                                 ReadFileContent = path => ProductFileWrapper.GetFromFactory().ReadAllText(path),
-                                ExecuteScript = (name, script) => { effectiveSilentCmd.CommandText = script; effectiveSilentCmd.ExecuteNonQuery(); },
+                                ExecuteScript = (name, script) => { deliveryCmd.CommandText = script; deliveryCmd.ExecuteNonQuery(); },
                                 ProgressLog = SafeProgressLog,
                                 ProgressLogError = SafeProgressLogError,
-                                RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded"),
+                                RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded", target: AuditTarget),
                                 RecordDelivery = RecordDataDelivery,
                                 WhatIf = IsWhatIf,
                                 PostgreSqlServerVersionNum = _postgreSqlServerVersionNum,
@@ -1054,7 +1076,7 @@ public class DatabaseQuench
                             ExecuteScript = (_, _) => { },
                             ProgressLog = SafeProgressLog,
                             ProgressLogError = SafeProgressLogError,
-                            RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded"),
+                            RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded", target: AuditTarget),
                             RecordDelivery = RecordDataDelivery,
                             WhatIf = true
                         });
@@ -1086,7 +1108,7 @@ public class DatabaseQuench
             {
                 _statusMonitor?.Dispose();
                 _statusMonitor = null;
-                if (_updateTables) DrainChangeAudit(tableCommand ?? command);
+                if (AuditIsRead) DrainChangeAudit(tableCommand ?? command);
                 // MySQL parses the table JSON into session-scoped temp tables that every table step
                 // consumes, so the drop belongs AFTER the last consumer -- foreign keys -- not between
                 // two of them. It used to run right after the index quench, which meant ForeignKeys
@@ -1101,6 +1123,7 @@ public class DatabaseQuench
                 tableConnection?.Close();
                 objectsConnection?.Close();
                 silentConnection?.Close();
+                deliveryConnection?.Close();
             }
 
             SafeProgressLog("Successfully Quenched");
@@ -1404,7 +1427,7 @@ public class DatabaseQuench
         {
             new SchemaProvisioner().EnsureSchemaExists(command, _schemaName, _product.Platform,
                 IsWhatIf, SafeProgressLog);
-            ChangeAudit?.Record("schema", _schemaName, IsWhatIf ? "wouldCreate" : "created");
+            ChangeAudit?.Record("schema", _schemaName, IsWhatIf ? "wouldCreate" : "created", target: AuditTarget);
         }
         catch (Exception ex)
         {
@@ -1841,11 +1864,39 @@ END CATCH";
     /// index, a FILESTREAM column needs its ROWGUIDCOL constraint, CDC must see every column (computed and FILESTREAM
     /// included), and Change Tracking needs the primary key. Same order as the <c>SchemaSmith.TableQuench</c> wrapper.
     /// </summary>
+    // A step whose inputs are all empty is skipped and says so: the package declares nothing it acts on, and the database
+    // holds nothing of its kind it would converge. Its procedure is then never compiled, which on a fresh database is most
+    // of what the step would have cost.
+    private string SqlServerIndexStateStep(string db) => $"""
+        IF EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Disabled] = 1)
+             OR EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK) JOIN [{db}].sys.indexes si ON si.[object_id] = OBJECT_ID(N'[{db}].' + i.[Schema] + N'.' + i.[TableName]) WHERE si.is_disabled = 1)
+          EXEC [{db}].SchemaSmith.IndexStateQuench @WhatIf = {_whatIfOnly}
+        ELSE RAISERROR('Skipping index disabled state: no index is declared disabled and none is disabled', 10, 100) WITH NOWAIT
+        """;
+
+    private string SqlServerConstraintFollowUps(string db) => $"""
+        IF [{db}].SchemaSmith.fn_ServerMajorVersion() >= 15
+          IF EXISTS (SELECT 1 FROM #EdgeConstraints WITH (NOLOCK))
+               OR EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) JOIN [{db}].sys.objects o ON o.parent_object_id = OBJECT_ID(N'[{db}].' + t.[Schema] + N'.' + t.[Name]) WHERE o.[type] = 'EC')
+            EXEC [{db}].SchemaSmith.EdgeConstraintQuench @WhatIf = {_whatIfOnly}
+          ELSE RAISERROR('Skipping edge constraints: none declared and none on a declared table', 10, 100) WITH NOWAIT
+        IF EXISTS (SELECT 1 FROM #ForeignKeys WITH (NOLOCK) WHERE [Enforced] IS NOT NULL OR [Validated] IS NOT NULL)
+             OR EXISTS (SELECT 1 FROM #CheckConstraints WITH (NOLOCK) WHERE [Enforced] IS NOT NULL OR [Validated] IS NOT NULL)
+          EXEC [{db}].SchemaSmith.ConstraintStateQuench @WhatIf = {_whatIfOnly}
+        ELSE RAISERROR('Skipping constraint enforcement and validation: no foreign key or check constraint declares it', 10, 100) WITH NOWAIT
+        IF EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+             OR EXISTS (SELECT 1 FROM #Columns WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+             OR EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+             OR EXISTS (SELECT 1 FROM #ExtendedProperties WITH (NOLOCK))
+          EXEC [{db}].SchemaSmith.ExtendedPropertyQuench @WhatIf = {_whatIfOnly}
+        ELSE RAISERROR('Skipping extended properties: none declared', 10, 100) WITH NOWAIT
+        """;
+
     internal void QuenchSqlServerTableFeatures(IDbCommand tableCommand)
     {
         SafeProgressLog("  Quenching index state, FILESTREAM columns, CDC and Change Tracking");
         var db = Identifier.EscapeDelimited(_databaseName, _product.Platform);
-        tableCommand.CommandText = $@"EXEC [{db}].SchemaSmith.IndexStateQuench @WhatIf = {_whatIfOnly}
+        tableCommand.CommandText = $@"{SqlServerIndexStateStep(db)}
 EXEC [{db}].SchemaSmith.FileStreamColumnQuench @WhatIf = {_whatIfOnly}
 EXEC [{db}].SchemaSmith.CdcQuench @WhatIf = {_whatIfOnly}
 EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
@@ -1923,13 +1974,13 @@ EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
                 if (IsWhatIf)
                 {
                     SafeProgressLog($"  [WhatIf] Would rebuild VECTOR index `{table.Key}`.`{name}`: its M or DISTANCE changed");
-                    ChangeAudit?.Record("index", auditName, "wouldRebuild");
+                    ChangeAudit?.Record("index", auditName, "wouldRebuild", target: AuditTarget);
                     continue;
                 }
                 SafeProgressLog($"  Rebuilding VECTOR index `{table.Key}`.`{name}`: its M or DISTANCE changed");
                 cmd.CommandText = $"ALTER TABLE `{table.Key.Replace("`", "``")}` DROP INDEX `{name.Replace("`", "``")}`";
                 cmd.ExecuteNonQuery();
-                ChangeAudit?.Record("index", auditName, "dropped");
+                ChangeAudit?.Record("index", auditName, "dropped", target: AuditTarget);
             }
         }
 
@@ -2045,7 +2096,7 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
         {
             case Platform.SqlServer:
                 // One batch, which a severity-16 error does not end: the TRY stops it at a key that fails, as PostgreSQL does.
-                tableCommand.CommandText = $"BEGIN TRY\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ForeignKeyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}\nIF [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.fn_ServerMajorVersion() >= 15 EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.EdgeConstraintQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ConstraintStateQuench @WhatIf = {_whatIfOnly}\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExtendedPropertyQuench @WhatIf = {_whatIfOnly}\nEND TRY\nBEGIN CATCH\nDECLARE @v_Error NVARCHAR(2047) = ERROR_MESSAGE()\nRAISERROR('%s', 16, 1, @v_Error)\nEND CATCH";
+                tableCommand.CommandText = $"BEGIN TRY\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ForeignKeyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}, @OnlineApply = '{OnlineApply}'\n{SqlServerConstraintFollowUps(Identifier.EscapeDelimited(_databaseName, _product.Platform))}\nEND TRY\nBEGIN CATCH\nDECLARE @v_Error NVARCHAR(2047) = ERROR_MESSAGE()\nRAISERROR('%s', 16, 1, @v_Error)\nEND CATCH";
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ForeignKeyQuench""(p_WhatIf := {_whatIfOnly}, p_OnlineApply := '{OnlineApply}');
@@ -2235,7 +2286,8 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
         {
             tableCommand.CommandText = $"CALL SchemaSmith_SequenceQuench('{EscapeMySqlLiteral(_databaseName)}', '{EscapeMySqlLiteral(sequences)}', {_whatIfOnly})";
             _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Sequences"), tableCommand.CommandText);
-            tableCommand.ExecuteNonQuery();
+            ExecuteNonQueryHandlingMessages(tableCommand);
+            _debugFileLocation = "";
             return;
         }
         tableCommand.CommandText =
@@ -2352,8 +2404,9 @@ SET NOCOUNT ON
 
     private void ParseMySqlTableJson(IDbCommand command)
     {
-        var tableJson = !string.IsNullOrEmpty(_template.TableSchema)
-            ? _template.TableSchema
+        // The iteration's payload: it carries the engine tokens ({{ServerMajorVersion}}) as well as the user's.
+        var tableJson = !string.IsNullOrEmpty(IterationTableSchema)
+            ? IterationTableSchema
             : JsonHelper.SerializeAll(_template.Tables);
         PrepareParameterizedTableJson(command,
             $"CALL SchemaSmith_ParseTableJson('{EscapeSqlLiteral(_databaseName)}', @tableJson)",
@@ -2447,7 +2500,7 @@ SET NOCOUNT ON
     // A connect that stalled said only "The operation has timed out", under "Begin Quench", naming neither the target nor
     // that it was the connect.
     internal static string ConnectFailure(Platform platform, string server, string database, string user, string reason) =>
-        $"{ProductQuench.ConnectFailure(platform, server, $" [Database: {database}]", user)}: {reason}";
+        ProductQuench.ConnectFailure(platform, server, $" [Database: {database}]", user, reason);
 
     // Not wrapped: the lost-connection classifier walks inner exceptions and would call a failed connect a mid-run drop.
     private RunFailedException ConnectFailed(IDbConnection connection, Exception e, IConfigurationRoot config)
@@ -2530,11 +2583,12 @@ SET NOCOUNT ON
                 using var sessionCmd = connection.CreateCommand();
                 sessionCmd.CommandText = "SELECT CONNECTION_ID()";
                 var sessionId = Convert.ToInt64(sessionCmd.ExecuteScalar());
-                _statusMonitor = new StatusMessageMonitor(connectionString, sessionId, msg => LogServerMessage($"    {msg}"));
+                _statusMonitor = new StatusMessageMonitor(connectionString, sessionId, msg => LogServerMessage($"    {msg}"),
+                    sessionConnection: connection, warn: msg => _progressLog.Warn(msg));
             }
-            catch
+            catch (DbException e)
             {
-                // Status monitoring is best-effort
+                _progressLog.Warn($"The database's step messages cannot be read ({e.Message}); this run's log has none of them.");
             }
         }
 
@@ -2660,7 +2714,7 @@ SET NOCOUNT ON
                     script.Outcome = ScriptOutcome.Unchanged;
                     SafeProgressLog($"    Unchanged, not re-run: {script.LogPath}");
                     _checkpointing.MarkScriptCompleted(DbScope, slot.ToString(), script.LogPath);
-                    ChangeAudit?.Record(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged");
+                    ChangeAudit?.Record(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged", target: AuditTarget);
                     continue;
                 }
 
@@ -2680,7 +2734,7 @@ SET NOCOUNT ON
                 {
                     _checkpointing.MarkScriptCompleted(DbScope, slot.ToString(), script.LogPath);
                     if (slot is DatabaseScriptSlot.Object or DatabaseScriptSlot.AfterTablesObject)
-                        ChangeAudit?.RecordRan(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath);
+                        ChangeAudit?.RecordRan(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, AuditTarget);
                     if (stamp != null && script.Outcome == ScriptOutcome.Applied) RecordScriptStamp(destCmd, stamp);
                 }
             }
@@ -2704,7 +2758,7 @@ SET NOCOUNT ON
         // returns null, leaving the run honestly not-instrumented; the record/mark steps can't throw.
         var rows = ChangeAuditReader.ReadAndDrain(_product.Platform, auditCmd);
         if (rows == null) return;
-        foreach (var r in rows) ChangeAudit.Record(r.ObjectType, r.ObjectName, r.Action, r.Mode);
+        foreach (var r in rows) ChangeAudit.Record(r.ObjectType, r.ObjectName, r.Action, r.Mode, AuditTarget);
         foreach (var line in DowngradeLog.Lines(_product.Platform, rows)) SafeProgressLog(line);
         ChangeAudit.MarkInstrumented();
     }
@@ -2854,7 +2908,7 @@ SET NOCOUNT ON
                     destCmd.CommandText = statement;
                     destCmd.ExecuteNonQuery();
                 }
-                ChangeAudit?.Record(drop.AuditType, drop.AuditName, "dropped");
+                ChangeAudit?.Record(drop.AuditType, drop.AuditName, "dropped", target: AuditTarget);
                 if (drop.Dependent.Kind == SchemaBoundDependentKind.Module)
                     droppedModuleScripts.AddRange(ScriptsCreating(drop.Dependent.Schema, drop.Dependent.Name));
                 if (drop.Dependent.Kind == SchemaBoundDependentKind.SecurityPolicy)
@@ -2886,8 +2940,8 @@ SET NOCOUNT ON
             if (skippedAsUnchanged)
             {
                 var objectType = ObjectScriptClassifier.Classify(dependent.LogPath);
-                ChangeAudit?.Retract(objectType, dependent.LogPath, "unchanged");
-                ChangeAudit?.RecordRan(objectType, dependent.LogPath);
+                ChangeAudit?.Retract(objectType, dependent.LogPath, "unchanged", AuditTarget);
+                ChangeAudit?.RecordRan(objectType, dependent.LogPath, AuditTarget);
             }
             if (ProbeScriptStamp(destCmd, dependent, DatabaseScriptSlot.AfterTablesObject) is { } stamp) RecordScriptStamp(destCmd, stamp);
         }
@@ -3029,7 +3083,7 @@ SET NOCOUNT ON
                 {
                     view.Script.HasBeenQuenched = false;
                     view.Script.Outcome = ScriptOutcome.Applied;
-                    ChangeAudit?.Retract(ObjectScriptClassifier.Classify(view.Script.LogPath), view.Script.LogPath, "unchanged");
+                    ChangeAudit?.Retract(ObjectScriptClassifier.Classify(view.Script.LogPath), view.Script.LogPath, "unchanged", AuditTarget);
                     _tablesChangedThisRun.Add(view.Identity.Name);
                     requeued.Add(view);
                 }
@@ -3836,7 +3890,7 @@ SET NOCOUNT ON
                 script.Outcome = ScriptOutcome.Unchanged;
                 entries.Add(new WhatIfConsoleEntry("skip (unchanged)", "SKIP (unchanged)", script.LogPath));
                 WhatIf?.Record(WhatIfCategory.Skip, LogPrefix, script.LogPath);
-                ChangeAudit?.Record(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged");
+                ChangeAudit?.Record(ObjectScriptClassifier.Classify(script.LogPath), script.LogPath, "unchanged", target: AuditTarget);
                 continue;
             }
             entries.Add(new WhatIfConsoleEntry("apply", "APPLY", script.LogPath));
@@ -3846,7 +3900,7 @@ SET NOCOUNT ON
                 var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
                 var name = ModuleAuditName(identity);
                 SafeProgressLog($"    Would re-apply the grants on {name} after {script.LogPath}");
-                ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldReapply");
+                ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldReapply", target: AuditTarget);
             }
             if (CaptureModuleSignatures(destCmd, script) is { } signatures)
             {
@@ -3855,7 +3909,7 @@ SET NOCOUNT ON
                 if (signatures.Script != null)
                 {
                     SafeProgressLog($"    Would sign {name} again after {script.LogPath}");
-                    ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldResign");
+                    ChangeAudit?.Record(identity.Kind.ToString().ToLowerInvariant(), name, "wouldResign", target: AuditTarget);
                 }
                 if (signatures.Unsignable != null) WarnUnsignable(name, signatures.Unsignable);
             }
@@ -3867,7 +3921,7 @@ SET NOCOUNT ON
                 foreach (var drop in plan.Drops)
                 {
                     SafeProgressLog($"    Would drop {drop.Dependent.Display} before re-applying {script.LogPath}; the run would put it back");
-                    ChangeAudit?.Record(drop.AuditType, drop.AuditName, "wouldDrop");
+                    ChangeAudit?.Record(drop.AuditType, drop.AuditName, "wouldDrop", target: AuditTarget);
                 }
             }
         }
@@ -3880,10 +3934,10 @@ SET NOCOUNT ON
         if (IsWhatIf)
         {
             WhatIf?.Record(WhatIfCategory.Deliver, LogPrefix, label);
-            ChangeAudit?.Record("dataDelivery", label, "wouldDeliver");
+            ChangeAudit?.Record("dataDelivery", label, "wouldDeliver", target: AuditTarget);
         }
         else
-            ChangeAudit?.Record("dataDelivery", label, "delivered");
+            ChangeAudit?.Record("dataDelivery", label, "delivered", target: AuditTarget);
     }
 
     private void WhatIfLogTableDataScripts(List<SqlScript> scripts)

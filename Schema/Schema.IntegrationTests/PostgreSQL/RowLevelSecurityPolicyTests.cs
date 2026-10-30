@@ -163,6 +163,28 @@ public class RowLevelSecurityPolicyTests
         });
     }
 
+    // A created or re-created policy is named in the log, as an altered one is.
+    [Test]
+    public void ACreatedAndARecreatedPolicy_AreNamedInTheLog()
+    {
+        using var c = Open(_db);
+        var notices = new List<string>();
+        ((Npgsql.NpgsqlConnection)c).Notice += (_, e) => notices.Add(e.Notice.MessageText);
+        using var cmd = c.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        Deploy(cmd, Package("rls_log", Policy("p_log")));
+        var created = new List<string>(notices);
+        notices.Clear();
+        Deploy(cmd, Package("rls_log", Policy("p_log", cmd: "SELECT")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(created, Has.Some.EqualTo("  Creating policy public.rls_log.p_log"), string.Join(" | ", created));
+            Assert.That(notices, Has.Some.EqualTo("  Re-creating policy public.rls_log.p_log"), string.Join(" | ", notices));
+        });
+    }
+
     [Test]
     public void APolicyRemovedFromThePackage_IsDropped()
     {

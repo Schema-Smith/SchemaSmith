@@ -114,9 +114,13 @@ public sealed record ModifiedCounts(int Tables, int Columns);
 
 public sealed record DroppedCounts(int Tables, int Indexes, int Constraints, int ForeignKeys);
 
-// Mode is left out of the report when null, so a deploy without OnlineApply reports exactly what it did before.
+// Mode is left out of the report when null, so a deploy without OnlineApply reports exactly what it did before. Server,
+// Database and Schema name where the change was made: a fleet run makes the same change in many places.
 public sealed record ObjectChangeDetail(string ObjectType, string ObjectName, string Action,
-    [property: JsonProperty(NullValueHandling = NullValueHandling.Ignore)] string Mode = null);
+    [property: JsonProperty(NullValueHandling = NullValueHandling.Ignore)] string Mode = null,
+    [property: JsonProperty(NullValueHandling = NullValueHandling.Ignore)] string Server = null,
+    [property: JsonProperty(NullValueHandling = NullValueHandling.Ignore)] string Database = null,
+    [property: JsonProperty(NullValueHandling = NullValueHandling.Ignore)] string Schema = null);
 
 /// <summary>
 /// No-drop protection tier manifest (#270 Slice E). Present only when the environment-level

@@ -41,7 +41,8 @@ cd "$(dirname "$0")/.." || exit 1
 # SQL Server is NOT here: its bands need full-text install and semantic-DB provisioning, which
 # scripts/run-modern-band-sweep.sh already does for 2017/2022/2025. The two together cover the matrix.
 #
-# Versions mirror continuous-integration.yml's matrices; keep them in sync when CI's legs move. Nothing
+# Versions cover continuous-integration.yml's matrices, and the sweep refuses to start when a CI leg has no band
+# (scripts/ci_matrix.py reads them from the workflow). Each band is set up by CI's own setup script. Nothing
 # floats in either place -- see :64 below, and continuous-integration.yml's own "No test leg floats any
 # more". A floating band was the old tripwire for an engine release breaking us; the ceiling sweep is
 # what covers that now, deliberately, because a float makes every run a different test.
@@ -49,6 +50,8 @@ set -u
 
 TEST_USER='TestUser'
 TEST_PASSWORD='aCa2d805-41E5@40c4!98e7#92F93zzxo176'
+# CI's setup steps, run through CI's clients.
+. scripts/ci-steps-local.sh
 # All four, as CI's floor legs run them. Schema.IntegrationTests alone catches a kindle that dies, but the
 # PR #392 family (MySQL 5.7 parenthesized DEFAULT, SRS_ID, comment escaping) only fails in the tool suites.
 PROJS=(
@@ -145,9 +148,24 @@ assert_latest_is_covered() {
 echo "===== Version-floor sweep ====="
 echo "--- ceiling check: is each engine's latest covered by a pinned band? ---"
 for img in mysql mariadb postgres; do assert_latest_is_covered "$img"; done
-echo "Building Release once so every leg runs --no-build..."
-if ! dotnet build SchemaSmith.sln -c Release -v q --nologo >/dev/null 2>&1; then
-  echo "FAIL: Release build failed. Fix that first -- the legs below would all fail for the same reason."
+# Every leg CI runs on a merge to main, read from the workflow rather than from a copy kept in sync by hand.
+echo "--- CI check: does a band cover every leg main runs? ---"
+for engine in mysql mariadb postgres; do
+  legs=$(python3 scripts/ci_matrix.py "$engine" 2>&1) || { echo "  !! $legs"; FAILED=1; continue; }
+  while IFS=$'\t' read -r img tag _; do
+    if printf '%s\n' "${FLOORS[@]}" | grep -q ":$img:$tag:"; then
+      echo "  $img:$tag -- covered"
+    else
+      echo "  !! CI runs $img:$tag and no band does. Add it to FLOORS."
+      FAILED=1
+    fi
+  done <<< "$legs"
+done
+[ "$FAILED" = "0" ] || { echo "FAIL: the bands do not cover CI."; exit 1; }
+# Debug, as CI builds and tests it.
+echo "Building Debug once so every leg runs --no-build..."
+if ! dotnet build SchemaSmith.sln -c Debug -v q --nologo >/dev/null 2>&1; then
+  echo "FAIL: Debug build failed. Fix that first -- the legs below would all fail for the same reason."
   exit 1
 fi
 
@@ -193,14 +211,19 @@ for f in "${FLOORS[@]}"; do
     FAILED=1; continue
   fi
 
-  # MySQL/MariaDB images create TestUser without global rights; CI grants them in its own step.
-  if [ "$image" != "postgres" ]; then
-    # MariaDB 11.4+ images ship mariadb/mariadb-admin and NO LONGER ship the mysql* names. Try the
-    # MariaDB spelling first and fall back, so one loop covers 10.2 through latest and MySQL too.
-    docker exec "$name" sh -c "{ command -v mariadb >/dev/null && CLI=mariadb || CLI=mysql; } ; \$CLI -u root -p'$TEST_PASSWORD' -e \"
-      GRANT ALL PRIVILEGES ON *.* TO '$TEST_USER'@'%' WITH GRANT OPTION;
-      FLUSH PRIVILEGES;
-      SET GLOBAL max_connections = 2000;\"" >/dev/null 2>&1
+  # CI's own setup step for the engine, through CI's client. It used to be a copy run inside the server container
+  # with its errors discarded, so a grant CI could not make passed here.
+  if [ "$image" = "postgres" ]; then
+    setup_out=$(ci_postgres_setup "$name" "$port" 2>&1)
+  else
+    setup_out=$(ci_mysql_family_setup bridge host.docker.internal "$port" "$image:$tag" 2>&1)
+  fi
+  if [ $? -ne 0 ]; then
+    echo "  FAIL: CI's setup step failed on $name -- NOT RUN"
+    echo "$setup_out" | tail -3 | sed 's/^/    /'
+    FAILED=1
+    [ "$KEEP" != "1" ] && docker rm -fv "$name" >/dev/null 2>&1
+    continue
   fi
 
   # MySQL 5.7's TLS handshake is incompatible with the modern connector's negotiation on the stock image
@@ -215,7 +238,7 @@ for f in "${FLOORS[@]}"; do
   esac
 
   for proj in "${PROJS[@]}"; do
-    out=$(env $PORT_ENV $SSL_ENV dotnet test "$proj" -c Release --no-build \
+    out=$(env $PORT_ENV $SSL_ENV dotnet test "$proj" -c Debug --no-build \
             --filter "TestCategory=$category" 2>&1)
     rc=$?
     summary=$(echo "$out" | grep -aE '^(Passed!|Failed!)' | tail -1)

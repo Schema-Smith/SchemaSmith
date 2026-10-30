@@ -45,6 +45,7 @@ BEGIN
   DECLARE v_zone VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
   DECLARE v_mode VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
   DECLARE v_flag VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_comment_kept INT;
   DECLARE v_i INT;
   DECLARE v_n INT;
 
@@ -107,8 +108,12 @@ BEGIN
   IF UPPER(COALESCE(p_Status, 'ENABLE')) <> v_status THEN RETURN 0; END IF;
   IF COALESCE(p_Preserve, 0) <> v_preserve THEN RETURN 0; END IF;
   -- The comment and body are the user's text, so they compare byte for byte: a change only in case or accent is a
-  -- change, whatever the database's collation.
-  IF CAST(COALESCE(p_Comment, '') AS BINARY) <> CAST(COALESCE(v_comment, '') AS BINARY) THEN RETURN 0; END IF;
+  -- change, whatever the database's collation. The engine keeps as much of a comment as its catalog column holds
+  -- (64 characters on MariaDB and MySQL 5.7, 2048 on 8.0) and drops the rest without a word, so the declaration is
+  -- compared as it is stored; otherwise a longer one reads as changed, and re-creating the event resets its STARTS.
+  SELECT CHARACTER_MAXIMUM_LENGTH INTO v_comment_kept FROM INFORMATION_SCHEMA.COLUMNS
+   WHERE TABLE_SCHEMA = 'information_schema' AND TABLE_NAME = 'EVENTS' AND COLUMN_NAME = 'EVENT_COMMENT';
+  IF CAST(LEFT(COALESCE(p_Comment, ''), COALESCE(v_comment_kept, 2048)) AS BINARY) <> CAST(COALESCE(v_comment, '') AS BINARY) THEN RETURN 0; END IF;
 
   -- The zone and the mode follow the Starts convention: omitted means not managed. The mode is compared as a
   -- SET of flags, because the engine canonicalises the order it stores ('ANSI_QUOTES,PIPES_AS_CONCAT' is stored

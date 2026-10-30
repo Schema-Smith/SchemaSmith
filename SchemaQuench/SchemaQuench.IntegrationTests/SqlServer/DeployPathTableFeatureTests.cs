@@ -38,6 +38,7 @@ public class DeployPathTableFeatureTests
     private string _beforeScript;
     private string _prerequisiteScript;
     private string _securityPolicyScript;
+    private string _tableData;
     private bool _nextDeployFails;
 
     // A new database costs CREATE DATABASE, sp_cdc_enable_db, a full kindle and a cold plan compile on the first
@@ -84,8 +85,8 @@ public class DeployPathTableFeatureTests
             // 4. Only an explicit false turns it off.
             deploy(CdcTable(enableCdc: false, extraColumn: true));
             Assert.That(IsTrackedByCdc(cmd), Is.False, "EnableCDC false must disable CDC on the table");
-            // One row per capture instance: the rotation left two, and each is disabled.
-            Assert.That(CdcChanges(), Is.EqualTo(new[] { "dropped", "dropped" }), "the summary must record CDC being disabled");
+            // One row for the table, though the rotation left two capture instances: the summary counts tables.
+            Assert.That(CdcChanges(), Is.EqualTo(new[] { "dropped" }), "the summary must record CDC being disabled, once");
         });
     }
 
@@ -163,7 +164,7 @@ public class DeployPathTableFeatureTests
     public void AForeignKeyWithASchemaQualifiedRelatedTable_ReferencesThatSchema()
     {
         const string setup = "EXEC('CREATE SCHEMA sales'); CREATE TABLE sales.Customer ([Id] INT NOT NULL CONSTRAINT [PK_Customer] PRIMARY KEY);";
-        RunScenario("DeployFkSchema", setup, (deploy, db, cmd) =>
+        RunScenario("DeployFkSchema", null, (deploy, db, cmd) =>
         {
             deploy("""
                 { "Schema": "[dbo]", "Name": "[DeployProbe]",
@@ -174,7 +175,7 @@ public class DeployPathTableFeatureTests
                 """);
             cmd.CommandText = "SELECT OBJECT_SCHEMA_NAME(referenced_object_id) + '.' + OBJECT_NAME(referenced_object_id) FROM sys.foreign_keys WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("sales.Customer"));
-        }, freshDatabase: true);
+        }, setupObjects: setup);
     }
 
     // The shape SchemaTongs writes to Prerequisites/, an Objects folder: that pass runs ahead of table creation, and the
@@ -202,7 +203,7 @@ public class DeployPathTableFeatureTests
             cmd.CommandText = "SELECT k.[name] COLLATE DATABASE_DEFAULT + ':' + c.encryption_type_desc COLLATE DATABASE_DEFAULT FROM sys.columns c " +
                               "JOIN sys.column_encryption_keys k ON k.column_encryption_key_id = c.column_encryption_key_id WHERE c.[object_id] = OBJECT_ID('dbo.DeployProbe')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("CEK_Deploy:DETERMINISTIC"));
-        }, freshDatabase: true);
+        });
     }
 
     // SecurityPolicies is an after-tables folder: a policy names its table, which the same deploy has just created.
@@ -210,7 +211,7 @@ public class DeployPathTableFeatureTests
     public void ASecurityPolicy_IsCreatedAfterTheTableItProtects_ByARealDeploy()
     {
         const string setup = "EXEC('CREATE SCHEMA sec'); EXEC('CREATE FUNCTION sec.fn_rep(@Rep AS SYSNAME) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS ok WHERE @Rep = USER_NAME()');";
-        RunScenario("DeployRls", setup, (deploy, db, cmd) =>
+        RunScenario("DeployRls", null, (deploy, db, cmd) =>
         {
             _securityPolicyScript = """
                 IF OBJECT_ID(N'[sec].[ProbePolicy]') IS NULL
@@ -225,7 +226,7 @@ public class DeployPathTableFeatureTests
             deploy(table);
             cmd.CommandText = "SELECT OBJECT_NAME(target_object_id) FROM sys.security_predicates WHERE [object_id] = OBJECT_ID(N'sec.ProbePolicy')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("DeployProbe"));
-        }, freshDatabase: true);
+        }, setupObjects: setup);
     }
 
     // A schema-bound policy holds the columns its predicates pass: changing one failed the deploy (5074 / 4922). The
@@ -234,7 +235,7 @@ public class DeployPathTableFeatureTests
     public void ASchemaBoundSecurityPolicy_OverAChangingColumn_IsDroppedAndCreatedAgain_ByARealDeploy()
     {
         const string setup = "EXEC('CREATE SCHEMA sec'); EXEC('CREATE FUNCTION sec.fn_rep(@Rep AS NVARCHAR(200)) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS ok WHERE @Rep = USER_NAME()');";
-        RunScenario("DeployRlsChange", setup, (deploy, db, cmd) =>
+        RunScenario("DeployRlsChange", null, (deploy, db, cmd) =>
         {
             string Table(string type) => $$"""
                 { "Schema": "[dbo]", "Name": "[DeployProbe]",
@@ -253,7 +254,7 @@ public class DeployPathTableFeatureTests
                               "CONVERT(VARCHAR(10), (SELECT COUNT(*) FROM sys.security_predicates p WHERE p.[object_id] = sp.[object_id])) " +
                               "FROM sys.security_policies sp WHERE sp.[object_id] = OBJECT_ID(N'sec.HandMade')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("0:1:2"), "and the policy is back as it was: off, schema-bound, both predicates");
-        }, freshDatabase: true);
+        }, setupObjects: setup);
     }
 
     // A partially contained database keeps its catalog in a fixed collation and its temp tables in its own, so every
@@ -326,6 +327,168 @@ public class DeployPathTableFeatureTests
         });
     }
 
+    // A real deploy runs each table step as its own batch over temp tables the session created, not through the
+    // TableQuench wrapper; a step with nothing to do says so there too.
+    [Test]
+    public void AStepWithNothingToDo_IsSkippedAndLogged_ByARealDeploy()
+    {
+        const string table = """
+            { "Schema": "[dbo]", "Name": "[DeployProbe]",
+              "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                           { "Name": "[Code]", "DataType": "VARCHAR(20)", "Nullable": false },
+                           { "Name": "[Qty]", "DataType": "INT", "Nullable": true, "Default": "((0))", "CheckExpression": "[Qty] >= 0" } ],
+              "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" },
+                           { "Name": "[IX_DeployProbe_Code]", "IndexColumns": "[Code]" } ] }
+            """;
+        RunScenario("DeploySkips", null, (deploy, db, cmd) =>
+        {
+            deploy(table);
+            deploy(table);
+
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping extended properties: none declared")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping constraint enforcement and validation: no foreign key or check constraint declares it")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping index disabled state: no index is declared disabled and none is disabled")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping XML index comparison: the database has no XML index")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping spatial index comparison: the database has no spatial index")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Skipping full-text index comparison: the database has no full-text index")));
+            _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("Collect Existing XML Index Definitions")));
+            _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("Collect Existing Spatial Index Definitions")));
+            _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("Collect Existing FullText Indexes")));
+        });
+    }
+
+    // The merge reports what an append-only ledger table kept as it was; those counts are only worth anything in the log.
+    [Test]
+    public void AnAppendOnlyLedgerDelivery_CountsWhatItLeftAlone_InTheDeployLog()
+    {
+        const string table = """
+            { "Schema": "[dbo]", "Name": "[DeployProbe]", "Ledger": "AppendOnly",
+              "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                           { "Name": "[V]", "DataType": "NVARCHAR(20)", "Nullable": true } ],
+              "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ],
+              "DataDelivery": { "ContentFile": "DeployProbe.tabledata", "MergeType": "Insert/Update/Delete" } }
+            """;
+        RunScenario("DeployLedgerData", null, (deploy, db, cmd) =>
+        {
+            cmd.CommandText = "SELECT CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(50)), 4) AS INT)";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) < 16) Assert.Ignore("Ledger tables need SQL Server 2022.");
+            _tableData = """[{"Id":1,"V":"a"},{"Id":9,"V":"z"}]""";
+            deploy(table);
+            _tableData = """[{"Id":1,"V":"b"},{"Id":2,"V":"c"}]""";
+            deploy(table);
+
+            cmd.CommandText = "SELECT STRING_AGG(CONCAT(Id, ':', V), ',') WITHIN GROUP (ORDER BY Id) FROM dbo.DeployProbe";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("1:a,2:c,9:z"), "new rows inserted, existing rows untouched");
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("1 delivered rows differ from rows already in the append-only ledger table [dbo].[DeployProbe]")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("1 rows of the append-only ledger table [dbo].[DeployProbe] are not in the delivered data")));
+        });
+    }
+
+    // Delivery runs on a connection of its own; a deploy that delivers nothing must not hold one more connection for it.
+    [Test]
+    public void ADeployThatDeliversNothing_HoldsNoConnectionForDelivery()
+    {
+        const string plain = """
+            { "Schema": "[dbo]", "Name": "[DeployProbe]",
+              "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false } ],
+              "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ] }
+            """;
+        const string delivered = """
+            { "Schema": "[dbo]", "Name": "[DeployProbe]",
+              "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false } ],
+              "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" } ],
+              "DataDelivery": { "ContentFile": "DeployProbe.tabledata", "MergeType": "Insert/Update/Delete" } }
+            """;
+        RunScenario("DeployConnections", null, (deploy, db, cmd) =>
+        {
+            var gate = new object();
+            int open = 0, peak = 0;
+            var factory = Substitute.For<IDbConnectionFactory>();
+            factory.GetDbConnection(Arg.Any<string>()).Returns(ci =>
+            {
+                var connection = (DbConnection)new SqlServerConnectionFactory().GetDbConnection(ci.Arg<string>());
+                connection.StateChange += (_, e) =>
+                {
+                    lock (gate)
+                    {
+                        if (e.CurrentState == ConnectionState.Open) peak = Math.Max(peak, ++open);
+                        else if (e.OriginalState == ConnectionState.Open) open--;
+                    }
+                };
+                return connection;
+            });
+            deploy(plain);
+            FactoryContainer.Register(factory);
+            try
+            {
+                deploy(plain);
+                var withoutDelivery = peak;
+                peak = 0;
+                _tableData = """[{"Id":1}]""";
+                deploy(delivered);
+
+                Assert.That(withoutDelivery, Is.LessThan(peak), "connections held at once, delivering nothing vs delivering a table");
+            }
+            finally
+            {
+                FactoryContainer.Unregister<IDbConnectionFactory>();
+            }
+        });
+    }
+
+    // A package that says nothing about Disabled still means enabled, so an index someone disabled is rebuilt: the step
+    // runs for what the database holds even when the package declares nothing it acts on.
+    [Test]
+    public void AnIndexDisabledByHand_IsRebuiltByARealDeploy_ThoughThePackageSaysNothingAboutIt()
+    {
+        const string table = """
+            { "Schema": "[dbo]", "Name": "[DeployProbe]",
+              "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[Code]", "DataType": "INT", "Nullable": true } ],
+              "Indexes": [ { "Name": "[PK_DeployProbe]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" },
+                           { "Name": "[IX_DeployProbe_Code]", "IndexColumns": "[Code]" } ] }
+            """;
+        RunScenario("DeployReenableIndex", null, (deploy, db, cmd) =>
+        {
+            deploy(table);
+            cmd.CommandText = "ALTER INDEX [IX_DeployProbe_Code] ON dbo.DeployProbe DISABLE";
+            cmd.ExecuteNonQuery();
+
+            deploy(table);
+
+            cmd.CommandText = "SELECT is_disabled FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND [name] = 'IX_DeployProbe_Code'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "an index disabled by hand is enabled again");
+        });
+    }
+
+    // The last edge constraint leaving the package is still dropped: the package then declares none, and the step runs
+    // because the table holds one.
+    [Test]
+    public void TheLastEdgeConstraint_LeavingThePackage_IsDroppedByARealDeploy()
+    {
+        using (var conn = OpenMaster())
+        using (var probe = conn.CreateCommand())
+        {
+            probe.CommandText = "SELECT CONVERT(INT, SERVERPROPERTY('ProductMajorVersion'))";
+            if (Convert.ToInt32(probe.ExecuteScalar()) < 15) Assert.Ignore("Edge constraints are SQL Server 2019.");
+        }
+        const string setup = "CREATE TABLE dbo.ProbePerson ([Id] INT NOT NULL) AS NODE; CREATE TABLE dbo.ProbeCity ([Id] INT NOT NULL) AS NODE;";
+        RunScenario("DeployEdgeConstraintGone", null, (deploy, db, cmd) =>
+        {
+            deploy("""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]", "GraphType": "Edge",
+                  "Columns": [ { "Name": "[Since]", "DataType": "DATE", "Nullable": true } ],
+                  "EdgeConstraints": [ { "Name": "[EC_DeployProbe]", "Clauses": [ { "FromTable": "[dbo].[ProbePerson]", "ToTable": "[dbo].[ProbeCity]" } ] } ] }
+                """);
+            deploy("""
+                { "Schema": "[dbo]", "Name": "[DeployProbe]", "GraphType": "Edge",
+                  "Columns": [ { "Name": "[Since]", "DataType": "DATE", "Nullable": true } ] }
+                """);
+
+            cmd.CommandText = "SELECT COUNT(*) FROM sys.edge_constraints WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero, "the edge constraint the package no longer declares is dropped");
+        }, setupObjects: setup);
+    }
+
     [Test]
     public void AnEdgeConstraint_IsCreatedByARealDeploy()
     {
@@ -338,7 +501,7 @@ public class DeployPathTableFeatureTests
             supported = Convert.ToInt32(probe.ExecuteScalar()) >= 15;
         }
         const string setup = "CREATE TABLE dbo.ProbePerson ([Id] INT NOT NULL) AS NODE; CREATE TABLE dbo.ProbeCity ([Id] INT NOT NULL) AS NODE;";
-        RunScenario("DeployEdgeConstraint", setup, (deploy, db, cmd) =>
+        RunScenario("DeployEdgeConstraint", null, (deploy, db, cmd) =>
         {
             deploy("""
                 { "Schema": "[dbo]", "Name": "[DeployProbe]", "GraphType": "Edge",
@@ -349,12 +512,12 @@ public class DeployPathTableFeatureTests
             {
                 cmd.CommandText = "SELECT is_edge FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe')";
                 Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the edge table still deploys");
-                _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Edge constraint skipped: requires SQL Server 2019")));
+                _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Edge constraint skipped: requires SQL Server 2019") && m.EndsWith(": [dbo].[DeployProbe].[EC_DeployProbe]")));
                 return;
             }
             cmd.CommandText = "SELECT [name] COLLATE DATABASE_DEFAULT + ':' + delete_referential_action_desc COLLATE DATABASE_DEFAULT FROM sys.edge_constraints WHERE parent_object_id = OBJECT_ID('dbo.DeployProbe')";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("EC_DeployProbe:CASCADE"), "the declared edge constraint reaches the database");
-        }, expectIncomplete: !supported, freshDatabase: true);
+        }, expectIncomplete: !supported, setupObjects: setup);
     }
 
     [Test]
@@ -366,7 +529,7 @@ public class DeployPathTableFeatureTests
             Assert.That(IsTrackedByCdc(cmd), Is.False);
             // Asserted on the log, not on SchemaSmith.ChangeAudit: a real deploy reads its session's audit rows into the
             // deployment summary and then deletes them, so the table is empty afterwards whether or not the degrade ran.
-            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database") && m.EndsWith(": [dbo].[DeployProbe]")));
         }, expectIncomplete: true);
     }
 
@@ -433,7 +596,7 @@ public class DeployPathTableFeatureTests
             _beforeScript = "SELECT 1";
             deploy(CdcTable(enableCdc: true, extraColumn: false));
             Assert.That(IsTrackedByCdc(cmd), Is.False);
-            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database")));
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("CDC skipped: not enabled on this database") && m.EndsWith(": [dbo].[DeployProbe]")));
         }, expectIncomplete: true);
     }
 
@@ -791,6 +954,8 @@ public class DeployPathTableFeatureTests
             Assert.That(cmd.ExecuteScalar() as string, Is.EqualTo("DeployProbe:Latin1_General_CI_AS,DeployProbe_Archive:Latin1_General_CI_AS"));
             cmd.CommandText = "SELECT COUNT(*) FROM sys.extended_properties WHERE major_id = OBJECT_ID('dbo.DeployProbe') AND [name] = 'SchemaSmith_SuspendedHistory'";
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "the suspension marker must be removed once versioning is back on");
+            _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("Mirror column changes onto the history tables of suspended temporal tables")));
+            _progressLog.DidNotReceive().Info(Arg.Is<string>(m => m.Contains("Skipping history tables")));
         });
     }
 
@@ -829,7 +994,7 @@ public class DeployPathTableFeatureTests
     // Tracking), so a shared one would carry that into the next scenario.
     private void RunScenario(string prefix, string setupDatabase, Action<Action<string>, string, IDbCommand> body,
                              string templateExtra = "", bool expectFailure = false, string policy = "warn", bool xmlIngest = false,
-                             bool expectIncomplete = false, bool freshDatabase = false, bool contained = false)
+                             bool expectIncomplete = false, bool freshDatabase = false, bool contained = false, string setupObjects = null)
     {
         var tempDir = Path.Join(Path.GetTempPath(), $"{prefix}_{Guid.NewGuid():N}");
         var key = (setupDatabase ?? "", policy, xmlIngest);
@@ -872,13 +1037,15 @@ public class DeployPathTableFeatureTests
                     if (setupDatabase != null) ExecuteWithDeadlockRetry(cmd, setupDatabase);
                     ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, policy: policy);
                 }
+                // Objects a scenario needs that say nothing about the database itself; ResetProbe removes them again.
+                if (setupObjects != null) ExecuteWithDeadlockRetry(cmd, setupObjects);
                 config["SchemaPackagePath"] = tempDir;
                 // The encoding is chosen during version detection, which SkipKindlingForge also skips.
                 if (xmlIngest) config["Target:CompatEncoding"] = "legacy";
 
                 body(tableJson =>
                 {
-                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript, _prerequisiteScript, _securityPolicyScript);
+                    WritePackage(tempDir, db, tableJson, templateExtra, _betweenScript, _beforeScript, _prerequisiteScript, _securityPolicyScript, _tableData);
                     _environment.ClearReceivedCalls();
                     var reportBase = Path.Join(tempDir, "summary");
                     if (expectIncomplete) _environment.CommandLine.Returns($"SchemaQuench.exe --report:{reportBase}");
@@ -940,6 +1107,9 @@ public class DeployPathTableFeatureTests
     // and history table, and SchemaSmith's own per-object state, so the next scenario deploys as if into a new one.
     // Run at the start rather than the end, so a scenario that failed half-way cannot leak into the next.
     private static void ResetProbe(IDbCommand cmd) => ExecuteWithDeadlockRetry(cmd, """
+        IF CONVERT(INT, SERVERPROPERTY('ProductMajorVersion')) >= 13
+            EXEC(N'IF OBJECT_ID(N''sec.ProbePolicy'') IS NOT NULL DROP SECURITY POLICY sec.ProbePolicy;
+                   IF OBJECT_ID(N''sec.HandMade'') IS NOT NULL DROP SECURITY POLICY sec.HandMade;');
         IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe') AND is_tracked_by_cdc = 1)
             EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'DeployProbe', @capture_instance = N'all';
         IF EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE [object_id] = OBJECT_ID('dbo.DeployProbe'))
@@ -948,6 +1118,15 @@ public class DeployPathTableFeatureTests
             ALTER TABLE dbo.DeployProbe SET (SYSTEM_VERSIONING = OFF);
         IF OBJECT_ID('dbo.DeployProbe') IS NOT NULL DROP TABLE dbo.DeployProbe;
         IF OBJECT_ID('dbo.DeployProbe_Archive') IS NOT NULL DROP TABLE dbo.DeployProbe_Archive;
+        IF OBJECT_ID('sec.fn_rep') IS NOT NULL DROP FUNCTION sec.fn_rep;
+        IF SCHEMA_ID('sec') IS NOT NULL DROP SCHEMA sec;
+        IF OBJECT_ID('sales.Customer') IS NOT NULL DROP TABLE sales.Customer;
+        IF SCHEMA_ID('sales') IS NOT NULL DROP SCHEMA sales;
+        IF OBJECT_ID('dbo.ProbePerson') IS NOT NULL DROP TABLE dbo.ProbePerson;
+        IF OBJECT_ID('dbo.ProbeCity') IS NOT NULL DROP TABLE dbo.ProbeCity;
+        IF CONVERT(INT, SERVERPROPERTY('ProductMajorVersion')) >= 13
+            EXEC(N'IF EXISTS (SELECT 1 FROM sys.column_encryption_keys WHERE [name] = N''CEK_Deploy'') DROP COLUMN ENCRYPTION KEY [CEK_Deploy];
+                   IF EXISTS (SELECT 1 FROM sys.column_master_keys WHERE [name] = N''CMK_Deploy'') DROP COLUMN MASTER KEY [CMK_Deploy];');
         DELETE SchemaSmith.ChangeAudit;
         DELETE SchemaSmith.ExpressionMap;
         DELETE SchemaSmith.ProductOwnership;
@@ -1015,7 +1194,8 @@ public class DeployPathTableFeatureTests
     }
 
     private static void WritePackage(string dir, string db, string tableJson, string templateExtra = "", string betweenScript = null,
-                                     string beforeScript = null, string prerequisiteScript = null, string securityPolicyScript = null)
+                                     string beforeScript = null, string prerequisiteScript = null, string securityPolicyScript = null,
+                                     string tableData = null)
     {
         var tables = Path.Join(dir, "Templates", "Main", "Tables");
         Directory.CreateDirectory(tables);
@@ -1058,6 +1238,9 @@ public class DeployPathTableFeatureTests
         File.WriteAllText(Path.Join(dir, "Templates", "Main", "Template.json"),
             "{ \"Name\": \"Main\", \"DatabaseIdentificationScript\": "
             + $"\"SELECT [name] FROM sys.databases WHERE [name] = '{db}'\", \"ScriptFolders\": [{folders}]{templateExtra} }}");
+        var dataFile = Path.Join(dir, "Templates", "Main", "DeployProbe.tabledata");
+        if (tableData != null) File.WriteAllText(dataFile, tableData);
+        else if (File.Exists(dataFile)) File.Delete(dataFile);
         File.WriteAllText(Path.Join(tables, "dbo.DeployProbe.json"), tableJson);
     }
 
@@ -1070,6 +1253,7 @@ public class DeployPathTableFeatureTests
         _beforeScript = null;
         _prerequisiteScript = null;
         _securityPolicyScript = null;
+        _tableData = null;
         _nextDeployFails = false;
         FactoryContainer.Register(_environment);
         LogFactory.Register("ErrorLog", _errorLog);
