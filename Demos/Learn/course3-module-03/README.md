@@ -1,7 +1,5 @@
 # Course 3, Module 3 — Rollback & recovery (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (#549 rollback rerun, hook hand-off lines, WhatIf preview): delete the "On 2.7.x" callouts -->
-
 Goal: roll back a schema release the SchemaSmith way — **deploy the prior package and let
 SchemaQuench compute the reverting delta.** No hand-written undo scripts. The same tool that deploys
 forward deploys backward, on SQL Server, PostgreSQL, MySQL, and MariaDB alike. Along the way you'll see
@@ -67,7 +65,7 @@ you.*
   lab uses **`ordersservice_dev`** — the first `v1` deploy converges dev to the v1 state regardless of
   what was there before.
 - The CLI is reachable. The commands below assume `schemaquench` is on your PATH
-  (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later). If you'd rather not put it on
+  (`schemaquench --version` reports `SchemaQuench - Version: 2.8.0.0` or later). If you'd rather not put it on
   the PATH, set `SCHEMAQUENCH` to the full path to the executable and substitute `$SCHEMAQUENCH` for
   `schemaquench` in every command below.
 
@@ -169,9 +167,6 @@ deploy's own words:
   Drop column: ALTER TABLE `ordersservice_dev`.`Customer` DROP COLUMN `PromotionId`
   CALL SchemaSmith_CustomTableDrop('ordersservice_dev', 'Promotion')
 ```
-
-> **On 2.7.x** the previews differ: SQL Server omits the foreign-key drop, PostgreSQL's names the table and
-> column only, and MySQL and MariaDB preview the foreign-key drop a second time after the column.
 
 The line to read twice is the **column** drop. **Dropping a column drops its data** — and unlike the
 table, a column is *not* caught by the recyclebin. In this lab `PromotionId` is empty, so there's nothing
@@ -279,9 +274,6 @@ PostgreSQL prints the same hand-off (`Handing table public.Promotion to SchemaSm
 in product)`), followed by the hook's own line, `Table public.Promotion recycled as recyclebin.public_Promotion
 with a retention of 90 days.` MySQL and MariaDB print `Handing table Promotion to SchemaSmith_CustomTableDrop
 (no longer in product)`.
-
-> **On 2.7.x** the hand-off line isn't there: SQL Server logs `Dropping table [dbo].Promotion`, as if the table
-> were destroyed, and PostgreSQL logs `Table public.Promotion no longer in product`.
 
 Either way `Promotion` is gone from its schema, but its rows are sitting in the recyclebin — confirm it, from
 the lab folder:

@@ -1,7 +1,5 @@
 # Course 4, Recipe 18 — History the database keeps (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (period columns by role, #523; the precision warning; MariaDB system-time columns, #487/#524): delete the "merged, not yet released" note -->
-
 Goal: "What did this price say last March?" Two engines answer that natively, and in both the answer is
 declared state, not a script you run once. **SQL Server** temporal tables keep every old version of a row
 in a history table. **MariaDB** system versioning does the same inside the table, and its
@@ -9,9 +7,6 @@ in a history table. **MariaDB** system versioning does the same inside the table
 true*. You declare all of it, deploy it, change it, and extract it back.
 
 Two engines: `sqlserver/` and `mariadb/`, everything against `cookbook_r18`.
-
-> **Merged, not yet released.** This recipe teaches SchemaSmith 2.8 behaviour, which is merged to `main` and not yet
-> in a tagged release.
 
 ## Before you start
 

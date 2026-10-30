@@ -1,7 +1,5 @@
 # Course 6, Module 6 — Lint before you deploy: the `--Validate` semantic linter (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (SS-STALE-001 on 2.7.x boards; MariaDB CheckExpression; --Validate with --ExitNonZeroOnWarning): delete the "On 2.7.x" callouts -->
-
 **Goal:** catch the cross-object errors JSON Schema can't express — a dangling foreign key, an ungated duplicate column, an undefined token, a stale editor schema, a drifted file name — with a single static command that needs no database, no credentials, and no running engine. Read a broken package's findings board, fix each error to green, prove the linter is *semantic* (not dumb), surface a misnamed-file warning that never gates the exit code, clear an induced staleness finding, see where the engines' own rules give different verdicts, then wire it in as a CI gate. SQL Server, PostgreSQL, MySQL, and MariaDB.
 
 ## The scenario
@@ -13,7 +11,7 @@ Structural validation (Module 3) catches the typo — a missing `DataType`, a mi
 ## Before you start
 
 - **No sandbox, no database, no credentials.** `--Validate` (and `schematongs --WriteSchemasOnly`, used later) never connect to an engine. This lab is entirely database-free.
-- **The CLI is on your PATH** — `schemaquench --version` answers **2.7.0 or later**. This lab quotes `--Validate` output verbatim so you can diff your own against it.
+- **The CLI is on your PATH** — `schemaquench --version` answers **2.8.0 or later**. This lab quotes `--Validate` output verbatim so you can diff your own against it.
 - Each engine package under `sqlserver/`, `postgres/`, `mysql/`, and `mariadb/` ships **deliberately broken** — that's the starting point. You'll fix it.
 
 > **Path binding note:** if `--SchemaPackagePath:./sqlserver/Package` doesn't bind in your shell, pass the absolute path via the environment instead: `SmithySettings_SchemaPackagePath="$(pwd)/sqlserver/Package" schemaquench --Validate`. Run `schematongs --WriteSchemasOnly` from *inside* a `Package` directory (it defaults to `.`).
@@ -35,8 +33,6 @@ ERROR [SS-TOK-001] .../dbo.Customer.json: References undefined token '{{IncludeP
 WARN [SS-FK-002] Template 'Main' / Table '[OrderItem]' / FK '[FK_OrderItem_Supplier]': RelatedTable '[Supplier]' does not resolve to any table in the package (resolved schema 'dbo'). The deploy succeeds only if it already exists on the target.
 2 error(s), 1 warning(s)
 ```
-
-> **On 2.7.x** the board carries one more error, `ERROR [SS-STALE-001] .../tables.sqlserver.schema: Committed .json-schemas are stale - regenerate via --WriteSchemasOnly. Structural validation used the current model merged with this file's authored custom-property governance.`, and counts `3 error(s), 1 warning(s)` (PostgreSQL flags `tables`, `domaintypes` and `sequences`: `5 error(s), 1 warning(s)`); it stays on every board until Scenario 5 regenerates the schemas, so Scenario 2 reads `1 error(s), 0 warning(s)` (`3 error(s)` on PostgreSQL) and exits `2` instead of `PASS`. Scenario 5 is where it clears.
 
 > **Your `SS-TOK-001` will show the real path where you cloned the repo** in place of the `...` above. Every
 > finding is prefixed with where it lives — a file path for file-scoped checks, the object's position in the
@@ -118,8 +114,6 @@ You met the warning tier in Scenario 1: a warning never gates the exit code. Her
    Exit `1` — the same board, now a failure your CI can stop on. Errors still exit `2`, so the code tells the
    two apart.
 
-   > **On 2.7.x** the switch does not exist for `--Validate`: it is logged as `Ignored - not recognized` and
-   > the exit code is unchanged.
 3. Rename the file back to `dbo.OrderItem.json` (`orderitem.json` on PostgreSQL, `OrderItem.json` on MySQL and MariaDB). This is an induced scenario — the committed package files stay canonical.
 
 <!-- walk[sqlserver]: mv "<engine>/Package/Templates/Main/Tables/orderitem-legacy.json" "<engine>/Package/Templates/Main/Tables/dbo.OrderItem.json" -->
@@ -376,8 +370,6 @@ schemaquench --Validate --SchemaPackagePath:./Package
 `PASS - no issues found`, exit `0`. MariaDB gives a column-level check the column's own name, so it can tell
 which column a check belongs to, and 2.8 brought the property back there: it stays column-level through
 extraction and deploys. Same property, two engines, opposite verdicts, and each for a reason in its catalog.
-
-> **On 2.7.x** the property is retired on MariaDB too, and the file does not load there either.
 
 Remove the `CheckExpression` line again.
 

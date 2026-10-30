@@ -1,7 +1,5 @@
 # Course 7, Module 3 — Provisioning at onboarding (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (#539 skipped tenant row, #550 WhatIf onboarding): delete the "On 2.7.x" callouts -->
-
 Goal: onboard a brand-new tenant in a **single deploy**. In Module 1 you ran `CREATE DATABASE` by hand
 and let discovery find it. Here the config roster names a tenant that *doesn't exist yet* —
 `fleet_tenant_006` — and `CreateIfMissing: true` makes SchemaSmith stand the database up itself, on the
@@ -25,7 +23,7 @@ and 2 first.
   ../lab-sql.sh mysql information_schema "DROP DATABASE IF EXISTS fleet_tenant_006"
   ../lab-sql.sh mariadb information_schema "DROP DATABASE IF EXISTS fleet_tenant_006"
   ```
-- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.8.0** or later.
 
 Each engine folder ships the same native `Shop` `Package/` as Modules 1–2, plus three settings files —
 all naming a roster of one existing tenant (`001`) and one that doesn't exist yet (`006`):
@@ -65,8 +63,6 @@ asked for. `SchemaQuench - Summary.md` in the log folder:
 
 `Summary.json` carries the same row in `targets[]`, with `"outcome": "Skipped"`.
 
-> **On 2.7.x** the summary lists only `fleet_tenant_001`: a skipped tenant leaves no row (#539).
-
 ## Step 2: Dry-run before you let it create anything
 
 Turn `CreateIfMissing` on, but run under WhatIf first. SchemaSmith tells you exactly what it *would*
@@ -83,9 +79,6 @@ schemaquench --ConfigFile:quench.settings.whatif.json
 ```
 
 Exit `0`. Check the catalog after — `006` still doesn't exist. That's your look-before-you-leap on provisioning.
-
-> **On 2.7.x** the preview reports the creation, then tries to open the database that doesn't exist yet: the
-> `fleet_tenant_006` unit fails and the run exits `2` (#550).
 
 ## Step 3: Onboard — provision and deploy in one run
 

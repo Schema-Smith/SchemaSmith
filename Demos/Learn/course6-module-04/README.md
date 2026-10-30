@@ -1,7 +1,5 @@
 # Course 6, Module 4 — Runtime validation gates (validation scripts) (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (server-validation failure exits 2; plain run ignores checkpoints): delete the "On 2.7.x" callouts -->
-
 **Goal:** make a deployment refuse the wrong server and refuse to run an older release over a newer one — before it touches the schema. This lab exercises SchemaQuench's runtime validation gates: the product-level `ValidationScript` (a server-identity / dependency / version gate) and the template-level `BaselineValidationScript` + `VersionStampScript` (the anti-rollback pairing). SQL Server, PostgreSQL, MySQL, and MariaDB.
 
 ## The scenario
@@ -31,7 +29,7 @@ The **version registry** (`SchemaVersion` / `schema_version`) is standing infras
    for db in shop_tenant_a shop_tenant_b shop_tenant_c; do ../lab-sql.sh mariadb "$db" "CREATE TABLE IF NOT EXISTS schema_version (product VARCHAR(128) NOT NULL PRIMARY KEY, version INT NOT NULL);"; done
    ```
 3. The `quench.settings.json` files carry `"KindleTheForge": true` (on by default; shown here for clarity). The first deploy into a fresh database installs SchemaSmith's helper objects ("kindles the forge") before it does anything else.
-4. **The CLI is on your PATH** — `schemaquench --version` answers **2.7.0** or later. The validation-script family itself is long-shipped, but this lab's package carries a `$schema` reference, which SchemaSmith only learned to read in 2.7.0; an older CLI refuses to load the package at all. Each command below is run from an engine/version directory, e.g. `sqlserver/v1`.
+4. **The CLI is on your PATH** — `schemaquench --version` answers **2.8.0** or later. The validation-script family itself is long-shipped, but this lab teaches 2.8's exit codes, and its package carries a `$schema` reference that a CLI older than 2.7.0 refuses to load. Each command below is run from an engine/version directory, e.g. `sqlserver/v1`.
 
 ## Scenario 1 — ValidationScript pass
 
@@ -62,8 +60,6 @@ FAILED: Invalid server for this product
 ```
 
 Exit code 2. Nothing is deployed — the quench never reaches a target database. Restore `DependencyDb` to `shop_tenant_a`.
-
-> **On 2.7.x** the run ends with `System.Exception: Invalid server for this product` and a stack trace instead of the `FAILED:` line, and exits `3`.
 
 <!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/v1/Package/Product.json" set ScriptTokens.DependencyDb '"shop_tenant_a"' -->
 
@@ -127,10 +123,7 @@ To return to a clean first-deploy state:
 2. **Empty the version registry** — `course6-setup` does not touch it. In each tenant: `DELETE FROM dbo.SchemaVersion;` (SQL Server), `DELETE FROM public.schema_version;` (PostgreSQL), or `DELETE FROM schema_version;` (MySQL / MariaDB) — or drop and re-create it per *Before you start*.
 3. **No checkpoint cache to clear.** SchemaQuench keeps per-run checkpoints in a `schemaquench-checkpoints` directory in your temp folder, but a plain run never reads them — only `--ResumeQuench` does — so a reset database gets a full deploy.
 
-   > **On 2.7.x** every run reads those checkpoints, so if a database is reset out from under one, the next run may skip steps it believes are already done. Delete the directory as part of the reset: `%TEMP%\schemaquench-checkpoints` on Windows, `$TMPDIR/schemaquench-checkpoints` or `/tmp/schemaquench-checkpoints` on macOS/Linux.
-
 ## Cross-platform
 
 The workflow is identical on all four engines; only the native SQL spelling differs. The admin database the product `ValidationScript` runs against is `master` (SQL Server), `postgres` (PostgreSQL), or `information_schema` (MySQL, MariaDB). Identifier quoting and types follow each engine (`dbo` + `SYSNAME`/`INT`; lowercase `public` + `text`/`integer`; backtick-quoted + `VARCHAR`/`INT` on MySQL and MariaDB). The gate names, the abort messages, and the exit code (2, for a failed server validation and a failed baseline alike) are the same everywhere.
 
-> **On 2.7.x** a failed server validation exits `3`, not `2`, on every engine.

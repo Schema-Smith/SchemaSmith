@@ -1,7 +1,5 @@
 # Module 3 — Change it and redeploy (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (scriptsUnchanged): delete the "On 2.7.x" callouts -->
-
 Goal: evolve the `Widget` table you built in Module 2 — widen a column and add a new one — then
 **preview the exact change with WhatIf before applying it**, deploy it, and confirm SchemaSmith
 converged the existing table to your new declared state. No hand-written `ALTER`.
@@ -14,7 +12,7 @@ edited `starter/` should look like when you're done.
 
 - The [sandbox](../docker) is up (`docker compose up -d`) and you completed [Module 2](../module-02),
   so the `Widget` table already exists on `learn`.
-- The CLI is on your PATH (`schemaquench --version` answers **2.7.0 or later**).
+- The CLI is on your PATH (`schemaquench --version` answers **2.8.0 or later**).
 
 > If you're starting fresh, deploy a `starter/` first to lay down the original `Widget`:
 > `cd <engine>/starter && schemaquench --ConfigFile:deploy.settings.json`.
@@ -98,8 +96,6 @@ cat out/whatif-summary.md
 - Ran (object scripts): 0
 - Unchanged (object scripts): 0
 ```
-
-> **On 2.7.x** the summary has no `Unchanged (object scripts)` line and the JSON has no `scriptsUnchanged` key.
 
 Now `out/whatif-summary.json` — the machine-readable twin a CI gate reads, with the mode that marks it a
 preview and the two changes itemized (an excerpt):

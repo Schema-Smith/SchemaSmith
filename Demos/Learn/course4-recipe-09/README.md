@@ -1,7 +1,5 @@
 # Course 4, Recipe 9 — Extensions as a source of truth: the data dictionary (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (Description key, ExtendedProperties): delete the "On 2.7.x" callouts -->
-
 Goal: `Extensions` isn't just an input to gates and defaults — it's an **authoritative metadata store** your
 own scripts can turn into real work. Here every table carries business metadata in `Extensions` (table-level
 `BusinessDomain` / `DataOwner` / `Description` / `RetentionPolicy`; column-level `BusinessName` /
@@ -16,7 +14,7 @@ all targeting `cookbook_r9`.
 ## Before you start
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup) once — it creates `cookbook_r9`).
-- The CLI is on your PATH (`schemaquench --version` → `2.7.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` → `2.8.0.0` or later).
 
 ## Step 1: See the metadata on the tables
 
@@ -138,10 +136,6 @@ PostgreSQL a description lives beside the table, so a package that omits `Descri
 already has alone — a description a DBA typed into SSMS survives your deploy. On MySQL and MariaDB the comment is
 part of the column and table definition, so a package that omits it clears it, as `Comment` always did. `""`
 removes one on every engine.
-
-> **On 2.7.x** `Description` is not a key it knows: the deploy stops at exit `3` with
-> `Could not find member 'Description' on object of type 'SqlServerColumn'`. MySQL and MariaDB spelled it
-> `Comment` there, which 2.8 still accepts with a `--Validate` warning (`SS-DESC-002`).
 
 ## Enforcing the metadata in CI (optional)
 

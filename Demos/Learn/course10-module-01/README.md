@@ -1,7 +1,5 @@
 # Course 10 · Module 1 — Let the engine adapt
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (warn downgrade exits 1; --ExitNonZeroOnWarning; PostgreSQL Skipping line; newest tier; {{ServerMajorVersion}} in MySQL/MariaDB table and column expressions, #598): delete the "On 2.7.x" callouts -->
-
 You author one modern feature per engine and deploy the same package to a **floor-version**
 target that predates it. SchemaSmith detects the target version, emits the degraded form the
 old engine can take, and records what it couldn't in the `downgraded` manifest — surfaced in
@@ -28,7 +26,7 @@ because SQL Server feature support tracks the server binary, not the database's 
   standing and every target database exists (`learn` on PostgreSQL 12 / MySQL 5.7 / MariaDB 10.2,
   and `learn_2008` at compatibility level 100 on the SQL Server instance). This module deploys
   into those databases — it does not create them. See that lab's ports-and-tiers table.
-- `schemaquench --version` answers **2.7.0** or later. All four engine floors and the
+- `schemaquench --version` answers **2.8.0** or later. All four engine floors and the
   `UnsupportedFeaturePolicy` knob shipped in 2.4.0.
 
 ## Steps
@@ -65,9 +63,6 @@ that downgraded something finishes as incomplete — exit 1, not 0. The log says
 
 Then read the deployment summary's **Unsupported Feature Downgrades** section.
 
-> **On 2.7.x** the same run exits 0 and prints no `Skipping` line; the statistic is still skipped and the
-> downgrade still recorded in the summary.
-
 Add `--ExitNonZeroOnWarning`, the switch that turns a `0` into a `1` when a run logged a warning:
 
 ```bash
@@ -78,8 +73,6 @@ schemaquench --ConfigFile:quench.settings.warn.json --LogPath:"$PWD/logs" --Exit
 Still exit 1, for the same reason. A downgrade is not a warning: the run already exits 1, and the switch
 only ever changes a `0`. So the exit code alone can't tell a downgraded run from a warned one — the
 deployment summary's `outcome` can: `Incomplete` here.
-
-> **On 2.7.x** the switch does not exist: the run logs a line starting `Ignored - not recognized: --ExitNonZeroOnWarning` and exits 0.
 
 **Fail — refuse instead:**
 
@@ -117,8 +110,6 @@ downgrade makes the run finish as incomplete:
  Deploy
 the identical package to MySQL 8.0 and the check is created — same package, target decides.
 
-> **On 2.7.x** the same run exits 0; the check is still left out and the downgrade still recorded.
-
 To see the refusal instead, flip the knob for one run:
 ```bash
 # from course10-module-01/mysql
@@ -142,8 +133,6 @@ Each records its own `downgraded` row — two lines in the summary — and the r
 [localhost].[learn]       Descending index key part stored ascending (requires MySQL 8.0 / MariaDB 10.8 - downgraded): Ledger.IX_Ledger_Amount_Desc
 [localhost].[learn]       Invisible index stored visible (requires MySQL 8.0 / MariaDB 10.6 - downgraded): Ledger.IX_Ledger_Region_Hidden
 ```
-
-> **On 2.7.x** the same run exits 0; both indexes are still downgraded the same way.
 
 ---
 

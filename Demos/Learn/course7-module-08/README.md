@@ -1,7 +1,5 @@
 # Course 7, Module 8 — The servers you don't write to (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (#596 secondaries on host,port; #597 a Secondary folder with no secondaries is skipped; the cold read-only refusal exits 2): delete the "merged, not yet released" note -->
-
 Goal: a fleet has targets you must not write to the way you write to the rest. A read-only copy of a tenant should be
 **skipped**, with a line saying so, not counted as a failure. A replica should be **read from** without SchemaSmith trying
 to install its helpers on it. And a server that sits beside the primary, an Availability Group secondary, needs some
@@ -12,9 +10,6 @@ separate SQL Server stands in for a secondary. Neither is an Availability Group:
 replicates. What the lab proves is the part SchemaSmith owns: which targets a run touches, and what it does with each.
 
 `sqlserver/` for all three parts, `postgres/` for the read-only part too.
-
-> **Merged, not yet released.** This module teaches SchemaSmith 2.8 behaviour, which is merged to `main` and not yet
-> in a tagged release.
 
 ## Before you start
 

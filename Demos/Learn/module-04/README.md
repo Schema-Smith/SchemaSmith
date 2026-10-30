@@ -1,7 +1,5 @@
 # Module 4 — Bring an existing database under management (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (extraction column order and keys; SchemaTongs progress lines): delete the "On 2.7.x" callouts -->
-
 Goal: take a database that nobody has under source control, point **SchemaTongs** at it, and cast it
 into a schema package — tables, keys, and indexes — that you then own and manage like any other.
 
@@ -17,7 +15,7 @@ It's a trimmed slice of the classic Chinook schema: `Artist`, `Album`, `Track`, 
 ## Before you start
 
 - The [sandbox](../docker) is up (`docker compose up -d`).
-- The CLI is on your PATH (`schematongs --version` answers **2.7.0 or later**).
+- The CLI is on your PATH (`schematongs --version` answers **2.8.0 or later**).
 
 ## Step 1: Stand up the "existing" database
 
@@ -70,8 +68,6 @@ Expected (SQL Server shown; PostgreSQL prints `Cast Json for public.album`, MySQ
 Casting Completed Successfully
 ```
 
-> **On 2.7.x** MySQL and MariaDB number the table lines instead: `[1/7] Extracting Album...`.
-
 SchemaTongs writes the package to `./Extracted`, one file per table:
 
 ```
@@ -98,10 +94,6 @@ MySQL's quoting and casing here, and writes its own types (`int(11)`) — it's a
 
 Your `Extracted/` package should match `solution/`. From here, it's a normal SchemaSmith package — you
 manage it exactly like the one you built in Module 2: edit a table, preview with WhatIf, and quench.
-
-> **On 2.7.x** your extraction lists each table's columns alphabetically rather than in the table's own order,
-> and on PostgreSQL every index also carries `"FillFactor": 90`, so those lines differ from `solution/`. The
-> tables, keys and indexes are the same.
 
 ## Reset
 

@@ -1,7 +1,5 @@
 # Course 6, Module 1 — Datafix & limited-privilege deployment (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (#547 run-once record): delete the "On 2.7.x" callouts -->
-
 **Goal:** ship a data-only fix — correct a batch of mispriced order lines across three tenant databases — deploying it through SchemaSmith under the **datafix profile** as a **scoped, least-privilege account**, one tenant at a time (canary). You'll see two independent things hold the structural boundary: the deployment *profile* (SchemaSmith performs no structural DDL) and the deploy *account* (it has no power to drop or alter the product's tables).
 
 ## The scenario
@@ -10,7 +8,7 @@ A pricing bug double-applied a discount: every `OrderItem` on a **May 2026** `Sa
 
 ## Before you start
 
-- The four-engine sandbox is up (`Demos/Learn/docker`) and `schemaquench --version` answers **2.7.0 or later** on your PATH.
+- The four-engine sandbox is up (`Demos/Learn/docker`) and `schemaquench --version` answers **2.8.0 or later** on your PATH.
 - Run **[`course6-setup`](../course6-setup/)** first. It seeds `shop_tenant_a`, `shop_tenant_b`, `shop_tenant_c` on each engine with the price defect, and creates the scoped **`datafix_user`** role (see [`course6-setup/seed/<engine>/datafix_role.sql`](../course6-setup/seed/)).
 
 Confirm the defect is present in the canary tenant — each line prints `10` (10 affected rows per tenant):
@@ -63,9 +61,6 @@ Skip the grant on SQL Server or PostgreSQL and the datafix deploy stops before t
 ```text
 Cannot read or record which Before scripts have already run: the deploy login has no SELECT and INSERT on SchemaSmith.CompletedMigrationScripts. Nothing in the slot was run, because a run-once script would run again. Grant the deploy login SELECT, INSERT and DELETE on SchemaSmith.CompletedMigrationScripts.
 ```
-
-> **On 2.7.x** a deploy without the grant does not stop: SQL Server logs the permission errors and exits `0`,
-> PostgreSQL logs nothing, and the fix runs again on every deploy (#547).
 
 ## Step 3 — Read the datafix profile
 

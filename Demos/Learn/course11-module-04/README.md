@@ -1,7 +1,5 @@
 # Course 11, Module 4 — What the database owns (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (the Setup slot; #509, #518; the #518 refusal names the longest value): delete the "merged, not yet released" note -->
-
 Goal: a package describes tables, but Change Data Capture and Change Tracking also need a switch that belongs to the
 **database**. Turning it on changes retention, cleanup jobs and storage for every table in the database, which is not a
 decision one table's JSON gets to make. So SchemaSmith doesn't make it: it records a downgrade and tells you. Then you
@@ -11,9 +9,6 @@ that keep captured history from being thrown away.
 
 SQL Server only: `sqlserver/`, everything against `vault_m5`. The sandbox runs SQL Server Agent, so capture is real: the
 rows you see in the change tables were written by the capture job.
-
-> **Merged, not yet released.** This module teaches SchemaSmith 2.8 behaviour, which is merged to `main` and not yet
-> in a tagged release.
 
 ## Before you start
 

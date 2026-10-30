@@ -1,8 +1,5 @@
 # Course 11, Module 2 — State your package never described (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (grants come back; #581 undeclared foreign key): delete the "On 2.7.x" callouts -->
-<!-- TRAINING-RELEASE-PIN 2.8.0 (#535, #537, #538, #542): bump the pre-flight to 2.8.0 and delete the "merged, not yet released" note -->
-
 Goal: Module 1 refused a change because *delivering* it would rewrite the table. This module refuses
 for a different reason — the change itself is fine, the data is fine, and SchemaSmith still stops,
 because the database holds something about your table that **your package does not contain**. Drop it
@@ -18,14 +15,10 @@ three answers, and every engine fits on them:
 
 Everything runs against `vault_m2`.
 
-> **Merged, not yet released.** Parts 2 and 3 teach SchemaSmith 2.8 behaviour, which is merged to `main`
-> and not yet in a tagged release. Where a 2.7.x CLI does something different, an **On 2.7.x** note says
-> what.
-
 ## Before you start
 
 - The [sandbox](../docker) is up and [`../course11-setup`](../course11-setup) has been run once.
-- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.8.0 or later**.
 - You have run [Course 8, Module 2](../course8-module-02) — its Beat 3 is the CDC rebuild refusal, and
   this module builds on it rather than repeating it.
 
@@ -95,9 +88,6 @@ about the view:
 
 The script text is what it was and the server still holds the view the last run left, so the script is
 not run again.
-
-> **On 2.7.x** the second run quenches the view script again (`Quenched …dbo.vw_AuditActors.sql`):
-> 2.7 runs every object script on every deploy.
 
 Now widen `Actor` from `NVARCHAR(64)` to `NVARCHAR(128)`. SQL Server refuses to alter a column while a
 schema-bound module references it — error **4922**, which names neither the module nor the remedy.
@@ -170,10 +160,6 @@ folder:
 # → pol_Actor 1 1 1
 ```
 
-> **On 2.7.x** this deploy fails on the security policy with SQL Server's own error 4922 (#538). Without
-> the policy, the view comes back from your package but its `GRANT` does not: 2.7 does not carry
-> permissions across this drop.
-
 ### The package, by default — a changed function (SQL Server)
 
 `DropSchemaBoundDependents` is for a **column** change, and it is off unless you opt in. A changed
@@ -220,9 +206,6 @@ changed module whose dependents you declared needs nothing. The first log line i
 noting that the view's own script did not change; the view still comes back, because the function under
 it did.
 
-> **On 2.7.x** the change to `fn_ActorKey` fails: SQL Server refuses to alter a function a schema-bound
-> view references (error 3729), and 2.7 does not take the view down around it.
-
 ### The package by default, the catalog for the rest (PostgreSQL)
 
 PostgreSQL has the same problem without the opt-in: it will not change a column's type while a view or
@@ -249,8 +232,6 @@ schemaquench --ConfigFile:quench.settings.baseline.json   # exit 0 -- nothing to
 ```text
   Unchanged, not re-run: .\baseline\Templates\Main\Views\public.vw_audit_actors.sql
 ```
-
-> **On 2.7.x** the second run quenches the view script again.
 
 Now add what a DBA would add and the package does not mention — an audit trigger that fires only when
 `actor` changes:
@@ -291,9 +272,6 @@ Policies` phase). The trigger is in no package: PostgreSQL describes a trigger i
 scripted it **from the catalog**, took it down before the change and put it back after, still enabled
 (`O`). A publication with a row filter over the column (PostgreSQL 15 and later) is handled the same
 way.
-
-> **On 2.7.x** this deploy fails: 2.7 does not take a row-level security policy or a trigger's `WHEN`
-> clause down around a type change, so the engine refuses it (#535).
 
 ### A column rename (MySQL)
 
@@ -389,9 +367,6 @@ Both views are still there — including `vw_AuditActors`, which the package *co
 refusal fires before the deploy drops anything for this change, not after dropping the one it could
 put back.
 
-> **On 2.7.x** this deploy drops `vw_DbaActors` along with `vw_AuditActors`, widens the column, and
-> exits 0 with `vw_DbaActors` gone for good (#542).
-
 ### An encrypted view (SQL Server)
 
 Remove the hand-made view, make `vw_AuditActors` **encrypted**, and try the same widening with the
@@ -471,9 +446,6 @@ This refusal is new. Before it, the same deploy dropped `vw_dba_report` to make 
 change and nothing put it back: a successful deploy, minus a view. A tool that *learned* to refuse is
 the clearest case in this course of what the refusals are for.
 
-> **On 2.7.x** nothing checks for an undeclared view: a deploy that reaches the type change drops
-> `vw_dba_report` and does not put it back (#535).
-
 ### An undeclared functional index (MySQL)
 
 Part 2 left `ix_dba_email` on `Contact`, unmanaged. `rename-blocked/` renames `Email` to `Mail`
@@ -534,9 +506,6 @@ schemaquench --ConfigFile:quench.settings.rename-declared.json   # exit 0
 Declaring the index adopted it. Now the package has the recipe, so the deploy drops the index ahead of
 the rename and builds it again over `Mail`. That is Module 5's rule arriving early: *unset means
 unmanaged* — and unmanaged is something SchemaSmith will not destroy on your behalf.
-
-> **On 2.7.x** both renames fail with MySQL's own refusal ("has a functional index dependency"): 2.7
-> does not take a functional index down around a rename (#537).
 
 ### An undeclared foreign key (MySQL, MariaDB)
 
@@ -601,8 +570,6 @@ schemaquench --ConfigFile:quench.settings.fk-collate.json   # exit 0
 
 Down, change, back up. The same rule as the index above: once the package has the recipe, SchemaSmith takes the
 key down around the change and builds it again.
-
-> **On 2.7.x** the `fk-collate` deploy exits `0` with the key dropped and never put back.
 
 ## Cleanup
 

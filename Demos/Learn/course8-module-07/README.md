@@ -1,7 +1,5 @@
 # Course 8 · Module 7 — Before you share the log
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (--ExitNonZeroOnWarning, #576 debug SQL, #577 echo): delete the "On 2.7.x" callouts -->
-
 The last module of Course 8. Every module so far ended with a log you read. This one ends with a log you
 **hand to someone else** — attached to a ticket, uploaded as a CI artifact, pasted into a chat. Before it
 leaves your machine, you want to know what's in it. SchemaSmith masks a lot on its own. This module shows
@@ -11,7 +9,7 @@ purpose.
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`) — see [`../README.md`](../README.md).
-- `schemaquench --version` answers **2.7.3 or later** on your PATH.
+- `schemaquench --version` answers **2.8.0 or later** on your PATH.
 
 ## The package
 
@@ -150,9 +148,6 @@ read it:
       0: DeployKey
 ```
 
-> **On 2.7.x** the echo prints this block as `ScrubTokens: ***` — the setting's own name contains `Token`, so
-> it masks itself (#577). Check the token block, not the echo, to see the setting worked.
-
 ## Step 4 — a block the tools can't read
 
 `quench.settings.oops.json` makes the most common mistake — one value where a list belongs:
@@ -185,8 +180,6 @@ schemaquench --ConfigFile:quench.settings.oops.json --LogPath:"$PWD/logs" --Exit
 
 Exit `1`: the run finished and logged a warning. The switch never changes a failure code; it only turns a
 `0` that logged a warning into a `1`.
-
-> **On 2.7.x** the switch does not exist: the run logs a line starting `Ignored - not recognized: --ExitNonZeroOnWarning` and exits 0.
 
 ## Step 5 — when the token list is the problem
 
@@ -279,11 +272,6 @@ to the ticket; keep the artifact local.
 There's no masked version to make one shareable. `ScrubArtifacts`, which swapped each secret for `***`, is
 deprecated and ignored: a `'***'` inside quotes is still valid SQL, so a masked file re-run wrote `***` into
 your table (#576). A run that still sets it logs a warning.
-
-> **On 2.7.x** there is no `--WriteDebugSql` (it's logged as `Ignored - not recognized`): every run writes the
-> artifacts, so the first `broken` deploy already leaves the key in `artifacts/`, and the files stay until you
-> delete them. The header reads `-- Contains expanded values — may be sensitive. Local debugging; scrub before
-> sharing.`, and `ScrubArtifacts` still masks — into SQL that writes `***` if you run it.
 
 ## Before you attach a log
 

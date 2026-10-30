@@ -1,7 +1,5 @@
 # Course 4, Recipe 16 — Trust the round trip: extraction that gives you back what you have (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (ObjectOrder defaults to Physical; SQL Server alias type #489): delete the "On 2.7.x" callouts -->
-
 Goal: extract a database you inherited, rebuild it from the package, and prove nothing was lost, widened or
 reshuffled on the way. "Extract what you have and trust the result" is how most people adopt SchemaSmith — it is
 the whole premise of Course 5 — so the round trip has to be exact. This lab checks the places it was not:
@@ -22,7 +20,7 @@ Everything runs against `cookbook_r16`, on all four engines.
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup)
   once — it creates `cookbook_r16`).
-- The CLI is on your PATH: `schematongs --version` and `schemaquench --version` answer **2.7.0 or later**.
+- The CLI is on your PATH: `schematongs --version` and `schemaquench --version` answer **2.8.0 or later**.
 
 ## Step 1: Build the database you inherited
 
@@ -60,10 +58,6 @@ and find the three columns:
 
 The type and the schema collection travel too, as scripts: `extracted/Templates/Main/DataTypes/dbo.ShortChar.sql`
 and `extracted/Templates/Main/XMLSchemaCollections/dbo.InvoiceSchema.sql`.
-
-> **On 2.7.x** `region_code` extracts as `"DataType": "SHORTCHAR(10)"`, and Step 3's SQL Server deploy fails with
-> `Cannot specify a column width on data type SHORTCHAR.` (exit `2`). The collation and the `DOCUMENT` binding come
-> through on 2.7.2 and later.
 
 Open PostgreSQL's `extracted/Templates/Main/Tables/device.json`
 and find the two bit columns:
@@ -129,9 +123,6 @@ Check the PostgreSQL column types the package produced:
 anywhere said so. The columns also come back in the order the inherited table had them, because extraction
 wrote them in the table's physical order. Deploy once more with `--report:./rerun` and `rerun.md` reports zero
 changes on all four engines — the package describes the database exactly.
-
-> **On 2.7.x** extraction writes columns in name order (`ObjectOrder` defaults to `Name`), so the rebuilt table
-> reads `device_id`, `flags`, `label`, `mask`.
 
 ```bash
 # from course4-recipe-16

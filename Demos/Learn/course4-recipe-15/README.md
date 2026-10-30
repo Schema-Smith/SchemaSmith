@@ -1,7 +1,5 @@
 # Course 4, Recipe 15 — The re-run that wasn't a no-op: expression change detection (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (empty expression map is verified; 2.8 type synonyms): delete the "On 2.7.x" callouts -->
-
 Goal: prove that a second deploy of an unchanged package changes **nothing** — on the objects where that used to
 be a lie. Every engine rewrites an expression when it stores it. SQL Server keeps `RetentionDays <= 365` as
 `([RetentionDays]<=(365))`; PostgreSQL keeps `starts_with(plan_code, 'P')` as
@@ -19,7 +17,7 @@ Everything runs against `cookbook_r15`.
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup)
   once — it creates `cookbook_r15`).
-- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.8.0 or later**.
 
 ## The table
 
@@ -85,9 +83,6 @@ schemaquench --ConfigFile:deploy.settings.json --report:./rerun    # exit 0
 `rerun.md` reads `Modified: tables=0, columns=0` again. The engine stores `varchar(100)` and `double`, and SchemaSmith
 compares the type you wrote as the type it becomes.
 
-> **On 2.7.x** the second deploy reports `Modified: tables=0, columns=1` on SQL Server, MySQL and MariaDB: the
-> synonym column is altered on every deploy. PostgreSQL's reads zero there too.
-
 ## Step 2: See what SchemaSmith recorded
 
 The answer lives in a table SchemaSmith kindles into every target: `SchemaSmith.ExpressionMap`
@@ -146,11 +141,6 @@ a scratch copy of the table, read back what the engine stored, and found exactly
 the computed column, the filtered index and the check are recorded as they stand, not rebuilt. The other engines
 print the same line: `Verified 2 expression(s)` on PostgreSQL, MySQL and MariaDB. The table is full again, and
 the next deploy compares against it as usual.
-
-> **On 2.7.x** an empty table falls back to the text comparison, so this deploy rebuilds them once at exit 0:
-> `Dropping index …`, `Dropping columns from [dbo].[Subscription] ([RetentionWeeks])`, `Dropping check constraint …`
-> and the matching `Adding`/`Creating` lines on SQL Server; on PostgreSQL `Recreating generated column
-> public.subscription.retention_weeks (expression changed)` and the check dropped and re-added.
 
 ## Step 4: Edit it behind SchemaSmith's back
 

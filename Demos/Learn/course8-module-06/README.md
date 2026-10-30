@@ -1,7 +1,5 @@
 # Course 8 · Module 6 — Per-engine dialects & your runbook
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (PostgreSQL notices need VerboseLogging; Errors.log line number): delete the "On 2.7.x" callouts -->
-
 The last of Course 8's failure modules. You've read SQL Server logs all course. Now the same failure lands on
 PostgreSQL, MySQL, and MariaDB — and the error isn't where you expected, because **each database hands
 it back through a different door**. This module shows all three doors (MariaDB rides MySQL's), then has
@@ -10,7 +8,7 @@ you assemble everything into a team diagnostic runbook.
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`) — see [`../README.md`](../README.md).
-- `schemaquench --version` answers **2.7.0 or later** on your PATH.
+- `schemaquench --version` answers **2.8.0 or later** on your PATH.
 
 ## Step 1 — create the sandbox database
 
@@ -62,8 +60,6 @@ Read the `Progress.log` **and** the `Errors.log` on each engine:
 | **MySQL** | `Duplicate entry 'ana.f@shop.test' for key 'Customer.IX_Customer_Email'` (`1062`) | **empty** |
 | **MariaDB** | `Duplicate entry 'ana.f@shop.test' for key 'IX_Customer_Email'` (`1062`) — no table prefix on the key | **empty** |
 
-> **On 2.7.x** SQL Server's `Errors.log` carries the same message with `at Line: 458`.
-
 That's the headline: **for a failure in a phase the engine computes, only SQL Server populates
 `Errors.log`** (with the fault + line number). On PostgreSQL, MySQL, and MariaDB the detail is in the
 `Progress.log`, and `Errors.log` is empty. A failed *user script* is different: its
@@ -105,8 +101,6 @@ schemaquench --ConfigFile:quench.settings.verbose.json --LogPath:"$PWD/logs-verb
   `Course 8 M6: VerboseLogging demo notice from a user script.`, is **absent** from the plain log and
   **present** in the verbose one.
 - **MySQL and MariaDB** — the report line appears in **neither**. User scripts on these engines have no progress channel at all — the `SchemaSmith_StatusMessages` sidecar is the *engine's* channel, not yours.
-
-> **On 2.7.x** `VerboseLogging` has no effect on PostgreSQL: the `RAISE NOTICE` line shows in **both** logs, the plain one included (both runs exit `0`).
 
 > **Note:** Set it on the command line in either form — `--VerboseLogging=true` or `--VerboseLogging:true` — or put `"VerboseLogging": true` in your settings file.
 

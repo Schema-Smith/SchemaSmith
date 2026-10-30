@@ -11,7 +11,7 @@ This is the capstone. Do Modules 1–3 first — you're now *operating* the flee
 
 - The [sandbox](../docker) is up and verified (all four engines healthy).
 - The fleet exists — run [`../course7-setup`](../course7-setup) once (creates `fleet_tenant_001`…`005`).
-- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.8.0** or later.
 
 Each engine folder ships the same native `Shop` `Package/` as Modules 1–3, plus two settings files and two
 drift helpers. The roster is **discovery-driven** — the template's `DatabaseIdentificationScript` finds
@@ -167,8 +167,7 @@ The run's summary says so too: `SchemaQuench - Summary.json` carries `"resumedFr
 > and database. Two runs that reach the same names — two pipelines on one agent, or this lab's MySQL and MariaDB
 > runs, which are both `localhost` — would read each other's progress if they both resumed from one folder, and
 > skip work the other had done. Only `--ResumeQuench` reads a checkpoint, so plain runs side by side are safe;
-> give each run you might resume its own `--CheckpointDirectory`, as this step does. (On 2.7.x *every* run read
-> the checkpoint folder, so even two plain runs could skip each other's steps and still exit `0` — #497.)
+> give each run you might resume its own `--CheckpointDirectory`, as this step does.
 
 ## Step 5: Do it on PostgreSQL, MySQL, and MariaDB
 

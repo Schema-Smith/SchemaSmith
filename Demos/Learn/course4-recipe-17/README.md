@@ -1,7 +1,5 @@
 # Course 4, Recipe 17 — Search you declare (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (MySQL/MariaDB full-text indexes outside index-only templates, #530; the re-create's drop line; SQL Server downgrade, #594; MariaDB copy build, #602; SQL Server column order, #601): delete the "merged, not yet released" note -->
-
 Goal: full-text search is the index family most packages leave as a hand-run script. It has its own objects (a
 catalog on SQL Server) and its own rules (one per table on SQL Server, as many as you like on MySQL and MariaDB). This
 recipe declares it like any other index: deployed, left alone when nothing changed, re-created when it changes, and
@@ -10,9 +8,6 @@ doesn't have Full-Text Search at all.
 
 Three engines: `mysql/`, `mariadb/` and `sqlserver/`, everything against `cookbook_r17`. PostgreSQL has no full-text
 index object. Its equivalent is an ordinary GIN index over a `tsvector` expression, which the index recipes cover.
-
-> **Merged, not yet released.** This recipe teaches SchemaSmith 2.8 behaviour, which is merged to `main` and not yet
-> in a tagged release.
 
 ## Before you start
 

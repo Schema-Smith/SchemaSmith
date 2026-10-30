@@ -1,7 +1,5 @@
 # Course 6, Module 2 — Pre-flight diagnostics: `--TestConnection` and `--PreviewTargets` (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (patch-level MySQL and MariaDB floors): delete the "On 2.7.x" callouts -->
-
 **Goal:** run SchemaQuench's two read-only pre-flight switches to validate a deployment before committing to the maintenance window — confirming connectivity, the minimum-version floor, and the exact target roster, then wire both checks as a CI gate that aborts on failure.
 
 ## The scenario
@@ -13,7 +11,7 @@ Your team is about to push a schema update to three tenant databases across a fl
 > **Engine floor:** this lab deliberately declares a floor *higher* than it needs (SQL Server `2019`, PostgreSQL `15`, MySQL `8.0`, MariaDB `10.6`) so that raising it can be shown failing. On your own server, either meet those or edit `Product.json` down — they are the lab's teaching values, not SchemaSmith limits.
 
 - The four-engine sandbox is up (`Demos/Learn/docker`) and `course6-setup` has been run — it seeds `shop_tenant_a`, `shop_tenant_b`, and `shop_tenant_c` on each engine.
-- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.8.0.0` or later).
 
 ## Scenario 1 — `--TestConnection` pass
 
@@ -103,8 +101,6 @@ Exit code: `2` on all four engines. The manifest names the server, the detected 
 <!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"10.6"' -->
 
 Those originals are values *this lab declares* — deliberately well above what it needs, so Scenario 2 has room to fail against. They are not SchemaSmith's floors, which are SQL Server 2008, PostgreSQL 12, MySQL 5.7.22 (8.0.23 on the 8.0 line), and MariaDB 10.2.13 — patch-level on the MySQL family, so a server below them is refused. A real product declares the floor *it* needs.
-
-> **On 2.7.x** the MySQL and MariaDB floors are 5.7 and 10.2, any patch.
 
 ## Scenario 3 — `--PreviewTargets` pass
 
@@ -220,8 +216,6 @@ Each engine reports its version in its own native form, so that row is what the 
 The declared floor is a separate, friendlier grammar — you never match the detected string's shape. This lab declares `2019` and passes against a server reporting `16.0.4260.1`.
 
 The last row is what each lab package declares in its own `Product.json`, chosen well above what the lab actually needs so Scenario 2 has something to fail against. It is **not** SchemaSmith's supported floor — those are SQL Server 2008, PostgreSQL 12, MySQL 5.7.22 (8.0.23 on the 8.0 line), and MariaDB 10.2.13.
-
-> **On 2.7.x** the MySQL and MariaDB floors are 5.7 and 10.2, any patch.
 
 > *MariaDB is a fourth platform in the MySQL family — its own `Platform: MariaDb` selection and native package, not the MySQL package retargeted. Its dialect matches MySQL except for a few DDL specifics (invisible indexes, check-constraint drops, column-default reporting) that SchemaSmith handles for you.*
 

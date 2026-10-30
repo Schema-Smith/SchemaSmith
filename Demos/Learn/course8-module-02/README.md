@@ -1,7 +1,5 @@
 # Course 8 · Module 2 — Structure-change failures
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (plain run ignores checkpoints): delete the "On 2.7.x" callouts -->
-
 Two induced incidents on one database (`diag_structure`), read end to end. This is the **structure
 half** of the mechanical engine: how column *adds* (`MissingTableAndColumnQuench`) and column
 *alters* (`ModifiedTableQuench`) fail, and how to read them. Same method as Module 1 — locate the
@@ -10,7 +8,7 @@ phase, read the error, recover.
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`) — see [`../README.md`](../README.md).
-- `schemaquench --version` answers **2.7.0 or later** on your PATH. New to the CLI? [Course 1, Module 1](https://learn.schemasmith.com/01-install-connect/).
+- `schemaquench --version` answers **2.8.0 or later** on your PATH. New to the CLI? [Course 1, Module 1](https://learn.schemasmith.com/01-install-connect/).
 
 ## Step 1 — create the sandbox database
 
@@ -118,8 +116,6 @@ schemaquench --ConfigFile:quench.settings.beat2-broken.json --LogPath:"$PWD/logs
 Green on all four — the narrow now applies. (The failed run's checkpoint is still on disk, but a
 plain redeploy does not read it: it converges from the top. Only `--ResumeQuench` picks up a
 checkpoint — that's Module 5.)
-
-> **On 2.7.x** a plain redeploy reads the failed run's checkpoint and resumes at the `ModifiedTables` phase; it still exits `0`.
 
 ## Beat 3 — the change an in-place `ALTER` cannot make, and the state that blocks it
 

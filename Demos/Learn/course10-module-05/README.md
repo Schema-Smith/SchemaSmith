@@ -1,7 +1,5 @@
 # Course 10 · Module 5 — Retiring the gates
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (MinimumVersion refusal exits 2): delete the "On 2.7.x" callouts -->
-
 This is the finale. Across Modules 1–4 you built version gates — the engine adapting its own
 DDL, `ShouldApplyExpression` on the scripts you wrote, two shapes of one query, the oldest tier's
 encoding switch. Every one of those gates was **debt with a payoff date.** This module collects
@@ -30,7 +28,7 @@ past by accident.
 - **Run [`course10-setup`](../course10-setup/README.md) first** so the mixed fleet is standing:
   PostgreSQL 16 (`15432`) and the PostgreSQL 12 floor (`15433`), plus the SQL Server tiers on
   `localhost,11433`. This module deploys into those; it does not create them.
-- `schemaquench --version` and `schematongs --version` both answer **2.7.0** or later.
+- `schemaquench --version` and `schematongs --version` both answer **2.8.0** or later.
 
 ---
 
@@ -109,8 +107,6 @@ FAILED: One or more target servers are below the product's declared MinimumVersi
 ```
 Non-zero exit (2); nothing deployed.
 
-> **On 2.7.x** the refusal surfaces as an unhandled exception, `System.Exception: One or more target servers are below the product's declared MinimumVersion; aborting before any deployment:` followed by a stack trace, and the exit code is 3; nothing is deployed either way.
-
 That refusal is the point of Part 2 of the retirement. Without the `MinimumVersion` bump, the
 gate is simply gone and a forgotten PG12 server would sail past pre-flight and fail deep in the
 deploy where `any_value()` doesn't resolve. With it, the stop is loud, early, and enforced.
@@ -186,11 +182,6 @@ PASS - no issues found
 ```
 
 `Product.json` is exactly as you left it: re-extracting into an existing template leaves the file alone.
-
-> **On 2.7.x** the board reads `WARN [SS-TOK-003] ./package\Product.json: ScriptTokens entry 'MainDb' (defined in
-> ./package\Product.json) is never referenced anywhere in the package.` and `0 error(s), 1 warning(s)`: the
-> re-extraction rewrote `Product.json`, adding a `MainDb` token nothing uses and dropping keys it doesn't own,
-> `DropTablesRemovedFromProduct` among them (#551). Put the file back before you deploy this package again.
 
 This is why a token-gated variant is safe to keep in a package indefinitely: extracting the live
 shape doesn't duplicate it or lose the gate. The gate is transitional by design — you author it,

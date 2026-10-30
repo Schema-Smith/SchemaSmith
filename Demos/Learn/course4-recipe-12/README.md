@@ -1,7 +1,5 @@
 # Course 4, Recipe 12 — Declared, not scripted: scheduled events (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (event log lines): delete the "On 2.7.x" callouts -->
-
 Goal: the companion to [Recipe 11](../course4-recipe-11), on the other side of the family. MySQL and
 MariaDB **scheduled events** can be declared — compared, converged, and removed by absence — instead
 of scripted. And the scripted form fails in exactly the same silent way: a guarded `CREATE EVENT IF NOT
@@ -18,7 +16,7 @@ Both engines: `mysql/` and `mariadb/`, everything against `cookbook_r12`.
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup)
   once — it creates `cookbook_r12`).
-- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.8.0 or later**.
 - Ports: MySQL **13306**, MariaDB **13307**. Each engine folder's `deploy.settings.json` already points
   at the right one.
 
@@ -114,8 +112,6 @@ The first deploy names each event it creates:
 ```
 
 The second prints `Quenching scheduled events` with nothing under it — nothing to do.
-
-> **On 2.7.x** no line follows `Quenching scheduled events`, whatever the deploy did.
 
 ## Step 3: Change the body — this time it takes
 

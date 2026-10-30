@@ -1,7 +1,5 @@
 # Course 10 bonus recipe — XML data delivery, on purpose
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (JSON delivery below compatibility level 130; #573 JSON extract at level 100): delete the "On 2.7.x" callouts, bump the pre-flight to 2.8.0 -->
-
 Course 10's oldest SQL Server tier (`learn_2008`, compatibility level 100) is where
 SchemaSmith's own model ingest switches from JSON to XML, because `OPENJSON` needs level 130
 (see [Module 4](../course10-module-04/README.md)). From 2.8 your seed data crosses the same cliff
@@ -24,7 +22,7 @@ data in two encodings: a default JSON `DataDelivery`, and the same delivery decl
   `learn_2022` (compat 160) and `learn_2008` (compat 100) on the shared SQL Server instance
   (`localhost,11433`), and current-tier PostgreSQL 16 (`localhost:15432`). MySQL (`localhost:13306`)
   and MariaDB (`localhost:13307`) use the sandbox's `learn` database.
-- `schemaquench --version` answers **2.7.0 or later**. Part 1 describes 2.8; on 2.7.x read its callout.
+- `schemaquench --version` answers **2.8.0 or later**.
 
 ## Part 1 — a JSON delivery lands on the floor
 
@@ -65,11 +63,6 @@ US    United States   North America
 ```
 
 Five rows, on a tier where `OPENJSON` can't even parse. `JP`'s JSON `null` arrived as `NULL`.
-
-> **On 2.7.x** this delivery doesn't land. Under the default `warn` policy it is skipped —
-> `[SKIPPED - requires compatibility level 130 for JSON delivery] JSON data delivery for dbo.CountryCode requires SQL Server compatibility level 130 (target is at 100); re-encode this delivery as XML ("ContentEncoding": "Xml") to deploy it on a legacy-compat target.`
-> — the run still exits `0`, and the table is empty. Under `fail` (next step) the run stops with
-> that message and exits `2`. Deploy the XML package from Part 3 instead.
 
 Now set the policy to `fail`. `quench.settings.json.legacy-fail.json` is identical except it sets
 `"UnsupportedFeaturePolicy": "fail"` under `Target`:
@@ -244,10 +237,6 @@ datatongs --ConfigFile:tongs.settings.legacy.json --DeliveryEncoding:Xml
     Writing contents to : ./extracted\dbo.CountryCode.tabledata
 ```
 
-> **On 2.7.x** a JSON extract from a database at compatibility level 100 fails — `Error processing table
-> dbo.CountryCode: Incorrect syntax near '('.`, exit `2` (#573) — so the no-switch extract above fails. Pass
-> `--DeliveryEncoding:Xml` when you extract from a database below level 110.
-
 `--DeliveryEncoding` is the switch that decides what DataTongs writes. Don't reach for
 `Source:CompatEncoding` here — it sounds related, but it only chooses how DataTongs reads a SQL
 Server source's catalog while building its output; the files and scripts come out the same either way.
@@ -357,9 +346,6 @@ FAILED: DeliveryEncoding is Xml, but MySQL and MariaDB merge scripts read their 
 
 Exit code `2`, before anything is extracted: no content file, no scripts, nothing half-written to clean
 up. A `DataDelivery` is unaffected, as the deploys above showed.
-
-> **On 2.7.x** there's no refusal: DataTongs writes the XML file and the scripts, and each script
-> fails with `Invalid JSON text` when it's deployed.
 
 `mysql/tongs.settings.json` writes content files only. Leave the switch off and you get JSON:
 

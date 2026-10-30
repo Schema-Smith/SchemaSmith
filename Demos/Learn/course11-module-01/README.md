@@ -1,7 +1,5 @@
 # Course 11, Module 1 — Applied at CREATE, refused on change (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (page compression applied by ALTER): delete the "On 2.7.x" callouts -->
-
 Goal: some things about a table are decided when it is built and cannot be moved afterwards without
 rewriting every row in it. SchemaSmith applies those at CREATE and **refuses them by name** on a
 deployed table — it does not quietly ignore your declaration, and it does not quietly rewrite your
@@ -16,7 +14,7 @@ Three engine families, three different mechanisms, one posture. All against `vau
 ## Before you start
 
 - The [sandbox](../docker) is up, and [`../course11-setup`](../course11-setup) has been run once.
-- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.8.0 or later**.
 
 > **What setup created, and why that matters.** `course11-setup` created a SQL Server partition
 > function (`pf_vault_year`) and two schemes (`ps_vault_year`, `ps_vault_year_alt`), plus a PostgreSQL
@@ -157,8 +155,6 @@ a deployed table because the change rewrites the table:
 
 And the irreversible table *types*, which behave identically because the engine has no `ALTER` for
 them at all: memory-optimized durability and inline-index shape, `Ledger`, `GraphType`.
-
-> **On 2.7.x** InnoDB page compression (MySQL `Compression`, MariaDB `PageCompressed`) is applied only when a table is created: a changed value on an existing table is left unapplied, at exit `0`, rather than refused.
 
 ## Cleanup
 

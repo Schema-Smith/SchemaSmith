@@ -1,7 +1,5 @@
 # Course 8 · Module 4 — Script-slot & data-delivery failures
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (#576 debug SQL, delivery roll-up names its file): delete the "On 2.7.x" callouts -->
-
 Two induced incidents on one database (`diag_scripts`), read end to end. Modules 1–3 diagnosed the
 **mechanical** engine — the phases SchemaSmith computes for you (missing tables, modified tables,
 indexes, foreign keys). This module diagnoses the other half: the scripts and the data **you** put in
@@ -26,7 +24,7 @@ end — so `FAILED to quench:` alone doesn't mean "mechanical." The **per-item l
 ## Prerequisites
 
 - The four-engine sandbox is up (`Demos/Learn/docker`) — see [`../README.md`](../README.md).
-- `schemaquench --version` answers **2.7.0 or later** on your PATH. New to the CLI? [Course 1, Module 1](https://learn.schemasmith.com/01-install-connect/).
+- `schemaquench --version` answers **2.8.0 or later** on your PATH. New to the CLI? [Course 1, Module 1](https://learn.schemasmith.com/01-install-connect/).
 
 ## Step 1 — create the sandbox database
 
@@ -71,8 +69,6 @@ for it with `--WriteDebugSql` (debug SQL is written only on request, because it 
 # from course8-module-04/<engine>
 schemaquench --ConfigFile:quench.settings.beat1-broken.json --LogPath:"$PWD/logs" --WriteDebugSql
 ```
-
-> **On 2.7.x** the switch is logged as `Ignored - not recognized` and the artifacts are written on every run.
 
 Fails at the **After** slot (`Quenching after database scripts`), exit `2`. In `Progress.log` you get
 the per-script line — **`Unable to quench '.\beat1-broken\…\02_backfill_customers.sql': <error>`**:
@@ -150,9 +146,6 @@ can save a row whose parent genuinely isn't there — the fix is in the data you
 In `Failures.log` the delivery's roll-up names the table and the artifact:
 `Error: Data delivery failed for 1 table(s): dbo.SalesOrder`, then
 `Debug SQL: ./artifacts\SchemaQuench - Failed DataDelivery dbo.SalesOrder#0 localhost,11433.diag_scripts.sql`.
-
-> **On 2.7.x** that roll-up says `Debug SQL: n/a`; the artifact's path is in the `Resolved SQL written to:`
-> line of its context tail.
 
 **Recover — fix the content, redeploy.** Reparent the orphan in the `.tabledata` file (`999` → a real
 customer, e.g. `1`): in `<engine>/beat2-broken/Templates/Main/data/` (`dbo.SalesOrder.tabledata`,

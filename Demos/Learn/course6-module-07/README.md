@@ -1,7 +1,5 @@
 # Course 6, Module 7 — Change a busy table without blocking it (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (OnlineApply, #564; the not-covered line): delete the "merged, not yet released" note -->
-
 Goal: a deploy that adds an index or widens a column takes locks while the change runs, and on a big table the
 application waits as long as the change does. `OnlineApply` asks each engine for its lower-lock form. This lab shows
 the setting, what each engine actually does under `Prefer` and records in the summary, what `Require` refuses and why,
@@ -11,9 +9,6 @@ A real stall needs millions of rows and a second session, so the walked steps pr
 a timed lock. There's an optional two-terminal aside at the end if you want to watch one.
 
 All four engines, each in its own folder, everything against `online_m7`.
-
-> **Merged, not yet released.** This module teaches SchemaSmith 2.8 behaviour, which is merged to `main` and not yet
-> in a tagged release.
 
 ## Before you start
 

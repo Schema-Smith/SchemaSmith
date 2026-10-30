@@ -1,7 +1,5 @@
 # Course 4, Recipe 14 — Subfolder organization: your layout survives re-extraction (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (--ExitNonZeroOnWarning; #551 Product.json kept): delete the "On 2.7.x" callouts -->
-
 Goal: extraction tools usually flatten. You organise your procedures by domain, run the tool that
 refreshes them from the database, and get back one directory with two hundred files in alphabetical
 order — so the organising never sticks, and after the second time nobody bothers.
@@ -15,7 +13,7 @@ Everything runs against `cookbook_r14`.
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup)
   once — it creates `cookbook_r14`).
-- The CLI is on your PATH: `schemaquench --version` and `schematongs --version` answer **2.7.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` and `schematongs --version` answer **2.8.0 or later**.
 
 ## Step 1: Look at the layout, then deploy it
 
@@ -60,8 +58,6 @@ MariaDB the two procedures show as modified — edits in place, not moves: the e
 the server returns it, with a `sql_mode` pin around it. Commit that once; what you are checking for is files
 that changed folder.
 
-> **On 2.7.x** `Product.json` is modified too, on every engine: the extraction writes the database it read into
-> it as a `MainDb` script token (#551).
 That stability is the whole feature: a re-extraction that churns your tree is one nobody runs.
 
 Before it writes anything, SchemaTongs walks the template folder and builds an index of every `.sql`,
@@ -128,8 +124,6 @@ Exit **1**: the run finished, and it logged a warning. The last line still reads
 `Casting Completed Successfully` — the exit code is the signal. The switch never changes a failure
 code; it only turns a `0` that logged a warning into a `1`. `"ExitNonZeroOnWarning": true` in the
 settings file does the same.
-
-> **On 2.7.x** the switch does not exist: the run logs a line starting `Ignored - not recognized: --ExitNonZeroOnWarning` and exits 0.
 
 **Read what is on disk afterwards, because this is the trap:**
 

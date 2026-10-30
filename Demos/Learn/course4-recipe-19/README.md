@@ -1,7 +1,5 @@
 # Course 4, Recipe 19 — History you can't rewrite (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (ledger columns and view by role, #523; rebuild refusal, #591; retained ledger columns left alone, #600): delete the "merged, not yet released" note -->
-
 Goal: [Recipe 18](../course4-recipe-18) kept old versions of a row so you could ask what it used to say. A **ledger
 table** answers a harder question: *has anyone rewritten it?* SQL Server 2022 chains every change to a ledger table
 into cryptographic blocks, so tampering, even by a sysadmin, shows up when you verify the database.
@@ -11,9 +9,6 @@ keeps it under a generated name. So this is the recipe where declaring it right 
 see what a deploy changes in place, what it refuses, and what a ledger table keeps no matter what you do.
 
 SQL Server only: `sqlserver/`, everything against `cookbook_r19`.
-
-> **Merged, not yet released.** This recipe teaches SchemaSmith 2.8 behaviour, which is merged to `main` and not yet
-> in a tagged release.
 
 ## Before you start
 

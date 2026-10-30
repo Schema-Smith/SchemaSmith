@@ -1,7 +1,5 @@
 # Course 9 · Module 5 — Ready to replicate
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (#595 converging publication scripts; creating a policy is logged): delete the "merged, not yet released" note -->
-
 Two PostgreSQL databases with identical schemas can disagree about whether a write is allowed. Publish a table with no
 usable **replica identity** and PostgreSQL refuses every `UPDATE` and `DELETE` on it. Turn on **row-level security**
 with no policy and the table returns nothing to anyone but its owner. Neither shows up in a column list, and both are
@@ -9,9 +7,6 @@ declared state. This module declares them, then publishes the tables and proves 
 
 PostgreSQL only: `postgres/`, against `catalog_repl` on the sandbox (port 15432) and on a second, subscriber
 PostgreSQL (port 15434).
-
-> **Merged, not yet released.** This module teaches SchemaSmith 2.8 behaviour, which is merged to `main` and not yet
-> in a tagged release.
 
 ## Before you start
 

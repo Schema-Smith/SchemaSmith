@@ -1,7 +1,5 @@
 # Course 2, Module 1 — Product boundaries (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (failed ValidationScript exits 2): delete the "On 2.7.x" callouts -->
-
 Goal: split a deployment into **products** along server-*role* lines, deploy them into the **same**
 database, and prove the shared parts are never duplicated. Along the way you'll wire up the real
 deployment guardrail — `ValidationScript` — that refuses to run against the wrong target.
@@ -29,7 +27,7 @@ Each engine folder (`sqlserver/`, `postgres/`, `mysql/`, `mariadb/`) has both pr
 
 - The [sandbox](../docker) is up (`docker compose up -d`) and verified (`./verify-sandbox.sh` /
   `.\verify-sandbox.ps1` — all four engines `PASS`).
-- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.7.0.0` or later).
+- The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.8.0.0` or later).
 
 ## Step 1: Look at the two products
 
@@ -172,8 +170,6 @@ FAILED: Invalid server for this product
 
 The run stops at `Validate Server` and the exit code is non-zero (`2`) — nothing in the database is
 touched.
-
-> **On 2.7.x** the last line is `System.Exception: Invalid server for this product`, followed by a stack trace, and the exit code is `3`.
 
 This is the guardrail you'd point at a production hostname, a known environment marker, or
 an expected schema version to keep a package from ever deploying somewhere it shouldn't.

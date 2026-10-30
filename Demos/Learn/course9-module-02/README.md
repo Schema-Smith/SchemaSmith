@@ -1,7 +1,5 @@
 # Course 9 · Module 2 — Where native fidelity diverges
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (#519 one file per overload; #433 case-only column rename): delete the "On 2.7.x" callouts -->
-
 Three engines. The same two concepts — an auto-incrementing surrogate key, a JSON payload — declared three different ways because that is what each engine's native model actually looks like.
 
 SchemaSmith does not flatten those differences into a lowest-common-denominator abstraction. It models them natively, so the JSON you write matches the DDL the engine expects and the artifacts the extractor produces.
@@ -53,7 +51,7 @@ Every modern application stores flexible JSON alongside structured columns. How 
   ```
 
   That is ownership working as designed: one product, one declared set of tables. Each module in this course is its own snapshot of the service, not a layer on the last one.
-- `schemaquench --version` answers **2.7.0** or later.
+- `schemaquench --version` answers **2.8.0** or later.
 
 ## Steps
 
@@ -167,8 +165,6 @@ schematongs --ConfigFile:tongs.settings.json
 Every object comes back into the folder it came from, under the name the package already uses — including one
 file per overload.
 
-> **On 2.7.x** the two overloads extract into a single `public.price_band.sql` that holds only one of them, so the other is missing from the package.
-
 `Window Functions/` is the one PostgreSQL folder this lab leaves empty: PostgreSQL only lets you write a window
 function in C, so the ones you'll meet come from extensions.
 
@@ -176,9 +172,7 @@ The catalog goes further than this lab needs. SchemaTongs also casts range types
 operators, casts and event triggers, each to its own folder (`Range Types/`, `Text Search Configurations/`,
 `Operators/`, `Casts/`, `Event Triggers/`), so a package extracted from a database that uses them deploys to an
 empty one. An operator's file name carries its symbol and argument types, with characters a file system can't hold
-encoded: `<->` on two `numeric`s is `public.%3C-%3E(numeric, numeric).sql`. (On 2.7.x none of the five was
-extracted, and a range type's constructor functions came out as ordinary functions in `Functions/`, so such a
-package could not rebuild its database.)
+encoded: `<->` on two `numeric`s is `public.%3C-%3E(numeric, numeric).sql`.
 
 ---
 
@@ -232,10 +226,6 @@ schemaquench --ConfigFile:quench.settings.json --LogPath:"$PWD/logs"
 ```
 
 Same column, new spelling, both rows' values intact.
-
-> **On 2.7.x** this deploy logs ``Drop column: ALTER TABLE `sessions`.`PageHit` DROP COLUMN `Channel` `` and exits
-> `0`: the comparison was case-sensitive, so the live column looked removed from the package and was dropped with its
-> data, and the respelled one was never added (#433). If you follow along on 2.7.x, skip the deploy.
 
 ---
 

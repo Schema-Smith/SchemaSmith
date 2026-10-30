@@ -1,7 +1,5 @@
 # Course 7, Module 5 — Diagnosing a fleet failure (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (#576 debug SQL): delete the "On 2.7.x" callouts -->
-
 Goal: roll out a new unique index across the whole fleet, watch **two** tenants fail in **two different
 phases**, and work through the exact sequence a real operator uses to locate each tenant's evidence, name its
 phase, remediate it, and resume the run. You'll do all of this on SQL Server, then repeat the same moves on
@@ -15,7 +13,7 @@ fleet, tune it, handle drift, and resume a partial failure. M5 is the middle ste
 
 - The [sandbox](../docker) is up and verified (all four engines healthy).
 - The fleet exists — run [`../course7-setup`](../course7-setup) once if you haven't already.
-- The CLI is on your PATH — `schemaquench --version` answers **2.7.0** or later.
+- The CLI is on your PATH — `schemaquench --version` answers **2.8.0** or later.
 
 Each engine folder ships a `baseline/` package (the established fleet state), an `after/` package (adds the
 `UQ_Customer_Email` unique index to `Customer`), two settings files, and drift + reset helpers for the two
@@ -86,8 +84,6 @@ schemaquench --ConfigFile:quench.settings.after.json --WriteDebugSql
 
 (On a real incident you usually find out you want it after the fact: without the switch, the line under each
 error reads `Rerun with --WriteDebugSql to write the resolved SQL of this step to ./artifacts.`)
-
-> **On 2.7.x** the switch is logged as `Ignored - not recognized` and the artifacts are written anyway.
 
 The run finishes with exit code `2`. Tenants 001, 003, and 005 succeed. Two fail:
 

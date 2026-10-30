@@ -1,7 +1,5 @@
 # Course 10 · Module 4 — The oldest tier
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (ModuleSyntax Legacy, SS-VER-002): delete the "On 2.7.x" callouts -->
-
 Module 3 gave you two shapes of one query and a gate to pick between them. This module goes
 all the way down to the **oldest tier in the fleet** — a SQL Server database so far back that
 `OPENJSON` won't even parse — and shows what SchemaSmith does about it automatically, and
@@ -40,7 +38,7 @@ shred.
   the three SQL Server tiers (`learn_2022` / `learn_2016` / `learn_2008` on `localhost,11433`)
   and the floor engines from the `mixed-fleet` profile — PostgreSQL 12 (`15433`), MySQL 5.7
   (`13316`), MariaDB 10.2 (`13317`). This module deploys into those; it does not create them.
-- `schemaquench --version` answers **2.7.0** or later (for the encoding switch and the XML twin
+- `schemaquench --version` answers **2.8.0** or later (for the encoding switch and the XML twin
   tokens).
 
 ---
@@ -306,9 +304,6 @@ kept your `MinimumVersion`, and the same validation now reports `no issues found
 # from course10-module-04/sqlserver
 schemaquench --Validate --SchemaPackagePath:./extracted-2008
 ```
-
-> **On 2.7.x** there is no `ModuleSyntax` switch and no `SS-VER-002`: the default extraction validates clean
-> with `MinimumVersion` 2008 and fails on a real pre-2016 SP1 server.
 
 Clear the view away before Module 5, which extracts these tiers again:
 

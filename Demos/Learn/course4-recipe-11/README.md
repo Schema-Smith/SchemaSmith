@@ -1,7 +1,5 @@
 # Course 4, Recipe 11 — Declared, not scripted: the silent no-op (lab)
 
-<!-- TRAINING-RELEASE-PIN 2.8.0 (MariaDB declared sequences): delete the "On 2.7.x" callouts -->
-
 Goal: PostgreSQL domain types, enum types and standalone sequences can be **declared** — compared,
 converged, and removable by absence — instead of scripted. The reason that matters is sharper than
 "it's tidier." The *scripted* form is worse than doing it by hand: a guarded `CREATE …` silently
@@ -17,7 +15,7 @@ with a native `SEQUENCE`.
 
 - The [sandbox](../docker) is up and the Course 4 databases exist (run [`../course4-setup`](../course4-setup)
   once — it creates `cookbook_r11`).
-- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
+- The CLI is on your PATH: `schemaquench --version` answers **2.8.0 or later**.
 
 ## Step 1: Watch the scripted form lie to you
 
@@ -222,9 +220,6 @@ schemaquench --ConfigFile:deploy.settings.json      # exit 0
 The edit landed, and the sequence carried on from where it was: `1002`, then counting by ten. SchemaSmith
 altered the sequence in place and never touched its current value. Deploy once more and the log shows
 `Quenching sequences` with nothing under it.
-
-> **On 2.7.x** a `.json` file in a MariaDB `Sequences/` folder is not read: the deploy exits `0` and creates no
-> sequence. Only `.sql` sequence scripts deploy there.
 
 ## Cleanup
 
