@@ -11,11 +11,9 @@ BEGIN
   -- Fills the caller's #OnlineForms with how each declared index on a table in the caller's #OnlineTables would be built
   -- under OnlineApply. The caller resolves each table's mode, OFF for a table this deploy creates (it is empty). XML,
   -- spatial and JSON indexes have no online build.
+  -- Callers call this only when a table is not OFF: a statement here recompiles on every call, because the caller has
+  -- just created both tables. A table with no row reads as OFF everywhere #OnlineForms is joined.
   SET NOCOUNT ON
-  DELETE FROM #OnlineForms
-  -- A table with no row reads as OFF everywhere #OnlineForms is joined, so a deploy with every table OFF (the default) stages
-  -- nothing -- and never compiles the statement below, which recompiles on every call because the caller re-creates both tables.
-  IF NOT EXISTS (SELECT 1 FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] <> 'OFF') RETURN
   INSERT INTO #OnlineForms ([Kind], [Schema], [TableName], [IndexName], [Mode], [Form], [Options], [Reason])
     SELECT 'index', i.[Schema], i.[TableName], SchemaSmith.fn_StripBracketWrapping(i.[IndexName]), ot.[Mode], f.[Form], f.[Options], f.[Reason]
       FROM #Indexes i WITH (NOLOCK)

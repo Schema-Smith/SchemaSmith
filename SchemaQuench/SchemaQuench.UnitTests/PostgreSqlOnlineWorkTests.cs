@@ -53,7 +53,7 @@ public class PostgreSqlOnlineWorkTests
         Assert.Multiple(() =>
         {
             Assert.That(executed, Is.EqualTo(new[] { Build, DropInvalid, Build, FollowUp, "DROP TABLE IF EXISTS pg_temp.temp_deferred_online_work" }));
-            Assert.That(log, Has.Some.Contains("left \"public\".\"ix\" invalid; dropping it and building once more"));
+            Assert.That(log, Has.Some.Contains("left the index invalid; dropping it and building once more").And.None.Contains("\"public\".\"ix\""));
         });
     }
 

@@ -396,7 +396,7 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
             Quench(cmd, Version(true), indexOnly: indexOnly);
             Assert.Multiple(() =>
             {
-                Assert.That(Audits(cmd, t), Is.SupersetOf(new[] { $"[dbo].[{t}].UQ_{t}|dropped|-", $"[dbo].[{t}].[UQ_{t}]|created|-" }),
+                Assert.That(Audits(cmd, t), Is.SupersetOf(new[] { $"[dbo].[{t}].[UQ_{t}]|dropped|-", $"[dbo].[{t}].[UQ_{t}]|created|-" }),
                     "SQL Server cannot change a constraint's IGNORE_DUP_KEY in place (1979)");
                 Assert.That(Convert.ToInt32(Scalar(cmd, $"SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.{t}') AND name = 'UQ_{t}' AND ignore_dup_key = 1 AND is_unique_constraint = 1")), Is.EqualTo(1));
             });
@@ -416,7 +416,7 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
             Quench(cmd, Version("[V],[W]"), "PREFER", indexOnly: indexOnly);
             Assert.Multiple(() =>
             {
-                Assert.That(Audits(cmd, t), Is.SupersetOf(new[] { $"[dbo].[{t}].CX_{t}|dropped|online", $"[dbo].[{t}].[CX_{t}]|created|online" }));
+                Assert.That(Audits(cmd, t), Is.SupersetOf(new[] { $"[dbo].[{t}].[CX_{t}]|dropped|online", $"[dbo].[{t}].[CX_{t}]|created|online" }));
                 Assert.That(Keys(cmd, t, $"CX_{t}"), Is.EqualTo("V,W"));
             });
         });
@@ -536,7 +536,47 @@ public class TableQuench_OnlineApplyTests : BaseTableQuenchTests
             Assert.That(Audits(cmd, t), Is.EquivalentTo(new[] { $"[dbo].[{t}].[IX_{t}]|created|-" }));
             ClearAudit(cmd);
             Quench(cmd, Json(t, Pk(t) + "," + Index($"IX_{t}", "[W]")), indexOnly: indexOnly);
-            Assert.That(Audits(cmd, t), Is.EquivalentTo(new[] { $"[dbo].[{t}].IX_{t}|dropped|-", $"[dbo].[{t}].[IX_{t}]|created|-" }));
+            Assert.That(Audits(cmd, t), Is.EquivalentTo(new[] { $"[dbo].[{t}].[IX_{t}]|dropped|-", $"[dbo].[{t}].[IX_{t}]|created|-" }));
+        });
+    }
+
+    // A check constraint or foreign key added to an existing table scans it, and OnlineApply has no lower-lock form for
+    // either on SQL Server. It runs as written, under Require too, and says so on its log line and in the summary's mode.
+    [TestCase("REQUIRE", true, false)]
+    [TestCase("PREFER", true, false)]
+    [TestCase("OFF", false, false)]
+    [TestCase("REQUIRE", true, true)]
+    [TestCase("OFF", false, true)]
+    public void ACheckOrForeignKeyAddedToAnExistingTable_RunsAsWritten_AndSaysOnlineApplyDoesNotCoverIt(string online, bool marked, bool whatIf)
+    {
+        var t = Unique("OnNc");
+        WithTable(t, (conn, cmd) =>
+        {
+            Quench(cmd, Json(t, Pk(t)));
+            var v2 = Json(t, Pk(t), """, { "Name": "[X]", "DataType": "INT", "Nullable": true, "CheckExpression": "[X] >= 0" }""")
+                .TrimEnd().TrimEnd(']').TrimEnd().TrimEnd('}') + $$"""
+                ,
+                    "CheckConstraints": [ { "Name": "[CK_{{t}}]", "Expression": "[W] >= 0" } ],
+                    "ForeignKeys": [ { "Name": "[FK_{{t}}_Self]", "Columns": "[W]", "RelatedTableSchema": "[dbo]", "RelatedTable": "[{{t}}]", "RelatedColumns": "[Id]" } ]
+                }]
+                """;
+            ClearAudit(cmd);
+
+            var printed = Printed(conn, cmd, v2, online, whatIf: whatIf);
+
+            var mode = marked ? "notCovered" : "-";
+            var action = whatIf ? "wouldCreate" : "created";
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar(cmd, $"SELECT OBJECT_ID('dbo.CK_{t}')") is DBNull, Is.EqualTo(whatIf), "the check is added, unless this is a preview");
+                Assert.That(Scalar(cmd, $"SELECT OBJECT_ID('dbo.FK_{t}_Self')") is DBNull, Is.EqualTo(whatIf), "and the key");
+                foreach (var line in new[] { $"Adding check constraint [dbo].[{t}].[CK_{t}]", $"Adding foreign key [dbo].[{t}].[FK_{t}_Self]", $"to column [dbo].[{t}].[X]" })
+                    Assert.That(printed.Split('\n').Any(l => l.Contains(line) && l.Contains("(not covered by OnlineApply)")), Is.EqualTo(marked), $"{line}:\n{printed}");
+                Assert.That(Audits(cmd, t), Is.SupersetOf(new[]
+                {
+                    $"[dbo].[{t}].[CK_{t}]|{action}|{mode}", $"[dbo].[{t}].[FK_{t}_Self]|{action}|{mode}", $"[dbo].[{t}].[X] (check)|{action}|{mode}"
+                }));
+            });
         });
     }
 }

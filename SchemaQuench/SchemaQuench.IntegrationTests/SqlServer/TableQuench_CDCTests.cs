@@ -556,6 +556,49 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CDCHistor
         cmd.ExecuteNonQuery();
         conn.Close();
     }
+    // Turning CDC off disables each capture instance; the log names each one, and the table is recorded as dropped once.
+    [Test]
+    public void DisablingCdc_OnATableWithTwoCaptureInstances_NamesEach_AndRecordsTheTableOnce()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.DisableTwoInstances (Id INT NOT NULL, Val NVARCHAR(100) NULL)
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'DisableTwoInstances', @role_name = NULL, @capture_instance = N'dbo_DisableTwoInstances_a'
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'DisableTwoInstances', @role_name = NULL, @capture_instance = N'dbo_DisableTwoInstances_b'
+DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+        ExecuteWithDeadlockRetry(cmd);
+        var messages = new System.Collections.Generic.List<string>();
+        ((Microsoft.Data.SqlClient.SqlConnection)conn).InfoMessage += (_, e) =>
+            messages.AddRange(System.Linq.Enumerable.Select(System.Linq.Enumerable.Cast<Microsoft.Data.SqlClient.SqlError>(e.Errors), m => m.Message));
+        try
+        {
+            RunTableQuenchProc(cmd, """
+                { "Schema": "[dbo]", "Name": "[DisableTwoInstances]", "EnableCDC": false,
+                  "Columns": [ {"Name": "[Id]", "DataType": "INT", "Nullable": false}, {"Name": "[Val]", "DataType": "NVARCHAR(100)"} ] }
+                """);
+
+            cmd.CommandText = "SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND ObjectType = 'changeDataCapture' AND ActionType = 'dropped'";
+            var auditRows = (int)cmd.ExecuteScalar()!;
+            Assert.Multiple(() =>
+            {
+                Assert.That(System.Linq.Enumerable.Where(messages, m => m.Contains("Disable CDC on")),
+                    Is.EquivalentTo(new[] { "  Disable CDC on [dbo].[DisableTwoInstances] (capture instance dbo_DisableTwoInstances_a)",
+                                            "  Disable CDC on [dbo].[DisableTwoInstances] (capture instance dbo_DisableTwoInstances_b)" }));
+                Assert.That(auditRows, Is.EqualTo(1), "the table's capture is dropped once, whatever it held");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = "IF OBJECTPROPERTY(OBJECT_ID('dbo.DisableTwoInstances'), 'TableHasCDC') IS NOT NULL AND EXISTS (SELECT 1 FROM sys.tables WHERE object_id = OBJECT_ID('dbo.DisableTwoInstances') AND is_tracked_by_cdc = 1) " +
+                              "EXEC sys.sp_cdc_disable_table @source_schema = N'dbo', @source_name = N'DisableTwoInstances', @capture_instance = N'all'; DROP TABLE IF EXISTS dbo.DisableTwoInstances";
+            cmd.ExecuteNonQuery();
+            conn.Close();
+        }
+    }
+
     [Test]
     public void ShouldRefuseAColumnChangeWhenBothCaptureInstancesAreInUse()
     {
@@ -836,6 +879,7 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNarrow
             {
                 Assert.That(ex!.Message, Does.Contain("CDC capture would stop on [dbo].[CdcNarrow]: the change to column [Val] (VARCHAR(10)"));
                 Assert.That(ex.Message, Does.Contain("change table [cdc].[dbo_CdcNarrow_CT] of capture instance dbo_CdcNarrow"));
+                Assert.That(ex.Message, Does.Contain("(the longest is 34 characters)").And.Not.Contain("tempdb"), "the reason is the history's, not the probe's");
                 Assert.That(ex.Message, Does.Contain("@source_name = N'CdcNarrow', @capture_instance = N'dbo_CdcNarrow'"), "the message names the instance to drop");
                 Assert.That(valType, Is.EqualTo("VARCHAR(50)"), "nothing on the table changed");
                 Assert.That(otherType, Is.EqualTo("INT"), "not even the change that would have been fine");
@@ -849,6 +893,48 @@ EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNarrow
             Assert.That(GetColumnDataType(cmd, "CdcNarrow", "Val"), Is.EqualTo("VARCHAR(10)"));
         }
         finally { DropCdcTable(cmd, "CdcNarrow"); }
+    }
+
+    [Test]
+    public void ACapturedNtextColumnNarrowedPastItsHistory_IsRefusedWithTheCdcReason()
+    {
+        // The refusal measures the longest captured value to say how far over it is, and LEN takes no ntext; the refusal
+        // must still be the one that reaches the user.
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE dbo.CdcNtext (Id INT NOT NULL CONSTRAINT PK_CdcNtext PRIMARY KEY, Val NTEXT NULL)
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcNtext', @role_name = NULL";
+        ExecuteWithDeadlockRetry(cmd);
+        try
+        {
+            cmd.CommandText = "INSERT dbo.CdcNtext VALUES (1, N'a value longer than ten characters')";
+            cmd.ExecuteNonQuery();
+            WaitForCapture(cmd, "dbo_CdcNtext_CT", "Id = 1");
+            const string package = """
+                {
+                    "Schema": "[dbo]",
+                    "Name": "[CdcNtext]",
+                    "EnableCDC": true,
+                    "Columns": [
+                        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                        {"Name": "[Val]", "DataType": "NVARCHAR(10)", "Nullable": true}
+                    ],
+                    "Indexes": [ {"Name": "[PK_CdcNtext]", "PrimaryKey": true, "Clustered": true, "IndexColumns": "[Id]"} ]
+                }
+                """;
+
+            var ex = Assert.Catch<Exception>(() => RunTableQuenchProc(cmd, package));
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain("CDC capture would stop on [dbo].[CdcNtext]: the change to column [Val] (NVARCHAR(10)"));
+                Assert.That(ex.Message, Does.Not.Contain("is invalid for argument 1 of len function"));
+                Assert.That(GetColumnDataType(cmd, "CdcNtext", "Val"), Is.EqualTo("NTEXT"), "nothing on the table changed");
+            });
+        }
+        finally { DropCdcTable(cmd, "CdcNtext"); }
     }
 
     [Test]

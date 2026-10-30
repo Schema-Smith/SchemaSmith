@@ -100,6 +100,7 @@ public class SettingsContractTests
     [TestCase("Target:Databases:0")]
     [TestCase("Target:Templates:2")]
     [TestCase("Target:Schemas:11")]
+    [TestCase("Target:SecondaryServers:1")]
     public void ArrayElements_AreNotTreatedAsMembers(string key)
     {
         Assert.That(SettingsContract.UnrecognizedKeys(Config((key, "v")), SettingsTool.SchemaQuench), Is.Empty);

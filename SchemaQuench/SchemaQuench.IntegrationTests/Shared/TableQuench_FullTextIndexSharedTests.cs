@@ -4,6 +4,7 @@ using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
 using System;
+using System.Collections.Generic;
 
 using NUnit.Framework;
 
@@ -266,7 +267,7 @@ public abstract class TableQuench_FullTextIndexSharedTests
     // The normal table quench, with both by-absence drops on: DropUnknownIndexes here, removed-from-product inside.
     private void FullQuench(IDbCommand command, string json, int dropUnknownIndexes = 1)
     {
-        command.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+        command.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID(); DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
         command.ExecuteNonQuery();
         command.CommandText = $"CALL SchemaSmith_TableQuench('FullTextProduct', '{_testDb}', '{json.Replace("'", "''")}', 0, {dropUnknownIndexes}, 0)";
         TransientRetry.Run(() => command.ExecuteNonQuery());
@@ -281,6 +282,15 @@ public abstract class TableQuench_FullTextIndexSharedTests
                      GROUP BY INDEX_NAME) f
             """;
         return command.ExecuteScalar()?.ToString() ?? "";
+    }
+
+    private static List<string> FullTextMessages(IDbCommand command)
+    {
+        command.CommandText = "SELECT Message FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%fulltext index:%' ORDER BY Id";
+        var messages = new List<string>();
+        using var reader = command.ExecuteReader();
+        while (reader.Read()) messages.Add(reader.GetString(0));
+        return messages;
     }
 
     private string IndexAudits(IDbCommand command)
@@ -310,13 +320,59 @@ public abstract class TableQuench_FullTextIndexSharedTests
         });
 
         FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary" }"""));
-        Assert.That(FullText(command), Is.EqualTo("ft_content(content,summary)"), "its columns changed");
+        var messages = FullTextMessages(command);
+        Assert.Multiple(() =>
+        {
+            Assert.That(FullText(command), Is.EqualTo("ft_content(content,summary)"), "its columns changed");
+            Assert.That(messages, Has.Some.Contains("Drop modified fulltext index:").And.Contains("`ft_content`"), "the log names the drop: " + string.Join(" | ", messages));
+            Assert.That(messages, Has.Some.Contains("Create fulltext index:").And.Contains("ft_content"), "and the create");
+        });
 
         FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary", "Comment": "search" }"""));
         Assert.That(FullText(command), Is.EqualTo("ft_content(content,summary) search"), "its comment changed");
 
         FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary", "Comment": "search" }"""));
         Assert.That(IndexAudits(command), Is.Empty, "then a redeploy is a no-op");
+    }
+
+    // A full-text index the deploy re-creates or adds must find the rows already in the table. MariaDB 10.4 and later
+    // build one added in place over a table that has (or had) one without them.
+    [Test]
+    public void AFullTextIndexTheDeployReCreatesOrAdds_FindsTheRowsAlreadyInTheTable()
+    {
+        using var command = _connection.CreateCommand();
+        FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content" }"""));
+        command.CommandText = $"INSERT INTO `{_testDb}`.`{_testTableName}` (title, content, summary) VALUES "
+                              + "('Quenching steel', 'Plunge the hot blade into oil.', 'quenching'), "
+                              + "('Choosing an anvil', 'A heavy anvil returns more of each blow.', 'quenching comes later'), "
+                              + "('Forge safety', 'Wear leather.', 'aprons')";
+        command.ExecuteNonQuery();
+
+        FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary" }"""));
+        command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{_testTableName}` WHERE MATCH(content, summary) AGAINST ('quenching')";
+        var afterReCreate = Convert.ToInt32(command.ExecuteScalar());
+
+        FullQuench(command, FullTableJson("""{ "Name": "ft_content", "Columns": "content, summary" }, { "Name": "ft_title", "Columns": "title" }"""));
+        command.CommandText = $"SELECT COUNT(*) FROM `{_testDb}`.`{_testTableName}` WHERE MATCH(title) AGAINST ('anvil')";
+        var afterAdd = Convert.ToInt32(command.ExecuteScalar());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(afterReCreate, Is.EqualTo(2), "the re-created index covers the rows already in the table");
+            Assert.That(afterAdd, Is.EqualTo(1), "and so does a second index added beside it");
+        });
+        command.CommandText = "SELECT VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1004";
+        if (Convert.ToInt32(command.ExecuteScalar()) == 1)
+        {
+            command.CommandText = "SELECT Message FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%by copying the table%' ORDER BY Id";
+            var copyLines = new List<string>();
+            using (var reader = command.ExecuteReader()) while (reader.Read()) copyLines.Add(reader.GetString(0).Trim());
+            command.CommandText = "SELECT Message FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%Create fulltext index: %ft_title%' ORDER BY Id DESC LIMIT 1";
+            var createdAs = (command.ExecuteScalar() as string)?.Trim()["Create fulltext index: ".Length..];
+            Assert.That(createdAs, Does.EndWith("`ft_title`"), "the create line names the index");
+            Assert.That(copyLines, Has.Some.StartsWith($"Building fulltext index {createdAs} by copying"),
+                "named as the create line names it: " + string.Join(" | ", copyLines));
+        }
     }
 
     [Test]

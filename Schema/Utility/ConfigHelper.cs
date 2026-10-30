@@ -39,7 +39,10 @@ public static class ConfigHelper
     public static string ResolveLogPath()
     {
         var toolDir = AppContext.BaseDirectory.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var raw = CommandLineParser.ValueOfSwitch("LogPath", null) ?? toolDir;
+        // A value written with a space (`--LogPath ./logs`) leaves the switch empty; the argument check reports it, and
+        // it needs a log to report into.
+        var given = CommandLineParser.ValueOfSwitch("LogPath", null);
+        var raw = string.IsNullOrWhiteSpace(given) ? toolDir : given;
         // Path.GetFullPath resolves a relative path against the process CWD (the invocation
         // directory) and leaves an absolute path unchanged — so the log4net property and the
         // log backup step below always agree on one absolute directory (#331).

@@ -42,7 +42,10 @@ BEGIN
       FROM #XmlIndexes x WITH (NOLOCK)
       WHERE x.[Selective] IS NOT NULL OR x.[ForPath] IS NOT NULL
   DECLARE @v_Msg NVARCHAR(400) = '  Selective XML index skipped: the feature ' + @v_Reason + ' - the table deploys without it (downgraded)'
-  RAISERROR(@v_Msg, 10, 100) WITH NOWAIT
+  DECLARE @v_Skipped NVARCHAR(MAX) = STUFF((SELECT ', ' + x.[Schema] + '.' + x.[TableName] + '.' + x.[IndexName] FROM #XmlIndexes x WITH (NOLOCK)
+                                            WHERE x.[Selective] IS NOT NULL OR x.[ForPath] IS NOT NULL
+                                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  EXEC SchemaSmith.PrintDowngrade @v_Msg, @v_Skipped
 
   DELETE FROM #XmlIndexes WHERE [Selective] IS NOT NULL OR [ForPath] IS NOT NULL
 END

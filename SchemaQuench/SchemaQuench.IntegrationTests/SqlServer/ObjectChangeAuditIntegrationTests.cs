@@ -58,13 +58,23 @@ public class ObjectChangeAuditIntegrationTests : BaseTableQuenchTests
 
         // Phase 2 — widen Name (column modify); drop the index, FK, and check by absence; drop the
         // AuditDrop table (removed from product).
+        var messages = new List<string>();
+        void Capture(object _, Microsoft.Data.SqlClient.SqlInfoMessageEventArgs e) => messages.AddRange(e.Errors.Cast<Microsoft.Data.SqlClient.SqlError>().Select(x => x.Message));
+        ((Microsoft.Data.SqlClient.SqlConnection)conn).InfoMessage += Capture;
         RunTableQuenchProc(cmd, ModifyJson, productName: Product, dropTablesRemovedFromProduct: true);
+        ((Microsoft.Data.SqlClient.SqlConnection)conn).InfoMessage -= Capture;
         var changed = ReadAudit(cmd);
+
+        Assert.That(messages, Does.Contain("  Dropping table [dbo].[AuditDrop]"), "the log names the table as the audit does");
 
         Assert.That(changed.Any(r => r is { Type: "column", Action: "modified" } && r.Name.Contains("Name")),
             "expected column/modified for Name");
         Assert.That(changed.Any(r => r is { Type: "index", Action: "dropped" } && r.Name.Contains("IX_AuditChild")),
             "expected index/dropped for IX_AuditChild_Name");
+        // A dropped and a created index are named the same way, so the two rows read as the same index.
+        Assert.That(changed.Single(r => r is { Type: "index", Action: "dropped" } && r.Name.Contains("IX_AuditChild")).Name,
+            Is.EqualTo(created.Single(r => r is { Type: "index", Action: "created" } && r.Name.Contains("IX_AuditChild")).Name),
+            "a dropped index is named as it was created");
         Assert.That(changed.Any(r => r is { Type: "foreignKey", Action: "dropped" }),
             "expected foreignKey/dropped for FK_AuditChild_Parent");
         Assert.That(changed.Any(r => r is { Type: "constraint", Action: "dropped" } && r.Name.Contains("CK_AuditChild")),
@@ -114,8 +124,8 @@ public class ObjectChangeAuditIntegrationTests : BaseTableQuenchTests
                 "expected index/wouldCreate for the new IX_AuditChild_Extra");
             Assert.That(wi.Any(r => r is { Type: "constraint", Action: "wouldCreate" } && r.Name.Contains("PK_AuditNew")),
                 "expected constraint/wouldCreate for PK_AuditNew");
-            Assert.That(wi.Any(r => r is { Type: "index", Action: "wouldDrop" } && r.Name.Contains("IX_AuditChild_Name")),
-                "expected index/wouldDrop for IX_AuditChild_Name");
+            Assert.That(wi.Any(r => r is { Type: "index", Action: "wouldDrop" } && r.Name == "[dbo].[AuditChild].[IX_AuditChild_Name]"),
+                "expected index/wouldDrop for [dbo].[AuditChild].[IX_AuditChild_Name], bracketed like every other row");
             Assert.That(wi.Any(r => r is { Type: "foreignKey", Action: "wouldDrop" }),
                 "expected foreignKey/wouldDrop for FK_AuditChild_Parent");
             Assert.That(wi.Any(r => r is { Type: "table", Action: "wouldDrop" } && r.Name.Contains("AuditDrop")),

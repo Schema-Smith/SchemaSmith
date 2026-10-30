@@ -2,6 +2,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -21,6 +23,7 @@ public class TaskQueueManager<T> : IDisposable
     private readonly int _safetyNetMs;
     private readonly List<WorkerTask> _workingTasks = [];
     private readonly Queue<WorkerTask> _workQueue = new();
+    private readonly List<Exception> _failures = [];
     private readonly object _lockObject = new();
 
     /// <param name="maxTasks">Maximum tasks in flight at once.</param>
@@ -73,6 +76,11 @@ public class TaskQueueManager<T> : IDisposable
         }
     }
 
+    private void RecordFailure(Exception failure)
+    {
+        lock (_lockObject) _failures.Add(failure);
+    }
+
     private void StartTask(WorkerTask aTask)
     {
         lock (_lockObject)
@@ -110,7 +118,11 @@ public class TaskQueueManager<T> : IDisposable
             lock (_lockObject)
             {
                 ProcessQueue();
-                if (_workingTasks.Count == 0 && _workQueue.Count == 0) return;
+                if (_workingTasks.Count == 0 && _workQueue.Count == 0)
+                {
+                    ThrowFailures();
+                    return;
+                }
                 // Monitor.Wait releases the lock while blocked, so TaskComplete can take it and pulse.
                 // Bounded, so a missed pulse degrades to a poll instead of hanging.
                 Monitor.Wait(_lockObject, _safetyNetMs);
@@ -119,29 +131,35 @@ public class TaskQueueManager<T> : IDisposable
         }
     }
 
+    // Every item still runs when one fails; the waiter then gets the failure, so a worker's error is never lost.
+    private void ThrowFailures()
+    {
+        if (_failures.Count == 0) return;
+        var failures = _failures.ToArray();
+        _failures.Clear();
+        if (failures.Length == 1) ExceptionDispatchInfo.Capture(failures[0]).Throw();
+        // Several refusals (two servers that cannot be reached) are still a refusal, reported as one.
+        if (failures.All(f => f is RunFailedException))
+            throw new RunFailedException(string.Join(Environment.NewLine, failures.Select(f => f.Message).Distinct()));
+        throw new AggregateException(failures);
+    }
+
     private class WorkerTask(T item, TaskDelegate workProcedure, TaskQueueManager<T> owner)
     {
         private Task _task;
 
-        private void DoWork()
-        {
-            // TaskComplete must run unconditionally — otherwise an unhandled exception in
-            // workProcedure leaves this WorkerTask in _workingTasks forever, permanently
-            // reducing the queue's effective capacity and hanging WaitForAll.
-            try
-            {
-                workProcedure(item);
-            }
-            finally
-            {
-                owner.TaskComplete(this);
-            }
-        }
-
         public void StartTask()
         {
             if (_task != null) return;
-            _task = new Task(DoWork);
+            _task = new Task(() => workProcedure(item));
+            // The continuation runs however the work ends, so TaskComplete is unconditional -- otherwise a throw
+            // would leave this WorkerTask in _workingTasks forever and hang WaitForAll -- and a failure is recorded
+            // before the waiter can see the queue drain.
+            _task.ContinueWith(done =>
+            {
+                if (done.Exception != null) owner.RecordFailure(done.Exception.InnerException ?? done.Exception);
+                owner.TaskComplete(this);
+            }, TaskScheduler.Default);
             _task.Start();
         }
     }

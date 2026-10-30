@@ -28,7 +28,7 @@ public class BaseTableQuenchTests
         _mainDb = config["ScriptTokens:MainDB"];
     }
 
-    protected void RunTableQuenchProc(IDbCommand cmd, string json, bool indexOnly = false, bool dropTablesRemovedFromProduct = false, bool whatIf = false, string productName = "")
+    protected void RunTableQuenchProc(IDbCommand cmd, string json, bool indexOnly = false, bool dropTablesRemovedFromProduct = false, bool whatIf = false, string productName = "", Action beforeRetry = null)
     {
         var prod = string.IsNullOrEmpty(productName) ? _productName : productName;
         cmd.CommandTimeout = 300;
@@ -41,13 +41,14 @@ public class BaseTableQuenchTests
         {
             try
             {
-                TransientRetry.Run(() => cmd.ExecuteNonQuery());
+                TransientRetry.Run(() => cmd.ExecuteNonQuery(), beforeRetry);
                 retry = false;
             }
             catch (Exception e)
             {
                 if (!e.Message.ContainsIgnoringCase("has been chosen as the deadlock victim")) throw;
                 Thread.Sleep(1000);
+                beforeRetry?.Invoke();
             }
         }
     }

@@ -150,9 +150,7 @@ public class ProductQuench
         // Secondary servers are SqlServer-only (Availability Groups)
         if (_product.Platform == Platform.SqlServer)
         {
-            _secondaryServers.AddRange((_config[SettingsKeys.Target.SecondaryServers] ?? "")
-                .Split([','], StringSplitOptions.RemoveEmptyEntries)
-                .Where(s => !string.IsNullOrWhiteSpace(s)));
+            _secondaryServers.AddRange(ReadSecondaryServers(_config));
         }
     }
 
@@ -179,6 +177,24 @@ public class ProductQuench
     }
 
     private IReadOnlyList<string> ReadFilterArray(string sectionKey) => ReadFilterArray(_config, sectionKey);
+
+    // SQL Server names a server on another port `host,port`. An array item is one server whole; in the comma-separated
+    // string, an all-digit item is the port of the server before it.
+    internal static List<string> ReadSecondaryServers(IConfiguration config)
+    {
+        var listed = ReadFilterArray(config, SettingsKeys.Target.SecondaryServers);
+        if (listed.Count > 0) return listed.ToList();
+
+        var servers = new List<string>();
+        foreach (var item in (config[SettingsKeys.Target.SecondaryServers] ?? "").Split(',').Select(s => s.Trim()).Where(s => s.Length > 0))
+        {
+            if (servers.Count > 0 && item.All(char.IsAsciiDigit))
+                servers[^1] += "," + item;
+            else
+                servers.Add(item);
+        }
+        return servers;
+    }
 
     internal static bool ResolveCascadedFlag(bool? env, bool? product, bool? template, bool defaultValue)
     {
@@ -498,8 +514,9 @@ public class ProductQuench
 
     // The engine is named because a package run with another engine's settings fails here, and "unable to connect"
     // alone reads as a server that is down.
-    internal static string ConnectFailure(Platform platform, string server, string detail, string user) =>
-        $"Unable to connect to {platform.ToDisplayName()} at {server}{detail}{(string.IsNullOrWhiteSpace(user) ? "" : $" with user {user}")}";
+    internal static string ConnectFailure(Platform platform, string server, string detail, string user, string reason = null) =>
+        $"Unable to connect to {platform.ToDisplayName()} at {server}{detail}{(string.IsNullOrWhiteSpace(user) ? "" : $" with user {user}")}" +
+        (string.IsNullOrWhiteSpace(reason) ? "" : $": {reason}");
 
     internal virtual IDbCommand GetCommand(string server)
     {
@@ -522,19 +539,45 @@ public class ProductQuench
         }
         var factory = DbConnectionFactory.ForPlatform(_product.Platform);
         var connection = factory.GetDbConnection(connectionString);
+        if (connection is Microsoft.Data.SqlClient.SqlConnection sqlConnection)
+            sqlConnection.InfoMessage += (_, e) => LogServerMessages(server, initDb, e.Errors);
+        else if (connection is Npgsql.NpgsqlConnection pgConnection)
+            pgConnection.Notice += (_, e) =>
+            {
+                if (DatabaseQuench.ShouldLogPostgreSqlNotice(e.Notice.MessageText, e.Notice.Where, VerboseLogging))
+                    LogServerMessage(server, initDb, e.Notice.MessageText);
+            };
         try
         {
             connection.Open();
         }
         catch (Exception e)
         {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User]), e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User], e.Message), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
 
         return command;
     }
+
+    // A product script's messages are logged as a template script's are: on SQL Server those raised with state 100, on
+    // PostgreSQL SchemaSmith's own notices, every one of either under VerboseLogging, and a WARNING: line as a warning.
+    private void LogServerMessages(string server, string database, Microsoft.Data.SqlClient.SqlErrorCollection errors)
+    {
+        foreach (Microsoft.Data.SqlClient.SqlError message in errors)
+            if (message.Class <= 10 && (VerboseLogging || message.State == 100))
+                LogServerMessage(server, database, message.Message);
+    }
+
+    private void LogServerMessage(string server, string database, string message)
+    {
+        var line = $"[{server}].[{database}]      {message}";
+        if (DatabaseQuench.IsServerWarning(message)) _progressLog.Warn(line);
+        else _progressLog.Info(line);
+    }
+
+    private bool VerboseLogging => _config[SettingsKeys.VerboseLogging]?.ToLower() == "true";
 
     /// <summary>
     /// Resolves <see cref="Template.IdentificationDatabase"/> through the product + template
@@ -577,7 +620,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, $" [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]", _config[SettingsKeys.Target.User]), e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, $" [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]", _config[SettingsKeys.Target.User], e.Message), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -625,7 +668,7 @@ public class ProductQuench
         }
         catch (Exception e)
         {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User]), e);
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User], e.Message), e);
         }
         var command = connection.CreateCommand();
         command.CommandTimeout = 0;
@@ -1196,8 +1239,15 @@ public class ProductQuench
         }
         else
         {
-            // PostgreSQL/MySQL: single server only
-            QuenchScriptsToServerWithCheckpoint(_primaryServer, msg, folders, isBefore);
+            // PostgreSQL/MySQL: single server only. A SQL Server folder meant for secondaries has nowhere to run without them.
+            var onPrimary = folders;
+            if (_product.Platform == Platform.SqlServer)
+            {
+                foreach (var folder in folders.Where(f => !f.QuenchOnPrimary))
+                    _progressLog.Info($"  Skipping folder '{folder.FolderPath}' — ServerToQuench is Secondary and no SecondaryServers are configured");
+                onPrimary = folders.Where(f => f.QuenchOnPrimary).ToList();
+            }
+            QuenchScriptsToServerWithCheckpoint(_primaryServer, msg, onPrimary, isBefore);
         }
 
         if (_updateFailed)
@@ -1275,6 +1325,7 @@ public class ProductQuench
             {
                 _progressLog.Error($"  {server}: {e.Message} **CONNECTION FAILED**");
                 _errorLog.Error($"Unable to connect to {server}:\r\n{e}");
+                _failureRecords.Add(new FailureRecord("Validate", server, e.Message, Array.Empty<string>(), null));
                 shouldFail = true;
             }
         }
@@ -1286,7 +1337,11 @@ public class ProductQuench
             shouldFail = true;
         }
 
-        if (shouldFail) throw new RunFailedException("Error validating configured servers");
+        if (shouldFail)
+        {
+            EmitFailureRollup();
+            throw new RunFailedException("Error validating configured servers");
+        }
 
         _progressLog.Info("");
         _progressLog.Info("");
@@ -1799,7 +1854,7 @@ public class ProductQuench
             try
             {
                 ProvisionDatabaseViaAdminConnection(server, databaseName);
-                _changeAudit.Record("database", databaseName, IsWhatIfOnly ? "wouldCreate" : "created");
+                _changeAudit.Record("database", databaseName, IsWhatIfOnly ? "wouldCreate" : "created", target: new ChangeTarget(server, databaseName));
             }
             catch (Exception ex)
             {
@@ -2138,6 +2193,7 @@ public class ProductQuench
             MigrationScripts = _migrationScripts,
             WhatIf = _whatIf,
             ChangeAudit = _changeAudit,
+            ReadsChangeAudit = _updateTables,
             CaptureWouldDrop = _protectedMode,
             CascadedRebuildPolicy = rebuildPolicy,
             DropPeriodsRemovedFromProduct = dropRemovedPeriods,

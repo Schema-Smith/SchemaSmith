@@ -196,6 +196,8 @@ public class TemplateTargetsHappyPathTests
                     "CreateIfMissing: true must provision the missing DB.");
                 Assert.That(SummaryRecords("database", transientDb, "created"), Is.True,
                     "the deployment summary must record the database it created");
+                Assert.That(SummaryTargetsOf("table", "created"), Does.Contain(transientDb),
+                    "each change in the summary names the database it was made in");
                 Assert.That(TableExistsInDb(transientDb, "public", "lookup"), Is.True,
                     "Shared template deployment must have run inside the newly-provisioned DB.");
             }
@@ -625,6 +627,15 @@ SELECT pg_terminate_backend(pid)
         {
             // Best-effort cleanup — a missing or already-dropped DB is fine.
         }
+    }
+
+    private static string[] SummaryTargetsOf(string objectType, string action)
+    {
+        var summary = Newtonsoft.Json.Linq.JObject.Parse(System.IO.File.ReadAllText(
+            System.IO.Path.Join(Schema.Utility.ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+        return (summary.SelectToken("objectChanges.details") as Newtonsoft.Json.Linq.JArray ?? [])
+            .Where(d => (string)d["objectType"] == objectType && (string)d["action"] == action)
+            .Select(d => (string)d["database"]).ToArray();
     }
 
     private static bool SummaryRecords(string objectType, string objectName, string action)

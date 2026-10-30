@@ -101,6 +101,14 @@ public class DeadlockClassifierTests
     }
 
     [Test]
+    public void MySqlNeedRePrepare_1615_IsRetryableContention()
+    {
+        // A procedure's PREPARE/EXECUTE outpaced by concurrent DDL on a table it reads; a re-run prepares afresh.
+        Assert.That(DeadlockClassifier.IsMySqlTransientConcurrencyCode(MySqlErrorCode.NeedRePrepare), Is.True);
+        Assert.That(MySqlErrorCode.NeedRePrepare, Is.EqualTo((MySqlErrorCode)1615));
+    }
+
+    [Test]
     public void AnOrdinaryMySqlError_IsNotTransientConcurrency()
     {
         // Guards the widening in the direction that matters: re-running a real failure ten times just

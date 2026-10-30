@@ -61,7 +61,7 @@ public static class ImportTableHelper
         if (tableObj.DataDelivery is { Count: 1 } && string.IsNullOrWhiteSpace(tableObj.DataDelivery[0].MergeType))
             tableObj.DataDelivery[0].MergeType = "None";
 
-        tableObj.OldName = original.OldName;
+        tableObj.OldName = string.IsNullOrEmpty(original.OldName) ? null : original.OldName;
 
         // XML_COMPRESSION is deployable from SQL Server 2022 but only READABLE from 2025, so on
         // 2022-2024 extraction cannot see it and the package is the only record of it. Carry it forward
@@ -289,7 +289,8 @@ public static class ImportTableHelper
         CopyAuthoredOnlyProperties(original, current);
 
         // Only a value the file actually carried is carried forward. Coalescing an absent one to "" wrote an empty
-        // key the file never had, so the first re-extraction of an unchanged database rewrote every table file.
+        // key the file never had, so the first re-extraction of an unchanged database rewrote every table file. An
+        // empty one is not carried either: it means unset, and extraction once wrote it everywhere.
         CarryForward(original, current, "ShouldApplyExpression");
         CarryForward(original, current, "VariantName");
         if (copyOldName)
@@ -310,7 +311,7 @@ public static class ImportTableHelper
     {
         var property = original.GetType().GetProperty(propertyName);
         var value = property?.GetValue(original);
-        if (value != null) current.GetType().GetProperty(propertyName)?.SetValue(current, value);
+        if (value != null && value is not "") current.GetType().GetProperty(propertyName)?.SetValue(current, value);
     }
 
     /// <summary>

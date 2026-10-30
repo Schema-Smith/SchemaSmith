@@ -152,6 +152,11 @@ internal static class DeadlockClassifier
     /// concurrent work units that read can fail outright; the retry recreates them.
     /// </para>
     /// <para>
+    /// <b>1615</b> — "Prepared statement needs to be re-prepared" — is what a procedure's own PREPARE/EXECUTE
+    /// raises when concurrent DDL keeps changing a table it reads faster than the engine's few automatic
+    /// re-prepares can catch up. Seen on MariaDB 10.2 under two workers.
+    /// </para>
+    /// <para>
     /// Both are safe for exactly the reason the deadlock retry is: nothing partial survives a failed call
     /// that a re-run would not recompute, because the convergence procs derive desired-vs-existing from
     /// scratch every time. Observed against MariaDB and MySQL under two test workers -- three failures in
@@ -163,7 +168,8 @@ internal static class DeadlockClassifier
         // are preferred everywhere else here precisely because a bare number is easy to misread -- hence
         // the spelled-out name beside it.
         code == (MySqlErrorCode)1684                        // ER_WARN_I_S_SKIPPED_TABLE
-        || code == MySqlErrorCode.AutoIncrementReadFailed;  // 1467
+        || code == MySqlErrorCode.AutoIncrementReadFailed   // 1467
+        || code == MySqlErrorCode.NeedRePrepare;            // 1615
 
     /// <summary>
     /// True for any transient contention an idempotent convergence proc can recover from by re-running:

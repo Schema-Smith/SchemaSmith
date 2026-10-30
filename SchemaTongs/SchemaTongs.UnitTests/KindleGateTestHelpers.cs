@@ -32,9 +32,10 @@ internal static class KindleGateTestHelpers
     /// returns). Unrelated ExecuteScalar calls fall through to null, preserving any per-test
     /// stubbing the caller has set up for its own queries.
     /// </summary>
-    public static void StubMySqlKindleGate(IDbCommand command)
+    public static void StubMySqlKindleGate(IDbCommand command, Platform platform = Platform.MySQL)
     {
-        var stamp = ForgeKindler.ComputeKindleStamp(Platform.MySQL);
+        // MariaDB's stamp also records whether it reports CHECK constraints, which this stub answers no to.
+        var stamp = ForgeKindler.ComputeKindleStamp(platform, checkConstraintsReadable: platform == Platform.MariaDb ? false : null);
         command.ExecuteScalar().Returns(_ =>
         {
             var sql = command.CommandText ?? string.Empty;

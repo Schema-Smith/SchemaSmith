@@ -338,6 +338,14 @@ namespace Schema.Capabilities
                 "full-text statistical semantics (no semantic database)",
                 "a registered semantic language statistics database"));
 
+            // Gated on server state: without Full-Text Search installed (the stock Linux container images) SQL Server refuses
+            // every full-text index. Skip: the table deploys without it.
+            rows.Add(new("fulltext-search-not-installed", "Full-text indexes without Full-Text Search", Platform.SqlServer,
+                0, "any supported version (needs Full-Text Search installed on the server)",
+                null, DegradeKind.Skip,
+                "full-text index (Full-Text Search not installed)",
+                "Full-Text Search installed on the server"));
+
             rows.Add(new("filestream-column", "FILESTREAM columns", Platform.SqlServer,
                 0, "any supported version (needs FILESTREAM on the server and a filegroup on the database)",
                 null, DegradeKind.Reduced,

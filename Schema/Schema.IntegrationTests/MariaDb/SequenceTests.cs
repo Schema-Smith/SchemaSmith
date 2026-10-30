@@ -31,7 +31,13 @@ public class SequenceTests
         _connection = DbConnectionFactory.ForPlatform(Platform.MariaDb).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         _connection.Open();
         _versionNum = Convert.ToInt32(Scalar("SELECT SchemaSmith_ServerVersionNum()"));
-        if (_versionNum < 1003) Assert.Ignore("Sequences arrived in MariaDB 10.3.");
+    }
+
+    [SetUp]
+    public void SetUp()
+    {
+        if (_versionNum < 1003 && TestContext.CurrentContext.Test.MethodName != nameof(BelowMariaDb103_ADeclaredSequence_IsSkipped_AndRecordedAsDowngraded))
+            Assert.Ignore("Sequences arrived in MariaDB 10.3.");
     }
 
     [OneTimeTearDown]
@@ -72,6 +78,21 @@ public class SequenceTests
 
     private bool Exists(string name) =>
         Long($"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{_db}' AND TABLE_NAME = '{name}' AND TABLE_TYPE = 'SEQUENCE'") == 1;
+
+    [Test]
+    public void BelowMariaDb103_ADeclaredSequence_IsSkipped_AndRecordedAsDowngraded()
+    {
+        if (_versionNum >= 1003) Assert.Ignore("Covers the servers without sequences, below MariaDB 10.3.");
+        var name = "seq_" + Uid();
+
+        Deploy($"[{{\"Name\": \"{name}\"}}]");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Exists(name), Is.False);
+            Assert.That(Audits(name, "downgraded"), Is.EqualTo(1), "the run's manifest and exit code come from this row");
+        });
+    }
 
     [Test]
     public void ADeclaredSequence_IsCreatedWithItsAttributes()

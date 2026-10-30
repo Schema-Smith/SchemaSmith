@@ -56,7 +56,8 @@ internal static class PostgreSqlOnlineWork
         }
         catch (DbException) when (item.CleanupIndex != null && IsInvalidIndex(command, item.CleanupIndex))
         {
-            log($"    The build stopped and left {item.CleanupIndex} invalid; dropping it and building once more");
+            // Named by the line above as every other line names it, not by the quoted name the cleanup statement uses.
+            log("    The build stopped and left the index invalid; dropping it and building once more");
             DropInvalidIndex(command, item.CleanupIndex);
             try
             {

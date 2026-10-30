@@ -354,6 +354,24 @@ public abstract class ScheduledEventSharedTests
         Assert.That(EventField("ON_COMPLETION"), Is.EqualTo("PRESERVE"));
     }
 
+    // MariaDB and MySQL 5.7 keep 64 characters of an event's comment, MySQL 8.0 keeps 2048. Re-creating the event
+    // resets its STARTS, so a comment the engine shortened must still read as unchanged.
+    [Test]
+    public void ACommentLongerThanTheEngineKeeps_RedeploysAsUnchanged()
+    {
+        var comment = "Purges expired sessions and the audit rows they left behind, nightly, for the reporting team.";
+        Deploy(EventJson(comment: comment));
+        var kept = Scalar("SELECT CHARACTER_MAXIMUM_LENGTH FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'information_schema' " +
+                          "AND TABLE_NAME = 'EVENTS' AND COLUMN_NAME = 'EVENT_COMMENT'");
+        Assert.That(EventField("EVENT_COMMENT"), Is.EqualTo(comment[..(int)Math.Min(kept, comment.Length)]),
+            $"precondition: the engine keeps {kept} characters");
+        Exec($"DELETE FROM SchemaSmith_ChangeAudit WHERE ObjectName LIKE '%{EventName}%'");
+
+        Deploy(EventJson(comment: comment));
+
+        Assert.That(AuditCount("created"), Is.Zero, "an event whose comment the engine truncated must not be re-created");
+    }
+
     [Test]
     public void ChangingTheComment_Converges()
     {

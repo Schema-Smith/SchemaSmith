@@ -32,7 +32,8 @@ SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + x.[Stmt]
                            '' INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''''column'''', N'''''' + REPLACE(d.[Qualified] + ''.'' + d.[Bare], '''''''', '''''''''''') + '''''', ''''modified'''');''
                       ELSE '''' END +
                  CASE WHEN sc.is_hidden <> lc.[Hidden]
-                      THEN '' ALTER TABLE '' + t.[Schema] + ''.'' + t.[Name] + '' ALTER COLUMN '' + QUOTENAME(d.[Bare]) + CASE WHEN lc.[Hidden] = 1 THEN '' ADD HIDDEN;'' ELSE '' DROP HIDDEN;'' END +
+                      THEN '' RAISERROR(''''  Making ledger column '' + REPLACE(REPLACE(d.[Qualified] + ''.'' + d.[Bare], '''''''', ''''''''''''), ''%'', ''%%'') + CASE WHEN lc.[Hidden] = 1 THEN '' hidden'' ELSE '' visible'' END + '''''', 10, 100) WITH NOWAIT;'' +
+                           '' ALTER TABLE '' + t.[Schema] + ''.'' + t.[Name] + '' ALTER COLUMN '' + QUOTENAME(d.[Bare]) + CASE WHEN lc.[Hidden] = 1 THEN '' ADD HIDDEN;'' ELSE '' DROP HIDDEN;'' END +
                            '' INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''''column'''', N'''''' + REPLACE(d.[Qualified] + ''.'' + d.[Bare], '''''''', '''''''''''') + '''''', ''''modified'''');''
                       ELSE '''' END) x
   WHERE x.[Stmt] <> ''''

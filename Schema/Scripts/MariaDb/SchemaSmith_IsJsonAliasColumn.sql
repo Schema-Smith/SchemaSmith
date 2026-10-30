@@ -14,6 +14,7 @@ CREATE FUNCTION SchemaSmith_IsJsonAliasColumn(
 ) RETURNS TINYINT
 READS SQL DATA
 BEGIN
+    DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_Schema;
     DECLARE v_Expected TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_IsShape INT DEFAULT 0;
     SET v_Expected = SchemaSmith_JsonAliasCheck(p_Column);
@@ -22,7 +23,7 @@ BEGIN
     END IF;
     SELECT COUNT(*) INTO v_IsShape
       FROM INFORMATION_SCHEMA.COLUMNS c
-     WHERE SchemaSmith_IdentifierKey(c.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_Schema)
+     WHERE c.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(c.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_Schema)
        AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(p_Table)
        AND SchemaSmith_NameKeyCI(c.COLUMN_NAME) = SchemaSmith_NameKeyCI(p_Column)
        AND c.COLUMN_TYPE = 'longtext'

@@ -270,7 +270,6 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        CASE WHEN (SELECT CONVERT(NVARCHAR(50), [value])
                     FROM fn_listextendedproperty(N'PreventDrop', N'Schema', @p_Schema, N'Table', @p_Table, default, default)) = 'true'
             THEN CAST(1 AS BIT) END AS [PreventDrop],
-       '' AS [OldName],
        -- MS_Description is the one extended property with a key of its own; it stays out of the ExtendedProperties bag below.
        (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, default, default)) AS [Description],
        (SELECT *
@@ -311,16 +310,15 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                                  AND cc.[object_id] IS NULL AND sc.encryption_type IS NULL
                             THEN CAST(0 AS BIT) END AS [AnsiPadding],
                        sc.is_column_set AS [IsColumnSet],
-                       ISNULL(NULLIF(sc.collation_name, @v_DatabaseCollation), '') AS [Collation],
-                       ISNULL(mc.masking_function, '') COLLATE DATABASE_DEFAULT AS DataMaskFunction,
+                       NULLIF(sc.collation_name, @v_DatabaseCollation) AS [Collation],
+                       mc.masking_function COLLATE DATABASE_DEFAULT AS DataMaskFunction,
                        ISNULL(sc.encryption_type_desc, 'NONE') COLLATE DATABASE_DEFAULT AS EncryptionType,
-                       ISNULL((SELECT QUOTENAME(cek.[name])
-                                 FROM sys.column_encryption_keys cek
-                                WHERE cek.column_encryption_key_id = sc.column_encryption_key_id), '') COLLATE DATABASE_DEFAULT AS EncryptionKey,
-                       ISNULL(sc.encryption_algorithm_name, '') COLLATE DATABASE_DEFAULT AS EncryptionAlgorithm,
+                       (SELECT QUOTENAME(cek.[name])
+                          FROM sys.column_encryption_keys cek
+                         WHERE cek.column_encryption_key_id = sc.column_encryption_key_id) COLLATE DATABASE_DEFAULT AS EncryptionKey,
+                       sc.encryption_algorithm_name COLLATE DATABASE_DEFAULT AS EncryptionAlgorithm,
                        CASE sc.generated_always_type WHEN 1 THEN 'RowStart' WHEN 2 THEN 'RowEnd' WHEN 7 THEN 'TransactionIdStart' WHEN 8 THEN 'TransactionIdEnd' WHEN 9 THEN 'SequenceNumberStart' WHEN 10 THEN 'SequenceNumberEnd' END AS [GeneratedAlways],
                        CASE WHEN sc.generated_always_type IN (1, 2, 7, 8, 9, 10) AND sc.is_hidden = 1 THEN CAST(1 AS BIT) END AS [Hidden],
-                       '' AS [OldName],
                        (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Column', c.COLUMN_NAME)) AS [Description],
                        JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE([Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Column', c.COLUMN_NAME) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
                   FROM INFORMATION_SCHEMA.COLUMNS c

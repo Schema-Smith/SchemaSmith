@@ -129,6 +129,7 @@ public class FixtureSetup
             {
                 try { TestDatabaseDrop.Drop(cmd, db); } catch (DbException) { /* in use by a live run; leave it */ }
             }
+            TestDatabaseDrop.DropStaleGeneratedDatabases(cmd);
         }
         catch (DbException)
         {

@@ -41,6 +41,7 @@ BEGIN
     -- is identical on both.
     DECLARE v_idx INT DEFAULT 0;
     DECLARE v_count INT DEFAULT 0;
+    DECLARE v_comment_kept INT;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Events;
     -- No ENGINE=MEMORY: it cannot hold BLOB/TEXT, and three of these columns are TEXT.
@@ -120,6 +121,11 @@ BEGIN
         SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
     END IF;
 
+    -- MySQL 5.7 in strict mode refuses a comment longer than its catalog column instead of cutting it, so it is cut
+    -- here to what the engine keeps -- the same length the comparison uses.
+    SELECT CHARACTER_MAXIMUM_LENGTH INTO v_comment_kept FROM INFORMATION_SCHEMA.COLUMNS
+     WHERE TABLE_SCHEMA = 'information_schema' AND TABLE_NAME = 'EVENTS' AND COLUMN_NAME = 'EVENT_COMMENT';
+
     -- Build the CREATE once, so the text that is COMPARED and the text that is EMITTED cannot drift apart.
     -- Rebuilding the string separately in two places is how an object ends up churning forever.
     UPDATE _SchemaSmith_Events
@@ -139,7 +145,7 @@ BEGIN
                                                          'DISABLE ON REPLICA', 'DISABLE ON SLAVE')
                          ELSE 'ENABLE' END,
         CASE WHEN NULLIF(Comment, '') IS NOT NULL
-             THEN CONCAT(' COMMENT ''', REPLACE(Comment, '''', ''''''), '''') ELSE '' END,
+             THEN CONCAT(' COMMENT ''', REPLACE(LEFT(Comment, COALESCE(v_comment_kept, 2048)), '''', ''''''), '''') ELSE '' END,
         ' DO ', COALESCE(Definition, ''));
 
     -- A combination mode (TRADITIONAL, ANSI) is stored as the flags it stands for, so the declared mode is compared as

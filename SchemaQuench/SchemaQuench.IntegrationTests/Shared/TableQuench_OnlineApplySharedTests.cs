@@ -2,6 +2,7 @@
 
 using System;
 using System.Data;
+using System.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -43,10 +44,10 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
         cmd.ExecuteNonQuery();
     }
 
-    private void Deploy(IDbCommand cmd, string json, string online, bool whatIf = false, bool indexOnly = false)
+    private void Deploy(IDbCommand cmd, string json, string online, bool whatIf = false, bool indexOnly = false, Action beforeRetry = null)
     {
         Sql(cmd, $"SET @ss_online_apply = '{online}'; DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID(); DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()");
-        RunTableQuenchProc(cmd, json, indexOnly: indexOnly, whatIf: whatIf);
+        RunTableQuenchProc(cmd, json, indexOnly: indexOnly, whatIf: whatIf, beforeRetry: beforeRetry);
     }
 
     // The Mode on this session's latest change row for the object: "<none>" with no row, "NULL" when it carries none.
@@ -154,8 +155,10 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
         try
         {
             Drop(cmd, "onl_new");
+            // A retry would find the table the failed attempt created, so it starts again from no table.
             Deploy(cmd, Table("onl_new", string.Join(", ", Col("id", nullable: false), Col("a")),
-                """, "Indexes": [{ "Name": "ix_onl_new_a", "IndexColumns": "a" }]"""), "PREFER");
+                """, "Indexes": [{ "Name": "ix_onl_new_a", "IndexColumns": "a" }]"""), "PREFER",
+                beforeRetry: () => Sql(cmd, $"DROP TABLE IF EXISTS `{_mainDb}`.`onl_new`; DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()"));
             Assert.Multiple(() =>
             {
                 Assert.That(IndexExists(cmd, "onl_new", "ix_onl_new_a"), Is.True);
@@ -454,7 +457,12 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
             if (!copyOnline)
             {
                 var refusal = Assert.Catch(() => Deploy(cmd, json, "REQUIRE"));
-                Assert.That(refusal!.Message, Does.Contain("OnlineApply is Require"));
+                Assert.Multiple(() =>
+                {
+                    Assert.That(refusal!.Message, Does.StartWith("OnlineApply is Require: onl_type cannot change online").And.EndWith("(the line above says why)"),
+                        "the refusal reads whole within the engine's 128-character limit");
+                    Assert.That(AuditCount(cmd, "onl_type.a", "modified"), Is.Zero, "a refused change is not reported as made");
+                });
             }
             Deploy(cmd, json, "PREFER");
             Assert.Multiple(() =>
@@ -465,6 +473,26 @@ public abstract class TableQuench_OnlineApplySharedTests : BaseTableQuenchTests
             });
         }
         finally { Drop(cmd, "onl_type"); }
+    }
+
+    // With two tables' columns changed in one step, each table's statement is followed by the form it took.
+    [Test]
+    public void ColumnChangesOnTwoTables_EachStatementIsFollowedByItsForm()
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            Seed(cmd, "onl_ord1");
+            Seed(cmd, "onl_ord2");
+            string One(string table) => Table(table, string.Join(", ", Col("id", nullable: false), Col("a", "BIGINT"), Col("b")))[1..^1];
+            Deploy(cmd, "[" + One("onl_ord1") + ", " + One("onl_ord2") + "]", "PREFER");
+
+            var lines = Messages(cmd).Split('\n').Where(l => l.StartsWith("  Modify column:") || l.StartsWith("    (")).ToArray();
+            Assert.That(lines.Select(l => l.StartsWith("  Modify column:") ? (l.Contains("onl_ord1") ? "modify onl_ord1" : "modify onl_ord2") : "form"),
+                Is.EqualTo(new[] { "modify onl_ord1", "form", "modify onl_ord2", "form" }), string.Join(" | ", lines));
+        }
+        finally { Drop(cmd, "onl_ord1"); Drop(cmd, "onl_ord2"); }
     }
 
     // A key column's type change drops the foreign key first. Require refused only at the MODIFY, after the drop had

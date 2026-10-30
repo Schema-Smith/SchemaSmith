@@ -2,7 +2,9 @@
 
 using System;
 using System.Data;
+using System.Data.Common;
 using System.Threading;
+using MySqlConnector;
 using Schema.DataAccess;
 
 namespace Schema.Utility;
@@ -11,14 +13,20 @@ namespace Schema.Utility;
 /// MySQL-specific: polls the SchemaSmith_StatusMessages table for new messages written by stored
 /// procedures running on a different connection. Uses a background timer to check for messages
 /// at regular intervals. Uses the CONNECTION_ID() pattern for session identification.
+/// <para>Given the writing session's own connection, a flush reads through it, so every message still arrives after
+/// each step when the polling connection cannot be opened or fails; the polling connection only adds live progress
+/// during a long step, and losing it is warned about once.</para>
 /// </summary>
 public class StatusMessageMonitor : IDisposable
 {
     private readonly string _connectionString;
     private readonly long _sessionId;
     private readonly Action<string> _callback;
+    private readonly Action<string> _warn;
+    private readonly IDbConnection _sessionConnection;
     private readonly Timer _timer;
     private IDbConnection _connection;
+    private bool _warned;
     private long _lastId;
     private bool _disposed;
     private readonly object _pollLock = new();
@@ -30,16 +38,38 @@ public class StatusMessageMonitor : IDisposable
     /// <param name="sessionId">The CONNECTION_ID() of the session writing messages.</param>
     /// <param name="callback">Action invoked for each new message.</param>
     /// <param name="pollIntervalMs">Polling interval in milliseconds (default 200ms).</param>
-    public StatusMessageMonitor(string connectionString, long sessionId, Action<string> callback, int pollIntervalMs = 200)
+    /// <param name="sessionConnection">The writing session's own open connection, read on each flush.</param>
+    /// <param name="warn">Told once when live progress is lost.</param>
+    public StatusMessageMonitor(string connectionString, long sessionId, Action<string> callback, int pollIntervalMs = 200,
+                                IDbConnection sessionConnection = null, Action<string> warn = null)
     {
         _connectionString = connectionString;
         _sessionId = sessionId;
         _callback = callback;
+        _sessionConnection = sessionConnection;
+        _warn = warn;
 
         _connection = DbConnectionFactory.ForPlatform(Domain.Platform.MySQL).GetDbConnection(connectionString);
-        _connection.Open();
+        try
+        {
+            _connection.Open();
+        }
+        catch (DbException e) when (sessionConnection != null)
+        {
+            _connection.Dispose();
+            _connection = null;
+            WarnOnce(e.Message);
+            return;
+        }
 
         _timer = new Timer(PollForMessages, null, pollIntervalMs, pollIntervalMs);
+    }
+
+    private void WarnOnce(string reason)
+    {
+        if (_warned || _warn == null) return;
+        _warned = true;
+        _warn($"Live progress from the database is unavailable ({reason}); its messages are logged after each step instead.");
     }
 
     private void PollForMessages(object state)
@@ -51,20 +81,36 @@ public class StatusMessageMonitor : IDisposable
             if (_disposed) return;
             try
             {
-                PollOnce();
+                PollThrough(_connection);
             }
-            catch
+            catch (DbException e)
             {
-                // Swallow polling errors - the monitor is best-effort
-                // If the connection breaks, we'll try to reconnect on next poll
-                TryReconnect();
+                PollFailed(e);
+            }
+            catch (InvalidOperationException e)
+            {
+                PollFailed(e);
             }
         }
     }
 
-    internal void PollOnce()
+    private void PollFailed(Exception failure)
     {
-        using var command = _connection.CreateCommand();
+        // A flush through the session's own connection still delivers what this poll missed. Before kindling the
+        // table is not there yet, which is not a lost message.
+        if (_sessionConnection != null && failure is not MySqlException { ErrorCode: MySqlErrorCode.NoSuchTable }) WarnOnce(failure.Message);
+        TryReconnect();
+    }
+
+    internal void PollOnce() => PollThrough(ReadConnection);
+
+    private IDbConnection ReadConnection =>
+        _sessionConnection is { State: ConnectionState.Open } ? _sessionConnection : _connection;
+
+    private void PollThrough(IDbConnection connection)
+    {
+        if (connection == null) return;
+        using var command = connection.CreateCommand();
         command.CommandText = "SELECT Id, Message FROM SchemaSmith_StatusMessages WHERE SessionId = @sid AND Id > @lastId ORDER BY Id";
 
         var sidParam = command.CreateParameter();
@@ -132,7 +178,7 @@ public class StatusMessageMonitor : IDisposable
         if (_disposed) return;
         _disposed = true;
 
-        _timer.Dispose();
+        _timer?.Dispose();
 
         // Final flush
         try
@@ -147,7 +193,7 @@ public class StatusMessageMonitor : IDisposable
         // Clean up messages for this session
         try
         {
-            using var command = _connection.CreateCommand();
+            using var command = ReadConnection.CreateCommand();
             command.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = @sid";
 
             var sidParam = command.CreateParameter();

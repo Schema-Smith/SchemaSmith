@@ -54,7 +54,7 @@ BEGIN TRY
   CREATE TABLE #OnlineForms ([Kind] VARCHAR(16) COLLATE DATABASE_DEFAULT, [Schema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
                              [IndexName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [Mode] VARCHAR(7) COLLATE DATABASE_DEFAULT,
                              [Form] VARCHAR(12) COLLATE DATABASE_DEFAULT, [Options] NVARCHAR(200) COLLATE DATABASE_DEFAULT, [Reason] NVARCHAR(400) COLLATE DATABASE_DEFAULT)
-  EXEC SchemaSmith.StageOnlineForms @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
+  IF EXISTS (SELECT 1 FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] <> 'OFF') EXEC SchemaSmith.StageOnlineForms @OnlineApplyMaxDuration = @OnlineApplyMaxDuration
 
   EXEC SchemaSmith.ResolvePausedIndexBuilds @OnlineApplyMaxDuration = @OnlineApplyMaxDuration, @WhatIf = @WhatIf
   RAISERROR('Override table compression to match clustered index', 10, 100) WITH NOWAIT
@@ -287,7 +287,7 @@ BEGIN TRY
       IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
       RAISERROR('Drop inbound foreign keys referencing tables removed from the product', 10, 100) WITH NOWAIT
-      SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping inbound foreign Key ' + OBJECT_SCHEMA_NAME(fk.parent_object_id) + '.' + OBJECT_NAME(fk.parent_object_id) + '.' + fk.[name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+      SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping inbound foreign key ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                       'IF OBJECT_ID(''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''') IS NOT NULL ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + ' DROP CONSTRAINT ' + QUOTENAME(fk.[name]) + ';' + CHAR(13) + CHAR(10) +
                                       'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''', ''dropped'');' AS NVARCHAR(MAX))
                                FROM #TablesRemovedFromProduct t WITH (NOLOCK)
@@ -314,7 +314,7 @@ BEGIN TRY
         WHERE OBJECT_ID('SchemaSmith.CustomTableDrop') IS NOT NULL
 
       RAISERROR('Drop tables removed from the product', 10, 100) WITH NOWAIT
-      SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + CASE WHEN OBJECT_ID('SchemaSmith.CustomTableDrop') IS NOT NULL THEN 'Handing table ' + t.[Schema] + '.' + t.[TableName] + ' to SchemaSmith.CustomTableDrop (no longer in product)' ELSE 'Dropping table ' + t.[Schema] + '.' + t.[TableName] END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+      SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + CASE WHEN OBJECT_ID('SchemaSmith.CustomTableDrop') IS NOT NULL THEN 'Handing table ' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) + ' to SchemaSmith.CustomTableDrop (no longer in product)' ELSE 'Dropping table ' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                       CASE WHEN OBJECT_ID('SchemaSmith.CustomTableDrop') IS NOT NULL
                                            THEN 'EXEC SchemaSmith.CustomTableDrop ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ''' + t.[TableName] + ''';'
                                            ELSE 'IF OBJECT_ID(''' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) + ''') IS NOT NULL DROP TABLE ' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) + ';'
@@ -376,6 +376,67 @@ BEGIN TRY
                                                  AND t.[Name] = QUOTENAME(tp.TableName))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+
+  -- Filegroup placement (#filegroups): a NEW index/constraint declaring a filegroup name that does not
+  -- exist on this target must fail loudly BEFORE any DDL runs, naming both the index and the filegroup --
+  -- same contract as the table-create check in MissingTableAndColumnQuench.sql. Only indexes not yet
+  -- present are checked; an already-existing index's declared vs. deployed filegroup is the "move"
+  -- question, checked below.
+  RAISERROR('Validate declared index filegroups exist', 10, 100) WITH NOWAIT
+  IF EXISTS (SELECT 1
+               FROM #Indexes i WITH (NOLOCK)
+               WHERE i.[FileGroup] IS NOT NULL
+                 AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
+                 AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
+  BEGIN
+    DECLARE @v_IdxFGIndex NVARCHAR(1510), @v_IdxFGName NVARCHAR(500)
+    SELECT TOP 1 @v_IdxFGIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxFGName = i.[FileGroup]
+      FROM #Indexes i WITH (NOLOCK)
+      WHERE i.[FileGroup] IS NOT NULL
+        AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
+        AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
+    RAISERROR('Index %s declares filegroup %s, which does not exist on this database. SchemaSmith does not create filegroups -- create it on the target first, or correct the declared name.', 16, 1, @v_IdxFGIndex, @v_IdxFGName)
+  END
+
+  -- Partition placement (#partitioning, K1): the scheme must exist, same contract as the filegroup check
+  -- above -- SchemaSmith creates neither a filegroup nor a partition function/scheme.
+  RAISERROR('Validate declared index partition schemes exist', 10, 100) WITH NOWAIT
+  IF EXISTS (SELECT 1
+               FROM #Indexes i WITH (NOLOCK)
+               WHERE i.[PartitionScheme] IS NOT NULL
+                 AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme])))
+  BEGIN
+    DECLARE @v_IdxPsNewIndex NVARCHAR(1510), @v_IdxPsNewName NVARCHAR(500)
+    SELECT TOP 1 @v_IdxPsNewIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxPsNewName = i.[PartitionScheme]
+      FROM #Indexes i WITH (NOLOCK)
+      WHERE i.[PartitionScheme] IS NOT NULL
+        AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]))
+    RAISERROR('Index %s declares partition scheme %s, which does not exist on this database. SchemaSmith does not create partition functions or schemes -- create them on the target first, or correct the declared name.', 16, 1, @v_IdxPsNewIndex, @v_IdxPsNewName)
+  END
+
+  -- Both or neither, the index twin of the table-level pair check in MissingTableAndColumnQuench: ON
+  -- <scheme> with no column is a syntax error naming nothing useful.
+  IF EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
+              WHERE (i.[PartitionScheme] IS NOT NULL AND i.[PartitionColumn] IS NULL)
+                 OR (i.[PartitionScheme] IS NULL AND i.[PartitionColumn] IS NOT NULL))
+  BEGIN
+    DECLARE @v_IdxPsHalf NVARCHAR(1510), @v_IdxPsHalfMissing NVARCHAR(30)
+    SELECT TOP 1 @v_IdxPsHalf = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName],
+                 @v_IdxPsHalfMissing = CASE WHEN i.[PartitionColumn] IS NULL THEN 'PartitionColumn' ELSE 'PartitionScheme' END
+      FROM #Indexes i WITH (NOLOCK)
+      WHERE (i.[PartitionScheme] IS NOT NULL AND i.[PartitionColumn] IS NULL)
+         OR (i.[PartitionScheme] IS NULL AND i.[PartitionColumn] IS NOT NULL)
+    RAISERROR('Index %s declares one half of a partition placement but not the other -- %s is missing. PartitionScheme and PartitionColumn are declared together or not at all.', 16, 1, @v_IdxPsHalf, @v_IdxPsHalfMissing)
+  END
+
+  -- Everything below compares a declared table with one that existed before this deploy, so a deploy that created
+  -- every table it declares only stamps their ownership. Nothing below is then compiled.
+  IF NOT EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE [NewTable] = 0)
+  BEGIN
+    RAISERROR('Skipping table modifications: no declared table existed before this deploy', 10, 100) WITH NOWAIT
+    EXEC SchemaSmith.StampTableOwnership @ProductName = @ProductName, @WhatIf = @WhatIf
+    RETURN
+  END
 
   RAISERROR('Collect index level extended properties', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexProperties') IS NOT NULL DROP TABLE #IndexProperties
@@ -659,6 +720,15 @@ BEGIN TRY
             -- them, so an unchanged package fails on its second deploy. Identified by
             -- generated_always_type rather than by name -- the type codes are what actually mean it.
             OR c.generated_always_type IN (7, 8, 9, 10)'
+  -- A column dropped from a ledger table is retained by the engine (MSSQL_DroppedLedgerColumn_<name>_<guid>) and can
+  -- never be dropped again. The flag is 2022+, so it gets its own guard.
+  IF SchemaSmith.fn_ServerMajorVersion() >= 16
+    EXEC sp_executesql N'
+      INSERT INTO #EngineOwnedColumns (TableSchema, TableName, ColumnName)
+        SELECT SCHEMA_NAME(st.[schema_id]), st.[name], c.[name]
+          FROM sys.columns c
+          JOIN sys.tables st ON st.[object_id] = c.[object_id]
+         WHERE c.is_dropped_ledger_column = 1'
 
   RAISERROR('Detect Column Drops', 10, 100) WITH NOWAIT
   INSERT #ColumnChanges ([Schema], [TableName], [ColumnName], [ColumnScript], [SpecialColumnScript], MustDropAndRecreate, MustSwapColumn, [DropOnly], [DefinitionChanged], [TypeChanged], [OptionsBefore], [OptionsAfter])
@@ -904,20 +974,26 @@ BEGIN TRY
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
   BEGIN
     DECLARE @v_FitSchema NVARCHAR(256), @v_FitTable NVARCHAR(256), @v_FitColumn NVARCHAR(256), @v_FitType NVARCHAR(MAX),
-            @v_FitInstance SYSNAME, @v_FitChangeTable NVARCHAR(600), @v_FitError NVARCHAR(MAX), @v_FitSQL NVARCHAR(MAX)
+            @v_FitInstance SYSNAME, @v_FitChangeTable NVARCHAR(600), @v_FitError NVARCHAR(MAX), @v_FitSQL NVARCHAR(MAX),
+            @v_FitLongest BIGINT
+    -- Staged first, for the same reason as the swap cursor's padding read: a cursor over the caller's #Tables recompiles.
+    IF OBJECT_ID('tempdb..#CdcFitProbes') IS NOT NULL DROP TABLE #CdcFitProbes
+    SELECT cc.[Schema], cc.[TableName], cc.[ColumnName], [FitType] = REPLACE(REPLACE(cc.[ColumnScript], ' SPARSE', ''), ' NOT NULL', ' NULL'),
+           [CaptureInstance] = ct.capture_instance, [ChangeTable] = QUOTENAME(OBJECT_SCHEMA_NAME(ct.[object_id])) + '.' + QUOTENAME(OBJECT_NAME(ct.[object_id]))
+      INTO #CdcFitProbes
+      FROM #ColumnChanges cc WITH (NOLOCK)
+      JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = cc.[Schema] AND t.[Name] = cc.[TableName]
+      JOIN sys.tables st ON st.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
+      JOIN cdc.change_tables ct WITH (NOLOCK) ON ct.source_object_id = st.[object_id]
+      JOIN cdc.captured_columns cap WITH (NOLOCK) ON cap.[object_id] = ct.[object_id]
+                                                 AND cap.column_name = SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName]) COLLATE DATABASE_DEFAULT
+     WHERE cc.[TypeChanged] = 1 AND cc.MustDropAndRecreate = 0 AND cc.MustSwapColumn = 0 AND cc.[DropOnly] = 0
+       AND cc.[ColumnScript] NOT LIKE '%ENCRYPTED WITH%'
+       AND ISNULL(t.EnableCDC, 1) = 1
     DECLARE fit_cur CURSOR LOCAL FAST_FORWARD FOR
-      SELECT cc.[Schema], cc.[TableName], cc.[ColumnName], REPLACE(REPLACE(cc.[ColumnScript], ' SPARSE', ''), ' NOT NULL', ' NULL'),
-             ct.capture_instance, QUOTENAME(OBJECT_SCHEMA_NAME(ct.[object_id])) + '.' + QUOTENAME(OBJECT_NAME(ct.[object_id]))
-        FROM #ColumnChanges cc WITH (NOLOCK)
-        JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = cc.[Schema] AND t.[Name] = cc.[TableName]
-        JOIN sys.tables st ON st.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName])
-        JOIN cdc.change_tables ct WITH (NOLOCK) ON ct.source_object_id = st.[object_id]
-        JOIN cdc.captured_columns cap WITH (NOLOCK) ON cap.[object_id] = ct.[object_id]
-                                                   AND cap.column_name = SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName]) COLLATE DATABASE_DEFAULT
-       WHERE cc.[TypeChanged] = 1 AND cc.MustDropAndRecreate = 0 AND cc.MustSwapColumn = 0 AND cc.[DropOnly] = 0
-         AND cc.[ColumnScript] NOT LIKE '%ENCRYPTED WITH%'
-         AND ISNULL(t.EnableCDC, 1) = 1
-       ORDER BY cc.[Schema], cc.[TableName], cc.[ColumnName], ct.capture_instance
+      SELECT [Schema], [TableName], [ColumnName], [FitType], [CaptureInstance], [ChangeTable]
+        FROM #CdcFitProbes WITH (NOLOCK)
+       ORDER BY [Schema], [TableName], [ColumnName], [CaptureInstance]
     OPEN fit_cur
     FETCH NEXT FROM fit_cur INTO @v_FitSchema, @v_FitTable, @v_FitColumn, @v_FitType, @v_FitInstance, @v_FitChangeTable
     WHILE @@FETCH_STATUS = 0 AND @v_FitError IS NULL
@@ -928,6 +1004,19 @@ BEGIN TRY
       END TRY
       BEGIN CATCH
         SET @v_FitError = ERROR_MESSAGE()
+        -- A truncation error names the probe's own table variable, so say how long the longest stored value is instead.
+        IF ERROR_NUMBER() IN (2628, 8152)
+        BEGIN
+          SET @v_FitSQL = N'SELECT @l = MAX(' + CASE WHEN @v_FitType LIKE '%BINARY%' THEN N'DATALENGTH(' ELSE N'LEN(' END + @v_FitColumn + N')) FROM ' + @v_FitChangeTable + N' WITH (NOLOCK)'
+          -- LEN takes no text or ntext; for those the engine's own message stands.
+          BEGIN TRY
+            EXEC sp_executesql @v_FitSQL, N'@l BIGINT OUTPUT', @l = @v_FitLongest OUTPUT
+            SET @v_FitError = 'the longest is ' + CONVERT(NVARCHAR(20), @v_FitLongest) + CASE WHEN @v_FitType LIKE '%BINARY%' THEN ' bytes' ELSE ' characters' END
+          END TRY
+          BEGIN CATCH
+            SET @v_FitLongest = NULL
+          END CATCH
+        END
       END CATCH
       IF @v_FitError IS NULL
         FETCH NEXT FROM fit_cur INTO @v_FitSchema, @v_FitTable, @v_FitColumn, @v_FitType, @v_FitInstance, @v_FitChangeTable
@@ -1044,63 +1133,17 @@ BEGIN TRY
     RAISERROR('Index %s declares partition placement %s, but is currently deployed on %s. SchemaSmith does not move an existing index onto or between partition schemes -- that rebuilds the whole index. Migrate it manually, or correct the declaration to match.', 16, 1, @v_IdxPsIndex, @v_IdxPsDeclared, @v_IdxPsLive)
   END
 
-  -- Filegroup placement (#filegroups): a NEW index/constraint declaring a filegroup name that does not
-  -- exist on this target must fail loudly BEFORE any DDL runs, naming both the index and the filegroup --
-  -- same contract as the table-create check in MissingTableAndColumnQuench.sql. Only indexes not yet
-  -- present are checked; an already-existing index's declared vs. deployed filegroup is the "move"
-  -- question, checked below.
-  RAISERROR('Validate declared index filegroups exist', 10, 100) WITH NOWAIT
-  IF EXISTS (SELECT 1
-               FROM #Indexes i WITH (NOLOCK)
-               WHERE i.[FileGroup] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
-                 AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
-  BEGIN
-    DECLARE @v_IdxFGIndex NVARCHAR(1510), @v_IdxFGName NVARCHAR(500)
-    SELECT TOP 1 @v_IdxFGIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxFGName = i.[FileGroup]
-      FROM #Indexes i WITH (NOLOCK)
-      WHERE i.[FileGroup] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.filegroups fg WHERE fg.[name] = SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]))
-        AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
-    RAISERROR('Index %s declares filegroup %s, which does not exist on this database. SchemaSmith does not create filegroups -- create it on the target first, or correct the declared name.', 16, 1, @v_IdxFGIndex, @v_IdxFGName)
-  END
-
-  -- Partition placement (#partitioning, K1): the scheme must exist, same contract as the filegroup check
-  -- above -- SchemaSmith creates neither a filegroup nor a partition function/scheme.
-  RAISERROR('Validate declared index partition schemes exist', 10, 100) WITH NOWAIT
-  IF EXISTS (SELECT 1
-               FROM #Indexes i WITH (NOLOCK)
-               WHERE i.[PartitionScheme] IS NOT NULL
-                 AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme])))
-  BEGIN
-    DECLARE @v_IdxPsNewIndex NVARCHAR(1510), @v_IdxPsNewName NVARCHAR(500)
-    SELECT TOP 1 @v_IdxPsNewIndex = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], @v_IdxPsNewName = i.[PartitionScheme]
-      FROM #Indexes i WITH (NOLOCK)
-      WHERE i.[PartitionScheme] IS NOT NULL
-        AND NOT EXISTS (SELECT * FROM sys.partition_schemes ps WHERE ps.[name] = SchemaSmith.fn_StripBracketWrapping(i.[PartitionScheme]))
-    RAISERROR('Index %s declares partition scheme %s, which does not exist on this database. SchemaSmith does not create partition functions or schemes -- create them on the target first, or correct the declared name.', 16, 1, @v_IdxPsNewIndex, @v_IdxPsNewName)
-  END
-
-  -- Both or neither, the index twin of the table-level pair check in MissingTableAndColumnQuench: ON
-  -- <scheme> with no column is a syntax error naming nothing useful.
-  IF EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
-              WHERE (i.[PartitionScheme] IS NOT NULL AND i.[PartitionColumn] IS NULL)
-                 OR (i.[PartitionScheme] IS NULL AND i.[PartitionColumn] IS NOT NULL))
-  BEGIN
-    DECLARE @v_IdxPsHalf NVARCHAR(1510), @v_IdxPsHalfMissing NVARCHAR(30)
-    SELECT TOP 1 @v_IdxPsHalf = i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName],
-                 @v_IdxPsHalfMissing = CASE WHEN i.[PartitionColumn] IS NULL THEN 'PartitionColumn' ELSE 'PartitionScheme' END
-      FROM #Indexes i WITH (NOLOCK)
-      WHERE (i.[PartitionScheme] IS NOT NULL AND i.[PartitionColumn] IS NULL)
-         OR (i.[PartitionScheme] IS NULL AND i.[PartitionColumn] IS NOT NULL)
-    RAISERROR('Index %s declares one half of a partition placement but not the other -- %s is missing. PartitionScheme and PartitionColumn are declared together or not at all.', 16, 1, @v_IdxPsHalf, @v_IdxPsHalfMissing)
-  END
-
   -- OnlineApply: how each column definition change runs, and a REQUIRE that cannot be met is refused here, before
   -- anything on the table has changed.
   IF OBJECT_ID('tempdb..#ColumnOnline') IS NOT NULL DROP TABLE #ColumnOnline
+  CREATE TABLE #ColumnOnline ([Schema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
+                              [ColumnName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [Mode] VARCHAR(7) COLLATE DATABASE_DEFAULT,
+                              [Form] VARCHAR(12) COLLATE DATABASE_DEFAULT, [Reason] NVARCHAR(4000) COLLATE DATABASE_DEFAULT)
+  -- Each guarded step below is skipped when nothing it reads can exist, so it is never compiled. Under OFF every form is
+  -- NULL, which is what the readers' LEFT JOIN takes a missing row as.
+  IF EXISTS (SELECT 1 FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] <> 'OFF')
+  INSERT #ColumnOnline ([Schema], [TableName], [ColumnName], [Mode], [Form], [Reason])
   SELECT cc.[Schema], cc.[TableName], cc.[ColumnName], ot.[Mode], f.[Form], f.[Reason]
-    INTO #ColumnOnline
     FROM #ColumnChanges cc WITH (NOLOCK)
     JOIN #OnlineTables ot WITH (NOLOCK) ON ot.[Schema] = cc.[Schema] AND ot.[Name] = cc.[TableName]
     CROSS APPLY SchemaSmith.fn_OnlineAlterColumnForm(ot.[Mode], OBJECT_ID(cc.[Schema] + '.' + cc.[TableName]), cc.[ColumnName], cc.[ColumnScript],
@@ -1110,6 +1153,7 @@ BEGIN TRY
                                        AND ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> 'NONE')
                        THEN 1 ELSE 0 END) f
     WHERE cc.[DefinitionChanged] = 1 AND cc.[MustDropAndRecreate] = 0 AND cc.[MustSwapColumn] = 0 AND cc.[DropOnly] = 0
+  ELSE RAISERROR('Skipping online column forms: OnlineApply is Off for every table', 10, 100) WITH NOWAIT
   IF EXISTS (SELECT 1 FROM #ColumnOnline WITH (NOLOCK) WHERE [Mode] = 'REQUIRE' AND [Form] = 'unavailable')
   BEGIN
     DECLARE @v_OnlineColumns NVARCHAR(MAX) = STUFF((SELECT '; ' + [Schema] + '.' + [TableName] + '.' + [ColumnName] + ' (' + [Reason] + ')'
@@ -1479,17 +1523,25 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
   
-  RAISERROR('Collect Existing FullText Indexes', 10, 100) WITH NOWAIT
   -- sys.fulltext_index_columns.statistical_semantics is a 2012 column. This proc is NOT swapped on the
   -- legacy tier (see ForgeKindler's SqlServerXmlSwaps) so it is kindled on the 2008 floor too, where a
   -- static reference is a CREATE-time 'invalid column' error -- the whole proc fails to deploy, not just
   -- the semantics clause. Stage through a guarded dynamic INSERT (empty below 2012, where semantic
   -- indexing does not exist) and join to it below.
+  DECLARE @v_HasFullTextIndexes BIT = CASE WHEN EXISTS (SELECT 1 FROM sys.fulltext_indexes) THEN 1 ELSE 0 END
   IF OBJECT_ID('tempdb..#SemanticCols') IS NOT NULL DROP TABLE #SemanticCols
   CREATE TABLE #SemanticCols ([object_id] INT NOT NULL, column_id INT NOT NULL)
-  IF SchemaSmith.fn_ServerMajorVersion() >= 11
+  IF SchemaSmith.fn_ServerMajorVersion() >= 11 AND @v_HasFullTextIndexes = 1
     EXEC(N'INSERT INTO #SemanticCols ([object_id], column_id) SELECT [object_id], column_id FROM sys.fulltext_index_columns WHERE statistical_semantics = 1')
   IF OBJECT_ID('tempdb..#ExistingFullTextIndexes') IS NOT NULL DROP TABLE #ExistingFullTextIndexes
+  CREATE TABLE #ExistingFullTextIndexes ([Schema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [TableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
+                                         [Columns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT, [FullTextCatalog] NVARCHAR(258) COLLATE DATABASE_DEFAULT,
+                                         [KeyIndex] NVARCHAR(258) COLLATE DATABASE_DEFAULT, [ChangeTracking] NVARCHAR(60) COLLATE DATABASE_DEFAULT,
+                                         [StopList] NVARCHAR(258) COLLATE DATABASE_DEFAULT)
+  IF @v_HasFullTextIndexes = 1
+  BEGIN
+  RAISERROR('Collect Existing FullText Indexes', 10, 100) WITH NOWAIT
+  INSERT #ExistingFullTextIndexes ([Schema], [TableName], [Columns], [FullTextCatalog], [KeyIndex], [ChangeTracking], [StopList])
   SELECT t.[Schema], [TableName] = t.[Name],
          STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)) +
                             CASE WHEN fc.type_column_id IS NOT NULL
@@ -1520,10 +1572,11 @@ BEGIN TRY
          KeyIndex = QUOTENAME((SELECT i.[Name] COLLATE DATABASE_DEFAULT FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
          ChangeTracking = change_tracking_state_desc COLLATE DATABASE_DEFAULT,
          [StopList] = QUOTENAME(COALESCE((SELECT fs.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id), 'SYSTEM'))
-    INTO #ExistingFullTextIndexes
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.fulltext_indexes fi ON fi.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
     WHERE t.NewTable = 0
+  END
+  ELSE RAISERROR('Skipping full-text index comparison: the database has no full-text index', 10, 100) WITH NOWAIT
   
   RAISERROR('Identify Indexes To Drop Based On Column Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexesToDropForColumnChanges') IS NOT NULL DROP TABLE #IndexesToDropForColumnChanges
@@ -1739,7 +1792,7 @@ BEGIN TRY
                       AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
       AND ei.IndexScript <> d.[Script]
 
-  EXEC SchemaSmith.RebuildOptionOnlyIndexChanges @WhatIf = @WhatIf
+  IF EXISTS (SELECT 1 FROM #IndexChanges WITH (NOLOCK)) EXEC SchemaSmith.RebuildOptionOnlyIndexChanges @WhatIf = @WhatIf
 
   RAISERROR('Detect Index Renames', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexRenames') IS NOT NULL DROP TABLE #IndexRenames
@@ -1784,8 +1837,8 @@ BEGIN TRY
 
   -- Every index rename and drop this run will make is known from here on, and none has run yet.
   IF EXISTS (SELECT 1 FROM sys.databases WHERE database_id = DB_ID() AND is_cdc_enabled = 1)
-     AND EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name]) WHERE st.is_tracked_by_cdc = 1)
-    EXEC SchemaSmith.CdcIndexGuard @DropIndexesRemovedFromProduct = @DropIndexesRemovedFromProduct, @DropUnknownIndexes = @DropUnknownIndexes
+    IF EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name]) WHERE st.is_tracked_by_cdc = 1)
+      EXEC SchemaSmith.CdcIndexGuard @DropIndexesRemovedFromProduct = @DropIndexesRemovedFromProduct, @DropUnknownIndexes = @DropUnknownIndexes
   
   RAISERROR('Handle Renamed Indexes And Unique Constraints', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Renaming ' + [OldName] + ' to ' + [NewName] + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -1803,9 +1856,14 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
-  RAISERROR('Collect Existing XML Index Definitions', 10, 100) WITH NOWAIT
   {{CollectSelectiveXmlIndexes}}
   IF OBJECT_ID('tempdb..#ExistingXmlIndexes') IS NOT NULL DROP TABLE #ExistingXmlIndexes
+  CREATE TABLE #ExistingXmlIndexes ([xSchema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [xTableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
+                                    [xIndexName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [IndexScript] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT)
+  IF EXISTS (SELECT 1 FROM sys.xml_indexes)
+  BEGIN
+  RAISERROR('Collect Existing XML Index Definitions', 10, 100) WITH NOWAIT
+  INSERT #ExistingXmlIndexes ([xSchema], [xTableName], [xIndexName], [IndexScript])
   SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(i.[Name] COLLATE DATABASE_DEFAULT AS NVARCHAR(500)),
          IndexScript = 'CREATE ' + ISNULL(s.[KindPrefix], CASE WHEN i.using_xml_index_id IS NULL THEN 'PRIMARY ' ELSE '' END) +
                        'XML INDEX ' + QUOTENAME(i.[name] COLLATE DATABASE_DEFAULT) + ' ON ' + QUOTENAME(OBJECT_SCHEMA_NAME(i.[object_id])) + '.' + QUOTENAME(OBJECT_NAME(i.[object_id])) + ' ' + 
@@ -1820,12 +1878,13 @@ BEGIN TRY
                                     JOIN sys.partitions p ON p.[object_id] = xsi.[object_id] AND p.index_id = xsi.index_id
                                     WHERE it.parent_object_id = i.[object_id]) = 1
                             THEN ' WITH (XML_COMPRESSION = ON)' ELSE '' END
-    INTO #ExistingXmlIndexes
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.xml_indexes i ON i.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
     JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
     LEFT JOIN #SelectiveXmlIndexes s ON s.[object_id] = i.[object_id] AND s.index_id = i.index_id
     WHERE t.NewTable = 0
+  END
+  ELSE RAISERROR('Skipping XML index comparison: the database has no XML index', 10, 100) WITH NOWAIT
 
   RAISERROR('Detect Xml Index Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#XmlIndexChanges') IS NOT NULL DROP TABLE #XmlIndexChanges
@@ -1887,8 +1946,18 @@ BEGIN TRY
   -- Spatial indexes (sys.spatial_indexes and its tessellation, both 2008). A declared attribute that differs from the
   -- live index re-creates it; an attribute the package omits is not compared, so an index declared by its column alone
   -- keeps whatever the engine chose. fill_factor 0 is the server default, read as 100.
-  RAISERROR('Collect Existing Spatial Index Definitions', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#ExistingSpatialIndexes') IS NOT NULL DROP TABLE #ExistingSpatialIndexes
+  CREATE TABLE #ExistingSpatialIndexes ([xSchema] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [xTableName] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
+                                        [xIndexName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [xColumn] NVARCHAR(500) COLLATE DATABASE_DEFAULT,
+                                        [xTessellation] NVARCHAR(60) COLLATE DATABASE_DEFAULT, [xXMin] FLOAT, [xYMin] FLOAT, [xXMax] FLOAT, [xYMax] FLOAT,
+                                        [xLevel1] NVARCHAR(60) COLLATE DATABASE_DEFAULT, [xLevel2] NVARCHAR(60) COLLATE DATABASE_DEFAULT,
+                                        [xLevel3] NVARCHAR(60) COLLATE DATABASE_DEFAULT, [xLevel4] NVARCHAR(60) COLLATE DATABASE_DEFAULT,
+                                        [xCellsPerObject] INT, [xFillFactor] INT, [xCompression] NVARCHAR(60) COLLATE DATABASE_DEFAULT)
+  IF EXISTS (SELECT 1 FROM sys.spatial_indexes)
+  BEGIN
+  RAISERROR('Collect Existing Spatial Index Definitions', 10, 100) WITH NOWAIT
+  INSERT #ExistingSpatialIndexes ([xSchema], [xTableName], [xIndexName], [xColumn], [xTessellation], [xXMin], [xYMin], [xXMax], [xYMax],
+                                  [xLevel1], [xLevel2], [xLevel3], [xLevel4], [xCellsPerObject], [xFillFactor], [xCompression])
   SELECT xSchema = t.[Schema], [xTableName] = t.[Name], [xIndexName] = CAST(i.[name] COLLATE DATABASE_DEFAULT AS NVARCHAR(500)),
          [xColumn] = CAST(QUOTENAME(COL_NAME(i.[object_id], ic.column_id)) AS NVARCHAR(500)),
          [xTessellation] = CAST(i.tessellation_scheme COLLATE DATABASE_DEFAULT AS NVARCHAR(60)),
@@ -1900,12 +1969,13 @@ BEGIN TRY
          -- DATA_COMPRESSION lands on the index's internal table, not on the index.
          [xCompression] = CAST(ISNULL((SELECT MAX(p.data_compression_desc) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1
                                         WHERE it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id), 'NONE') COLLATE DATABASE_DEFAULT AS NVARCHAR(60))
-    INTO #ExistingSpatialIndexes
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.spatial_indexes i ON i.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
     JOIN sys.spatial_index_tessellations tz ON tz.[object_id] = i.[object_id] AND tz.index_id = i.index_id
     JOIN sys.index_columns ic ON ic.[object_id] = i.[object_id] AND ic.index_id = i.index_id
     WHERE t.NewTable = 0
+  END
+  ELSE RAISERROR('Skipping spatial index comparison: the database has no spatial index', 10, 100) WITH NOWAIT
 
   RAISERROR('Detect Spatial Index Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#SpatialIndexChanges') IS NOT NULL DROP TABLE #SpatialIndexChanges
@@ -2095,7 +2165,7 @@ BEGIN TRY
   -- MissingIndexesAndConstraintsQuench turns versioning back on once the key exists again. Recorded in the database
   -- rather than in this run, so a run that fails part-way is resumed by the next one.
   -- OnlineApply REQUIRE: refused before any index is dropped.
-  EXEC SchemaSmith.RefuseUnmetOnlineRequire
+  IF EXISTS (SELECT 1 FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] = 'REQUIRE') EXEC SchemaSmith.RefuseUnmetOnlineRequire
 
   RAISERROR('Suspend System Versioning On Temporal Tables Losing Their Primary Key', 10, 100) WITH NOWAIT
   IF SchemaSmith.fn_ServerMajorVersion() >= 13
@@ -2165,7 +2235,7 @@ BEGIN TRY
                                        THEN 'IF OBJECT_ID(''' + di.[Schema] + '.' + QUOTENAME(di.[IndexName]) + ''') IS NOT NULL ALTER TABLE ' + di.[Schema] + '.' + di.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(di.[IndexName]) + od.[With] + ';'
                                        ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + di.[Schema] + '.' + di.[TableName] + '''), ''' + di.[IndexName] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(di.[IndexName]) + ' ON ' + di.[Schema] + '.' + di.[TableName] + od.[With] + ';'
                                        END + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + di.[Schema] + '.' + di.[TableName] + '.' + di.[IndexName] + ''', ''dropped'', ' + CASE WHEN od.[With] <> '' THEN '''online''' ELSE 'NULL' END + ');'
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + di.[Schema] + '.' + di.[TableName] + '.' + QUOTENAME(di.[IndexName]) + ''', ''dropped'', ' + CASE WHEN od.[With] <> '' THEN '''online''' ELSE 'NULL' END + ');'
                                   FROM #IndexesToDrop di WITH (NOLOCK)
                                   -- Only a clustered index can be dropped online (3745); its heap is then built without blocking.
                                   CROSS APPLY (SELECT [With] = CASE WHEN di.[IsClustered] = 1 AND SchemaSmith.fn_OnlineOperationsAvailable() = 1
@@ -2178,7 +2248,7 @@ BEGIN TRY
   -- #363: WhatIf twin of the embedded 'index'/'constraint' 'dropped' audit above.
   IF @WhatIf = 1
     INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-      SELECT @@SPID, CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END, di.[Schema] + '.' + di.[TableName] + '.' + di.[IndexName], 'wouldDrop'
+      SELECT @@SPID, CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END, di.[Schema] + '.' + di.[TableName] + '.' + QUOTENAME(di.[IndexName]), 'wouldDrop'
         FROM #IndexesToDrop di WITH (NOLOCK)
 
   RAISERROR('Fixup Modified Fillfactors', 10, 100) WITH NOWAIT
@@ -2301,16 +2371,18 @@ BEGIN TRY
   RAISERROR('Swap Columns Requiring Data-Preserving Replacement', 10, 100) WITH NOWAIT
   DECLARE @v_SwapSchema NVARCHAR(256), @v_SwapTable NVARCHAR(256), @v_SwapColumn NVARCHAR(256), @v_SwapColumnScript NVARCHAR(MAX), @v_SwapPaddingOff BIT
   DECLARE swap_cursor CURSOR LOCAL FAST_FORWARD FOR
-    SELECT cc.[Schema], cc.[TableName], SchemaSmith.fn_StripBracketWrapping(cc.ColumnName), cc.ColumnScript,
-           CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
-                                           WHERE c.[Schema] = cc.[Schema] AND c.[TableName] = cc.[TableName] AND c.[ColumnName] = cc.[ColumnName]
-                                             AND c.[PaddingApplies] = 1 AND c.[AnsiPadding] = 0) THEN 1 ELSE 0 END)
+    SELECT cc.[Schema], cc.[TableName], SchemaSmith.fn_StripBracketWrapping(cc.ColumnName), cc.ColumnScript
       FROM #ColumnChanges cc WITH (NOLOCK)
       WHERE cc.MustSwapColumn = 1
   OPEN swap_cursor
-  FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript, @v_SwapPaddingOff
+  FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript
   WHILE @@FETCH_STATUS = 0
   BEGIN
+    -- Read here, not in the cursor: a cursor over the caller's #Columns recompiles this procedure's temp-table reads on every call.
+    SET @v_SwapPaddingOff = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
+                                                          WHERE c.[Schema] = @v_SwapSchema AND c.[TableName] = @v_SwapTable
+                                                            AND SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]) = @v_SwapColumn
+                                                            AND c.[PaddingApplies] = 1 AND c.[AnsiPadding] = 0) THEN 1 ELSE 0 END)
     DECLARE @v_TempColName NVARCHAR(256) = @v_SwapColumn + '_swap_temp'
     -- The data type without NULL/NOT NULL
     DECLARE @v_SwapDataType NVARCHAR(MAX) = RTRIM(REPLACE(REPLACE(@v_SwapColumnScript, ' NOT NULL', ''), ' NULL', ''))
@@ -2347,7 +2419,7 @@ BEGIN TRY
     -- Step 5: Rename temp to original
     SET @v_SQL = 'EXEC sp_rename ''' + SchemaSmith.fn_StripBracketWrapping(@v_SwapSchema) + '.' + SchemaSmith.fn_StripBracketWrapping(@v_SwapTable) + '.' + QUOTENAME(@v_TempColName) + ''', ''' + @v_SwapColumn + ''', ''COLUMN'';'
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-    FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript, @v_SwapPaddingOff
+    FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript
   END
   CLOSE swap_cursor
   DEALLOCATE swap_cursor
@@ -2431,91 +2503,7 @@ BEGIN TRY
     FROM #Columns c
     WHERE EXISTS (SELECT * FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = c.[Schema] AND cc.[TableName] = c.[TableName] and cc.ColumnName = c.ColumnName AND cc.MustDropAndRecreate = 1 AND cc.MustSwapColumn = 0)
   
-  RAISERROR('Add missing ProductName extended property to tables', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +
-                                                              '@level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ' +
-                                                              '@level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''';' AS NVARCHAR(MAX))
-                           FROM #Tables t WITH (NOLOCK)
-                           WHERE NOT EXISTS (SELECT * FROM #TableProperties tp WITH (NOLOCK) WHERE t.[Schema] = tp.[Schema] AND t.[Name] = QUOTENAME(tp.TableName) AND tp.PropertyName = 'ProductName')
-                             AND OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NOT NULL  -- and the table physically exists
-                             AND t.[MemoryOptimized] = 0  -- memory-optimized tables reject extended properties; their ownership is tracked in SchemaSmith.ProductOwnership below
-                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-
-  -- Stamp/refresh the sticky PreventDrop protection marker so it tracks the package value each run
-  -- (an existing table newly marked PreventDrop:true gets its property; one toggled back to false is
-  -- updated). Covers the same present-table set as the ProductName stamp above (physical tables in #Tables).
-  -- WHAT THE MARKER ALREADY SAYS, READ ONCE. The statement below generates one
-  -- fn_listextendedproperty probe plus an sp_updateextendedproperty (or sp_addextendedproperty) PER
-  -- TABLE, and then executes all of them -- unconditionally, so a re-deploy where nothing had changed
-  -- still re-stamped every table in the package. On a 1,783-table model that is ~1,783 system-procedure
-  -- calls to write values that already said what they were going to say, and it measured 5,541 ms.
-  -- Reading the current values in one pass lets the generator skip tables that already agree, which on
-  -- an unchanged package is all of them. The end state is identical either way.
-  IF OBJECT_ID('tempdb..#ExistingPreventDrop') IS NOT NULL DROP TABLE #ExistingPreventDrop
-  SELECT [MajorId] = ep.major_id, [Value] = CONVERT(NVARCHAR(100), ep.[value])
-    INTO #ExistingPreventDrop
-    FROM sys.extended_properties ep
-   WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.[name] = 'PreventDrop'
-  CREATE CLUSTERED INDEX [ixExistingPreventDrop] ON #ExistingPreventDrop ([MajorId])
-
-  RAISERROR('Stamp/refresh PreventDrop protection marker', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-    'IF EXISTS (SELECT 1 FROM fn_listextendedproperty(N''PreventDrop'', N''Schema'', ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', N''Table'', ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', default, default)) ' +
-    'EXEC sp_updateextendedproperty @name = N''PreventDrop'', @value = ''' + CASE WHEN t.[PreventDrop] = 1 THEN 'true' ELSE 'false' END + ''', @level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + '''; ' +
-    'ELSE EXEC sp_addextendedproperty @name = N''PreventDrop'', @value = ''' + CASE WHEN t.[PreventDrop] = 1 THEN 'true' ELSE 'false' END + ''', @level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''';' AS NVARCHAR(MAX))
-    FROM #Tables t WITH (NOLOCK)
-    WHERE OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NOT NULL  -- table physically exists
-      AND t.[MemoryOptimized] = 0  -- memory-optimized tables reject extended properties; PreventDrop is tracked in SchemaSmith.ProductOwnership below
-      -- Only where the marker is missing or disagrees. The generated SQL still probes and branches
-      -- add-vs-update itself, so this narrows WHICH tables are visited, not what happens when one is.
-      AND ISNULL((SELECT x.[Value] FROM #ExistingPreventDrop x WHERE x.[MajorId] = OBJECT_ID(t.[Schema] + '.' + t.[Name])), '')
-          <> CASE WHEN t.[PreventDrop] = 1 THEN 'true' ELSE 'false' END
-    FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
-  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
-  IF OBJECT_ID('tempdb..#ExistingPreventDrop') IS NOT NULL DROP TABLE #ExistingPreventDrop
-
-  -- Memory-optimized tables reject extended properties, so their ProductName / PreventDrop ownership is
-  -- recorded in SchemaSmith.ProductOwnership instead of stamped on the table (the read-side fold into
-  -- #TableProperties near the top of this proc turns these rows back into the ownership records every
-  -- downstream check reads). Insert missing owner rows and refresh the marker each run so it tracks the
-  -- package, mirroring the two extended-property stamps above. IndexName = '' is the table-level marker.
-  -- Ownership bookkeeping is a real mutation, so like the other engines it is skipped under WhatIf.
-  RAISERROR('Record memory-optimized table ownership in ProductOwnership', 10, 100) WITH NOWAIT
-  IF @WhatIf = 0
-  BEGIN
-    INSERT INTO SchemaSmith.ProductOwnership ([Schema], [TableName], [IndexName], [ProductName], [PreventDrop])
-      SELECT t.[Schema], SchemaSmith.fn_StripBracketWrapping(t.[Name]), '', @ProductName, ISNULL(t.[PreventDrop], 0)
-        FROM #Tables t WITH (NOLOCK)
-        WHERE t.[MemoryOptimized] = 1
-          AND OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM SchemaSmith.ProductOwnership po WITH (NOLOCK)
-                            WHERE po.[Schema] = t.[Schema] COLLATE DATABASE_DEFAULT
-                              AND po.[TableName] = SchemaSmith.fn_StripBracketWrapping(t.[Name]) COLLATE DATABASE_DEFAULT
-                              AND po.[IndexName] = '')
-
-    UPDATE po
-      SET po.[ProductName] = @ProductName, po.[PreventDrop] = ISNULL(t.[PreventDrop], 0)
-      FROM SchemaSmith.ProductOwnership po
-      JOIN #Tables t WITH (NOLOCK) ON t.[Schema] COLLATE DATABASE_DEFAULT = po.[Schema]
-                                  AND SchemaSmith.fn_StripBracketWrapping(t.[Name]) COLLATE DATABASE_DEFAULT = po.[TableName]
-      WHERE t.[MemoryOptimized] = 1
-        AND po.[IndexName] = ''
-        AND OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NOT NULL
-        AND (po.[ProductName] <> @ProductName OR po.[PreventDrop] <> ISNULL(t.[PreventDrop], 0))
-  END
-
-  -- Prune ownership rows for memory-optimized tables that no longer exist -- dropped by absence earlier in
-  -- this proc, or removed out of band. Mirrors the catalog-existence prune the other engines run; a
-  -- PreventDrop-retained table still physically exists, so its row survives. Scoped to this product and
-  -- this run's schemas. Runs after the drops above, so a table removed this run is already gone here.
-  RAISERROR('Prune ProductOwnership for memory-optimized tables no longer present', 10, 100) WITH NOWAIT
-  IF @WhatIf = 0
-    DELETE po
-      FROM SchemaSmith.ProductOwnership po
-      JOIN #SchemaList sl WITH (NOLOCK) ON sl.[Schema] = po.[Schema] COLLATE DATABASE_DEFAULT
-      WHERE po.[ProductName] = @ProductName COLLATE DATABASE_DEFAULT
-        AND OBJECT_ID(po.[Schema] + '.' + QUOTENAME(po.[TableName]) + '') IS NULL
+  EXEC SchemaSmith.StampTableOwnership @ProductName = @ProductName, @WhatIf = @WhatIf
 
   RAISERROR('Add Missing Physical Columns', 10, 100) WITH NOWAIT
   -- Need to do this a second time for the edge case of replacing a computed column with a physical column
@@ -2853,7 +2841,6 @@ BEGIN TRY
   -- With versioning suspended, a column change reaches the current table only, and versioning cannot come back on until
   -- the history table matches it by name, type, collation and nullability (probed: nullability is checked too). Make it
   -- match: drop what the current table no longer has, add what it gained, and restate what differs.
-  RAISERROR('Mirror column changes onto the history tables of suspended temporal tables', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#SuspendedTemporal') IS NOT NULL DROP TABLE #SuspendedTemporal
   SELECT [CurrentId] = ep.major_id, [HistoryName] = CAST(ep.[value] AS NVARCHAR(600)),
          [HistoryId] = OBJECT_ID(CAST(ep.[value] AS NVARCHAR(600)))
@@ -2861,6 +2848,9 @@ BEGIN TRY
     FROM sys.extended_properties ep
     JOIN #Tables t WITH (NOLOCK) ON OBJECT_ID(t.[Schema] + '.' + t.[Name]) = ep.major_id
     WHERE ep.class = 1 AND ep.minor_id = 0 AND ep.[name] = N'SchemaSmith_SuspendedHistory'
+  IF EXISTS (SELECT 1 FROM #SuspendedTemporal WITH (NOLOCK))
+  BEGIN
+  RAISERROR('Mirror column changes onto the history tables of suspended temporal tables', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(x.Stmt AS NVARCHAR(MAX))
                            FROM (SELECT 1 AS Ord, 'ALTER TABLE ' + s.HistoryName + ' DROP COLUMN ' + QUOTENAME(hc.[name]) + ';' AS Stmt
                                    FROM #SuspendedTemporal s WITH (NOLOCK)
@@ -2900,6 +2890,8 @@ BEGIN TRY
                            ORDER BY x.Ord
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  END
+  ELSE RAISERROR('Skipping history tables: no temporal table has versioning suspended', 10, 100) WITH NOWAIT
 
   IF EXISTS (SELECT 1 FROM #SbPolicies) AND @WhatIf = 0
   BEGIN
@@ -2936,14 +2928,17 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
   
+  -- A full-text index's columns are a set: the order they are declared in is not a change.
   RAISERROR('Drop Modified or Removed FullText Indexes', 10, 100) WITH NOWAIT
+  IF @v_HasFullTextIndexes = 1
+  BEGIN
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping fulltext index on ' + ei.[Schema] + '.' + ei.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'DROP FULLTEXT INDEX ON ' + ei.[Schema] + '.' + ei.[TableName] + ';' AS NVARCHAR(MAX))
                            FROM #ExistingFullTextIndexes ei WITH (NOLOCK)
                            LEFT JOIN #FullTextIndexes fi WITH (NOLOCK) ON fi.[Schema] = ei.[Schema]
                                                                       AND fi.[TableName] = ei.[TableName]
                            JOIN sys.fulltext_indexes ft ON ft.[object_id] = OBJECT_ID(ei.[Schema] + '.' + ei.[TableName])
-                           WHERE RTRIM(ISNULL(fi.[Columns], '')) <> RTRIM(ISNULL(ei.[Columns], ''))
+                           WHERE (EXISTS (SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(fi.[Columns], ''), ',') EXCEPT SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(ei.[Columns], ''), ',')) OR EXISTS (SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(ei.[Columns], ''), ',') EXCEPT SELECT LTRIM(RTRIM([value])) COLLATE DATABASE_DEFAULT FROM SchemaSmith.fn_SplitList(ISNULL(fi.[Columns], ''), ',')))
                               OR SchemaSmith.fn_StripBracketWrapping(fi.[FullTextCatalog]) <> SchemaSmith.fn_StripBracketWrapping(ei.[FullTextCatalog])
                               OR SchemaSmith.fn_StripBracketWrapping(fi.[KeyIndex]) <> SchemaSmith.fn_StripBracketWrapping(ei.[KeyIndex])
                               OR fi.[ChangeTracking] <> ei.[ChangeTracking]
@@ -2951,6 +2946,7 @@ BEGIN TRY
                               OR fi.[TableName] IS NULL
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  END
   
   SET NOCOUNT OFF
 END TRY

@@ -8,6 +8,7 @@ using Microsoft.Extensions.Configuration;
 using NSubstitute;
 using Schema.DataAccess;
 using Schema.Domain;
+using Schema.Domain.SqlServer;
 using Schema.IntegrationTests;
 using Schema.Isolators;
 using Schema.Utility;
@@ -71,6 +72,100 @@ public class FolderGateIntegrationTests
         using var cmd = conn.CreateCommand();
 
         Assert.That(FolderGate.ShouldApply(cmd, folder.ShouldApplyExpression), Is.True);
+    }
+
+    // A folder meant only for replicas (a local cache build, a job that must not run on the primary) has nowhere to run
+    // without them, as in any environment that has no Availability Group.
+    [Test]
+    public void ProductFolders_WithNoSecondariesConfigured_RunOnlyThoseMeantForThePrimary()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            var probeDb = $"probe_597_{Guid.NewGuid():N}"[..20];
+            var scriptDir = Path.Join(Path.GetTempPath(), probeDb);
+            config["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "ValidProduct");
+            var secondaries = config["Target:SecondaryServers"];
+            config["Target:SecondaryServers"] = "";
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            try
+            {
+                cmd.CommandText = $"CREATE DATABASE [{probeDb}]";
+                cmd.ExecuteNonQuery();
+                Directory.CreateDirectory(scriptDir);
+                ProductFolder Folder(string name, ServerToQuench serverToQuench)
+                {
+                    var path = Path.Join(scriptDir, $"{name}.sql");
+                    File.WriteAllText(path, $"CREATE TABLE [{probeDb}].dbo.[{name}] (Id INT)");
+                    var folder = new ProductFolder { FolderPath = name, ServerToQuench = serverToQuench, QuenchSlot = ProductQuenchSlot.After };
+                    folder.Scripts.Add(SqlScript.Load(path, []));
+                    return folder;
+                }
+                var folders = new List<ProductFolder>
+                {
+                    Folder("PrimaryOnly", ServerToQuench.Primary), Folder("SecondaryOnly", ServerToQuench.Secondary), Folder("Both", ServerToQuench.Both)
+                };
+
+                new ProductQuench().QuenchProductScriptsWithCheckpoint(folders, "After Product", false);
+
+                cmd.CommandText = $"SELECT name FROM [{probeDb}].sys.tables ORDER BY name";
+                var created = new List<string>();
+                using (var reader = cmd.ExecuteReader())
+                    while (reader.Read()) created.Add(reader.GetString(0));
+                Assert.That(created, Is.EqualTo(new[] { "Both", "PrimaryOnly" }), "a Secondary folder must not run on the primary");
+            }
+            finally
+            {
+                config["SchemaPackagePath"] = null;
+                config["Target:SecondaryServers"] = secondaries;
+                cmd.CommandText = $"IF DB_ID('{probeDb}') IS NOT NULL BEGIN ALTER DATABASE [{probeDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{probeDb}] END";
+                cmd.ExecuteNonQuery();
+                if (Directory.Exists(scriptDir)) Directory.Delete(scriptDir, true);
+            }
+        }
+    }
+
+    // A product script's RAISERROR(..., 10, 100) reaches the log, as a template script's does.
+    [Test]
+    public void AProductScriptsInformationalMessages_AreLogged()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            var scriptDir = Path.Join(Path.GetTempPath(), $"ProductMsg_{Guid.NewGuid():N}");
+            config["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "ValidProduct");
+            var progress = new List<string>();
+            var progressLog = Substitute.For<log4net.ILog>();
+            progressLog.When(l => l.Info(Arg.Any<object>())).Do(ci => progress.Add($"{ci.Arg<object>()}"));
+            progressLog.When(l => l.Warn(Arg.Any<object>())).Do(ci => progress.Add($"WARN {ci.Arg<object>()}"));
+            LogFactory.Register("ProgressLog", progressLog);
+            LogFactory.Register("ErrorLog", Substitute.For<log4net.ILog>());
+            try
+            {
+                Directory.CreateDirectory(scriptDir);
+                var path = Path.Join(scriptDir, "messages.sql");
+                File.WriteAllText(path, "RAISERROR('product script says hello', 10, 100) WITH NOWAIT\nRAISERROR('WARNING: product script warns', 10, 100) WITH NOWAIT\nRAISERROR('product script mutters', 10, 1) WITH NOWAIT");
+                var folder = new ProductFolder { FolderPath = "Messages", QuenchSlot = ProductQuenchSlot.After };
+                folder.Scripts.Add(SqlScript.Load(path, []));
+
+                new ProductQuench().QuenchProductScriptsWithCheckpoint([folder], "After Product", false);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(progress, Has.Some.EndsWith("product script says hello"), string.Join(Environment.NewLine, progress));
+                    Assert.That(progress, Has.Some.Matches<string>(l => l.StartsWith("WARN ") && l.EndsWith("WARNING: product script warns")), "a WARNING: line is a warning");
+                    Assert.That(progress, Has.None.Contains("product script mutters"), "a message without state 100 stays out unless VerboseLogging is on");
+                });
+            }
+            finally
+            {
+                config["SchemaPackagePath"] = null;
+                LogFactory.Clear();
+                if (Directory.Exists(scriptDir)) Directory.Delete(scriptDir, true);
+            }
+        }
     }
 
     private static string NonexistentBasePath() =>

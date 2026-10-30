@@ -417,4 +417,18 @@ public class DeploymentSummaryAssemblerTests
         Assert.That(summary.ObjectChanges.Dropped, Is.EqualTo(new DroppedCounts(0, 0, 0, 0)));
         Assert.That(summary.ObjectChanges.Details, Is.Empty);
     }
+
+    // A fleet run makes the same change in many places, and the detail named none of them.
+    [Test]
+    public void Assemble_ObjectChangeDetails_NameWhereEachChangeWasMade()
+    {
+        var cap = new ChangeAuditCapture();
+        cap.Record("table", "dbo.T", "created", target: new ChangeTarget("srv", "dbA", "sales"));
+        cap.Record("table", "dbo.T", "created", target: new ChangeTarget("srv", "dbB"));
+        cap.MarkInstrumented();
+
+        var details = AssembleWith(changeAudit: cap).ObjectChanges.Details;
+
+        Assert.That(details.Select(d => $"{d.Server}/{d.Database}/{d.Schema}"), Is.EqualTo(new[] { "srv/dbA/sales", "srv/dbB/" }));
+    }
 }
