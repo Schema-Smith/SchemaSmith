@@ -1029,8 +1029,7 @@ The engine check on a copy covers the same surfaces except PostgreSQL's extended
 materialized views, which are re-applied once and then recorded, as before.
 
 Some surfaces never had this problem and are unchanged: SQL Server indexed view bodies and literal column
-defaults, and PostgreSQL column defaults and exclude constraints, all already compared equal after the
-engine's own rewrite.
+defaults already compared equal after the engine's own rewrite.
 
 ---
 

@@ -2000,7 +2000,8 @@ Indexed views are defined as JSON files in the `Indexed Views/` directory of eac
 
 Four object types accept two authoring forms, and choosing between them is the same decision every time. A
 **declared** object is a `.json` file: SchemaSmith compares it against the database on each deploy, converges
-it when it differs, and can remove it when it leaves the package. A **scripted** object is a `.sql` file in
+it when it differs, and leaves it in place when it leaves the package (scheduled events are the exception: see
+the table below). A **scripted** object is a `.sql` file in
 the same folder: it runs on every deploy, is never compared, and is never removed by absence. Both forms are
 supported, both can live in one package, and existing scripted packages need no change.
 
