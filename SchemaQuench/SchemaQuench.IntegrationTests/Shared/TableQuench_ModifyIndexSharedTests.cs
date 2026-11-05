@@ -222,7 +222,7 @@ VALUES ('{_productName}', '', '{db}', 'TABLE', 'Parent'), ('{_productName}', '',
         finally
         {
             cmd.CommandText = $@"DROP DATABASE IF EXISTS `{db}`;
-DELETE FROM `{_mainDb}`.SchemaSmith_ProductOwnership WHERE ObjectSchema = '{db}';";
+DELETE FROM `{_mainDb}`.SchemaSmith_ProductOwnership WHERE ObjectType IN ('TABLE', 'INDEX', 'EVENT') AND ObjectSchema = '{db}';";
             cmd.ExecuteNonQuery();
             conn.Close();
         }

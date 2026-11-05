@@ -71,7 +71,7 @@ public abstract class TableQuench_ExpressionMapAdoptSharedTests : BaseTableQuenc
             Assert.Ignore("CHECK constraints and expression defaults need MySQL 8.0.16 / MariaDB 10.2.");
         void Drop() => Exec(cmd, $"""
             DROP TABLE IF EXISTS `{_mainDb}`.`{t}`; DELETE FROM SchemaSmith_ExpressionMap WHERE ObjectTable = '{t}';
-            DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectSchema = '{_mainDb}' AND ObjectName LIKE '{t}%';
+            DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectType IN ('TABLE', 'INDEX', 'EVENT') AND ObjectSchema = '{_mainDb}' AND ObjectName LIKE '{t}%';
             DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID(); DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()
             """);
         Drop();
