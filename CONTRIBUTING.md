@@ -37,20 +37,20 @@ The CLI tools target:
 
 The `Demos/` directory has a separate Docker compose stack per platform — `Demos/SqlServer/`, `Demos/PostgreSQL/`, `Demos/MySQL/`, `Demos/MariaDB/`. Each stack spins up the database server and runs SchemaQuench to deploy the bundled demo schema packages (AdventureWorks, Chinook, Northwind, Sakila). MariaDB binds host port `3317` so it runs beside the MySQL stack on `3306`.
 
-Each platform folder has `run-demo.cmd` (Windows) and `run-demo.sh` (Linux/macOS) that build SchemaQuench from your local source and stand the stack up correctly:
+Each platform folder has `run-demo.cmd` (Windows) and `run-demo.sh` (Linux/macOS) that stand the stack up correctly. By default they run the published SchemaQuench image; pass `--from-source` to build SchemaQuench from your local source and run the demos on that:
 
 ```
 # Windows
-cd Demos\SqlServer    & run-demo.cmd
-cd Demos\PostgreSQL   & run-demo.cmd
-cd Demos\MySQL        & run-demo.cmd
-cd Demos\MariaDB      & run-demo.cmd
+cd Demos\SqlServer    & run-demo.cmd --from-source
+cd Demos\PostgreSQL   & run-demo.cmd --from-source
+cd Demos\MySQL        & run-demo.cmd --from-source
+cd Demos\MariaDB      & run-demo.cmd --from-source
 
 # Linux / macOS
-cd Demos/SqlServer    && ./run-demo.sh
-cd Demos/PostgreSQL   && ./run-demo.sh
-cd Demos/MySQL        && ./run-demo.sh
-cd Demos/MariaDB      && ./run-demo.sh
+cd Demos/SqlServer    && ./run-demo.sh --from-source
+cd Demos/PostgreSQL   && ./run-demo.sh --from-source
+cd Demos/MySQL        && ./run-demo.sh --from-source
+cd Demos/MariaDB      && ./run-demo.sh --from-source
 ```
 
 Default credentials are in each stack's `.env` file. See [`Demos/README.md`](Demos/README.md) for additional details.

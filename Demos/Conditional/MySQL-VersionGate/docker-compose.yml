@@ -47,9 +47,7 @@ services:
       - "3309:3306"
 
   quench-mysql8:
-    build:
-      context: ../../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=mysql8
       - SmithySettings_Target__User=${MYSQL_USER}
@@ -62,9 +60,7 @@ services:
         condition: service_healthy
 
   quench-mysql9:
-    build:
-      context: ../../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=mysql9
       - SmithySettings_Target__User=${MYSQL_USER}

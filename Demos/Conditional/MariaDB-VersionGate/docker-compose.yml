@@ -49,9 +49,7 @@ services:
       - "3311:3306"
 
   quench-mariadb10:
-    build:
-      context: ../../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=mariadb10
       - SmithySettings_Target__User=${MARIADB_USER}
@@ -64,9 +62,7 @@ services:
         condition: service_healthy
 
   quench-mariadb11:
-    build:
-      context: ../../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=mariadb11
       - SmithySettings_Target__User=${MARIADB_USER}

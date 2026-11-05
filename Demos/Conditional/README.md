@@ -28,7 +28,7 @@ cd PostgreSQL-VersionGate      # or MySQL-VersionGate / SqlServer-RollingRollout
 run-demo.cmd                   # Windows
 ```
 
-Each launcher publishes the SchemaQuench binary (via the existing `build-schemaquench.sh` / `.cmd` at the repo root), brings up the engines under `docker compose`, runs the deploy, and emits a verification block showing what landed where.
+Each launcher pulls the published SchemaQuench image, brings up the engines under `docker compose`, runs the deploy, and emits a verification block showing what landed where. Pass `--from-source` to run a build of this checkout instead (needs the .NET SDK); see [`../README.md`](../README.md#quick-start).
 
 Cleanup is `docker compose down --volumes` from inside the demo directory.
 

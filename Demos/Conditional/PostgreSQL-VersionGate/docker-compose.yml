@@ -38,9 +38,7 @@ services:
       - "5418:5432"
 
   quench-pg15:
-    build:
-      context: ../../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=pg15
       - SmithySettings_Target__User=${POSTGRES_USER}
@@ -53,9 +51,7 @@ services:
         condition: service_healthy
 
   quench-pg18:
-    build:
-      context: ../../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=pg18
       - SmithySettings_Target__User=${POSTGRES_USER}

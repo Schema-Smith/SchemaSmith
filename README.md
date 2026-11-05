@@ -174,7 +174,7 @@ cd Demos/MySQL && ./run-demo.sh
 cd Demos/MariaDB && ./run-demo.sh
 ```
 
-Each script builds SchemaQuench from source (if not already built), starts a containerized database server, and deploys the AdventureWorks, Chinook, Northwind, and Sakila demo products. Use `run-demo.cmd` on Windows. Connection details for each platform live in the `.env` file inside the platform folder.
+Each script pulls the published SchemaQuench image, starts a containerized database server, and deploys the AdventureWorks, Chinook, Northwind, and Sakila demo products. Docker is the only prerequisite. Use `run-demo.cmd` on Windows, and add `--from-source` to run a build of your own checkout instead. Connection details for each platform live in the `.env` file inside the platform folder.
 
 ## Running Tests
 

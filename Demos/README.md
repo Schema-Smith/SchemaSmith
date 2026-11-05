@@ -64,7 +64,10 @@ cd MySQL && ./run-demo.sh
 cd MariaDB && ./run-demo.sh
 ```
 
-The launcher publishes SchemaQuench from source (via `build-schemaquench.cmd` / `.sh` — requires the .NET SDK on the host), then runs `docker compose up --build -d` to start the database server and deploy the demo schemas.
+The launcher pulls the SchemaQuench image published with every release (`ghcr.io/schema-smith/schemaquench:2`), then runs `docker compose up --build -d` to start the database server and deploy the demo schemas. Docker is all you need.
+
+- **Pin a release:** set `SCHEMAQUENCH_IMAGE` first, e.g. `SCHEMAQUENCH_IMAGE=ghcr.io/schema-smith/schemaquench:2.8.0 ./run-demo.sh`.
+- **Run your own changes:** `./run-demo.sh --from-source` (or `run-demo.cmd --from-source`) publishes SchemaQuench from this checkout and runs the demo on that build. This needs the .NET SDK.
 
 Each platform folder contains:
 - Demo schema packages (product folders)

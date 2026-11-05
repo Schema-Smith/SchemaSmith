@@ -2,9 +2,7 @@ name: schemasmith-mysql-demo
 
 services:
   quench-adventureworks:
-    build:
-      context: ../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MYSQL_USER}
@@ -17,9 +15,7 @@ services:
         condition: service_healthy
 
   quench-chinook:
-    build:
-      context: ../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MYSQL_USER}
@@ -32,9 +28,7 @@ services:
         condition: service_completed_successfully
 
   quench-northwind:
-    build:
-      context: ../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MYSQL_USER}
@@ -47,9 +41,7 @@ services:
         condition: service_completed_successfully
 
   quench-sakila:
-    build:
-      context: ../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MYSQL_USER}

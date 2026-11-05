@@ -1,6 +1,0 @@
-{
-  "$schema": "../../.json-schemas/templates.sqlserver.schema",
-  "Name": "Client",
-  "DatabaseIdentificationScript": "SELECT [Name] FROM master.sys.databases WHERE [Name] LIKE '{{ClientDb}}%'",
-  "VersionStampScript": ""
-}
