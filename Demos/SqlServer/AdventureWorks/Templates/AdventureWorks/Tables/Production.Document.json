@@ -322,7 +322,7 @@
     "KeyIndex": "[PK_Document_DocumentNode]",
     "ChangeTracking": "AUTO",
     "StopList": "SYSTEM",
-    "Columns": "[Document] TYPE COLUMN [FileExtension],[DocumentSummary]",
+    "Columns": "[Document] TYPE COLUMN [FileExtension] LANGUAGE 1033,[DocumentSummary]",
     "ShouldApplyExpression": "SERVERPROPERTY('IsFullTextInstalled') = 1",
     "VariantName": "FullTextInstalled"
   },

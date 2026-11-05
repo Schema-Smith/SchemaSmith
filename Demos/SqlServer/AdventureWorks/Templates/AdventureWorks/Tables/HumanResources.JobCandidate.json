@@ -124,7 +124,7 @@
     "KeyIndex": "[PK_JobCandidate_JobCandidateID]",
     "ChangeTracking": "AUTO",
     "StopList": "SYSTEM",
-    "Columns": "[Resume]",
+    "Columns": "[Resume] LANGUAGE 1033",
     "ShouldApplyExpression": "SERVERPROPERTY('IsFullTextInstalled') = 1",
     "VariantName": "FullTextInstalled"
   },

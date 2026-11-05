@@ -30,18 +30,6 @@
       "ObjectType": "Functions"
     },
     {
-      "FolderPath": "Functions-Modern",
-      "QuenchSlot": "Objects",
-      "ObjectType": "Functions",
-      "ShouldApplyExpression": "{{ServerMajorVersion}} >= 14 AND {{CompatibilityLevel}} >= 130"
-    },
-    {
-      "FolderPath": "Functions-Legacy",
-      "QuenchSlot": "Objects",
-      "ObjectType": "Functions",
-      "ShouldApplyExpression": "{{ServerMajorVersion}} < 14 OR {{CompatibilityLevel}} < 130"
-    },
-    {
       "FolderPath": "Views",
       "QuenchSlot": "Objects",
       "ObjectType": "Views"
