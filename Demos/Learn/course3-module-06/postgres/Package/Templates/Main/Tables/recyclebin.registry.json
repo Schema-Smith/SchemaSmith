@@ -1,0 +1,46 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Name": "registry",
+  "Schema": "recyclebin",
+  "PreventDrop": true,
+  "Columns": [
+    {
+      "Name": "original_schema",
+      "DataType": "varchar(128)"
+    },
+    {
+      "Name": "original_name",
+      "DataType": "varchar(128)"
+    },
+    {
+      "Name": "recycled_name",
+      "DataType": "varchar(128)"
+    },
+    {
+      "Name": "recycled_date",
+      "DataType": "timestamp"
+    },
+    {
+      "Name": "retention_days",
+      "DataType": "int4",
+      "Default": "90"
+    },
+    {
+      "Name": "expiration_date",
+      "DataType": "timestamp"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_recyclebin_registry",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "recycled_name"
+    },
+    {
+      "Name": "ix_recyclebin_registry_expiration_date",
+      "IndexColumns": "expiration_date"
+    }
+  ],
+  "ForeignKeys": []
+}

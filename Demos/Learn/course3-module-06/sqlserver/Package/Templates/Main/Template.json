@@ -1,0 +1,11 @@
+{
+  "$schema": "../../.json-schemas/templates.sqlserver.schema",
+  "Name": "Main",
+  "DatabaseIdentificationScript": "SELECT name FROM sys.databases WHERE name = '{{TargetDb}}'",
+  "ScriptFolders": [
+    { "FolderPath": "Schemas", "QuenchSlot": "Objects", "ObjectType": "Schemas" },
+    { "FolderPath": "Procedures", "QuenchSlot": "Objects", "ObjectType": "Procedures" },
+    { "FolderPath": "Procedures-Modern", "QuenchSlot": "Objects", "ObjectType": "Procedures", "ShouldApplyExpression": "{{ServerMajorVersion}} >= 14 AND {{CompatibilityLevel}} >= 130" },
+    { "FolderPath": "Procedures-Legacy", "QuenchSlot": "Objects", "ObjectType": "Procedures", "ShouldApplyExpression": "{{ServerMajorVersion}} < 14 OR {{CompatibilityLevel}} < 130" }
+  ]
+}

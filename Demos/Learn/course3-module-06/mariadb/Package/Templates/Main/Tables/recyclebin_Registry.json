@@ -1,0 +1,56 @@
+{
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
+  "Name": "`recyclebin_Registry`",
+  "PreventDrop": true,
+  "Columns": [
+    {
+      "Name": "`OriginalSchema`",
+      "DataType": "varchar(64)",
+      "CharacterSet": "utf8mb4"
+    },
+    {
+      "Name": "`OriginalName`",
+      "DataType": "varchar(64)",
+      "CharacterSet": "utf8mb4"
+    },
+    {
+      "Name": "`RecycledName`",
+      "DataType": "varchar(128)",
+      "CharacterSet": "utf8mb4"
+    },
+    {
+      "Name": "`RecycledDate`",
+      "DataType": "datetime"
+    },
+    {
+      "Name": "`RetentionDays`",
+      "DataType": "int",
+      "Default": "90"
+    },
+    {
+      "Name": "`ExpirationDate`",
+      "DataType": "datetime"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "UniqueConstraint": true,
+      "IndexColumns": "`RecycledName`",
+      "IndexType": "BTREE"
+    },
+    {
+      "Name": "`IX_recyclebin_Registry_ExpirationDate`",
+      "IndexColumns": "`ExpirationDate`",
+      "IndexType": "BTREE"
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "FullTextIndexes": [],
+  "Engine": "InnoDB",
+  "Collation": "utf8mb4_uca1400_ai_ci",
+  "CharacterSet": "utf8mb4"
+}

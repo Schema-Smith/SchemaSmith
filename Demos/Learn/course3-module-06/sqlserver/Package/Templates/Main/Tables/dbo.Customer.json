@@ -1,0 +1,15 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "dbo",
+  "Name": "Customer",
+  "Columns": [
+    { "Name": "CustomerId", "DataType": "INT IDENTITY(1,1)" },
+    { "Name": "Name", "DataType": "NVARCHAR(100)" },
+    { "Name": "Email", "DataType": "NVARCHAR(200)" },
+    { "Name": "LoyaltyTier", "DataType": "NVARCHAR(20)", "Nullable": true, "Default": "N'Standard'" }
+  ],
+  "Indexes": [
+    { "Name": "PK_Customer", "PrimaryKey": true, "Clustered": true, "IndexColumns": "CustomerId" },
+    { "Name": "IX_Customer_Email", "Unique": false, "IndexColumns": "Email" }
+  ]
+}

@@ -1,0 +1,110 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "[recyclebin]",
+  "Name": "[Registry]",
+  "CompressionType": "NONE",
+  "PreventDrop": true,
+  "Columns": [
+    {
+      "Name": "[Id]",
+      "DataType": "INT IDENTITY(1, 1)",
+      "Nullable": false,
+      "Persisted": false,
+      "Sparse": false,
+      "Collation": "",
+      "DataMaskFunction": ""
+    },
+    {
+      "Name": "[OriginalSchema]",
+      "DataType": "SYSNAME",
+      "Nullable": false,
+      "Persisted": false,
+      "Sparse": false,
+      "Collation": "",
+      "DataMaskFunction": ""
+    },
+    {
+      "Name": "[OriginalName]",
+      "DataType": "SYSNAME",
+      "Nullable": false,
+      "Persisted": false,
+      "Sparse": false,
+      "Collation": "",
+      "DataMaskFunction": ""
+    },
+    {
+      "Name": "[RecycledName]",
+      "DataType": "SYSNAME",
+      "Nullable": false,
+      "Persisted": false,
+      "Sparse": false,
+      "Collation": "",
+      "DataMaskFunction": ""
+    },
+    {
+      "Name": "[RecycledDate]",
+      "DataType": "DATETIME2",
+      "Nullable": false,
+      "Persisted": false,
+      "Sparse": false,
+      "Collation": "",
+      "DataMaskFunction": ""
+    },
+    {
+      "Name": "[RetentionDays]",
+      "DataType": "INT",
+      "Nullable": false,
+      "Default": "90",
+      "Persisted": false,
+      "Sparse": false,
+      "Collation": "",
+      "DataMaskFunction": ""
+    },
+    {
+      "Name": "[ExpirationDate]",
+      "DataType": "DATETIME2",
+      "Nullable": false,
+      "ComputedExpression": "dateadd(day,[RetentionDays],[RecycledDate])",
+      "Persisted": true,
+      "Sparse": false,
+      "Collation": "",
+      "DataMaskFunction": ""
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_recyclebin_Registry]",
+      "CompressionType": "NONE",
+      "PrimaryKey": true,
+      "Unique": true,
+      "UniqueConstraint": false,
+      "Clustered": true,
+      "ColumnStore": false,
+      "FillFactor": 0,
+      "IndexColumns": "[Id]"
+    },
+    {
+      "Name": "[UX_recyclebin_Registry_RecycledName]",
+      "CompressionType": "NONE",
+      "PrimaryKey": false,
+      "Unique": true,
+      "UniqueConstraint": false,
+      "Clustered": false,
+      "ColumnStore": false,
+      "FillFactor": 0,
+      "IndexColumns": "[RecycledName]"
+    },
+    {
+      "Name": "[IX_recyclebin_Registry_ExpirationDate]",
+      "CompressionType": "NONE",
+      "PrimaryKey": false,
+      "Unique": false,
+      "UniqueConstraint": false,
+      "Clustered": false,
+      "ColumnStore": false,
+      "FillFactor": 0,
+      "IndexColumns": "[ExpirationDate]"
+    }
+  ],
+  "ForeignKeys": []
+}

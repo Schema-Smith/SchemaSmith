@@ -1,0 +1,11 @@
+{
+  "Target": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": { "TrustServerCertificate": "True" }
+  },
+  "WhatIfONLY": false,
+  "SchemaPackagePath": "./Package",
+  "KindleTheForge": true
+}

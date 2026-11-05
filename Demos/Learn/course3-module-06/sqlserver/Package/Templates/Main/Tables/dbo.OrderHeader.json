@@ -1,0 +1,23 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "dbo",
+  "Name": "OrderHeader",
+  "Columns": [
+    { "Name": "OrderId", "DataType": "INT IDENTITY(1,1)" },
+    { "Name": "CustomerId", "DataType": "INT" },
+    { "Name": "OrderDate", "DataType": "DATETIME2" },
+    { "Name": "TotalAmount", "DataType": "DECIMAL(10,2)" }
+  ],
+  "Indexes": [
+    { "Name": "PK_OrderHeader", "PrimaryKey": true, "Clustered": true, "IndexColumns": "OrderId" }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "FK_OrderHeader_Customer",
+      "Columns": "CustomerId",
+      "RelatedTable": "Customer",
+      "RelatedColumns": "CustomerId",
+      "RelatedTableSchema": "dbo"
+    }
+  ]
+}

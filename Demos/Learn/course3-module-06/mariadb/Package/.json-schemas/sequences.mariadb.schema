@@ -1,0 +1,54 @@
+{
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time."
+    },
+    "Name": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "DataType": {
+      "type": "string",
+      "pattern": "^(?:(tinyint|smallint|mediumint|int|integer|bigint)( unsigned)?)$",
+      "description": "The sequence's integer type (MariaDB 11.5+): tinyint, smallint, mediumint, int or bigint, optionally unsigned. Defaults to bigint. Below 11.5 every sequence is a signed bigint and another type is a downgrade."
+    },
+    "Start": {
+      "type": "integer",
+      "description": "The value the sequence starts from when it is created. NOT the current value — that is data, and SchemaSmith never resets it. Left out, MariaDB starts at MinValue (MaxValue for a descending sequence)."
+    },
+    "Increment": {
+      "type": "integer",
+      "description": "Step between values. Negative for a descending sequence."
+    },
+    "MinValue": {
+      "type": "integer"
+    },
+    "MaxValue": {
+      "type": "integer"
+    },
+    "Cache": {
+      "type": "integer",
+      "minimum": 0.0,
+      "description": "How many values are pre-allocated per session. Defaults to 1000, matching MariaDB; 0 turns caching off."
+    },
+    "Cycle": {
+      "type": "boolean",
+      "description": "When true the sequence wraps to MinValue after reaching MaxValue instead of erroring."
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deploy log messages when the variant applies."
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name"
+  ]
+}
