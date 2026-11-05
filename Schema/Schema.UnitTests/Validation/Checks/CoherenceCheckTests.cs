@@ -462,6 +462,40 @@ public class CoherenceCheckTests
         return table;
     }
 
+    // A secondary XML index is built on its primary; one naming a primary the table does not declare validated clean and
+    // failed the deploy at CREATE XML INDEX.
+    [TestCase("PXML_Doc", true, false)]
+    [TestCase("pxml_doc", true, false)]
+    [TestCase("[PXML_Doc]", true, false)]
+    [TestCase("PXML_Missing", true, true)]
+    [TestCase("SXI_Doc", true, true)]
+    [TestCase(null, true, true)]
+    [TestCase("PXML_Doc", false, true)]
+    public void ASecondaryXmlIndexMustNameADeclaredPrimary(string primaryIndex, bool primaryIsPrimary, bool isError)
+    {
+        var table = Documents(true);
+        table.XmlIndexes.Add(new XmlIndex { Name = "PXML_Doc", Column = "Doc", IsPrimary = primaryIsPrimary, PrimaryIndex = primaryIsPrimary ? null : "PXML_Other", SecondaryIndexType = primaryIsPrimary ? null : "PATH" });
+        table.XmlIndexes.Add(new XmlIndex { Name = "SXI_Doc", Column = "Doc", Selective = new SelectiveXmlIndex { Paths = [new SelectiveXmlPath { Name = "p", Path = "/a" }] } });
+        table.XmlIndexes.Add(new XmlIndex { Name = "IXML_Doc_Value", Column = "Doc", PrimaryIndex = primaryIndex, SecondaryIndexType = "VALUE" });
+        var findings = RunOn(table).Where(f => f.Code == "SS-XML-002" && f.Location.Contains("IXML_Doc_Value")).ToArray();
+        Assert.That(findings.Select(f => f.Severity), Is.EqualTo(isError ? new[] { Severity.Error } : []));
+    }
+
+    // A secondary selective XML index names its selective index and one of that index's paths.
+    [TestCase("SXI_Doc", "p", false)]
+    [TestCase("SXI_Doc", "q", true)]
+    [TestCase("PXML_Doc", "p", true)]
+    [TestCase("SXI_Missing", "p", true)]
+    public void ASecondarySelectiveXmlIndexMustNameADeclaredSelectiveIndexAndPath(string primaryIndex, string forPath, bool isError)
+    {
+        var table = Documents(true);
+        table.XmlIndexes.Add(new XmlIndex { Name = "PXML_Doc", Column = "Doc", IsPrimary = true });
+        table.XmlIndexes.Add(new XmlIndex { Name = "SXI_Doc", Column = "Doc", Selective = new SelectiveXmlIndex { Paths = [new SelectiveXmlPath { Name = "p", Path = "/a" }] } });
+        table.XmlIndexes.Add(new XmlIndex { Name = "SXI_Doc_P", Column = "Doc", PrimaryIndex = primaryIndex, ForPath = forPath });
+        var findings = RunOn(table).Where(f => f.Code == "SS-XML-002" && f.Location.Contains("SXI_Doc_P")).ToArray();
+        Assert.That(findings.Select(f => f.Severity), Is.EqualTo(isError ? new[] { Severity.Error } : []));
+    }
+
     // A selective XML index with no paths validated clean, and the deploy reported success with no index created.
     [Test]
     public void ASelectiveXmlIndexWithNoPaths_IsAnError()

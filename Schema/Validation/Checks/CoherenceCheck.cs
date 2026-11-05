@@ -58,6 +58,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string JsonIndexPathCode = "SS-JSX-003";
     private const string JsonIndexKeyCode = "SS-JSX-004";
     private const string SelectiveXmlNoPathsCode = "SS-XML-001";
+    private const string XmlSecondaryWithoutPrimaryCode = "SS-XML-002";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RemovedFunctionCode = "SS-COL-004";
@@ -154,6 +155,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         [JsonIndexSameColumnCode] = ErrorLevel,
         [JsonIndexPathCode] = ErrorLevel,
         [SelectiveXmlNoPathsCode] = ErrorLevel,
+        [XmlSecondaryWithoutPrimaryCode] = ErrorLevel,
         [JsonIndexKeyCode] = ErrorLevel,
         [BackfillWithoutDefaultCode] = WarningLevel,
         [CharsetWithoutCollationCode] = WarningLevel,
@@ -279,6 +281,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckSpatialIndexes(table, location, columnsAreOwnedElsewhere));
             findings.AddRange(CheckJsonIndexes(table, location, columnsAreOwnedElsewhere));
             findings.AddRange(CheckSelectiveXmlIndexes(table, location));
+            findings.AddRange(CheckXmlSecondaryIndexes(table, location));
             findings.AddRange(CheckEdgeConstraints(table, location, tablesByKey));
             findings.AddRange(CheckCharsetWithoutCollation(table, location));
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
@@ -612,6 +615,38 @@ public sealed class CoherenceCheck : ISchemaCheck
         foreach (var index in sqlTable.XmlIndexes.Where(x => x.Selective != null && (x.Selective.Paths == null || x.Selective.Paths.Count == 0)))
             yield return new Finding(Severity.Error, SelectiveXmlNoPathsCode, Category, $"{tableLocation} / XML index '{index.Name}'",
                 $"Selective XML index '{index.Name}' declares no paths, so there is nothing to index and the deploy would create nothing. Declare at least one path.");
+    }
+
+    /// <summary>
+    /// A secondary XML index is built on a primary XML index of its table, and a secondary selective one on a path of a
+    /// selective XML index. Naming one the table does not declare fails the deploy at CREATE XML INDEX.
+    /// </summary>
+    private static IEnumerable<Finding> CheckXmlSecondaryIndexes(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable sqlTable) yield break;
+        var byName = sqlTable.XmlIndexes.Where(x => !string.IsNullOrWhiteSpace(x.Name))
+            .ToLookup(x => NormalizeIdentifier(x.Name), StringComparer.OrdinalIgnoreCase);
+        foreach (var index in sqlTable.XmlIndexes.Where(x => !x.IsPrimary && x.Selective == null))
+        {
+            var named = byName[NormalizeIdentifier(index.PrimaryIndex)].ToList();
+            var location = $"{tableLocation} / XML index '{index.Name}'";
+            if (!string.IsNullOrWhiteSpace(index.ForPath))
+            {
+                var selective = named.Where(x => x.Selective != null).ToList();
+                if (selective.Count == 0)
+                    yield return new Finding(Severity.Error, XmlSecondaryWithoutPrimaryCode, Category, location,
+                        $"Secondary selective XML index '{index.Name}' names PrimaryIndex '{index.PrimaryIndex}', which is not a selective XML " +
+                        $"index declared on table '{table.Name}', so the deploy cannot create it. Name one of the table's selective XML indexes.");
+                else if (!selective.Any(x => x.Selective.Paths?.Any(p => string.Equals(p.Name, index.ForPath, StringComparison.OrdinalIgnoreCase)) == true))
+                    yield return new Finding(Severity.Error, XmlSecondaryWithoutPrimaryCode, Category, location,
+                        $"Secondary selective XML index '{index.Name}' names ForPath '{index.ForPath}', which is not a path of selective XML " +
+                        $"index '{index.PrimaryIndex}', so the deploy cannot create it. Name one of that index's Paths.");
+            }
+            else if (!named.Any(x => x.IsPrimary && x.Selective == null))
+                yield return new Finding(Severity.Error, XmlSecondaryWithoutPrimaryCode, Category, location,
+                    $"Secondary XML index '{index.Name}' names PrimaryIndex '{index.PrimaryIndex}', which is not a primary XML index declared " +
+                    $"on table '{table.Name}', so the deploy cannot create it. Name the table's primary XML index, or set IsPrimary.");
+        }
     }
 
     private static IEnumerable<Finding> CheckJsonIndexes(Table table, string tableLocation, bool columnsAreOwnedElsewhere)
