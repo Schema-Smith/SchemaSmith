@@ -131,6 +131,10 @@ SchemaSmith adds these tokens automatically. You don't define them -- they appea
 | `{{TableSchema}}` | Full serialized JSON of every table in the current template, with single quotes escaped (`''`) for safe embedding in SQL string literals | Template scripts |
 | `{{IndexedViewSchema}}` | Full serialized JSON of every indexed view in the current template (SQL Server) | Template scripts |
 | `{{MaterializedViewSchema}}` | Full serialized JSON of every materialized view in the current template (PostgreSQL) | Template scripts |
+| `{{EventSchema}}` | Full serialized JSON of every **declared** scheduled event in the current template -- the `.json` files in `Events/` (MySQL, MariaDB). Scripted `.sql` events are not in it. `[]` on a template with none, which includes every SQL Server and PostgreSQL template | Template scripts |
+| `{{DomainTypeSchema}}` | Full serialized JSON of every declared domain type -- the `.json` files in `Domain Types/` (PostgreSQL). `[]` elsewhere | Template scripts |
+| `{{EnumTypeSchema}}` | Full serialized JSON of every declared enum type -- the `.json` files in `Enum Types/` (PostgreSQL). `[]` elsewhere | Template scripts |
+| `{{SequenceSchema}}` | Full serialized JSON of every declared sequence -- the `.json` files in `Sequences/`: the PostgreSQL sequences on PostgreSQL, the MariaDB sequences on MariaDB. `[]` on SQL Server and MySQL, which load no declared sequences | Template scripts |
 | `{{TableXml}}` | XML twin of `{{TableSchema}}` — the same table model as ingest XML, for shredding with `.nodes()`/`.value()` on a below-compat-130 SQL Server where `OPENJSON` parse-errors. See [Model-payload XML twins](#model-payload-xml-twins) | Template scripts |
 | `{{IndexedViewXml}}` | XML twin of `{{IndexedViewSchema}}` | Template scripts |
 | `{{MaterializedViewXml}}` | XML twin of `{{MaterializedViewSchema}}` | Template scripts |
@@ -292,7 +296,7 @@ Version-adaptive packages need to gate on what the target can actually do — ap
 
 These are two different questions, and confusing them is a real footgun. A modern binary can host a database left at an old compatibility level — a SQL Server 2022 server (`{{ServerMajorVersion}}` = `16`) with a database at compatibility level 100 (`{{CompatibilityLevel}}` = `100`). Compatibility-level-gated **syntax** — `STRING_SPLIT` and `OPENJSON` (compat 130), `TRY_CONVERT` and `STRING_AGG`'s optional `WITHIN GROUP (ORDER BY …)` clause (compat 110) — parse-errors on that database even though the binary is brand new. So:
 
-> ⚠ **`STRING_AGG` itself is *not* compatibility-level gated**, and this list used to imply it was. The function requires **SQL Server 2017** (server major 14) and parses at every compatibility level down to 100 on a server that has it — so it is a `{{ServerMajorVersion}}` gate, not a `{{CompatibilityLevel}}` one. Only its optional `WITHIN GROUP (ORDER BY …)` clause carries a compatibility-level requirement (110). Conflating the two is what allowed a compat-only probe to emit `STRING_AGG` onto a SQL Server 2016 server, which reports compatibility level 130 while having no `STRING_AGG` at all — see [SchemaQuench — the encoding switch](schemaquench.md#version-adaptive-code-generation), corrected for the same reason.
+> **Warning:** `STRING_AGG` itself is *not* compatibility-level gated. The function requires **SQL Server 2017** (server major 14) and parses at every compatibility level down to 100 on a server that has it — so it is a `{{ServerMajorVersion}}` gate, not a `{{CompatibilityLevel}}` one. Only its optional `WITHIN GROUP (ORDER BY …)` clause carries a compatibility-level requirement (110). A compat-only gate lets `STRING_AGG` through to a SQL Server 2016 server, which reports compatibility level 130 while having no `STRING_AGG` at all — see [SchemaQuench — the encoding switch](schemaquench.md#version-adaptive-code-generation).
 
 - **Syntax availability** follows the database's compatibility level → gate on `{{CompatibilityLevel}}`.
 - **Server features** (a new engine capability, a version-only DDL form) follow the binary → gate on `{{ServerMajorVersion}}`.
@@ -608,7 +612,7 @@ When the same token name appears in multiple places, the most specific definitio
 2. Config file and environment variable overrides replace matching product token values. (Steps 2 and 3 are handled together by the .NET configuration layering.)
 3. The automatic `ProductName` token is added.
 4. When each template loads, its `ScriptTokens` are merged on top of the resolved product tokens. Template tokens with matching keys win.
-5. The automatic `TemplateName`, `TableSchema`, `IndexedViewSchema`, and `MaterializedViewSchema` tokens are added.
+5. The automatic template tokens are added, in this order: `TemplateName`, then `TableSchema` and `TableXml`, `MaterializedViewSchema` and `MaterializedViewXml`, `EventSchema`, `DomainTypeSchema`, `EnumTypeSchema`, `SequenceSchema`, `IndexedViewSchema` and `IndexedViewXml`. The model payloads are serialized after the table model's own tokens have been resolved, so they carry resolved values.
 6. Cross-template `*_<TemplateName>` tokens are added once all templates have loaded.
 7. Custom property tokens from `Extensions` are merged in per component when the table model is processed.
 8. Advanced tag values (`<*File*>`, `<*Query*>`, etc.) resolve as described above, then the simple `{{TokenName}}` substitution runs against the final token map.

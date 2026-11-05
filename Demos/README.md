@@ -26,8 +26,6 @@ Demonstrations of `ShouldApplyExpression` (conditional deployment) on real engin
 - [`Conditional/SqlServer-CompatLevelGate`](Conditional/SqlServer-CompatLevelGate) — one SQL Server 2022 instance, two databases at compatibility level 130 and 160, swapping a whole view implementation by folder-level gating. Shows why `SERVERPROPERTY('ProductMajorVersion')` is the **wrong** gate for syntax on SQL Server
 - [`Conditional/SqlServer-RollingRollout`](Conditional/SqlServer-RollingRollout) — SQL Server 2022 × 3 tenant databases, rolling out a nonclustered columnstore index one tenant per maintenance window via a `RolloutControl` table
 
-Three of the five (PostgreSQL, MySQL, Rolling-Rollout) support the *Production Server That Can't Be Upgraded* article (LinkedIn, 2026-06-11); the other two close engine and gating-shape gaps.
-
 These demos use a different docker layout than the products above (engine pairs, or one instance with several databases) and live in `Conditional/` rather than per-platform subdirectories.
 
 ## Quick Start
@@ -74,6 +72,20 @@ Each platform folder contains:
 - A `run-demo.sh` / `run-demo.cmd` launcher
 - A `.env` file with default credentials
 
+### Credentials and ports
+
+Every demo signs in as `TestUser`; the password, the host port, and the engine image are the variables in that platform folder's `.env` (`MSSQL_*`, `PostGreSQL_*`, `MYSQL_*`, `MARIADB_*`). The default host ports are SQL Server `1440`, PostgreSQL `5432`, MySQL `3306`, and MariaDB `3317`, chosen so all four stacks run side by side. Change a value in `.env` before launching to point the demo elsewhere.
+
+### Cleaning up
+
+Each stack is torn down from its own folder:
+
+```bash
+docker compose down -v
+```
+
+`-v` removes any data volume the engine image created along with the containers, so the next `run-demo` starts from an empty server rather than from whatever the last run left behind.
+
 ### Engine version (optional)
 
 Every demo lets you point its container at a different engine version, so you can exercise the demo against the version you actually run in production. Each variable lives in that demo's `.env` and falls back to the default shown:
@@ -109,7 +121,7 @@ All three are tested end-to-end — every demo package, including the AdventureW
 
 ### Run on your own server (no Docker)
 
-Already have a server? Skip Docker and deploy the demo databases straight onto your instance with the `deploy-to-endpoint.ps1` (Windows) / `deploy-to-endpoint.sh` (macOS/Linux) helper in the engine's demo folder — `SqlServer/`, `PostgreSQL/`, `MySQL/`, or `MariaDb/`. It resets and redeploys the same demo set behind a confirmation, and refuses to touch any same-named database it didn't create. Requires the engine's command-line client on your `PATH` (`sqlcmd` / `psql` / `mysql` / `mariadb`). Full walkthrough: [Use your own server](../docs/end-user/guide/use-your-own-server.md).
+Already have a server? Skip Docker and deploy the demo databases straight onto your instance with the `deploy-to-endpoint.ps1` (Windows) / `deploy-to-endpoint.sh` (macOS/Linux) helper in the engine's demo folder — `SqlServer/`, `PostgreSQL/`, `MySQL/`, or `MariaDB/`. It resets and redeploys the same demo set behind a confirmation, and refuses to touch any same-named database it didn't create. Requires the engine's command-line client on your `PATH` (`sqlcmd` / `psql` / `mysql` / `mariadb`). Full walkthrough: [Use your own server](../docs/end-user/guide/use-your-own-server.md).
 
 ## Sources & Licensing
 

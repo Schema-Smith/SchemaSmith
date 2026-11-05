@@ -82,7 +82,7 @@ Each platform has its own idiom for the database identification script:
 
 - **SQL Server:** `SELECT [Name] FROM master.sys.databases WHERE [Name] = '{{MyDb}}'`
 - **PostgreSQL:** `SELECT datname FROM pg_database WHERE datname = '{{MyDb}}'`
-- **MySQL:** `SELECT schema_name FROM information_schema.schemata WHERE schema_name = '{{MyDb}}'`
+- **MySQL and MariaDB:** `SELECT schema_name FROM information_schema.schemata WHERE schema_name = '{{MyDb}}'`
 
 **The hierarchy:**
 
@@ -179,24 +179,11 @@ SchemaQuench follows a clear sequence when quenching a schema package to a datab
 3. **Compute the delta** -- determine what needs to be created, altered, or dropped to make the database match the declaration.
 4. **Apply changes in execution slots** -- run the computed changes in a controlled order.
 
-The execution slots give you precise control over ordering when it matters. SchemaQuench runs each template once per iteration -- where an iteration is one matched database for a regular template, or one matched schema inside a database for a schema template. The slot sequence is the same either way. Within a single iteration, changes execute in this sequence:
-
-1. Programmable objects (schemas, types, functions, views, procedures) -- with dependency retry
-2. New tables and columns created
-3. Before migration scripts
-4. Existing table modifications (column type changes, index updates)
-5. Between-tables-and-keys migration scripts
-6. Missing indexes and constraints
-7. After-tables migration scripts
-8. Triggers, DDL triggers, rules
-9. Table data (sync scripts)
-10. Foreign key constraints
-11. Indexed views (SQL Server) / Materialized views (PostgreSQL)
-12. After migration scripts
+The execution slots give you precise control over ordering when it matters. SchemaQuench runs each template once per iteration -- where an iteration is one matched database for a regular template, or one matched schema inside a database for a schema template. The slot sequence is the same either way. In broad strokes: `Setup` scripts first, then programmable objects, then tables are created and altered, then indexes and constraints, then data, then foreign keys, with migration-script slots (`Before`, `BetweenTablesAndKeys`, `AfterTablesScripts`, `After`) at fixed points in between. The full slot-by-slot table is in [Power Workflows -- Script folder execution order](09-power-workflows.md#script-folder-execution-order); the engine's step-by-step sequence is [Database Quench Sequence](../reference/schemaquench.md#database-quench-sequence) in the reference.
 
 Most of the time you don't think about slots -- tables and objects just deploy correctly. That's by design. The migration script slots exist for cases where you need to run something at a specific point in the sequence, like populating data before a NOT NULL constraint takes effect, or applying a data fixup after indexes exist. The tool handles the complexity so you can focus on the design.
 
-For the full deployment flow, execution slot details, and configuration options, see [SchemaQuench](../reference/schemaquench.md).
+For the full deployment flow and configuration options, see [SchemaQuench](../reference/schemaquench.md).
 
 ## JSON table definitions
 

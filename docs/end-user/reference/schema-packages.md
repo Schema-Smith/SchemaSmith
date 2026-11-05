@@ -16,7 +16,7 @@ The `Product.json` file sits at the root of the schema package and is the top-le
 |---|---|---|---|---|
 | `Name` | string | | Yes | Product name. Automatically added as a `{{ProductName}}` script token. Used for migration script tracking and version stamping. |
 | `Platform` | string | | Yes | Target platform. Valid values: `"SqlServer"`, `"PostgreSQL"`, `"MySQL"`, `"MariaDb"`. Determines which platform adapter handles deployment, extraction, and the default folder set. |
-| `ValidationScript` | string | | Yes | SQL expression evaluated before quench begins. Must return a truthy value or the quench aborts. Supports token replacement. |
+| `ValidationScript` | string | | No | Recommended. SQL expression run on the server connection before any deployment work. Must return a truthy value or the quench aborts with `Invalid server for this product`. Omitted or blank, the check is skipped and the run proceeds; `--Validate` does not require it either. Supports token replacement. |
 | `TemplateOrder` | string[] | `[]` | No | Ordered list of template directory names. Templates are quenched in this order. Each entry is the name of a folder directly under `Templates/`, matched without regard to case on every OS -- not a path: an entry with a path separator, `.` or `..`, a leading or trailing space, a trailing dot, or any of `< > : " \| ? *` is refused, as is one that matches no folder, by the deploy and by `--Validate`. |
 | `ScriptTokens` | object | `{}` | No | Key-value pairs for `{{TokenName}}` replacement in scripts and SQL properties. See the [Script Tokens Reference](script-tokens.md). |
 | `BaselineValidationScript` | string | | No | SQL expression evaluated after server validation but before template processing. |
@@ -28,7 +28,15 @@ The `Product.json` file sits at the root of the schema package and is the top-le
 | `BranchNameFile` | string | `"{{repo_path}}/.git/HEAD"` | No | Path to the file SchemaSmith reads to derive the `{{BranchName}}` automatic token. Default points at Git's `HEAD`. Use any VCS that exposes the current branch as a single-line file (Mercurial's `.hg/branch`, Subversion working-copy markers, etc.); the only requirement is that the file exists and contains the branch identifier somewhere on its first line. |
 | `BeforeBranchNameMask` | string | `"ref: refs/heads/"` | No | Prefix to strip from the line read out of `BranchNameFile`. Default matches Git's `ref: refs/heads/<branch>` format. Set to `""` for VCSs whose branch file already contains the bare branch name. |
 | `AfterBranchNameMask` | string | `""` | No | Suffix to strip after the prefix is removed. Default empty. Set when your VCS appends extra text after the branch name. |
-| `Extensions` | any | `null` | No | Reserved. `Product.json` does not currently use `Extensions` for custom properties. |
+| `DropTablesRemovedFromProduct` | bool | `true` | No | Product tier of the [drop cascade](#drop-cascade) for tables SchemaSmith owns that the package no longer declares. See [DropTablesRemovedFromProduct](configuration.md#droptablesremovedfromproduct). |
+| `DropColumnsRemovedFromProduct` | bool | omitted = inherit | No | Product tier of the [drop cascade](#drop-cascade) for columns of declared tables. See [DropColumnsRemovedFromProduct](configuration.md#dropcolumnsremovedfromproduct). |
+| `DropForeignKeysRemovedFromProduct` | bool | omitted = inherit | No | Product tier for foreign keys. See [DropForeignKeysRemovedFromProduct](configuration.md#dropforeignkeysremovedfromproduct). |
+| `DropCheckConstraintsRemovedFromProduct` | bool | omitted = inherit | No | Product tier for check constraints. See [DropCheckConstraintsRemovedFromProduct](configuration.md#dropcheckconstraintsremovedfromproduct). |
+| `DropExcludeConstraintsRemovedFromProduct` | bool | omitted = inherit | No | **PostgreSQL only.** Product tier for exclusion constraints. See [DropExcludeConstraintsRemovedFromProduct](configuration.md#dropexcludeconstraintsremovedfromproduct). |
+| `DropStatisticsRemovedFromProduct` | bool | omitted = inherit | No | **SQL Server and PostgreSQL.** Product tier for statistics. See [DropStatisticsRemovedFromProduct](configuration.md#dropstatisticsremovedfromproduct). |
+| `DropIndexesRemovedFromProduct` | bool | omitted = inherit | No | Product tier for indexes the package once declared. See [DropIndexesRemovedFromProduct](configuration.md#dropindexesremovedfromproduct). |
+| `DropSchemaBoundDependents` | bool | omitted = inherit | No | **SQL Server only.** Product tier of the same [cascade](#drop-cascade), off when no level declares it: a column change a `SCHEMABINDING` module blocks drops the module and lets the after-tables pass recreate it from the package. See [DropSchemaBoundDependents](configuration.md#dropschemabounddependents). |
+| `RebuildPolicy` | object | omitted = inherit | No | Product tier of the rebuild policy: `{ "Mode": "Never" / "Always" / "Threshold", "Threshold": n, "OnOrderMismatch": bool }`. Unlike the drop flags the levels do not combine -- the nearest level that declares a policy (table, template, product, environment) wins whole. See [RebuildPolicy](configuration.md#rebuildpolicy). |
 
 ### Settings intent
 
@@ -43,6 +51,17 @@ The `Product.json` file sits at the root of the schema package and is the top-le
 **DropUnknownIndexes** -- Enforces index alignment, but only when you're ready. Default `false` for good reason: most teams adopting SchemaSmith inherit environments with years of index drift. Turn this on after capturing every needed index in your repository. See [the adoption approach](../guide/11-edge-cases.md#the-adoption-approach) in the guide for the phased rollout pattern.
 
 **MinimumVersion** -- Declares the engine-version floor the product requires. Declare it when the product depends on DDL or behavior that a known-old engine version lacks, or when you want a clean abort rather than a partial deployment against an unsupported server. SchemaQuench detects the version of every resolved target before any deployment work begins. If any target is below the declared floor, the entire run aborts -- no partial deploy, no side effects -- and the diagnostic names each below-floor target with its detected version. SQL Server accepts a major version number (`16`) or a release year (`2022`, `2019`, `2017`, `2016`); PostgreSQL accepts a major number (`15`, `16`, `17`); MySQL accepts `major.minor` (`8.0`, `8.4`) or `major.minor.patch` (`8.0.30`); MariaDB accepts `major.minor` (`10.6`, `11.4`) or `major.minor.patch` (`10.6.4`). A patch is compared patch for patch. A pre-release suffix, such as PostgreSQL `18beta1`, reads as its leading number. An unparseable value is a configuration error that aborts at startup. If the target version cannot be determined, that is also a hard error -- SchemaSmith never deploys blind. See [SchemaQuench -- Engine Version Compatibility](schemaquench.md#engine-version-compatibility) for the full pre-flight behavior and supported engine floors.
+
+### Drop cascade
+
+A drop-by-absence flag is a decision about data loss, so SchemaSmith lets the people closest to each object make it: every `Drop…RemovedFromProduct` flag, `DropUnknownIndexes` and `DropSchemaBoundDependents` can be declared at up to four levels -- the environment's [settings](configuration.md#droptablesremovedfromproduct), `Product.json`, `Template.json` and, for the table-scoped flags, the table file itself. The levels combine the same way for every flag:
+
+- A level that **omits** the flag changes nothing.
+- A level that declares **`false`** turns the drop off for everything beneath it, and no lower level can turn it back on.
+- A level that declares **`true`** turns it on, but only while no level above it has said `false`.
+- The **table-level** override can only turn a drop off for that table; it never re-enables one a higher level disabled.
+
+When no level declares a flag, the `Drop…RemovedFromProduct` family is on and `DropUnknownIndexes` and `DropSchemaBoundDependents` are off. With [`PreventDrop`](configuration.md#preventdrop) set in the environment, every drop-by-absence is forced off whatever the package says. `RebuildPolicy` is the one package setting that does not cascade this way: the nearest level that declares a policy wins whole, and a policy declared on a table does not pick up fields it omits from a higher level.
 
 ### Example (SQL Server, Northwind demo)
 
@@ -106,7 +125,7 @@ Each template directory under `Templates/` must contain a `Template.json` file. 
 | Property | Type | Default | Required | Description |
 |---|---|---|---|---|
 | `Name` | string | | Yes | Template name. Must match the containing directory name. Automatically added as a `{{TemplateName}}` script token. |
-| `DatabaseIdentificationScript` | string | | Yes | SQL query that returns one or more database names. SchemaQuench reads the first column of each row. Supports token replacement. |
+| `DatabaseIdentificationScript` | string | | No | SQL query that returns one or more database names. SchemaQuench reads the first column of each row. Supports token replacement. Omitted or blank, the template names no database: SchemaQuench logs `Template <name> has no DatabaseIdentificationScript, so it names no database to deploy to -- skipped.` and moves on to the next template. (On MySQL and MariaDB a legacy `SchemaIdentificationScript` is migrated into this field first.) |
 | `IdentificationDatabase` | string | | No | Re-targets which database the `DatabaseIdentificationScript` runs against. Empty (the default) uses the platform init database. Point it at a control-plane registry database to enumerate a roster from a registry table. Token-resolvable. See [Template settings intent](#template-settings-intent). |
 | `VersionStampScript` | string | | No | SQL executed per database after that database's quench completes successfully. |
 | `UpdateFillFactor` | bool | `true` | No | When `true`, the table quench updates index fill factors to match the JSON definitions. OR'd with table-level and index-level `UpdateFillFactor` settings. |
@@ -123,6 +142,17 @@ Each template directory under `Templates/` must contain a `Template.json` file. 
 | `AllowParallel` | bool | `true` | No | Schema templates only. When `false`, iterations of this template run serially even when the global thread pool has capacity. See [Schema Templates](#schema-templates). |
 | `ContinueOnSchemaFailure` | bool | `true` | No | Schema templates only. When `false`, the first failing iteration aborts all subsequent iterations for this template. See [Schema Templates](#schema-templates). |
 | `ContinueOnDatabaseFailure` | bool | `true` | No | Regular templates only. When `false`, the first failing database iteration aborts all subsequent database iterations for this template. Ignored on schema templates -- failure isolation there is governed by `ContinueOnSchemaFailure`. See [Schema Templates](#schema-templates) for the schema-iteration analog and [SchemaQuench &mdash; ContinueOnDatabaseFailure](schemaquench.md#continueondatabasefailure) for the runtime behavior detail. |
+| `ServerToQuench` | string | `"Primary"` | No | **SQL Server only.** `Primary`, `Secondary` or `Both`: which of the configured servers this template's databases are enumerated and deployed on when `Target:SecondaryServers` is set. PostgreSQL, MySQL and MariaDB templates always run on the primary. See [Secondary Servers](#secondary-servers). |
+| `DropTablesRemovedFromProduct` | bool | omitted = inherit | No | Template tier of the [drop cascade](#drop-cascade). See [DropTablesRemovedFromProduct](configuration.md#droptablesremovedfromproduct). |
+| `DropColumnsRemovedFromProduct` | bool | omitted = inherit | No | Template tier of the [drop cascade](#drop-cascade). See [DropColumnsRemovedFromProduct](configuration.md#dropcolumnsremovedfromproduct). |
+| `DropForeignKeysRemovedFromProduct` | bool | omitted = inherit | No | Template tier. See [DropForeignKeysRemovedFromProduct](configuration.md#dropforeignkeysremovedfromproduct). |
+| `DropCheckConstraintsRemovedFromProduct` | bool | omitted = inherit | No | Template tier. See [DropCheckConstraintsRemovedFromProduct](configuration.md#dropcheckconstraintsremovedfromproduct). |
+| `DropExcludeConstraintsRemovedFromProduct` | bool | omitted = inherit | No | **PostgreSQL only.** Template tier. See [DropExcludeConstraintsRemovedFromProduct](configuration.md#dropexcludeconstraintsremovedfromproduct). |
+| `DropStatisticsRemovedFromProduct` | bool | omitted = inherit | No | **SQL Server and PostgreSQL.** Template tier. See [DropStatisticsRemovedFromProduct](configuration.md#dropstatisticsremovedfromproduct). |
+| `DropIndexesRemovedFromProduct` | bool | omitted = inherit | No | Template tier. See [DropIndexesRemovedFromProduct](configuration.md#dropindexesremovedfromproduct). |
+| `DropUnknownIndexes` | bool | omitted = inherit | No | Template tier of the [drop cascade](#drop-cascade) for indexes the package never declared. See [DropUnknownIndexes](configuration.md#dropunknownindexes). |
+| `DropSchemaBoundDependents` | bool | omitted = inherit | No | **SQL Server only.** Template tier. See [DropSchemaBoundDependents](configuration.md#dropschemabounddependents). |
+| `RebuildPolicy` | object | omitted = inherit | No | Template tier of the rebuild policy; the nearest declared policy wins whole. See [RebuildPolicy](configuration.md#rebuildpolicy). |
 
 ### Template settings intent
 
@@ -394,13 +424,15 @@ Tables are always loaded from `Tables/` regardless of platform. SQL Server adds 
 | `AfterTablesObjects` | Triggers, DDL triggers, rules, and views that depend on the completed table structure. Dependency retry loop. |
 | `TableData` | Data population scripts (MERGE statements, INSERT/UPDATE seeds). Run after triggers are deployed but before foreign key constraints are applied. Dependency retry loop. |
 | `After` | Final migration scripts. Run after all database objects and data are deployed. Sequential, tracked. |
+| `None` | Parked. The folder is declared and its scripts are loaded and token-resolved, but no execution pass selects this slot, so nothing in it runs and nothing is tracked. A way to keep a folder in the package without deploying it. |
 
-`ProductQuenchSlot` has only two values:
+`ProductQuenchSlot` has three values:
 
 | Slot | Behavior |
 |---|---|
 | `Before` | Product-level scripts that run before any template processing begins. Sequential, untracked (run every deployment). |
 | `After` | Product-level scripts that run after all templates complete. Sequential, untracked. |
+| `None` | Parked, as for the template slot: loaded, never run. |
 
 ### Execution behaviors
 
@@ -442,6 +474,8 @@ Then declare `ServerToQuench` on your product-level folders:
 ```
 
 `ServerToQuench` accepts `Primary`, `Secondary`, or `Both`. The default is `Primary`. Scripts in folders with `Both` (or scripts marked for the active server type) execute on every server in the list, in parallel. The CLI logs the per-server progress so you can see exactly what landed where. With no `SecondaryServers` configured, `Primary` and `Both` folders run on the primary and a `Secondary` folder runs nowhere: the log says it was skipped and why.
+
+A SQL Server `Template.json` takes the same `ServerToQuench` key at the template level, choosing the servers its `DatabaseIdentificationScript` is run on and its databases deployed to: `Primary` (the default), `Secondary`, or `Both`. PostgreSQL, MySQL and MariaDB templates ignore it and always run on the primary.
 
 > **Multi-platform note:** PostgreSQL, MySQL, and MariaDB deployments use a single connection only -- the secondary-server feature is SQL Server-specific because Availability Groups are a SQL Server concept.
 
@@ -517,11 +551,42 @@ Every table definition file declares exactly one table. The shared properties be
 | `CheckConstraints` | array | `[]` | No | Table-level check constraint definitions. See [Check Constraints](#check-constraints). |
 | `ShouldApplyExpression` | string | | No | SQL expression evaluated at quench time. If it returns false (or `0`), the entire table is skipped on this database. Tokens are resolved before evaluation. See [Conditional Application](#conditional-application). |
 | `VariantName` | string | | No | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
-| `OldName` | string | `""` | No | Previous table name. When set, the table is renamed during quench. Clear after the rename has been deployed everywhere. |
+| `OldName` | string | | No | Previous table name. When set and a table of that name exists where the declared one does not, it is renamed before anything else is changed. Clear after the rename has been deployed everywhere. See [Renames with OldName](#renames-with-oldname). |
 | `DataDelivery` | object | `null` | No | Declarative data delivery configuration for this table. See [DataDelivery](#datadelivery). |
+| `DropColumnsRemovedFromProduct` | bool | omitted = inherit | No | Table tier of the [drop cascade](#drop-cascade): `false` keeps this table's undeclared columns whatever the template, product and environment say; `true` cannot re-enable a drop a higher level turned off. An authored choice no catalog records, so SchemaTongs carries it forward from the existing file on re-extraction. See [DropColumnsRemovedFromProduct](configuration.md#dropcolumnsremovedfromproduct). |
+| `DropForeignKeysRemovedFromProduct` | bool | omitted = inherit | No | Table tier, as above. See [DropForeignKeysRemovedFromProduct](configuration.md#dropforeignkeysremovedfromproduct). |
+| `DropCheckConstraintsRemovedFromProduct` | bool | omitted = inherit | No | Table tier, as above. See [DropCheckConstraintsRemovedFromProduct](configuration.md#dropcheckconstraintsremovedfromproduct). |
+| `DropExcludeConstraintsRemovedFromProduct` | bool | omitted = inherit | No | **PostgreSQL only.** Table tier, as above. See [DropExcludeConstraintsRemovedFromProduct](configuration.md#dropexcludeconstraintsremovedfromproduct). |
+| `DropStatisticsRemovedFromProduct` | bool | omitted = inherit | No | **SQL Server and PostgreSQL.** Table tier, as above. See [DropStatisticsRemovedFromProduct](configuration.md#dropstatisticsremovedfromproduct). |
+| `DropIndexesRemovedFromProduct` | bool | omitted = inherit | No | Table tier, as above. See [DropIndexesRemovedFromProduct](configuration.md#dropindexesremovedfromproduct). |
+| `PreventDrop` | bool | `false` | No | Protects this table from drop-by-absence, and the protection is sticky: it is recorded in SchemaSmith's ownership tracking, so a protected table later removed from the package is skipped rather than dropped. Set it `false` and deploy while the table is still in the package to clear the protection before an intended removal. See [PreventDrop](configuration.md#preventdrop). |
+| `RebuildPolicy` | object | omitted = inherit | No | Overrides the template, product and environment policy for this table; the nearest declared policy wins whole, so a policy here does not pick up fields it omits from a higher level. Carried forward from the existing file on re-extraction. See [RebuildPolicy](configuration.md#rebuildpolicy). |
+| `OnlineApply` | string | omitted = inherit | No | `Off`, `Prefer` or `Require` (any casing), overriding the environment's `OnlineApply` for this table: `Off` runs the plain statements, `Prefer` uses the engine's online or instant form where the version and edition allow it and the plain form otherwise, `Require` uses the online form or refuses the deploy, naming the statement. Carried forward from the existing file on re-extraction. See [OnlineApply](configuration.md#onlineapply). |
 | `Extensions` | object | `null` | No | Open metadata bag. See [Custom Properties](custom-properties.md). |
 
 The `ShouldApplyExpression` field appears on **tables, columns, indexes, foreign keys, check constraints, indexed views, materialized views, data deliveries**, and several platform-specific components. Wherever it appears, it works the same way: the engine resolves tokens, runs the expression against the target database, and skips the component if the result is falsy.
+
+### Renames with OldName
+
+A rename is the one change a diff cannot infer: a table or column that disappears under one name and appears under another looks exactly like a drop and an add. `OldName` is how you tell SchemaSmith it is the same object. Set it on the table (`"OldName": "[Customer]"`) or on the column, deploy everywhere, then take it out.
+
+**What runs.** The rename is the engine's own statement:
+
+| Engine | Table | Column |
+|---|---|---|
+| SQL Server | `EXEC sp_rename 'schema.old', 'new'` | `EXEC sp_rename 'schema.table.old', 'new', 'COLUMN'` |
+| PostgreSQL | `ALTER TABLE schema.old RENAME TO new` | `ALTER TABLE schema.table RENAME COLUMN old TO new` |
+| MySQL, MariaDB | `RENAME TABLE old TO new`, every table rename in the deploy folded into one statement | `ALTER TABLE t RENAME COLUMN old TO new` on MySQL 8.0 and MariaDB 10.5.2 and later. Below that, `CHANGE COLUMN old new <current definition>`, which carries the column's current type, character set, nullability, generation and auto-increment; its default, `INVISIBLE` and `ON UPDATE` are put back under the new name by the same deploy's column pass |
+
+**When it runs.** Renames are the first thing the table pass does after the ownership check: before new tables are created, before columns are added, altered or dropped, and before any `Drop…RemovedFromProduct` pass looks at the table. A renamed table or column is therefore never seen as "removed" -- by the time drop-by-absence runs, it already carries its new name -- and the ownership record follows the table, so it stays the product's under its new name. `--WhatIf` prints the rename statements and runs none of them.
+
+**When both names exist.** A rename fires only when the old name exists and the new one does not. If an object already exists under the new name, nothing is renamed and the deploy converges that object; the one still under the old name is then simply an object the package does not declare. On SQL Server and PostgreSQL the ordinary drop-by-absence rules then apply to it -- `DropTablesRemovedFromProduct` for a table SchemaSmith owns, `DropColumnsRemovedFromProduct` for a column. On MySQL and MariaDB a column that a declared column names as its `OldName` is never dropped by absence. If neither name exists, the object is created under the new name. An `OldName` left in the package after the rename has deployed is harmless: the old name no longer exists, so there is nothing to rename.
+
+**Case-only spellings.** On MySQL and MariaDB, a column the server holds under a spelling that differs from the package's only in case is renamed to the package's spelling, with or without `OldName`, so the package and the catalog agree on the next extraction.
+
+**Dependents on MySQL.** MySQL refuses to rename a column that a functional index key part or a generated column's expression reads. A functional index the package declares is dropped ahead of the rename and rebuilt over the new name by the index pass; a generated column the package declares is re-stated over the new name in the same `ALTER TABLE` as the rename. One the package does not declare cannot be put back, so the deploy stops before renaming anything and names it: `A column rename would break index <table>.<name>, which the package does not declare. Declare it in the table's JSON, or drop it in a Before script.` MariaDB rewrites both dependents itself, so nothing is taken down there. MySQL also refuses to rename a column its partitioning expression uses (error 3855, from 8.0.17); `--Validate` reports that first as `SS-PART-009`.
+
+**Ownership first.** The check that a table belongs to this product runs before the rename pass, and it looks the table up under `OldName` when nothing exists under the new name yet. A table another product owns is refused as it stands -- not renamed and converged first.
 
 ---
 
@@ -713,7 +778,7 @@ Every entry in the `Columns` array defines one column. The shared shape is small
 | `Description` | string | | The column's description: `MS_Description` on SQL Server, `COMMENT ON COLUMN` on PostgreSQL, the column `COMMENT` on MySQL and MariaDB. See [Descriptions](#descriptions). |
 | `ShouldApplyExpression` | string | | Conditional inclusion. See [Conditional Application](#conditional-application). |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
-| `OldName` | string | `""` | Previous column name for rename detection. Clear after the rename has deployed everywhere. |
+| `OldName` | string | | Previous column name. When set and a column of that name exists where the declared one does not, it is renamed before any column is added, altered or dropped. Clear after the rename has deployed everywhere. See [Renames with OldName](#renames-with-oldname). |
 | `Extensions` | object | `null` | Custom metadata for this column. See [Custom Properties](custom-properties.md). |
 
 
@@ -770,7 +835,8 @@ instead and the column stays where the package declares it.
 `ValidFrom` and `ValidTo DATETIME2(7)` when it is created, as it always has. To name them yourself, declare both, with
 `GeneratedAlways` set to their role:
 
-```json
+```jsonc
+// two entries of the table's Columns array
 { "Name": "[SysStart]", "DataType": "DATETIME2(2)", "Nullable": false, "GeneratedAlways": "RowStart", "Hidden": true },
 { "Name": "[SysEnd]",   "DataType": "DATETIME2(2)", "Nullable": false, "GeneratedAlways": "RowEnd",   "Hidden": true }
 ```
@@ -791,7 +857,8 @@ without `IsTemporal` (`SS-TMP-003`), or is not `DATETIME2` (`SS-TMP-004`).
 table has only the two Start columns. A role you leave out takes the engine's name, such as
 `ledger_start_transaction_id`, hidden. `LedgerView` names the view and its columns the same way.
 
-```json
+```jsonc
+// inside the table file
 "Ledger": "Updatable",
 "LedgerView": { "Name": "[AccountHistory]", "TransactionIdColumn": "[TxId]" },
 "Columns": [
@@ -815,7 +882,7 @@ column that is not `BIGINT` (`SS-LDG-005`).
 
 ### MySQL column extras
 
-`GenerationExpression`, `CharacterSet`, `Collation`, and `AutoIncrement` (bool) for an `AUTO_INCREMENT` column (`Comment` is the deprecated alias of the shared `Description`) -- or spell it in `DataType` (`INT AUTO_INCREMENT`).
+`GenerationExpression` with `Generated` (`STORED` or `VIRTUAL`; omitted means `VIRTUAL`, the engine's own default), `CharacterSet`, `Collation`, and `AutoIncrement` (bool) for an `AUTO_INCREMENT` column (`Comment` is the deprecated alias of the shared `Description`) -- or spell it in `DataType` (`INT AUTO_INCREMENT`).
 
 `DataType` accepts the engine's synonyms, and a column declared with one is not changed again on the next deploy: `INTEGER`, `BOOL`/`BOOLEAN`, `DEC`/`NUMERIC`/`FIXED`, `REAL`, `DOUBLE PRECISION`, `FLOAT4`/`FLOAT8`, `INT1`-`INT8`, `MIDDLEINT`, `LONG`/`LONG VARCHAR`/`LONG VARBINARY`, `CHARACTER`/`CHARACTER VARYING`, and the national types (`NVARCHAR`, `NCHAR`, `NATIONAL CHAR`/`VARCHAR`), which mean `utf8mb3` unless the column declares a `CharacterSet`. A bare `DECIMAL`, `CHAR`, `BIT` or `BINARY` means its default length (`DECIMAL(10,0)`, length 1). `GEOMETRYCOLLECTION` and `GEOMCOLLECTION` are the same type.
 
@@ -901,8 +968,9 @@ The database needs a `MEMORY_OPTIMIZED_DATA` filegroup and the server needs In-M
 creates neither, and does not degrade the table to a disk table when they are missing** — it stops before any
 DDL runs, naming the table:
 
-> Table `X` is memory-optimized, but this database cannot host one: it needs In-Memory OLTP support
-> (`SERVERPROPERTY('IsXTPSupported') = 1`) and a `MEMORY_OPTIMIZED_DATA` filegroup.
+```
+Table dbo.SessionCache is memory-optimized, but this database cannot host one: it needs In-Memory OLTP support (SERVERPROPERTY('IsXTPSupported') = 1) and a MEMORY_OPTIMIZED_DATA filegroup. SchemaSmith creates neither and does not degrade a memory-optimized table to a disk table (that would change its durability). Add the filegroup / use a supporting edition, or drop MemoryOptimized.
+```
 
 > **Why it fails instead of degrading.** Quietly deploying a disk table would change the table's durability
 > and concurrency semantics while reporting success — the application would run against something that is not
@@ -1040,8 +1108,6 @@ Where each kind of index is declared. Most are entries in `Indexes`; a kind keye
 | `Unique` | bool | `false` | `true` for a unique index. |
 | `UniqueConstraint` | bool | `false` | `true` for a UNIQUE constraint (as opposed to a unique index). |
 | `IndexColumns` | string | | Comma-separated column names with optional sort direction. |
-| `IncludeColumns` | string | | Comma-separated INCLUDE/covering columns where supported. |
-| `FilterExpression` | string | | Filtered/partial index WHERE clause. |
 | `Description` | string | | The index's description: `MS_Description` on the index or its key constraint on SQL Server, `COMMENT ON INDEX` on PostgreSQL, the index `COMMENT` on MySQL and MariaDB. See [Descriptions](#descriptions). |
 | `ShouldApplyExpression` | string | | Conditional inclusion. See [Conditional Application](#conditional-application). |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
@@ -1056,6 +1122,8 @@ On a graph table, an index can name the engine's pseudo-columns as key parts: `$
 
 | Property | Type | Default | Notes |
 |---|---|---|---|
+| `IncludeColumns` | string | | Comma-separated `INCLUDE` columns of a nonclustered index -- the covering columns carried in the leaf level without being part of the key. |
+| `FilterExpression` | string | | The `WHERE` clause of a filtered index, without the keyword. Compared through [expression change detection](schemaquench.md#expression-change-detection), so SQL Server's own rewrite of it does not read as a change. |
 | `ColumnStore` | bool | `false` | A columnstore index. With `Clustered` it is the table's clustered columnstore index and takes no columns. Without it, it is a nonclustered columnstore index over the columns you list, in either `IndexColumns` or `IncludeColumns` (SchemaTongs writes `IncludeColumns`, because SQL Server stores them as included columns). The order you list them in does not matter; for a sort order, use `Order`. |
 | `BucketCount` | int | `null` | Only for an index on a [memory-optimized table](#memory-optimized-tables-sql-server). Setting it makes the index a **hash** index (`HASH … WITH (BUCKET_COUNT = n)`); leaving it unset makes it a range index. Size it at roughly one to two times the number of distinct key values — too few buckets lengthens the collision chains, too many wastes memory. SQL Server rounds the count **up to the next power of two**, so a declared `1000` deploys as `1024` and SchemaSmith compares the two as equal rather than churning. **Changing it on a deployed table is refused**, along with any other inline-index change. |
 
@@ -1084,6 +1152,8 @@ On a graph table, an index can name the engine's pseudo-columns as key parts: `$
 
 | Property | Type | Default | Description |
 |---|---|---|---|
+| `IncludeColumns` | string | | Comma-separated `INCLUDE` columns (PostgreSQL 11+): non-key columns stored in the index so a query over them can be answered from the index alone. |
+| `FilterExpression` | string | | The `WHERE` clause of a partial index, without the keyword. Compared through [expression change detection](schemaquench.md#expression-change-detection), so PostgreSQL's own rendering of it does not read as a change. |
 | `NullsNotDistinct` | bool | `false` | On a unique index or unique constraint, treats NULLs as equal, so only one row may hold NULL in the key (`NULLS NOT DISTINCT`). PostgreSQL 15+; below that the clause is dropped per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). |
 | `WithoutOverlaps` | bool | `false` | On a primary key or unique constraint whose last column is a range or multirange: rows with the same values in the other columns may not have overlapping ranges (`WITHOUT OVERLAPS`, a temporal key). The backing index is GiST, which the flag implies -- no `AccessMethod` is needed, and extraction writes none -- and a scalar key column needs the `btree_gist` extension. PostgreSQL 18+; below that the key is created without the clause per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). |
 | `Deferrable` | bool | `false` | `DEFERRABLE` on a primary key or unique constraint. A plain index cannot be deferred, so it applies only to the constraint forms. |
@@ -1116,9 +1186,9 @@ comparison is order-insensitive, because PostgreSQL returns `reloptions` in its 
 
 ### MySQL index extras
 
-`IndexType` (`BTREE`, `HASH`, `SPATIAL`; `VECTOR` on MariaDB), `Visible`/`Invisible` flag where supported.
+`IndexType` (`BTREE`, `HASH`, `FULLTEXT`, `SPATIAL`; `VECTOR` on MariaDB), `Visible`/`Invisible` flag where supported. MySQL and MariaDB indexes take no `IncludeColumns` or `FilterExpression`: neither engine has covering or partial indexes.
 
-**Primary keys on an existing table.** A table that already exists takes the primary key its package declares: one is added where the table has none, and a key over different columns is replaced in a single `ALTER TABLE`, rows intact. An `AUTO_INCREMENT` column that no longer leads the key gets an index of its own unless another index already leads with it. A key a foreign key needs, on either side of the relationship, is kept as it is and the deploy says so; change the foreign key first. A primary key the package does not declare is never dropped. Full and `--IndexOnly` deploys behave the same, and `--WhatIf` reports the change without making it.
+**Primary keys on an existing table.** A table that already exists takes the primary key its package declares: one is added where the table has none, and a key over different columns is replaced in a single `ALTER TABLE`, rows intact. An `AUTO_INCREMENT` column that no longer leads the key gets an index of its own unless another index already leads with it. A key a foreign key needs, on either side of the relationship, is kept as it is and the deploy says so; change the foreign key first. A primary key the package does not declare is never dropped. Full and [`IndexOnlyTableQuenches`](#template-settings-intent) deploys behave the same, and `--WhatIf` reports the change without making it.
 
 **MariaDB: temporal keys.** `WithoutOverlaps: true` on a primary key or unique key whose last `IndexColumns` part names one of the table's [`Periods`](configuration.md#application-time-periods) deploys `UNIQUE KEY (col, period WITHOUT OVERLAPS)`: rows with the same values in the other parts may not have overlapping periods (MariaDB 10.5.3+). The catalog lists such a key over the period's end and start columns, and the deploy compares a declared key the same way, so a redeploy leaves it alone on every version. Extraction names the period last and writes the flag from 11.4, where the catalog can say which period a key is over; below that -- the same blind spot the periods themselves have -- it reads back as a plain unique key over those two columns. Below 10.5.3 the key is created over the period's columns without the clause, per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). `--Validate` stops a `WithoutOverlaps` on a key that is not unique (`SS-IDX-002`) or whose last part is not a declared period (`SS-IDX-003`).
 
@@ -1126,7 +1196,7 @@ comparison is order-insensitive, because PostgreSQL returns `reloptions` in its 
 
 ### Examples
 
-```json
+```jsonc
 // Primary key (SQL Server)
 { "Name": "[PK_Product_ProductID]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[ProductID]" }
 
@@ -1152,9 +1222,11 @@ Referential integrity lives in the table JSON alongside columns and indexes, not
 | `RelatedColumns` | string | | Comma-separated referenced column names. |
 | `DeleteAction` | string | `null` | `"NO ACTION"`, `"CASCADE"`, `"SET NULL"`, `"SET DEFAULT"`, or `"RESTRICT"` where supported. |
 | `UpdateAction` | string | `null` | Same values as `DeleteAction`. |
-| `Enforced` | bool | `true` | **SQL Server and PostgreSQL.** `false` keeps the key defined but not checked: `NOCHECK CONSTRAINT` on SQL Server; `NOT ENFORCED` on PostgreSQL 18, and below 18 the key deploys enforced and the deployment summary records a downgrade (`UnsupportedFeaturePolicy`). Converges in place. Omitted, a new constraint is created with the default and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
-| `Validated` | bool | `true` | **SQL Server and PostgreSQL.** `false` creates the constraint without checking the rows already in the table (`WITH NOCHECK` on SQL Server, `NOT VALID` on PostgreSQL), which leaves it untrusted. `true` over such a constraint re-checks those rows (`WITH CHECK CHECK CONSTRAINT` / `VALIDATE CONSTRAINT`), and the deploy fails if any violate it -- the engine reporting the truth. A validated constraint cannot be un-validated, so `false` over one changes nothing. Omitted, a new constraint is created with the default and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
-| `NotForReplication` | bool | `false` | **SQL Server only.** `NOT FOR REPLICATION`: the constraint is not checked when a replication agent applies changes. Create-time state, so a declared change drops and re-creates the constraint. Omitted, a new constraint is created with the default and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
+| `Deferrable` | bool | `false` | **PostgreSQL only.** `DEFERRABLE`: the key may be checked at commit instead of per statement. A change drops and re-creates the key. |
+| `InitiallyDeferred` | bool | `false` | **PostgreSQL only.** `INITIALLY DEFERRED` on a deferrable key: the check waits for commit unless a transaction asks otherwise. A change drops and re-creates the key. |
+| `Enforced` | bool | omitted = not managed | **SQL Server and PostgreSQL.** `false` keeps the key defined but not checked: `NOCHECK CONSTRAINT` on SQL Server; `NOT ENFORCED` on PostgreSQL 18, and below 18 the key deploys enforced and the deployment summary records a downgrade (`UnsupportedFeaturePolicy`). Converges in place. Omitted, a new constraint is created with the default and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
+| `Validated` | bool | omitted = not managed | **SQL Server and PostgreSQL.** `false` creates the constraint without checking the rows already in the table (`WITH NOCHECK` on SQL Server, `NOT VALID` on PostgreSQL), which leaves it untrusted. `true` over such a constraint re-checks those rows (`WITH CHECK CHECK CONSTRAINT` / `VALIDATE CONSTRAINT`), and the deploy fails if any violate it -- the engine reporting the truth. A validated constraint cannot be un-validated, so `false` over one changes nothing. Omitted, a new constraint is created validated and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
+| `NotForReplication` | bool | omitted = not managed | **SQL Server only.** `NOT FOR REPLICATION`: the constraint is not checked when a replication agent applies changes. Create-time state, so a declared change drops and re-creates the constraint. Omitted, a new constraint is created without it and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
 | `MatchType` | string | `"SIMPLE"` | **PostgreSQL only.** `"SIMPLE"`, `"FULL"` or `"PARTIAL"` -- how a multi-column key with some NULL columns is matched. The default is PostgreSQL's own `SIMPLE` (a row with any NULL key column is not checked), so an omitted key deploys what `CREATE TABLE` gives; with `FULL`, a row whose key is only partly NULL is rejected rather than escaping the check. |
 | `SetNullColumns` | string | | **PostgreSQL 15+.** With `DeleteAction: "SET NULL"` or `"SET DEFAULT"`, the comma-separated subset of `Columns` set when the referenced row is deleted (`ON DELETE SET NULL (col, ...)`, `ON DELETE SET DEFAULT (col, ...)`); the other key columns keep their values. Omitted means every column. Below 15 the key is created with the plain action per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). `--Validate` stops it with any other action or naming a column outside the key (`SS-FK-007`). |
 | `ShouldApplyExpression` | string | | Conditional inclusion. |
@@ -1204,7 +1276,7 @@ Tables without a `DataDelivery` block are left alone. Tables that declare one ar
 | `MergeDisableRules` | bool | `false` | **PostgreSQL.** Disable rewrite rules on the table during the merge. |
 | `MergeUpdateDescendents` | bool | `false` | **PostgreSQL.** When `true`, the merge targets descendant partitions as well as the specified table. When `false` (the default), the merge uses `ONLY` so descendant tables are left untouched. |
 | `TimeZone` | string | | **MySQL, MariaDB.** The session time zone, as an offset such as `+00:00`, that the `ContentFile`'s `TIMESTAMP` values were extracted in. Delivery runs in the same zone, so the values arrive unchanged wherever the target server's zone is. DataTongs sets it to `+00:00`. Without it, delivery reads the values in the target session's zone, which is right for data written in that zone. |
-| `ShouldApplyExpression` | string | `""` | Optional SQL predicate evaluated against the target at deploy time. Tokens are resolved before evaluation -- including [`{{ServerMajorVersion}}` and `{{CompatibilityLevel}}`](script-tokens.md#servermajorversion-and-compatibilitylevel), the same version tokens a folder or table gate can reference. Blank or absent always applies -- today's unchanged behavior. When `DataDelivery` is an array of two or more deliveries, every entry must set one. See [Multiple Deliveries](#multiple-deliveries) below. |
+| `ShouldApplyExpression` | string | `""` | Optional SQL predicate evaluated against the target at deploy time. Exactly three tokens are resolved in it before it runs: `{{SchemaName}}` (schema templates) and the per-target [`{{ServerMajorVersion}}` and `{{CompatibilityLevel}}`](script-tokens.md#servermajorversion-and-compatibilitylevel), the same vocabulary a folder gate speaks. Package `ScriptTokens` and `Extensions`-derived tokens are **not** resolved here, so write anything else in terms of what the target can answer directly (`DB_NAME()`, `current_database()`, a catalog lookup). Blank or absent always applies. When `DataDelivery` is an array of two or more deliveries, every entry must set one. See [Multiple Deliveries](#multiple-deliveries) below. |
 | `VariantName` | string | `""` | Optional label naming the intent behind a delivery's `ShouldApplyExpression`. Appears in the deployment log when that delivery is skipped or when its gate errors. Max 128 characters. |
 
 A row value that is a JSON object or array, delivered into a text column, arrives as its compact JSON text (`{"a":1,"b":[1,2.50]}`, numbers exactly as written), on every engine and every SQL Server compatibility level; a JSON column receives it as a document. A string value arrives as the string.
@@ -1257,7 +1329,8 @@ Unlike the single-match variant pattern used elsewhere in the schema package (se
 
 **Pattern 1 -- environment-gated seed data (SQL Server, bare-object form):**
 
-```json
+```jsonc
+// inside the table file
 "DataDelivery": {
   "ContentFile": "data/dbo.TestFixtures.tabledata",
   "MergeType": "Insert/Update/Delete",
@@ -1271,7 +1344,8 @@ A single delivery can carry a `ShouldApplyExpression` on its own -- no array req
 
 **Pattern 2 -- per-environment variants (PostgreSQL, mutually exclusive gates):**
 
-```json
+```jsonc
+// inside the table file
 "DataDelivery": [
   {
     "ContentFile": "data/public.product_catalog.dev.tabledata",
@@ -1294,7 +1368,8 @@ The two gates are mutually exclusive, so exactly one variant applies per target 
 
 **Pattern 3 -- additive patch slices (MySQL, same gate, disjoint filters):**
 
-```json
+```jsonc
+// inside the table file
 "DataDelivery": [
   {
     "ContentFile": "data/StatusCodes.core.tabledata",
@@ -1327,7 +1402,7 @@ A gated-off delivery is logged as skipped, distinct from a delivered or a failed
 
 In WhatIf mode, skipped deliveries are still logged individually with their `VariantName`, exactly as in a real run. Applied deliveries are reported as a single `Would DELIVER: <table>` line for the table, not broken out per delivery.
 
-See [Conditional Application](#conditional-application) for the general `ShouldApplyExpression` behavior (blank/absent evaluates as always-apply, fail-closed error handling). Data delivery gates are evaluated the same way -- once per delivery instead of once per table -- with one difference worth knowing: component-level gates (columns, indexes, and the rest) and script-folder gates have their tokens (including `{{SchemaName}}` on schema templates) resolved before evaluation; a `DataDelivery.ShouldApplyExpression` does not currently go through that resolution step, so write it in terms of things you can query directly on the target (database/server name, catalog lookups) rather than a `{{Token}}` placeholder.
+See [Conditional Application](#conditional-application) for the general `ShouldApplyExpression` behavior (blank/absent evaluates as always-apply, fail-closed error handling). Data delivery gates are evaluated the same way -- once per delivery instead of once per table -- with one difference worth knowing: a component gate (a column's, an index's) has the package's `ScriptTokens` and its `Extensions`-derived tokens resolved into it at load time, while a `DataDelivery.ShouldApplyExpression` gets only the gate vocabulary -- `{{SchemaName}}` on a schema template, `{{ServerMajorVersion}}` and `{{CompatibilityLevel}}` -- so any other `{{Token}}` reaches the server as literal text and fails there. Write the rest in terms of things you can query directly on the target (database/server name, catalog lookups).
 
 ### FK-aware delivery
 
@@ -1382,10 +1457,10 @@ Table-level check constraints in the `CheckConstraints` array. Used when `CheckC
 |---|---|---|---|
 | `Name` | string | | Constraint name. |
 | `Expression` | string | | Boolean SQL expression. |
-| `Enforced` | bool | `true` | **SQL Server, PostgreSQL and MySQL.** `false` keeps the constraint defined but not checked: `NOCHECK CONSTRAINT` on SQL Server, converged in place; `NOT ENFORCED` on PostgreSQL 18 and MySQL 8.0.16, where a check's enforceability is part of its definition, so a change drops and re-creates it. Below PostgreSQL 18 the constraint deploys enforced and the deployment summary records a downgrade (`UnsupportedFeaturePolicy`); below MySQL 8.0.16 the check itself is the downgrade. MariaDB has no such state. Omitted, a new constraint is created with the default and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
-| `Validated` | bool | `true` | **SQL Server and PostgreSQL.** `false` creates the constraint without checking the rows already in the table (`WITH NOCHECK` on SQL Server, `NOT VALID` on PostgreSQL), which leaves it untrusted. `true` over such a constraint re-checks those rows (`WITH CHECK CHECK CONSTRAINT` / `VALIDATE CONSTRAINT`), and the deploy fails if any violate it -- the engine reporting the truth. A validated constraint cannot be un-validated, so `false` over one changes nothing. Omitted, a new constraint is created with the default and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
-| `NotForReplication` | bool | `false` | **SQL Server only.** `NOT FOR REPLICATION`: the constraint is not checked when a replication agent applies changes. Create-time state, so a declared change drops and re-creates the constraint. Omitted, a new constraint is created with the default and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
-| `NoInherit` | bool | `false` | **PostgreSQL only.** `NO INHERIT`: child tables do not inherit the constraint. Create-time state, so a change drops and re-creates it. |
+| `Enforced` | bool | omitted = not managed | **SQL Server, PostgreSQL and MySQL.** `false` keeps the constraint defined but not checked: `NOCHECK CONSTRAINT` on SQL Server, converged in place; `NOT ENFORCED` on PostgreSQL 18 and MySQL 8.0.16, where a check's enforceability is part of its definition, so a change drops and re-creates it. Below PostgreSQL 18 the constraint deploys enforced and the deployment summary records a downgrade (`UnsupportedFeaturePolicy`); below MySQL 8.0.16 the check itself is the downgrade. MariaDB has no such state. Omitted, a new constraint is created with the default and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
+| `Validated` | bool | omitted = not managed | **SQL Server and PostgreSQL.** `false` creates the constraint without checking the rows already in the table (`WITH NOCHECK` on SQL Server, `NOT VALID` on PostgreSQL), which leaves it untrusted. `true` over such a constraint re-checks those rows (`WITH CHECK CHECK CONSTRAINT` / `VALIDATE CONSTRAINT`), and the deploy fails if any violate it -- the engine reporting the truth. A validated constraint cannot be un-validated, so `false` over one changes nothing. Omitted, a new constraint is created validated and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
+| `NotForReplication` | bool | omitted = not managed | **SQL Server only.** `NOT FOR REPLICATION`: the constraint is not checked when a replication agent applies changes. Create-time state, so a declared change drops and re-creates the constraint. Omitted, a new constraint is created without it and an existing one is left as it is, so a package that never mentions it never changes what is on the server; declare it to converge. |
+| `NoInherit` | bool | omitted = not managed | **PostgreSQL only.** `NO INHERIT`: child tables do not inherit the constraint. Create-time state, so a change drops and re-creates it. Omitted, a new constraint is created inheritable and an existing one is left as it is. |
 | `ShouldApplyExpression` | string | | Conditional inclusion. |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `Extensions` | object | `null` | Custom metadata. |
@@ -1435,7 +1510,8 @@ XML index definitions in the `XmlIndexes` array. A primary XML index must be cre
 
 A selective XML index indexes the paths a workload queries instead of the whole document, so it is far smaller than a primary XML index. Declare one with `Selective`, and a secondary on one of its paths with `ForPath`:
 
-```json
+```jsonc
+// inside the table file
 "XmlIndexes": [
   { "Name": "[SXI_Orders_Doc]", "Column": "[Doc]",
     "Selective": {
@@ -1465,7 +1541,8 @@ The paths and namespaces are compared as sets, so their order does not matter. A
 
 Spatial index definitions in the `SpatialIndexes` array, one `CREATE SPATIAL INDEX` each. SQL Server builds a spatial index on a single `geometry` or `geography` column, and only on a table with a clustered primary key.
 
-```json
+```jsonc
+// inside the table file
 "SpatialIndexes": [
   { "Name": "[SX_Shape]", "Column": "[Shape]", "Tessellation": "GEOMETRY_GRID",
     "BoundingBox": { "XMin": 0, "YMin": 0, "XMax": 500, "YMax": 200 },
@@ -1489,7 +1566,7 @@ Spatial index definitions in the `SpatialIndexes` array, one `CREATE SPATIAL IND
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies. Max 128 characters. |
 | `Extensions` | object | Custom metadata. |
 
-**Only what you declare is compared.** An attribute you leave out is the engine's choice when the index is created, and a later deploy does not compare it, so a definition that names only the column keeps whatever the index has. A declared attribute that differs from the live index drops and re-creates it. A change to the clustered primary key takes the table's spatial indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A spatial index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and `--IndexOnly` deploys behave the same. That includes `CompressionType`: left out, an index compressed by hand keeps its compression. SchemaTongs writes it when the index is compressed.
+**Only what you declare is compared.** An attribute you leave out is the engine's choice when the index is created, and a later deploy does not compare it, so a definition that names only the column keeps whatever the index has. A declared attribute that differs from the live index drops and re-creates it. A change to the clustered primary key takes the table's spatial indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A spatial index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and [`IndexOnlyTableQuenches`](#template-settings-intent) deploys behave the same. That includes `CompressionType`: left out, an index compressed by hand keeps its compression. SchemaTongs writes it when the index is compressed.
 
 **Before SQL Server 2012** there are no `AUTO_GRID` schemes. A declared `GEOMETRY_AUTO_GRID` or `GEOGRAPHY_AUTO_GRID` index is created with the `GRID` scheme of the same family, with that scheme's defaults for anything not declared, and a downgrade is recorded; a redeploy leaves it as it is. Under `UnsupportedFeaturePolicy` `fail` the deploy is refused instead. See [Engine Version Compatibility](schemaquench.md#engine-version-compatibility).
 
@@ -1503,7 +1580,8 @@ Spatial index definitions in the `SpatialIndexes` array, one `CREATE SPATIAL IND
 
 JSON index definitions in the `JsonIndexes` array, one `CREATE JSON INDEX` each (SQL Server 2025). A JSON index covers one `json` column and the SQL/JSON paths your queries filter on, so queries that filter on those paths with `JSON_VALUE`, `JSON_PATH_EXISTS` or `JSON_CONTAINS` can use the index rather than read every document. SQL Server builds one only on a table with a clustered primary key, and a column takes one JSON index.
 
-```json
+```jsonc
+// inside the table file
 "JsonIndexes": [
   { "Name": "[JX_Orders_Doc]", "Column": "[Doc]", "Paths": [ "$.customer.id", "$.status" ],
     "OptimizeForArraySearch": true },
@@ -1523,7 +1601,7 @@ JSON index definitions in the `JsonIndexes` array, one `CREATE JSON INDEX` each 
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies. Max 128 characters. |
 | `Extensions` | object | Custom metadata. |
 
-**The paths are a set, compared as written.** Their order does not matter, but their text does: JSON keys are case-sensitive, so changing `$.status` to `$.Status` is a change, and SQL Server keeps a path exactly as it was written, spacing included. A changed path, column, `OptimizeForArraySearch`, `FillFactor` or `CompressionType` drops and re-creates the index; a `FillFactor` or `CompressionType` you leave out is not compared, so a JSON index someone compressed by hand stays compressed. A change to the clustered primary key takes the table's JSON indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A JSON index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and `--IndexOnly` deploys behave the same. SchemaTongs extracts `CompressionType` when the index is compressed.
+**The paths are a set, compared as written.** Their order does not matter, but their text does: JSON keys are case-sensitive, so changing `$.status` to `$.Status` is a change, and SQL Server keeps a path exactly as it was written, spacing included. A changed path, column, `OptimizeForArraySearch`, `FillFactor` or `CompressionType` drops and re-creates the index; a `FillFactor` or `CompressionType` you leave out is not compared, so a JSON index someone compressed by hand stays compressed. A change to the clustered primary key takes the table's JSON indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A JSON index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and [`IndexOnlyTableQuenches`](#template-settings-intent) deploys behave the same. SchemaTongs extracts `CompressionType` when the index is compressed.
 
 **Before SQL Server 2025** there are no JSON indexes, and no `json` columns either. A declared JSON index is skipped, the table deploys without it, and a downgrade is recorded; under `UnsupportedFeaturePolicy` `fail` the deploy is refused instead. See [Engine Version Compatibility](schemaquench.md#engine-version-compatibility).
 
@@ -1745,7 +1823,8 @@ SQL Server allows one full-text index per table. Declare it as a single `FullTex
 
 > **Note:** When no variant matches a target, an existing full-text index on that table is dropped -- the absence of a match is treated as "no full-text index here," not "leave it alone."
 
-```json
+```jsonc
+// inside the table file
 "FullTextIndex": [
   {
     "FullTextCatalog": "[Catalog_ProdEast]",
@@ -1972,6 +2051,9 @@ Sequences live in the `Sequences/` directory of each template, which accepts bot
 | `Cycle` | bool | `false` | Wrap to `MinValue` after `MaxValue` instead of erroring. |
 | `Description` | string | `null` | **PostgreSQL.** `COMMENT ON SEQUENCE`. A MariaDB sequence has no comment, so the key is not offered there. See [Descriptions](#descriptions). |
 | `PersistenceType` | string | `null` | **PostgreSQL 15+.** `Unlogged` for a sequence that skips the write-ahead log, or `Logged`. Left out, a new sequence is created logged and an existing one's persistence is not changed. Below 15 the clause is dropped under the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). |
+| `ShouldApplyExpression` | string | `null` | Conditional inclusion: a sequence whose predicate is false on the target is left out of that deploy. See [Conditional Application](#conditional-application). |
+| `VariantName` | string | `null` | Optional label for a conditional variant. Max 128 characters. |
+| `Extensions` | object | `null` | Custom metadata, preserved and never read at deploy time. See [Custom Properties](custom-properties.md). |
 
 **The current value is never managed.** A sequence's position records which numbers have already been handed out, so it is data rather than schema. If a deploy reset it, the next insert would re-issue keys already in use. `Start` only applies when the sequence is created; SchemaSmith never issues `RESTART`, and extraction never captures the current value.
 
@@ -1989,7 +2071,7 @@ Sequences live in the `Sequences/` directory of each template, which accepts bot
 }
 ```
 
-**MariaDB** (10.3 and later; MySQL has no sequence at any version) declares the same properties with these differences: there is no `Schema`, because a MariaDB schema is the database; `DataType` is an integer type (`tinyint`, `smallint`, `mediumint`, `int` or `bigint`, optionally `unsigned`) and needs MariaDB 11.5, below which every sequence is a signed `bigint` and another type is recorded as a downgrade; `Cache` defaults to `1000`, as it does in MariaDB; and an omitted `Start`, `MinValue` or `MaxValue` is left to the engine at creation and never compared afterwards. Lowering `MaxValue` below the position a running sequence has already reserved (its cache, 1000 values by default) is the one attribute change the engine does not take quietly: a cycling sequence wraps to `MinValue` on its next value and a non-cycling one errors, which is MariaDB's rule rather than SchemaSmith's. A column that defaults to a sequence is declared with the bare name, `nextval(`invoice_number_seq`)`, which is how SchemaTongs writes it: the catalog qualifies it with the database, and a package has to deploy to any database.
+**MariaDB** (10.3 and later; MySQL has no sequence at any version) declares the same properties with these differences: there is no `Schema`, because a MariaDB schema is the database; `DataType` is an integer type (`tinyint`, `smallint`, `mediumint`, `int` or `bigint`, optionally `unsigned`) and needs MariaDB 11.5, below which every sequence is a signed `bigint` and another type is recorded as a downgrade; `Cache` defaults to `1000`, as it does in MariaDB; and an omitted `Start`, `MinValue` or `MaxValue` is left to the engine at creation and never compared afterwards. `ShouldApplyExpression`, `VariantName` and `Extensions` work as they do on PostgreSQL. Lowering `MaxValue` below the position a running sequence has already reserved (its cache, 1000 values by default) is the one attribute change the engine does not take quietly: a cycling sequence wraps to `MinValue` on its next value and a non-cycling one errors, which is MariaDB's rule rather than SchemaSmith's. A column that defaults to a sequence is declared with the bare name, `nextval(`invoice_number_seq`)`, which is how SchemaTongs writes it: the catalog qualifies it with the database, and a package has to deploy to any database.
 
 ```json
 {
@@ -2016,9 +2098,12 @@ Domain types live in the `Domain Types/` directory of each template, which accep
 | `DataType` | string | | The underlying type, with its modifier where it has one — `integer`, `character varying(20)`, `numeric(10,2)`. Required. **Create-time only** — see below. |
 | `NotNull` | bool | `false` | Converges in place via `ALTER DOMAIN … SET/DROP NOT NULL`. |
 | `Default` | string | `null` | Default applied to a column of this domain that declares no default of its own. Converges in place. |
-| `CheckConstraints` | array | `[]` | Named `CHECK` constraints — `{ "Name": "...", "Expression": "VALUE > 0" }`. Write the predicate alone, without the surrounding `CHECK (…)`. `"Validated": false` adds the constraint `NOT VALID`, so the values already stored in the domain's columns are not checked; `true` over such a constraint validates it and the deploy fails if any value violates it. Omitted, a new constraint is validated and an existing one is left as it is. |
+| `CheckConstraints` | array | `[]` | Named `CHECK` constraints — `{ "Name": "...", "Expression": "VALUE > 0" }`. Write the predicate alone, without the surrounding `CHECK (…)`. `"Validated": false` adds the constraint `NOT VALID`, so the values already stored in the domain's columns are not checked; `true` over such a constraint validates it and the deploy fails if any value violates it. Omitted, a new constraint is validated and an existing one is left as it is. Each entry may carry its own `Extensions`. |
 | `Collation` | string | `null` | The domain's collation when it differs from the base type's, such as `"C"`; one in another schema is written delimited, as `"sales"."ci"`. Create-time only: PostgreSQL cannot alter it, so a change is refused rather than attempted. Leave it out and it is not checked. |
 | `Description` | string | `null` | `COMMENT ON DOMAIN`. See [Descriptions](#descriptions). |
+| `ShouldApplyExpression` | string | `null` | Conditional inclusion: a domain whose predicate is false on the target is left out of that deploy. See [Conditional Application](#conditional-application). |
+| `VariantName` | string | `null` | Optional label for a conditional variant. Max 128 characters. |
+| `Extensions` | object | `null` | Custom metadata, preserved and never read at deploy time. See [Custom Properties](custom-properties.md). |
 
 **Constraints converge as a set.** One the package declares and the server lacks is added; one the server has and the package no longer declares is dropped. Dropping is safe here in a way removing an enum value is not — it removes a validation rule, destroys no data, and cascades to nothing.
 
@@ -2055,6 +2140,9 @@ Enum types live in the `Enum Types/` directory of each template, which accepts *
 | `Schema` | string | `"public"` | Schema name. |
 | `Values` | array of string | | The labels, **in order**. Required. |
 | `Description` | string | `null` | `COMMENT ON TYPE`. See [Descriptions](#descriptions). |
+| `ShouldApplyExpression` | string | `null` | Conditional inclusion: an enum whose predicate is false on the target is left out of that deploy. See [Conditional Application](#conditional-application). |
+| `VariantName` | string | `null` | Optional label for a conditional variant. Max 128 characters. |
+| `Extensions` | object | `null` | Custom metadata, preserved and never read at deploy time. See [Custom Properties](custom-properties.md). |
 
 **Order matters.** PostgreSQL sorts and compares enum values by declared position, not alphabetically, so a value you add in the middle of the list is added in the middle of the type — not appended.
 
@@ -2125,7 +2213,8 @@ MySQL and MariaDB carry a table's partition definition in the table DDL itself �
 
 `SYSTEM_TIME` partitions a system-versioned ([`IsSystemVersioned`](#mariadb-mariadbtable)) table's history: current rows live in the `CURRENT` partition, and each old version moves to a `HISTORY` partition as it is replaced. The table must declare `IsSystemVersioned: true`; [`--Validate`](validate.md) stops one that does not, or one on MySQL, which has no system versioning (`SS-PART-006`).
 
-```json
+```jsonc
+// inside the table file
 "Partitioning": {
   "Method": "SYSTEM_TIME",
   "SystemTime": { "Interval": "1 MONTH", "StartsAt": "2026-01-01 00:00:00", "Auto": true }
@@ -2166,6 +2255,9 @@ Existing packages need no change. Declaring the same event both ways is reported
 | `Comment` | string | `null` | **Deprecated** alias of `Description`. Still deploys; `--Validate` reports it (`SS-DESC-002`). |
 | `TimeZone` | string | `null` | The time zone `Starts`, `Ends` and `ExecuteAt` are read in, as the engine stores it: an offset such as `"+05:00"`, or a named zone on a server with time-zone tables. The deploy sets it on its session around the `CREATE` and restores the session's own zone. Omitted, the event takes the deploying session's zone and the server's value is not compared. SchemaTongs writes it unless the event's zone is `SYSTEM`. |
 | `SqlMode` | string | `null` | The `sql_mode` the body runs under, written as the engine reports it (`SELECT @@sql_mode` after `SET`; the engine canonicalises the list). Compared as a set of flags, so the order does not matter. The deploy sets it around the `CREATE` and restores the session's own mode. Omitted, the event takes the deploying session's mode and the server's value is not compared. SchemaTongs always writes it. |
+| `ShouldApplyExpression` | string | `null` | Conditional inclusion: an event whose predicate is false on the target is left out of that deploy. See [Conditional Application](#conditional-application). |
+| `VariantName` | string | `null` | Optional label for a conditional variant. Max 128 characters. |
+| `Extensions` | object | `null` | Custom metadata, preserved and never read at deploy time. See [Custom Properties](custom-properties.md). |
 
 Removing an event from the package drops it only when `DropEventsRemovedFromProduct` is on, and only for events SchemaSmith created — one made by hand, or by a scripted `Events/` file, is never removed.
 
@@ -2290,10 +2382,12 @@ Your IDE helps you write correct JSON without being configured to. The `.json-sc
 
 Every package JSON opens with a `$schema` key naming its schema by relative path, which is what makes an editor pick it up with no `json.schemas` entry or equivalent:
 
-```json
+```jsonc
 {
   "$schema": "../../../.json-schemas/tables.sqlserver.schema",
-  "Name": "[dbo].[Orders]",
+  "Name": "[dbo].[Orders]"
+  // ... the rest of the table
+}
 ```
 
 SchemaTongs writes it on extraction, and `--WriteSchemasOnly` adds it to a package extracted before v2.7.0. It is ignored at deploy time, and deleting it costs you nothing but editor validation — **but it comes back**: the next extraction or `--WriteSchemasOnly` against that package adds it again, because SchemaSmith cannot tell a key you removed on purpose from one that was never written. If you would rather map the schemas yourself, expect to remove it each time rather than once. A file whose schema is missing from `.json-schemas/` is never stamped at all, so a package that keeps only some of its schemas gets references only for those.

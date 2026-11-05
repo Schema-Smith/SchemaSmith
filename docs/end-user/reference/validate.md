@@ -181,7 +181,7 @@ This check is deliberately structural only -- it confirms columns exist, not tha
 | `SS-TOK-003` | Warning | A `ScriptTokens` entry is defined but never referenced anywhere in the package. |
 | `SS-TOK-004` | Error | A `<*File*>`/`<*BinaryFile*>`/`<*QueryFile*>` ScriptTokens entry points at a file that doesn't exist (or can't be read). |
 
-Built-in tokens (`ProductName`, `TemplateName`, `SchemaName`, `TableSchema`, `MaterializedViewSchema`, `IndexedViewSchema`, `repo_path`, `BranchName`) always count as defined, along with every `ScriptTokens` entry and every name derived from an `Extensions` block, in every prefixed form (`Table.`, `MaterializedView.`, `IndexedView.`) a token could legitimately take. When it's unclear whether a name is a genuine custom token, `--Validate` always resolves the uncertainty toward "assume defined" -- a linter that flags a token you actually defined is worse than one that occasionally misses a stale one.
+Built-in tokens (`ProductName`, `TemplateName`, `SchemaName`, `TableSchema`, `MaterializedViewSchema`, `IndexedViewSchema`, `TableXml`, `MaterializedViewXml`, `IndexedViewXml`, `ServerMajorVersion`, `CompatibilityLevel`, `repo_path`, `BranchName`) always count as defined, along with every `ScriptTokens` entry and every name derived from an `Extensions` block, in every prefixed form (`Table.`, `MaterializedView.`, `IndexedView.`) a token could legitimately take. When it's unclear whether a name is a genuine custom token, `--Validate` always resolves the uncertainty toward "assume defined" -- a linter that flags a token you actually defined is worse than one that occasionally misses a stale one.
 
 `SS-TOK-001`/`002`/`003` scan the package as raw text and only confirm a token's *key* is defined somewhere -- they can't tell whether a `<*File*>` reference actually resolves. `SS-TOK-004` closes that gap: it comes from the loaded package (the same file-token resolution `Template.Load`/`Product.Load` perform at deploy time), so it reports the token key **and** the full resolved path it looked for -- product-level tokens resolve against the package root, template-level tokens against that template's own directory, so the same key can mean two different paths depending on where it's declared.
 
@@ -267,10 +267,17 @@ Warnings do not fail the run on their own -- they're advisory (a missing `Varian
 
 ## Use it in CI
 
-`--Validate` needs nothing but the package and the SchemaQuench binary -- no database container, no secrets, no target environment. That makes it the cheapest possible gate to run on every pull request that touches schema files:
+`--Validate` needs nothing but the package and the SchemaQuench binary -- no database container, no secrets, no target environment. That makes it the cheapest possible gate to run on every pull request that touches schema files. The whole step is two commands, so it drops into any CI system -- Azure DevOps, GitHub Actions, GitLab CI, Jenkins, TeamCity -- as one shell step:
+
+```bash
+curl -fsSL https://schemasmith.com/dl/install.sh | sh
+cd MyProduct && schemaquench --Validate
+```
+
+The same step as a complete GitHub Actions workflow, for illustration:
 
 ```yaml
-# GitHub Actions -- static schema lint, no database required
+# Static schema lint, no database required
 name: Validate Schema Package
 on:
   pull_request:
@@ -289,7 +296,7 @@ jobs:
         run: schemaquench --Validate
 ```
 
-Because `--Validate` exits `2` on any Error, the job fails naturally on a broken package -- no extra scripting needed to interpret the result. Cross-platform: the same command works whether `MyProduct/Product.json` declares `SqlServer`, `PostgreSQL`, `MySQL`, or `MariaDb` as its `Platform` -- `--Validate` reads the declared platform and loads the package through the matching domain model automatically.
+Because `--Validate` exits `2` on any Error, the job fails naturally on a broken package in every CI system -- no extra scripting needed to interpret the result. Cross-platform: the same command works whether `MyProduct/Product.json` declares `SqlServer`, `PostgreSQL`, `MySQL`, or `MariaDb` as its `Platform` -- `--Validate` reads the declared platform and loads the package through the matching domain model automatically.
 
 Pair it with the connection-based gates for a layered pipeline: `--Validate` on every PR (fast, no database), `--TestConnection` and `--PreviewTargets` immediately before a real deployment window (see [Pre-Flight Diagnostics](schemaquench.md#pre-flight-diagnostics)), and `WhatIfONLY` when you want to see the actual generated SQL for a tricky change (see [WhatIf Mode](schemaquench.md#whatif-mode)).
 

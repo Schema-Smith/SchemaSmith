@@ -6,10 +6,35 @@ The grant sets below are the recommended starting point for a `datafix_user` acc
 
 > **Provisional:** Treat these as the minimal baseline a datafix deploy role needs across all four engines (the Course 6 lab exercises SQL Server, PostgreSQL, and MySQL; MariaDB uses the same grant set as MySQL). Certify them against your own fix and environment — any grant a specific datafix doesn't actually exercise should be removed.
 
-**SchemaSmith's run-once record.** A migration script runs once per database because SchemaQuench records it in a
-SchemaSmith table when it has run. The deploy account needs `SELECT`, `INSERT` and `DELETE` on that table and nothing
-else of SchemaSmith's. Without them SchemaQuench stops before running the slot, naming the table, rather than run your fix
-again on the next deploy.
+**What the account touches of SchemaSmith's.** With `KindleTheForge` and `UpdateTables` off, nothing in the run reads
+or writes SchemaSmith's ownership or expression-map tables, and the kindle stamp is never checked. What
+is left depends on what the package carries:
+
+- **The run-once record** (`SchemaSmith.CompletedMigrationScripts` on SQL Server, `"SchemaSmith"."CompletedMigrationScripts"`
+  on PostgreSQL, `SchemaSmith_CompletedMigrationScripts` on MySQL and MariaDB) — only while
+  [`TrackRunOnceMigrations`](schemaquench.md#trackrunoncemigrations) is `true`, which this lab keeps so a fix runs once per
+  database. The account needs `SELECT`, `INSERT` and `DELETE` on it (PostgreSQL: `USAGE` on the schema too). SchemaQuench
+  checks before it runs the slot: on SQL Server it asks for `SELECT` and `INSERT` outright, and on every engine a read that
+  fails for any reason other than the table not existing stops the run before the first script
+  (`Cannot read which <slot> scripts have already run from <table>. Nothing in the slot was run …`, exit `2`), because a
+  run-once script would otherwise run again. If a script applies and its record then cannot be inserted, the data change
+  stands but the script is reported as failed (`The script applied, but could not be recorded as run, so the next deploy
+  would run it again`). With `TrackRunOnceMigrations: false` the table is never touched and none of these grants is needed.
+- **The unchanged-object stamp** (`SchemaSmith.ScriptStamp`, `"SchemaSmith"."ScriptStamp"`, `SchemaSmith_ScriptStamp`) — only
+  when the package carries object scripts (a folder declared with an `ObjectType`, such as `Procedures/`) and
+  `Target:SkipUnchangedObjects` is on (the default). Each such script reads its stamp before it runs and rewrites it after it
+  applies, so the account needs `SELECT`, `INSERT` and `DELETE` on the table. Without them the scripts still run every time:
+  SQL Server logs each denied statement as an error; PostgreSQL, MySQL and MariaDB say nothing when the read is denied; and
+  every engine logs one `Could not record the script stamp` line per target when only the write is. A script that drops and
+  recreates a procedure, function or view also calls SchemaSmith's `CapturePermissions` and `ReapplyPermissions` routines to
+  carry the module's grants across the drop (SQL Server: `EXECUTE` on them; PostgreSQL: `USAGE` on the `"SchemaSmith"`
+  schema, routines being executable by default; MySQL and MariaDB: the `EXECUTE ON db.*` below covers them); without that,
+  the recreated module comes back with no grants. The change audit is read, best-effort, only after such a re-apply -- a
+  denied read leaves the report `instrumented: false` and nothing else.
+- **MySQL and MariaDB progress** — the status-message poller reads `SchemaSmith_StatusMessages` through the tenant-wide
+  `SELECT` below; nothing more is needed.
+
+The sets below assume the lab's shape: migration scripts with tracking on, no object scripts.
 
 ---
 
@@ -115,10 +140,13 @@ FLUSH PRIVILEGES;
 
 ## Privilege summary across engines
 
+The same five capabilities, side by side, so you can hand a DBA one row per engine and verify what came back against it.
+
 | Capability | SQL Server | PostgreSQL | MySQL | MariaDB |
 |---|---|---|---|---|
 | Reader/writer on data | `GRANT SELECT, INSERT, UPDATE ON SCHEMA::dbo` | `GRANT SELECT, INSERT, UPDATE ON ALL TABLES IN SCHEMA public` | `GRANT SELECT, INSERT, UPDATE ON db.*` | `GRANT SELECT, INSERT, UPDATE ON db.*` |
 | Backup table creation | `GRANT CREATE TABLE` + `CREATE SCHEMA datafix AUTHORIZATION datafix_user` (owns the schema) | `CREATE SCHEMA datafix AUTHORIZATION datafix_user` (owns it; no `CREATE` on `public`) | `GRANT CREATE ON db.*` | `GRANT CREATE ON db.*` |
 | Temp space | Implicit for authenticated logins | `GRANT TEMPORARY ON DATABASE` | `GRANT CREATE TEMPORARY TABLES ON db.*` | `GRANT CREATE TEMPORARY TABLES ON db.*` |
 | Execute ancillary routines | `GRANT EXECUTE ON SCHEMA::dbo` | `GRANT EXECUTE ON ALL FUNCTIONS/PROCEDURES IN SCHEMA public` | `GRANT EXECUTE ON db.*` | `GRANT EXECUTE ON db.*` |
-| Run-once record | `GRANT SELECT, INSERT, DELETE ON SchemaSmith.CompletedMigrationScripts` | `GRANT USAGE ON SCHEMA "SchemaSmith"` + `GRANT SELECT, INSERT, DELETE ON "SchemaSmith"."CompletedMigrationScripts"` | `GRANT DELETE ON db.SchemaSmith_CompletedMigrationScripts` (with the reader/writer grant) | as MySQL |
+| Run-once record (`TrackRunOnceMigrations: true`) | `GRANT SELECT, INSERT, DELETE ON SchemaSmith.CompletedMigrationScripts` | `GRANT USAGE ON SCHEMA "SchemaSmith"` + `GRANT SELECT, INSERT, DELETE ON "SchemaSmith"."CompletedMigrationScripts"` | `GRANT DELETE ON db.SchemaSmith_CompletedMigrationScripts` (with the reader/writer grant) | as MySQL |
+| Unchanged-object stamp (object scripts only) | `GRANT SELECT, INSERT, DELETE ON SchemaSmith.ScriptStamp` | `GRANT USAGE ON SCHEMA "SchemaSmith"` + `GRANT SELECT, INSERT, DELETE ON "SchemaSmith"."ScriptStamp"` | `GRANT DELETE ON db.SchemaSmith_ScriptStamp` (with the reader/writer grant) | as MySQL |

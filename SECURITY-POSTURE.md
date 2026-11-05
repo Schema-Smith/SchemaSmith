@@ -52,11 +52,13 @@ HTTP client and open no sockets of their own.
 - **Build provenance and reproducibility.** Releases are built by a GitHub Actions
   workflow from a tagged commit in the public repository. Every action used in the build
   is pinned to a specific commit SHA rather than a mutable tag.
-- **Release gate.** A release cannot be produced unless the following checks are green on
-  the release commit: `Build & Unit Tests`, `Integration Tests (SQL Server)`,
-  `Integration Tests (PostgreSQL latest)`, `Integration Tests (PostgreSQL 14)`,
-  `Integration Tests (MySQL)`, `Integration Tests (MariaDB 11.4)`,
-  `Integration Tests (MariaDB 10.6)`, `Coverage Gate`, and `check-headers`.
+- **Release gate.** A release cannot be produced unless every check CI runs on a merge to
+  `main` is green on the release commit: `Build & Unit Tests`; the integration legs for
+  SQL Server 2017, 2019, 2022 and 2025, PostgreSQL 12 through 18, MySQL 5.7.22, 5.7,
+  8.0.23, 8.0, 8.4, 9.7 and 26, MariaDB 10.2, 10.6, 11.4, 11.8, 12.3 and 13, plus the
+  MySQL 8.0 and MariaDB 11.4 `lower_case_table_names=1` legs; `Genuine Sweep Record`;
+  `Engine Ceiling Ratchet`; `Coverage Gate`; and `check-headers`. The list the release
+  workflow enforces is the `REQUIRED_CHECKS` array in `.github/workflows/release.yml`.
 - **Windows code signing.** Windows binaries (`win-x64`, `win-arm64`) are Authenticode
   signed via Azure Trusted Signing.
 - **Checksums.** Every release publishes a `SHA256SUMS` file covering all release assets.

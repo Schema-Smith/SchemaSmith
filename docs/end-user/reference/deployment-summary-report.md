@@ -21,7 +21,7 @@ They're archived with the rest of the logs when a run finishes, so a report trav
 
 > **Note:** The report is strictly best-effort. Writing it is wrapped so that a failure to assemble or serialize the summary can never disrupt the run's real logging, exit code, or control flow — a broken report never breaks a deployment. If it can't be written, you get a one-line warning in the progress log and the run proceeds exactly as it would have.
 
-> **Emitted on every exit path.** Success, partial failure, and all three hard-abort sites funnel through the same writer, and it's idempotent — an aborting run writes the report once on its way out. A run that died is exactly the run whose report you most want to read, so the report is there for it.
+> **Emitted on every exit path.** Success, partial failure, and every hard-abort site funnel through the same writer, and it's idempotent — an aborting run writes the report once on its way out. A run that died is exactly the run whose report you most want to read, so the report is there for it.
 
 ## Redirecting the report
 
@@ -33,7 +33,7 @@ SchemaQuench --report:./artifacts/deploy-summary
 
 That writes `./artifacts/deploy-summary.json` and `./artifacts/deploy-summary.md`. You give the path *without* an extension; SchemaQuench appends `.json` and `.md` to the base you provide. Omit the switch and both files fall back to `SchemaQuench - Summary.json` / `.md` in the log directory.
 
-Attach the value with `:` or `=`, as with every other SchemaSmith switch — **not** with a space. A space-separated `--report ./artifacts/deploy-summary` leaves the switch with no value, so the report silently falls back to the default location instead of the path you named.
+Attach the value with `:` or `=`, as with every other SchemaSmith switch — **not** with a space. A space-separated `--report ./artifacts/deploy-summary` leaves the switch with no value and the path standing alone as an argument the tool will never read, so the run stops before anything connects: `Not recognized: ./artifacts/deploy-summary. Nothing was run.`, exit `2`. See [CLI Switch Format](configuration.md#cli-switch-format).
 
 ## Tuning bottleneck detection
 
@@ -62,7 +62,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     "startedUtc": "2026-07-09T14:03:11.204Z",
     "finishedUtc": "2026-07-09T14:03:47.881Z",
     "durationMs": 36677,            // run wall-clock
-    "mode": "Quench",               // Quench | WhatIf | Validate
+    "mode": "Quench",               // Quench | WhatIf
     "outcome": "Success",           // Success | Incomplete | PartialFailure | Aborted
     "exitCode": 0,
     "resumedFromCheckpoint": false
@@ -114,6 +114,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     "modified": { "tables": 1, "columns": 3 },
     "dropped":  { "tables": 0, "indexes": 1, "constraints": 0, "foreignKeys": 0 },
     "scriptsRan": 12,
+    "scriptsUnchanged": 3,          // object scripts left alone because nothing changed since their last apply
     "details": [
       { "objectType": "table",     "objectName": "sales.Orders",            "action": "created",  "server": "db01", "database": "Shop" },
       { "objectType": "column",    "objectName": "sales.Orders.Region",     "action": "modified", "server": "db01", "database": "Shop" },
@@ -121,6 +122,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
       { "objectType": "procedure", "objectName": "Procedures/GetOrders.sql", "action": "ran",     "server": "db01", "database": "Shop" }
     ]
   },
+  "preventDrop": null,              // null unless the environment's PreventDrop is on -- its own section below
   "unsupportedDowngrade": {         // null unless a feature was degraded for the target version
     "downgrades": [
       { "feature": "expression statistics (PG14)", "objectName": "public.metric.ST_metric_expr" }
@@ -143,6 +145,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `failures` | One entry per failed scope — the same content as the failure roll-up log. |
 | `whatIf` | The would-apply / would-skip / would-deliver plan; `null` unless the run was `WhatIf` mode. |
 | `objectChanges` | Verified DDL changes and object-script runs — its own section below. |
+| `preventDrop` | The no-drop protection manifest: what the run would have dropped by absence and withheld — its own section below. `null` unless the environment's `PreventDrop` is on. |
 | `unsupportedDowngrade` | Features the package declared that the target version couldn't take, emitted in a degraded form and recorded — its own section below. `null` when nothing was degraded. |
 
 ### `run`
@@ -153,7 +156,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `platform` | `SqlServer`, `PostgreSQL`, `MySQL`, or `MariaDb`. |
 | `startedUtc` / `finishedUtc` | Run start and end, UTC. |
 | `durationMs` | Wall-clock milliseconds for the whole run. |
-| `mode` | `Quench` (a real deploy), `WhatIf` (a dry run), or `Validate`. |
+| `mode` | `Quench` (a real deploy) or `WhatIf` (a dry run). A `--Validate` run writes no report: it exits with its findings before a deployment starts. |
 | `outcome` | `Success`; `Incomplete` (every target finished, but a feature was downgraded on a target that lacks it -- see `unsupportedDowngrade` -- exit code `1`); `PartialFailure` (some targets failed, others succeeded); or `Aborted`. |
 | `exitCode` | The process exit code the run returned. |
 | `resumedFromCheckpoint` | `true` when the run resumed a prior interrupted deployment. |
@@ -215,6 +218,27 @@ Empty on a clean run. Each entry mirrors the failure triage roll-up exactly — 
 | `wouldSkip[]` | Changes it would skip. |
 | `wouldDeliver[]` | Data it would deliver: a `Table Data` script's path, or a table's `DataDelivery` as the table's name (with ` [variant]` when the delivery names one). |
 
+### `preventDrop`
+
+`null` unless the environment-level [`PreventDrop`](configuration.md#preventdrop) is on. When it is, the run skips every drop-by-absence and this block is the receipt for what it withheld, so a protected environment can see what a full deploy would remove without removing it.
+
+```jsonc
+"preventDrop": {
+  "enabled": true,
+  "wouldDrop": [                    // empty when protection was on but nothing was suppressed
+    { "objectType": "table",  "objectName": "sales.LegacyOrders" },
+    { "objectType": "column", "objectName": "sales.Orders.Region" }
+  ]
+}
+```
+
+| Key | Meaning |
+| --- | --- |
+| `enabled` | Always `true` when the block is present. |
+| `wouldDrop[]` | One entry per object that would have been dropped by absence and was kept: `objectType` names the kind (tables, columns, foreign keys, check and exclude constraints, statistics, indexes), `objectName` the object. Only by-absence removals are listed; a drop-and-recreate for a declared change never is. |
+
+In `Summary.md` the same block renders under a **PreventDrop (no-drop protection)** heading, as `Protection active — no drops were suppressed this run.` or `Protection active — N drop(s) suppressed …` with one bullet per object. These suppressed drops are not `objectChanges.details[]` rows: they belong here, because nothing changed.
+
 ## objectChanges — what actually changed
 
 Timing tells you where the run spent its seconds; `objectChanges` tells you what it *did to your schema*. This is the section a DBA reads after a release: how many tables were created, which columns were modified, what got dropped. But it draws a hard, honest line between changes SchemaSmith *verified* and scripts it merely *ran* — and understanding that line is the whole point of the section.
@@ -223,7 +247,7 @@ Timing tells you where the run spent its seconds; `objectChanges` tells you what
 
 **Under WhatIf.** A `WhatIf` run records what it *would* change with the parallel actions `wouldCreate` / `wouldModify` / `wouldDrop`, which roll into the same `created` / `modified` / `dropped` buckets — so a dry run's `objectChanges` previews the structural changes it would make rather than reporting an empty section. The counts read the same as a real run; the report's `mode` field (`WhatIf` vs `Quench`) is how you tell a preview from an applied change.
 
-**Scripts that ran.** Object scripts — your stored procedures, views, and functions — are a different story. SchemaSmith re-applies them idempotently on *every* run, so a procedure script executes whether or not its body changed anything. SchemaSmith refuses to guess. It will not tell you a procedure was "created" or "modified" when all it honestly knows is that the script *ran*. So object scripts never touch the created/modified counts. Instead they contribute to `scriptsRan` (a count) and to `details[]` rows carrying `"action": "ran"`.
+**Scripts that ran.** Object scripts — your stored procedures, views, and functions — are a different story. SchemaSmith re-applies them idempotently on *every* run, so a procedure script executes whether or not its body changed anything. SchemaSmith refuses to guess. It will not tell you a procedure was "created" or "modified" when all it honestly knows is that the script *ran*. So object scripts never touch the created/modified counts. Instead they contribute to `scriptsRan` (a count) and to `details[]` rows carrying `"action": "ran"`. An object script that was *not* re-run because [nothing changed since its last apply](schemaquench.md#unchanged-object-scripts) counts under `scriptsUnchanged` instead, with a `details[]` row carrying `"action": "unchanged"` — the report says which scripts it left alone as plainly as which it ran.
 
 > **Why "ran", not "changed".** Reporting a re-applied procedure as "modified" every single run would be a lie that made every report look busy. An honest report says exactly what it knows: verified structural changes as counts, idempotent re-applies as "ran". When you see `scriptsRan: 12`, twelve object scripts executed — the report is not claiming twelve objects changed.
 
@@ -235,10 +259,11 @@ Timing tells you where the run spent its seconds; `objectChanges` tells you what
 | `modified` | `tables`, `columns`. |
 | `dropped` | `tables`, `indexes`, `constraints`, `foreignKeys`. |
 | `scriptsRan` | Total object scripts that ran this run. |
+| `scriptsUnchanged` | Total object scripts left alone because their text and the module the server renders are both as they were after the last apply. |
 
 ### `details[]`
 
-Where the counts are the summary, `details[]` is the itemized list — one row per recorded change or run, each with `objectType`, `objectName`, and `action`. The actions you'll see are `created`, `modified`, `dropped`, and `ran` on a real quench — and their `wouldCreate` / `wouldModify` / `wouldDrop` previews on a `WhatIf` run.
+Where the counts are the summary, `details[]` is the itemized list — one row per recorded change or run, each with `objectType`, `objectName`, and `action`. The actions you'll see are `created`, `modified`, `dropped`, `ran` and `unchanged` on a real quench — plus `rebuilt` on a `table` that [`RebuildPolicy`](configuration.md#rebuildpolicy) replaced wholesale — and their `wouldCreate` / `wouldModify` / `wouldDrop` previews on a `WhatIf` run (an `unchanged` script is `unchanged` under `WhatIf` too, since the probe is read-only).
 
 `details[]` also carries object types that have no dedicated count bucket. The verified-change audit records more kinds of object than the count fields cover, and those surface here rather than being dropped:
 
@@ -248,7 +273,8 @@ Where the counts are the summary, `details[]` is the itemized list — one row p
 - **`constraint`** — includes exclude constraints (PostgreSQL), which land in the generic constraint type.
 - **`dataDelivery`** — a table's `DataDelivery` that ran (`delivered`), or under `WhatIf` would run (`wouldDeliver`). The name is the table's, with ` [variant]` when the delivery names one.
 - **`database`** and **`schema`** — a database or schema created because its `TemplateTargets` entry or template sets `CreateIfMissing` (`created`, or `wouldCreate` under `WhatIf`).
-- **`sequence`**, **`domain type`**, **`domain constraint`**, **`enum type`** and **`enum value`** — PostgreSQL sequences, domains and enum types. An enum value the package no longer declares, or a changed value order, is recorded as `wouldDrop` / `wouldModify` even on a real run, because PostgreSQL cannot apply it without recreating the type.
+- **`sequence`** — a sequence created or modified (PostgreSQL and MariaDB).
+- **`domain type`**, **`domain constraint`**, **`enum type`** and **`enum value`** — PostgreSQL domains and enum types. An enum value the package no longer declares, or a changed value order, is recorded as `wouldDrop` / `wouldModify` even on a real run, because PostgreSQL cannot apply it without recreating the type.
 - **`changeDataCapture`**, **`changeTracking`** and **`temporal`** — SQL Server CDC, change tracking and system versioning on a table: `created` when turned on, `dropped` when turned off, `modified` for a CDC capture-instance rotation or a change-tracking reset. Disabling CDC on a table with two capture instances records one row for each.
 
 These appear as `details[]` rows with their real `objectType` and `action` even though no top-level count field aggregates them — the detail is preserved even where the summary doesn't bucket it.
@@ -274,7 +300,8 @@ When a package declares a feature the detected target version can't support — 
 
 These downgrades are recorded **separately** from `objectChanges` — they are not a `details[]` action — because a degraded object is a distinct outcome from a created, modified, or dropped one: the object landed, but not at full fidelity.
 
-```json
+```jsonc
+// the unsupportedDowngrade member of Summary.json
 "unsupportedDowngrade": {
   "downgrades": [
     { "feature": "expression statistics (PG14)", "objectName": "public.metric.ST_metric_expr" },

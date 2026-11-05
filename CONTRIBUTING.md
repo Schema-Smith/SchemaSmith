@@ -35,7 +35,7 @@ The CLI tools target:
 
 ### Running Locally with Docker
 
-The `Demos/` directory has a separate Docker compose stack per platform — `Demos/SqlServer/`, `Demos/PostgreSQL/`, `Demos/MySQL/`. Each stack spins up the database server and runs SchemaQuench to deploy the bundled demo schema packages (AdventureWorks, Chinook, Northwind, Sakila).
+The `Demos/` directory has a separate Docker compose stack per platform — `Demos/SqlServer/`, `Demos/PostgreSQL/`, `Demos/MySQL/`, `Demos/MariaDB/`. Each stack spins up the database server and runs SchemaQuench to deploy the bundled demo schema packages (AdventureWorks, Chinook, Northwind, Sakila). MariaDB binds host port `3317` so it runs beside the MySQL stack on `3306`.
 
 Each platform folder has `run-demo.cmd` (Windows) and `run-demo.sh` (Linux/macOS) that build SchemaQuench from your local source and stand the stack up correctly:
 
@@ -44,11 +44,13 @@ Each platform folder has `run-demo.cmd` (Windows) and `run-demo.sh` (Linux/macOS
 cd Demos\SqlServer    & run-demo.cmd
 cd Demos\PostgreSQL   & run-demo.cmd
 cd Demos\MySQL        & run-demo.cmd
+cd Demos\MariaDB      & run-demo.cmd
 
 # Linux / macOS
 cd Demos/SqlServer    && ./run-demo.sh
 cd Demos/PostgreSQL   && ./run-demo.sh
 cd Demos/MySQL        && ./run-demo.sh
+cd Demos/MariaDB      && ./run-demo.sh
 ```
 
 Default credentials are in each stack's `.env` file. See [`Demos/README.md`](Demos/README.md) for additional details.
@@ -67,12 +69,13 @@ Integration tests require live database containers. The Docker compose stack abo
 
 ## Project and Solution Organization
 
-The solution is organized around the three end-user CLI tools and the shared schema library:
+The solution is organized around the four end-user CLI tools and the shared schema library:
 
 - **`SchemaQuench/`** — CLI that deploys a schema package to a target database.
 - **`SchemaTongs/`** — CLI that extracts a live database into a clean, source-controllable schema package.
 - **`DataTongs/`** — CLI that captures and deploys reference data alongside schema.
-- **`Schema/`** — Shared library containing the domain model (`Domain/`, with platform-specific `Domain.SqlServer/`, `Domain.PostgreSQL/`, `Domain.MySQL/` projections), data access (`DataAccess/`), data delivery (`Delivery/`), checkpointing, isolators, embedded SQL scripts (`Scripts/`), and utilities. Referenced by the four CLI projects in this repository.
+- **`SchemaShears/`** — CLI that carves an object-level patch package from a full product via a manifest.
+- **`Schema/`** — Shared library containing the domain model (`Domain/`, with platform-specific `Domain.SqlServer/`, `Domain.PostgreSQL/`, `Domain.MySQL/`, `Domain.MariaDb/` projections), data access (`DataAccess/`), data delivery (`Delivery/`), checkpointing, isolators, embedded SQL scripts (`Scripts/`), and utilities. Referenced by the four CLI projects in this repository.
 - **`TestProducts/`** — Schema packages used by integration tests as fixtures.
 - **`Demos/`** — Demo schema packages and Docker compose stack for local development.
 - **`packaging/`** — Release packaging assets (install scripts, package templates, etc.).
@@ -97,15 +100,15 @@ PRs that add behavior without corresponding tests will be sent back. If you genu
 ### Code Coverage
 
 - **Target:** >85% line coverage, aiming close to 100% on new code.
-- **Tooling:** `coverlet` collects line coverage during `dotnet test` (configured by `coverage.runsettings`). CI runs collection in every test job — unit and all three database engines — merges the results, and **fails the build** if any project or the solution total falls below its line-coverage threshold. The merged report and a per-project summary are published on every CI run.
-- **Thresholds (line %):** DataTongs 92, Schema 92, SchemaQuench 91, SchemaTongs 90, solution 91. These protect the current level rather than the bare 85% floor and are a ratchet — raised over time toward the observed baseline, never lowered to make a red gate green. The fix for a failing gate is added tests.
+- **Tooling:** `coverlet` collects line coverage during `dotnet test` (configured by `coverage.runsettings`). CI runs collection in every test job — unit and all four database engines — merges the results, and **fails the build** if any project or the solution total falls below its line-coverage threshold. The merged report and a per-project summary are published on every CI run.
+- **Thresholds (line %):** DataTongs 92, Schema 93, SchemaQuench 91, SchemaShears 98, SchemaTongs 90, solution 91 (`scripts/check-coverage-thresholds.py` is the source of truth). These protect the current level rather than the bare 85% floor and are a ratchet — raised over time toward the observed baseline, never lowered to make a red gate green. The fix for a failing gate is added tests.
 - **Non-regression:** A PR that reduces coverage — even if the result stays above target — needs an explicit, specific reason in the PR description. "I didn't get to it" is not a reason; "this code path requires an isolator we haven't built and I've filed issue #N to track it" is. **Lowering a gate threshold, or widening the coverage exclusions to drop product code out of the denominator, is a flagged review event** — call it out and investigate; it is never an invisible part of getting CI green. Legitimate exclusions are test assemblies and compiler plumbing only; excluding product code in any form (new `<Exclude>` patterns, `GeneratedCodeAttribute`, or `[ExcludeFromCodeCoverage]` on real code) counts the same as lowering the number.
 
 ### OS Portability
 
 Code shipped in the CLI tools runs on Windows, Linux, and macOS, on x64 and ARM64. Common pitfalls to avoid:
 
-- Hard-coded path separators (`\\` or `/`) — use `Path.Combine`, `Path.DirectorySeparatorChar`.
+- Hard-coded path separators (`\\` or `/`) — use `Path.Join` (not `Path.Combine`, which the pre-push lint flags), `Path.DirectorySeparatorChar`.
 - Case-sensitive filesystems on Linux/macOS — file lookups must match casing exactly.
 - Line endings — see `.editorconfig` (CRLF default; LF for shell scripts; trailing whitespace preserved in markdown).
 - Process invocation — `cmd` / `pwsh` aren't available everywhere; prefer pure-.NET implementations or guard with platform checks.
@@ -235,7 +238,7 @@ When reviewing a PR, we look at:
 - **Test rigor.** Do the tests actually exercise the behavior, or do they just call into it? Are failure modes tested, not just success modes? For database-touching code, do the tests run against real database platforms?
 - **Coverage.** Did this PR raise or lower coverage on the touched code? Reductions need a stated reason. Watch specifically for changes to the coverage gate thresholds or the `coverage.runsettings` exclusions. The only legitimate exclusions are test assemblies and compiler-generated plumbing — anything that drops *product* code out of the denominator (a new assembly or namespace in `<Exclude>`, adding `GeneratedCodeAttribute` to `ExcludeByAttribute`, or `[ExcludeFromCodeCoverage]` on real code) games the gate exactly like lowering the threshold and must be flagged and investigated, not approved silently.
 - **OS portability.** Will this code behave the same on Windows, Linux, and macOS? Are paths, line endings, and culture-dependent operations handled correctly?
-- **Database Platform parity.** If a feature lands for one database platform, what's the story for the other two? Sometimes "we'll do it next" is the right answer with a tracked issue; sometimes it's a sign the design isn't ready.
+- **Database Platform parity.** If a feature lands for one database platform, what's the story for the other three? Sometimes "we'll do it next" is the right answer with a tracked issue; sometimes it's a sign the design isn't ready.
 - **Backward compatibility.** Does this change affect a public API surface, package format, or generated SQL shape? If so, is the change additive, deprecating, or breaking? Breaking changes need explicit CHANGELOG entries.
 - **Style and consistency.** Does the code match the surrounding style? `.editorconfig`'s naming rules, brace style, indentation? No suppressed warnings without justification?
 - **Comment hygiene.** Are comments load-bearing (explaining a non-obvious why) or noise (restating the code, referencing the PR/ticket, marking removed code)?

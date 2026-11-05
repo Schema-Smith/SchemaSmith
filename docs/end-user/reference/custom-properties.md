@@ -71,44 +71,61 @@ In earlier versions of SchemaSmith, custom properties were sprinkled directly in
 
 ## Supported Objects
 
-`Extensions` is available on every table component type where it makes sense. The specific set varies by platform because the underlying schema elements vary.
+`Extensions` is available on every declared object and component in a package -- every type below accepts the key, carries it through load and round-trips it through extraction. The specific set varies by platform because the underlying schema elements vary. The **Tokens** column says whether the values also become `{{Token}}` substitutions (see [Token Integration](#token-integration)); where it says *metadata only*, the bag is stored and preserved but nothing reads it at deploy time.
 
 ### All Platforms
 
-| Object | Lives In |
-|---|---|
-| Table | Top-level table definition file |
-| Column | `Columns` array |
-| Index | `Indexes` array |
-| ForeignKey | `ForeignKeys` array |
-| CheckConstraint | `CheckConstraints` array |
+| Object | Lives In | Tokens |
+|---|---|---|
+| Table | Top-level table definition file | Yes |
+| Column | `Columns` array | Yes |
+| Index | `Indexes` array | Yes |
+| ForeignKey | `ForeignKeys` array | Yes |
+| CheckConstraint | `CheckConstraints` array | Yes |
 
 ### SQL Server Additional
 
-| Object | Lives In |
-|---|---|
-| XmlIndex | `XmlIndexes` array |
-| Statistic | `Statistics` array |
-| FullTextIndex | `FullTextIndex` object |
-| IndexedView | Top-level indexed view definition file |
-| IndexedView Index | `Indexes` array inside an indexed view definition |
+| Object | Lives In | Tokens |
+|---|---|---|
+| XmlIndex | `XmlIndexes` array | Yes |
+| SpatialIndex | `SpatialIndexes` array | Yes |
+| JsonIndex | `JsonIndexes` array | Yes |
+| Statistic | `Statistics` array | Yes |
+| FullTextIndex | `FullTextIndex` object, or each variant in its array | Yes |
+| EdgeConstraint | `EdgeConstraints` array | Metadata only |
+| EdgeConstraint clause | `Clauses` array inside an edge constraint | Metadata only |
+| IndexedView | Top-level indexed view definition file | Yes |
+| IndexedView Index | `Indexes` array inside an indexed view definition | Yes |
 
 ### PostgreSQL Additional
 
-| Object | Lives In |
-|---|---|
-| MaterializedView | Top-level materialized view definition file |
-| MaterializedView Index | `Indexes` array inside a materialized view definition |
-| ExcludeConstraint | `ExcludeConstraints` array |
-| Statistic | `Statistics` array |
+| Object | Lives In | Tokens |
+|---|---|---|
+| MaterializedView | Top-level materialized view definition file | Yes |
+| MaterializedView Index | `Indexes` array inside a materialized view definition | Yes |
+| ExcludeConstraint | `ExcludeConstraints` array | Yes |
+| Statistic | `Statistics` array | Yes |
+| Policy | `Policies` array | Yes |
+| DomainType | Top-level file in `Domain Types/` | Metadata only |
+| Domain constraint | `CheckConstraints` array inside a domain type | Metadata only |
+| EnumType | Top-level file in `Enum Types/` | Metadata only |
+| Sequence | Top-level file in `Sequences/` | Metadata only |
 
 ### MySQL Additional
 
-| Object | Lives In |
-|---|---|
-| FullTextIndex | `FullTextIndexes` array |
+MariaDB tables carry every MySQL object below, plus the two marked MariaDB.
 
-> **Note:** `Product.json` and `Template.json` do not support `Extensions`. Custom properties belong to schema components, not to the product or template configuration.
+| Object | Lives In | Tokens |
+|---|---|---|
+| FullTextIndex | `FullTextIndexes` array | Metadata only |
+| Event | Top-level file in `Events/` | Metadata only |
+| Partitioning | `Partitioning` object | Metadata only |
+| Subpartitioning | `Subpartitioning` object inside `Partitioning` | Metadata only |
+| Partition | `Partitions` array inside `Partitioning` | Metadata only |
+| SystemTime (MariaDB) | `SystemTime` object inside `Partitioning` | Metadata only |
+| Sequence (MariaDB) | Top-level file in `Sequences/` | Metadata only |
+
+> **Note:** `Product.json` and `Template.json` do not support `Extensions`, and neither do the entries inside `ScriptFolders`. Custom properties belong to schema components, not to the product or template configuration; a package that puts the key there fails to load, naming the property and the file.
 
 Custom properties at any level are completely independent -- a `DataClassification` on the table and a `DataClassification` on a column are two different values.
 
@@ -123,7 +140,8 @@ Here's where custom properties stop being passive metadata and start driving beh
 - **Table-level `Extensions`** are available inside the table's own `ShouldApplyExpression` using **bare names** (`{{Environment}}`).
 - **Table-level `Extensions`** are also available in every *child* component's expression fields using the **`Table.` prefix** (`{{Table.Environment}}`).
 - **Component-level `Extensions`** are available in that component's own expression fields using bare names (`{{MaskInNonProd}}`).
-- Within a component's expression, both the component's own bare-name tokens *and* the parent table's `Table.`-prefixed tokens are merged. If a bare name collides with a table token, the component wins.
+- Within a component's expression, the script tokens, the parent table's `Table.`-prefixed tokens and the component's own bare-name tokens are all available. The prefix keeps table and component names apart, so those two never collide.
+- **First definition wins.** The token list is built in the order *script tokens* (`Product.json` and `Template.json` `ScriptTokens`, plus the automatic `ProductName` and `TemplateName`), then the table's `Table.`-prefixed values, then the component's bare values -- and a name is replaced by the first entry that matches it. So a bare custom property that happens to share a name with a `ScriptTokens` entry resolves to the **script token**, not the custom property; the same holds for a table's own bare names in its own `ShouldApplyExpression`. Pick names that do not shadow your script tokens.
 
 ### Flattening rules
 
@@ -134,7 +152,19 @@ Here's where custom properties stop being passive metadata and start driving beh
 
 ### Where tokens are substituted
 
-Custom property tokens resolve anywhere script tokens resolve -- `ShouldApplyExpression`, `Default`, `CheckExpression`, script body text, and so on. See [Script Tokens Reference](script-tokens.md) for the exhaustive list.
+Custom property tokens are narrower than script tokens. They are substituted while a **table, indexed-view or materialized-view file** is loaded, in the expression fields of that file and nowhere else:
+
+| Field | Where |
+|---|---|
+| `ShouldApplyExpression` | The table itself; every column, index, foreign key and check constraint; SQL Server XML, spatial and JSON indexes, statistics and full-text index variants; PostgreSQL statistics, exclude constraints and policies; an indexed or materialized view and its indexes |
+| `Default` | Every column |
+| `Expression` | Table-level check constraints |
+| `CheckExpression`, `ComputedExpression` | SQL Server columns |
+| `GenerationExpression` | PostgreSQL, MySQL and MariaDB columns |
+| `FilterExpression` | SQL Server indexes and statistics; PostgreSQL indexes, exclude constraints and materialized-view indexes |
+| `UsingExpression`, `WithCheckExpression` | PostgreSQL policies |
+
+They do **not** reach `.sql` script files, the `Product.json` and `Template.json` script properties, a `DataDelivery` gate, a MySQL or MariaDB `FullTextIndexes` entry, `Partitioning`, or the declared-object files (events, enum types, domain types, sequences) -- in those places `Extensions` is metadata only. To hand a custom property to a script, read it out of the [`{{TableSchema}}`](script-tokens.md#automatic-tokens) payload, which carries every component's `Extensions` as written.
 
 ### Example — environment-conditional index
 

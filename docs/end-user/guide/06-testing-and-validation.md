@@ -10,7 +10,7 @@ The demo included with SchemaSmith ships Docker Compose files that stand up comp
 cd Demos/SqlServer && ./run-demo.sh
 ```
 
-That single command does everything: starts a database server (SQL Server, PostgreSQL, MySQL, or MariaDB depending on which `Demos/` folder you launched), waits for it to be healthy, then deploys the matching schema package. When it finishes, you have a fully quenched database running locally. Swap `Demos/SqlServer` for `Demos/PostgreSQL`, `Demos/MySQL`, or `Demos/MariaDB` to target a different engine.
+That single command does everything: publishes SchemaQuench from source (the launcher needs the .NET 10 SDK), starts a database server (SQL Server, PostgreSQL, MySQL, or MariaDB depending on which `Demos/` folder you launched), waits for it to be healthy, then deploys the matching schema package. When it finishes, you have a fully quenched database running locally. Swap `Demos/SqlServer` for `Demos/PostgreSQL`, `Demos/MySQL`, or `Demos/MariaDB` to target a different engine.
 
 Here's how the compose pattern is structured:
 
@@ -32,47 +32,30 @@ The testing workflow becomes a tight loop: make changes to your schema files, ru
 
 ## Schema validation in CI
 
-Before a schema package ever reaches a database, you can validate that every JSON file is structurally correct. You can add a CI job that validates schema files on every pull request -- catching malformed JSON, missing required properties, and structural errors without spinning up a database at all.
+Before a schema package ever reaches a database, SchemaQuench can tell you whether it is sound. `--Validate` loads the package from disk and lints it -- no connection, no target, no credentials -- so it runs on every pull request in seconds:
 
-Each schema package includes JSON Schema files in a `.json-schemas/` directory, generated **on the fly** from the live C# domain types. The schemas always match the current engine, for the exact platform the package targets -- so each file carries a platform infix (`.sqlserver.`, `.postgresql.`, `.mysql.`, or `.mariadb.`). The examples below use a SQL Server package; swap the infix for your platform. A typical CI step validates three categories:
-
-```yaml
-- name: validate-product
-  uses: GrantBirki/json-yaml-validate@v3.3.0
-  with:
-    json_schema: "./my-product/.json-schemas/products.sqlserver.schema"
-    files: "./my-product/Product.json"
-
-- name: validate-templates
-  uses: GrantBirki/json-yaml-validate@v3.3.0
-  with:
-    json_schema: "./my-product/.json-schemas/templates.sqlserver.schema"
-    files: "./my-product/Templates/Main/Template.json"
-
-- name: validate-tables
-  uses: GrantBirki/json-yaml-validate@v3.3.0
-  with:
-    json_schema: "./my-product/.json-schemas/tables.sqlserver.schema"
-    base_dir: "./my-product/Templates/Main/Tables"
+```bash
+schemaquench --Validate --SchemaPackagePath=./my-product
 ```
 
-What each validator catches:
+It exits `0` when the package is clean or carries only warnings, and `2` on any error (with `ExitNonZeroOnWarning` on, a warnings-only run exits `1` instead, for teams that want warnings to fail the check too). What it catches, in one pass:
 
-- **Product definition** -- `Product.json` validated against `products.<platform>.schema`. Catches missing product names, invalid token structures, malformed validation scripts, unknown platform values.
-- **Template definitions** -- Each `Template.json` validated against `templates.<platform>.schema`. Catches invalid template order entries, broken database identification scripts, malformed settings, bad custom folder declarations.
-- **Table definitions** -- Every table JSON file validated against `tables.<platform>.schema`. Catches invalid column types, malformed index definitions, structural errors in any table. On PostgreSQL packages, there's also `materializedviews.postgresql.schema`; on SQL Server packages, `indexedviews.sqlserver.schema`.
+- **Package load** -- `Product.json`, every `Template.json` and every table file parse and bind, and the product declares its `Platform`; a file that would crash the deploy mid-run is reported as a finding instead.
+- **Dangling references** -- two files declaring the same object, a foreign key or index naming a column that does not exist, a foreign key pointing at a table the package does not declare.
+- **Tokens** -- a `{{Token}}` used in a script that no `ScriptTokens` entry defines.
+- **Schema conformance** -- every file validated against the `.json-schemas/` the package carries, and the schemas themselves checked against the CLI that generated them, so an edited package cannot drift past what the editor was told is valid.
 
-This is the first line of defense. No database, no deployment, no credentials required -- just structural validation that runs in seconds. A typo in a column definition or a missing required field gets caught here, long before it could cause a deployment failure.
+The CI step is the same shell command on any platform -- a script step in Azure DevOps, GitHub Actions, GitLab CI, Jenkins, TeamCity, or anything else that runs a command and reads an exit code:
 
-**A working example you can copy from.** The SchemaSmith repository ships a complete, runnable workflow at `.github/workflows/validate-demo-schemas.yml` that does exactly this across all four engines -- SQL Server, PostgreSQL, MySQL, and MariaDB -- on every pull request that touches a demo JSON file. No database containers, no credentials, no setup; it passes or fails in seconds.
+```bash
+schemaquench --Validate --SchemaPackagePath=./my-product || { echo "Package validation failed"; exit 1; }
+```
 
-**It runs as one job, and that is a deliberate correction worth copying.** It began as a matrix with one job per schema/file pair -- 105 of them. Each did about 9 seconds of work, but GitHub bills a job a full minute, so the run cost roughly 105 billed minutes to do about 16 minutes of work: more than SchemaSmith's entire multi-engine integration matrix. The pairs were never the expensive part; the per-job overhead was. It is now a single job that installs `ajv` and runs `scripts/validate-demo-schemas.mjs`, which walks every pair in one process. Coverage is identical. The pair list lives in `scripts/validate-demo-schemas.json` beside it, so adding a package is a data edit rather than a workflow edit.
-
-**Your packages carry their own `$schema` reference**, so an editor validates them with no configuration and most third-party validators can find the schema themselves. The explicit pairing above is still what a CI step wants: it validates the files you name against the schema you name, rather than trusting a path inside the file it is checking.
+The `.json-schemas/` folder in each package is generated from the live engine types for the exact platform the package targets (each file carries a `.sqlserver.`, `.postgresql.`, `.mysql.`, or `.mariadb.` infix), and every package file carries a `$schema` reference to its own. That is what gives you autocomplete and inline errors in the editor with nothing to configure -- and `--Validate` is the same check, run against the whole package at once. For every rule, its code, and how to read the output, see the [`--Validate` reference](../reference/validate.md).
 
 ## Custom Extensions validation
 
-If your team has authored a custom JSON Schema fragment for the `Extensions` bag on tables (for example, to require a `DataClassification` field on every table or to constrain `OwningTeam` to a known list), that fragment rides inside the same `.schema` files and gets validated in the same CI step -- with zero workflow changes. The CI workflow picks it up automatically because it validates the whole `.schema` file, including whatever `Extensions` fragment your team has added. The schema generation process preserves your custom Extensions fragment through regeneration, so your team's governance rules are enforced automatically on every pull request.
+If your team has authored a custom JSON Schema fragment for the `Extensions` bag on tables (for example, to require a `DataClassification` field on every table or to constrain `OwningTeam` to a known list), that fragment rides inside the same `.schema` files and `--Validate` checks it with everything else -- no extra step. The schema generation process preserves your custom Extensions fragment through regeneration, so your team's governance rules are enforced automatically on every pull request.
 
 See [Custom Properties -- JSON Schema Validation](../reference/custom-properties.md#json-schema-validation) for the fragment format, a real demo that carries table-level and column-level Extensions governance, and step-by-step instructions for constraining the `Extensions` shape in your own `.schema` files.
 
@@ -83,7 +66,7 @@ Schema validation catches structural problems in your JSON files. But valid JSON
 WhatIf runs the full SchemaQuench deployment logic -- validation scripts, token replacement, DDL generation, dependency resolution -- without executing any changes against the database. It's a complete dry run.
 
 ```bash
-SmithySettings_WhatIfONLY=true SchemaQuench
+SchemaQuench --WhatIf
 ```
 
 In WhatIf mode, SchemaQuench:
@@ -100,47 +83,9 @@ For the full details on WhatIf output, debug SQL files, and configuration option
 
 ## Validation scripts as deployment gates
 
-The final layer runs at deployment time itself. The `ValidationScript` property in `Product.json` executes before SchemaQuench deploys anything. It's your safety gate: if the script returns 0 or false, deployment stops. This prevents accidentally quenching to the wrong server or an unprepared environment.
+The final layer runs at deployment time itself. The `ValidationScript` property in `Product.json` executes before SchemaQuench deploys anything -- am I on the right server? -- and `BaselineValidationScript` asks the second question: is this environment at the state this package expects? If either returns false, deployment stops before anything is touched. Nothing changed. Nothing broken. Exactly how a safety gate should work.
 
-**SQL Server -- verify the target database exists:**
-
-```sql
-SELECT CAST(CASE WHEN EXISTS(
-  SELECT 1 FROM master.sys.databases WHERE [name] = '{{MainDB}}'
-) THEN 1 ELSE 0 END AS BIT)
-```
-
-**PostgreSQL -- verify the target database exists:**
-
-```sql
-SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = '{{MainDB}}')
-```
-
-**MySQL -- verify the target schema exists:**
-
-```sql
-SELECT EXISTS(SELECT 1 FROM information_schema.schemata WHERE schema_name = '{{MainDB}}')
-```
-
-**Verify a minimum server version (SQL Server):**
-
-```sql
-SELECT CAST(CASE WHEN SERVERPROPERTY('ProductMajorVersion') >= 15
-    THEN 1 ELSE 0 END AS BIT)
-```
-
-**Confirm expected state before a migration (any platform):**
-
-```sql
-SELECT CASE WHEN EXISTS(
-  SELECT 1 FROM information_schema.tables
-    WHERE table_name = 'AppConfig' AND table_schema = '{{AppSchema}}'
-) THEN 1 ELSE 0 END
-```
-
-Validation scripts support token replacement, so you can use `{{ProductName}}`, `{{MainDB}}`, or any custom token you have defined -- including the advanced `<*Query*>` tag for values you want fetched from the live server. If validation fails, SchemaQuench logs the failure and exits without modifying anything. Nothing touched. Nothing broken. Exactly how a safety gate should work.
-
-Products also support `BaselineValidationScript`, which runs only during initial baseline deployments to verify the target is in the expected starting state.
+The scripts, the version-handshake pattern that pairs `BaselineValidationScript` with `VersionStampScript`, and the per-engine forms are all in [Power Workflows -- Validation gates](09-power-workflows.md#validation-gates); this chapter only places them in the layering.
 
 ### Three layers, three classes of problems
 
@@ -148,11 +93,11 @@ Each validation layer catches problems the others can't:
 
 | Layer | What it catches | When it runs | Database required? |
 |-------|----------------|--------------|-------------------|
-| **JSON Schema validation** | Malformed JSON, missing properties, structural errors, Extensions contract violations | PR time | No |
+| **`--Validate`** | Malformed JSON, missing properties, duplicates, dangling references, undefined tokens, JSON-schema and Extensions contract violations | PR time | No |
 | **WhatIf mode** | Invalid SQL, missing tokens, dependency failures | PR or pre-deploy | Yes (disposable) |
 | **Validation scripts** | Wrong server, wrong state, wrong version | Deploy time | Yes (target) |
 
-Schema validation is fast and cheap -- run it on every PR. WhatIf is thorough but needs a database -- run it on PRs that touch schema files. Validation scripts are your last line of defense -- they run on every deployment, every time, automatically. Three layers. Three stages. Problems caught early, kept far from production.
+`--Validate` is fast and cheap -- run it on every PR. WhatIf is thorough but needs a database -- run it on PRs that touch schema files. Validation scripts are your last line of defense -- they run on every deployment, every time, automatically. Three layers. Three stages. Problems caught early, kept far from production.
 
 ---
 

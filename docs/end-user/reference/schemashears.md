@@ -80,6 +80,7 @@ Functions/dbo.AuditChange.sql
 - Blank lines are ignored.
 - Paths use forward slashes or backslashes; SchemaShears normalizes them.
 - Paths must be relative to the product root (the folder containing `Product.json`).
+- Every entry must name a **file** that exists under the source. An entry that does not -- a typo, a file deleted since the diff was taken, or a directory (directories belong in the [always-include file](#always-include-file)) -- stops the build before anything is written, with `Manifest path does not exist under source: '<entry>'` and exit code `2`. A manifest with no usable entries is refused the same way.
 
 > **Tip:** The natural producer of a manifest is your VCS. Generate one from a commit range with the shell one-liner below and paste or pipe the output directly into your manifest file.
 
@@ -136,7 +137,7 @@ When `--Zip` is set, SchemaShears additionally compresses the output directory i
 
 ### Exit code
 
-SchemaShears exits `0` when the patch is built. It exits `2` when the request cannot be built: the source folder, `Product.json` or manifest is missing, an always-include entry does not exist, the output folder or zip already exists, or `--AllowDrops` names an unknown category. The reason is in the progress log and in `SchemaShears - Errors.log`. These checks run before anything is written, so a failed request leaves no partial output. The full table of codes is in [Configuration -- Exit Codes](configuration.md#exit-codes).
+SchemaShears exits `0` when the patch is built. It exits `2` when the request cannot be built: the source folder, `Product.json`, the manifest or the always-include file is missing, a manifest entry names a file that does not exist under the source, the manifest has no usable entries, an always-include entry does not exist, no output path was given, the output folder or zip already exists, or `--AllowDrops` names an unknown category. Nothing is skipped silently: one bad entry fails the whole build. The reason is in the progress log and in `SchemaShears - Errors.log`. These checks run before anything is written, so a failed request leaves no partial output. The full table of codes is in [Configuration -- Exit Codes](configuration.md#exit-codes).
 
 ---
 

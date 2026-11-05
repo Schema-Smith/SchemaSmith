@@ -1,8 +1,8 @@
 # Quick Start
 
-In the next 15 minutes, you'll extract a real database into version-controlled files, deploy them to a fresh empty database, make a schema change, and watch SchemaSmith compute the exact DDL needed to bring the target in line. By the end, you'll have completed the full SchemaSmith cycle -- and you'll understand why teams stop writing migration scripts once they've seen this.
+You're about to extract a real database into version-controlled files, deploy them back, make a schema change, and watch SchemaSmith compute the exact DDL needed to bring the target in line. By the end, you'll have completed the full SchemaSmith cycle -- and you'll understand why teams stop writing migration scripts once they've seen this.
 
-This walkthrough uses **SQL Server** as the primary example, but the exact same workflow works against **PostgreSQL** and **MySQL**. Every platform ships the same four demo products (AdventureWorks, Chinook, Northwind, Sakila) -- pick whichever engine your team runs.
+This walkthrough uses **SQL Server** as the primary example, but the exact same workflow works against **PostgreSQL**, **MySQL**, and **MariaDB**. Every platform ships the same four demo products (AdventureWorks, Chinook, Northwind, Sakila) -- pick whichever engine your team runs.
 
 ## Prerequisites
 
@@ -10,38 +10,45 @@ You need three things:
 
 **SchemaSmith tools.** Pick the fastest path for your platform:
 
-- **Windows:** `choco install schemasmith`
+- **Windows:** `winget install SchemaSmith.SchemaSmith` or `choco install schemasmith`
 - **Linux / macOS:** `curl -fsSL https://schemasmith.com/dl/install.sh | sh`
 - **Debian/Ubuntu, RHEL/Fedora, manual ZIP, signature verification, all the rest:** see [Installation](installation.md).
 
-**A database server.** Either an existing instance or Docker (recommended). The repository includes a Docker Compose file that starts the demo servers for you.
+**A database server.** A local instance, a container you already run, a shared dev box -- any SQL Server, PostgreSQL, MySQL, or MariaDB reachable from your machine, with a login that can create and drop databases. Don't have one? Step 1 has a Docker path too.
 
-**The demo files.** Clone the repository or download just the `Demos/` folder:
+**The repository.** The demo packages live under `Demos/`, but the helpers that stand them up live in the folders above them, so clone the whole repository rather than downloading one folder:
 
 ```bash
 git clone https://github.com/Schema-Smith/SchemaSmith.git
 cd SchemaSmith
 ```
 
-## Step 1: Start the Demo Environment
+## Step 1: Stand Up the Demo Databases
 
-Each platform has its own demo folder under `Demos/` with a `run-demo` launcher, a `docker-compose.yml`, and a `.env` credentials file. From the repository root, launch the SQL Server demo:
+Each platform has its own folder under `Demos/` holding the four demo packages and two ways to deploy them. The first uses the SchemaQuench you just installed; the second builds one from source.
 
-**macOS / Linux:**
+**On your own server.** This path uses the CLI you just installed. The `deploy-to-endpoint` helper creates the demo databases on the server you name and deploys each package with the `schemaquench` on your PATH. It needs your engine's command-line client (`sqlcmd` here) on the PATH as well. From the repository root:
+
+```powershell
+cd Demos\SqlServer
+.\deploy-to-endpoint.ps1 -Server 'localhost,1433' -User sa -Password 'YourPassword'
+```
 
 ```bash
 cd Demos/SqlServer
-./run-demo.sh
+./deploy-to-endpoint.sh --server localhost,1433 --user sa --password 'YourPassword'
 ```
 
-**Windows:**
+The helper lists the databases it is about to create, waits for you to type `yes`, and deploys. It only ever drops databases it created itself, so an existing `Northwind` of yours is refused, not replaced. Client installs, Windows Authentication, and renaming a colliding demo are in [Use your own server](use-your-own-server.md). For the rest of this walkthrough, substitute your server, login and password wherever you see `localhost,1440` and `TestUser`.
 
-```cmd
-cd Demos\SqlServer
-run-demo.cmd
+**With Docker.** This path builds SchemaQuench from source: `run-demo.sh` / `run-demo.cmd` publishes SchemaQuench with `dotnet publish`, so this path needs the **.NET 10 SDK** installed in addition to Docker; it then runs `docker compose up --build`, starts a SQL Server on port `1440`, and deploys the demo databases inside the compose stack. The launcher blocks until the `completed` service exits, which signals the databases are ready.
+
+```bash
+cd Demos/SqlServer
+./run-demo.sh          # run-demo.cmd on Windows
 ```
 
-The launcher runs `build-schemaquench.sh` to compile the SchemaQuench binary (requires the .NET SDK on the host), then `docker compose up --build` packages that binary into a local Docker image, starts a SQL Server instance on port `1440`, and deploys the demo databases using SchemaQuench. The launcher blocks until the `completed` service exits, which signals the databases are ready. Credentials live in `Demos/SqlServer/.env`:
+Credentials live in `Demos/SqlServer/.env`:
 
 | Setting  | Value |
 |----------|-------|
@@ -49,9 +56,9 @@ The launcher runs `build-schemaquench.sh` to compile the SchemaQuench binary (re
 | User     | `TestUser` |
 | Password | _(see `Demos/SqlServer/.env`)_ |
 
-> **PostgreSQL, MySQL, or MariaDB?** Swap the platform folder: `Demos/PostgreSQL` (port `5432`), `Demos/MySQL` (port `3306`), or `Demos/MariaDB` (port `3317`). Each platform has its own `run-demo.sh` / `run-demo.cmd` launcher, `.env` credentials file, and the same four demo databases (AdventureWorks, Chinook, Northwind, Sakila). On MySQL and MariaDB, database names are case-sensitive: the demo containers run with `lower_case_table_names=0`, the Linux default. The Docker demo creates `adventureworks`, `northwind`, and `sakila` in lowercase and `Chinook` in mixed case, so match those names exactly in your `Database` / `NorthwindDb` config values — `northwind`, not `Northwind`.
+When you are done, `docker compose down -v` from the same folder removes the containers and their data volumes.
 
-> **Already have a SQL Server?** You can skip Docker entirely — the same demo databases deploy straight onto your own instance. See [Use your own server](use-your-own-server.md).
+> **PostgreSQL, MySQL, or MariaDB?** Swap the platform folder: `Demos/PostgreSQL` (Docker port `5432`), `Demos/MySQL` (`3306`), or `Demos/MariaDB` (`3317`). Each has the same `deploy-to-endpoint` helper (it takes `--port` separately: `--server localhost --port 5432`), the same `run-demo` launcher, `.env` credentials file, and the same four demo databases. On MySQL and MariaDB, database names are case-sensitive: the demo containers run with `lower_case_table_names=0`, the Linux default. The Docker demo creates `adventureworks`, `northwind`, and `sakila` in lowercase and `Chinook` in mixed case, so match those names exactly in your `Database` / `NorthwindDb` config values — `northwind`, not `Northwind`.
 
 ## Step 2: Cast with SchemaTongs
 
@@ -93,7 +100,7 @@ Now let's go the other direction. Pretend you already have a database and want t
 }
 ```
 
-> **PostgreSQL, MySQL, or MariaDB?** Set `"Platform"` to `"PostgreSQL"`, `"MySQL"`, or `"MariaDb"` and adjust the connection string. The `ShouldCast` flags you don't need are simply ignored. Schemas, sequences, materialized views, exclude constraints, full-text indexes, events -- all the per-platform object types are toggled from the same flag list.
+> **PostgreSQL, MySQL, or MariaDB?** Three edits. Set `"Platform"` to `"PostgreSQL"`, `"MySQL"`, or `"MariaDb"`. Replace the SQL Server-style `"Server": "localhost,1440"` with `"Server": "localhost"` plus a `"Port"` entry (`5432`, `3306`, or `3317` for the Docker demos). Drop the `ConnectionProperties` block -- `TrustServerCertificate` is a SQL Server driver key; the other engines take their own keys there (`SslMode`, for instance) and need none for the demo containers. The `Database` is lowercase `northwind` on MySQL and MariaDB. The `ShouldCast` flags you don't need are simply ignored: schemas, sequences, materialized views, exclude constraints, full-text indexes, events -- all the per-platform object types are toggled from the same flag list.
 
 Run the extraction:
 
@@ -178,7 +185,7 @@ One package. One command. A target verified against your declared source of trut
 
 Now for the payoff. Let's modify the schema and watch SchemaSmith figure out exactly what needs to change.
 
-Open `my-northwind/Templates/Northwind/Tables/dbo.Shippers.json`. The file declares the current state of the table: columns, indexes, the primary key. Add a new column for tracking email addresses. Insert this entry into the `Columns` array after the `[Phone]` column:
+Open `my-northwind/Templates/Northwind/Tables/dbo.Shippers.json` (on PostgreSQL the file is `public.shippers.json`; on MySQL and MariaDB it is `Shippers.json`). The file declares the current state of the table: columns, indexes, the primary key. Add a new column for tracking email addresses. Insert this entry into the `Columns` array after the `[Phone]` column, in the engine's own quoting and type -- `email` / `VARCHAR(100)` on PostgreSQL, `` `Email` `` / `VARCHAR(100)` on MySQL and MariaDB:
 
 ```json
 {
@@ -234,7 +241,18 @@ SchemaQuench connects to the `Northwind` database, sees that `dbo.Shippers` is m
 Connect to the database with whatever SQL client you prefer and look at the Shippers table:
 
 ```sql
+-- SQL Server
 SELECT TOP 1 [CompanyName], [Phone], [Email] FROM [dbo].[Shippers];
+```
+
+```sql
+-- PostgreSQL
+SELECT company_name, phone, email FROM public.shippers LIMIT 1;
+```
+
+```sql
+-- MySQL and MariaDB
+SELECT `CompanyName`, `Phone`, `Email` FROM `Shippers` LIMIT 1;
 ```
 
 The `Email` column is there, just as you declared it. The file is the truth, the database matches, and your next commit records the change for posterity.

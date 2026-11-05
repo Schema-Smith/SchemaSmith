@@ -9,14 +9,14 @@ Every supported engine ships the same helper, side by side with its Docker launc
 | SQL Server | `Demos/SqlServer/` | `sqlcmd` |
 | PostgreSQL | `Demos/PostgreSQL/` | `psql` |
 | MySQL | `Demos/MySQL/` | `mysql` |
-| MariaDB | `Demos/MariaDb/` | `mariadb` |
+| MariaDB | `Demos/MariaDB/` | `mariadb` |
 
 ## Two ways to run the demo
 
 - **Docker** — throwaway, zero setup. `run-demo` spins up a disposable server, deploys the demo, and you tear it all down when you're done. Reach for this when you *don't* already have a server. See [Quick Start](02-quick-start.md).
 - **Your own server** — this page. A local instance, a shared QA box, a container you manage — the `deploy-to-endpoint` helper resets and deploys the demo databases directly onto it, no Docker involved.
 
-Either path lands you in the same place: the AdventureWorks, Northwind, Sakila, and Chinook demo databases (SQL Server and PostgreSQL add TenantCRM; SQL Server also adds the shared `TestSecondary` scaffolding), all built on the shared `TestMain` control database, ready to explore.
+Either path lands you in the same place: the AdventureWorks, Northwind, Sakila, and Chinook demo databases (SQL Server and PostgreSQL add TenantCRM), ready to explore, plus one or two small scaffolding databases. `TestMain` is the control database every demo product's `Initialize` template connects to first -- it checks whether the product's database exists and creates it from there, so `TestMain` only has to exist and is otherwise empty. `TestSecondary` (SQL Server only) is a second empty database of the same kind; the demo packages never deploy into it, but the SQL Server demo container creates it for the integration tests that share these containers, so the helper creates it too and the two paths match.
 
 ## Prerequisite: the engine's command-line client
 
@@ -67,12 +67,12 @@ cd Demos/PostgreSQL
 **MySQL / MariaDB (PowerShell / bash):**
 
 ```powershell
-cd Demos\MySQL          # or Demos\MariaDb
+cd Demos\MySQL          # or Demos\MariaDB
 .\deploy-to-endpoint.ps1 -Server localhost -Port 3306 -User root -Password 'YourPassword'
 ```
 
 ```bash
-cd Demos/MySQL          # or Demos/MariaDb
+cd Demos/MySQL          # or Demos/MariaDB
 ./deploy-to-endpoint.sh --server localhost --port 3306 --user root --password 'YourPassword'
 ```
 

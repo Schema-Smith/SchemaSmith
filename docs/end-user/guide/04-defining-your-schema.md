@@ -44,7 +44,7 @@ That's the entire table definition. Every column, every constraint, every index 
 SchemaQuench
 ```
 
-SchemaQuench reads the JSON, sees that `dbo.Promotions` doesn't exist in the target database, and generates a `CREATE TABLE` statement. One file. One command. Done.
+With no switches, SchemaQuench reads `SchemaQuench.settings.json` from the current directory (falling back to the folder the executable lives in) for the target connection and `SchemaPackagePath` -- the same file the [Quick Start](02-quick-start.md#step-4-quench-with-schemaquench) built, under a different name via `--ConfigFile`. SchemaQuench reads the JSON, sees that `dbo.Promotions` doesn't exist in the target database, and generates a `CREATE TABLE` statement. One file. One command. Done.
 
 **Compare this to the traditional approach:** write a `CREATE TABLE` script, write a migration file with a sequence number, make sure the sequence number doesn't collide with anyone else's, add an `IF NOT EXISTS` guard, add a corresponding rollback script, update a migrations tracking table. With SchemaSmith, you created one file and ran one command. No migration scripts. No dependency ordering. No collision worries.
 
@@ -108,7 +108,7 @@ The `Promotions` table needs changes. Marketing wants a description field, the d
 Now preview the changes before touching the database. Run SchemaQuench in WhatIf mode:
 
 ```bash
-SmithySettings_WhatIfONLY=true SchemaQuench
+SchemaQuench --WhatIf
 ```
 
 SchemaQuench generates the SQL it *would* execute -- an `ALTER TABLE ... ADD` for the new column, an `ALTER TABLE ... ALTER COLUMN` for the data type change, and a `CREATE INDEX` for the new filtered index -- and logs it all without applying anything. Read the generated SQL, confirm it looks right, then run SchemaQuench normally to quench the changes into your database.
@@ -194,6 +194,8 @@ $ git diff
 
 The diff reads like a sentence: "someone added a BackorderThreshold column to the Products table with a default of 10." Compare that to trying to figure out what changed by comparing two database snapshots or reading through audit logs. The drift is captured. The mystery is over.
 
+Extracting a database that has years of history behind it is a bigger job than one diff, and the order you do it in decides whether the first enforced deploy is uneventful or drops something you had not captured yet. Read [The adoption approach](11-edge-cases.md#the-adoption-approach) before you point SchemaTongs at production.
+
 ## Extraction intelligence
 
 SchemaTongs does more than dump scripts to flat folders. When you cast your database schema, the tool brings real intelligence to the extraction.
@@ -202,13 +204,7 @@ SchemaTongs does more than dump scripts to flat folders. When you cast your data
 
 **Extensions preservation.** Custom metadata you've attached to tables via the [`Extensions` carrier](../reference/custom-properties.md) -- data classification tags, ownership, retention policies -- is carried forward on every re-extraction. Your sidecar data survives as long as the underlying object stays (or you use `OldName` to track a rename).
 
-**Orphan detection.** When a database object is dropped, its script file becomes an orphan. SchemaTongs offers three modes for handling this:
-
-| Mode | Behavior |
-|---|---|
-| `Detect` | Logs orphaned files but takes no action. Default. |
-| `DetectWithCleanupScripts` | Logs orphans and generates cleanup scripts you can review and apply. |
-| `DetectDeleteAndCleanup` | Deletes orphaned files and generates cleanup scripts automatically. |
+**Orphan detection.** When a database object is dropped, its script file becomes an orphan. SchemaTongs reports them by default and can generate cleanup scripts or remove the files for you; the three `OrphanHandling` modes and when to move from one to the next are in [Orphan handling strategies](11-edge-cases.md#orphan-handling-strategies).
 
 **Script validation.** With `ValidateScripts` enabled, SchemaTongs checks each extracted script against the database to verify it parses correctly. Invalid scripts are saved with a `.sqlerror` extension instead of `.sql`, making them visible but excluded from deployment until you fix them.
 
@@ -267,7 +263,7 @@ The same pattern works on PostgreSQL, MySQL, and MariaDB -- swap the identificat
 
 ## Advanced engine features
 
-Every engine brings capabilities that go beyond basic columns and indexes. SQL Server has temporal tables and columnstore indexes. PostgreSQL has exclusion constraints and materialized views. MySQL has generated columns with automatic dependency ordering. All of them live in the same JSON you've been writing -- no new tools, no separate configuration layer. You declare the feature; SchemaSmith handles the DDL.
+Every engine brings capabilities that go beyond basic columns and indexes. SQL Server has temporal tables and columnstore indexes. PostgreSQL has exclusion constraints and materialized views. MySQL has generated columns with automatic dependency ordering. MariaDB has system-versioned tables, application-time periods, sequences and vector indexes. All of them live in the same JSON you've been writing -- no new tools, no separate configuration layer. You declare the feature; SchemaSmith handles the DDL.
 
 ### SQL Server
 
@@ -344,6 +340,18 @@ Use `"Generated": "STORED"` or `"Generated": "VIRTUAL"` to control whether the v
 **Full-text indexes.** Unlike SQL Server, MySQL allows multiple full-text indexes per table -- which is why the property is `FullTextIndexes` (an array). Each index can specify a custom parser: `"Parser": "ngram"` for CJK and other non-space-delimited languages, for example. SchemaSmith creates each full-text index with `CREATE FULLTEXT INDEX ... WITH PARSER` when a parser is specified. For the full property set, see the [Full-Text Indexes (MySQL) reference](../reference/schema-packages.md#full-text-indexes-mysql).
 
 **Spatial indexes.** Index geometry columns for spatial queries by setting `"IndexType": "SPATIAL"` on the index definition. SchemaSmith emits the appropriate `CREATE SPATIAL INDEX` DDL. Pair with a geometry-typed column and MySQL's spatial functions for proximity searches, bounding-box queries, and GIS workloads.
+
+### MariaDB
+
+A MariaDB package carries every MySQL property above -- generated columns, full-text and spatial indexes -- plus the features MariaDB has and MySQL does not.
+
+**Sequences.** MariaDB has a native `SEQUENCE` object, so a MariaDB template gets a `Sequences/` folder that MySQL packages do not. Declare one as JSON -- `Start`, `Increment`, `MinValue`, `MaxValue`, `Cache`, `Cycle` -- and SchemaQuench creates it and converges an edited `Increment` or `MaxValue` in place, the same declared-and-converged treatment PostgreSQL sequences get. See [Sequence JSON Format](../reference/schema-packages.md#sequence-json-format-postgresql-mariadb).
+
+**System versioning.** Set `"IsSystemVersioned": true` and the table keeps its own row history (`WITH SYSTEM VERSIONING`, MariaDB 10.3+). A new table is created versioned; an existing ordinary table that starts declaring it converges through `ALTER TABLE ... ADD SYSTEM VERSIONING`. Removing the flag is refused by name, because MariaDB's `DROP SYSTEM VERSIONING` purges the history rather than switching the attribute off. Mark a high-churn column `"WithoutSystemVersioning": true` to keep it out of the history. See [System-versioned tables (MariaDB)](../reference/configuration.md#system-versioned-tables-mariadb).
+
+**Application periods.** Declare a `Periods` array on the table -- each entry names the period and its start and end columns -- and MariaDB maintains `PERIOD FOR` over them. Put `"WithoutOverlaps": true` on a primary key or unique key whose last part is the period and you have a temporal key: two rows with the same other key values may not have overlapping periods (MariaDB 10.5.3+). See [Application-time periods](../reference/configuration.md#application-time-periods).
+
+**Vector indexes.** `"IndexType": "VECTOR"` over one `NOT NULL` `VECTOR(n)` column deploys `CREATE VECTOR INDEX` (MariaDB 11.7+) for nearest-neighbour search with `VEC_DISTANCE`; `M` and `Distance` set the index options. Because MariaDB cannot alter either option, a changed `M` or `Distance` rebuilds the index. See [Indexes](../reference/schema-packages.md#indexes).
 
 ---
 

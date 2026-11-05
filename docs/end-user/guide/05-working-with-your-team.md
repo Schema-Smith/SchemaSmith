@@ -57,29 +57,27 @@ Here's a typical workflow for a team using SchemaSmith. Notice how each person f
 5. **DBA** reviews the full table structure in the PR diff -- the whole file is right there, with indexes and foreign keys in context.
 6. **Reviewer** approves. The branch merges.
 7. **CI/CD** quenches the package to staging using SchemaQuench. Same package, same command.
-8. **Release manager** quenches to production using SchemaQuench in WhatIf mode first, reviews the generated SQL, then runs the real deployment.
+8. **Release manager** quenches to production with the same package and the same command, different connection settings. If the release carries a migration nobody has run against production-shaped data before, a WhatIf pass first shows the SQL; a routine release goes straight through.
 
 Nobody wrote a deployment script. Nobody maintained a migration chain. Nobody worried about whether staging and production are at the same migration version. The same package deploys everywhere, and SchemaQuench computes the right delta for each target. You decide what the schema looks like; the forge makes it happen.
 
 ## WhatIf mode as your safety net
 
-WhatIf mode is the preview button for your database. Run it before every deployment -- especially production. Boring deployments are the goal, and WhatIf is how you keep them boring.
+WhatIf mode is the preview button for your database -- the way to read what a deployment would do while you are still deciding whether to trust it. Boring deployments are the goal; WhatIf is how you get to boring, not a toll you pay on every run afterwards.
 
 ```bash
-SmithySettings_WhatIfONLY=true SchemaQuench
+SchemaQuench --WhatIf
 ```
 
-SchemaQuench does everything it normally does -- connects to the target database, computes the delta between the declared state and the current state, generates the DDL -- but stops short of executing. The generated SQL is written to log files in the working directory so you can review every statement.
+The switch works the same on every operating system (it is the `WhatIfONLY` setting, so `"WhatIfONLY": true` in a settings file or `SmithySettings_WhatIfONLY=true` in the environment does the same). SchemaQuench does everything it normally does -- connects to the target database, computes the delta between the declared state and the current state, generates the DDL -- but stops short of executing. The plan goes to the console and to `SchemaQuench - Summary.md` beside the logs; `--WhatIfDetail:concise` collapses the console to per-category counts on a large package, and `--report:<basepath>` writes the summary pair wherever a pipeline wants it. See the [Deployment Summary Report](../reference/deployment-summary-report.md).
 
-Build this into your workflow:
+Reach for it when:
 
-- **Development:** Optional. Quench directly if you're comfortable.
-- **Staging:** Recommended. Review the WhatIf output to catch surprises before they hit production-like data.
-- **Production:** Non-negotiable. Always WhatIf first. Read every line of generated SQL. Then quench.
+- **A new migration.** A rename, a table split, a backfill -- read the SQL once before it runs against real data.
+- **An unfamiliar target.** First deploy to a server you did not set up, or of a package you inherited.
+- **Something looks off.** WhatIf shows the delta between the package and the live database, which is the fastest way to see drift.
 
-The cost is one extra command. The benefit is never being surprised by what a deployment does to your production database.
-
-For the full details on WhatIf behavior and output files, see [SchemaQuench Reference -- WhatIf Mode](../reference/schemaquench.md#whatif-mode).
+Once you trust the package and the pipeline, direct quenches are the normal mode; a WhatIf pass on every production run adds a second run and a log review without adding safety that CI, staging and a rollback package do not already give you. WhatIf shows the top level of changes, not every ripple that depends on an earlier change having landed -- it is a confidence check, not a guarantee. For the full details on WhatIf behavior and its known gaps, see [SchemaQuench Reference -- WhatIf Mode](../reference/schemaquench.md#whatif-mode).
 
 ## Reviewing schema changes in context
 

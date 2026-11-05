@@ -65,7 +65,7 @@ The `{{ReferenceData}}` token in any script resolves to the entire contents of `
 }
 ```
 
-`{{DefaultLogo}}` becomes a `0x...` hex literal, ready to drop into a `VARBINARY` insert on SQL Server or a `BYTEA` literal on PostgreSQL.
+`{{DefaultLogo}}` becomes the binary literal the target engine accepts -- a `0x...` literal for a `VARBINARY` insert on SQL Server, a `BYTEA` literal on PostgreSQL, a hex literal for a `BLOB` on MySQL and MariaDB.
 
 **Query the target server at deployment time:**
 
@@ -129,7 +129,7 @@ See [Custom Properties](../reference/custom-properties.md) for the full mechanis
 
 The section above put custom metadata to work *gating* deployments -- a flag on a table decides whether an index gets built. But the same metadata is readable as a whole. A deploy-time script can read your *entire* model -- every table, every column, and every `Extensions` bag you hung on them -- and derive something new from it on each quench. This is where a schema package stops merely describing structure and becomes the single source of truth your other tooling reads from.
 
-The `{{TableSchema}}` token from [Script tokens](#script-tokens) above is the key: it hands a script the whole template's table model as JSON, every `Extensions` bag intact. Shred it in a deploy-time script -- `OPENJSON` on SQL Server, `json_each` / `JSON_TABLE` on PostgreSQL and MySQL -- and walk the tables, reading their metadata:
+The `{{TableSchema}}` token from [Script tokens](#script-tokens) above is the key: it hands a script the whole template's table model as JSON, every `Extensions` bag intact. Shred it in a deploy-time script -- `OPENJSON` on SQL Server, `json_each` on PostgreSQL, `JSON_TABLE` on MySQL and MariaDB -- and walk the tables, reading their metadata (the sample is T-SQL; the shape is the same with the other engines' JSON table functions):
 
 ```sql
 -- Read the whole model; keep only the tables your metadata flagged:
@@ -323,12 +323,20 @@ Token replacement applies -- `{{MainDB}}`, `{{ReleaseVersion}}`, any token you d
 
 The canonical use is anti-rollback protection. Pair `BaselineValidationScript` with `VersionStampScript`: the stamp records a version identifier after a successful deployment; the baseline checks for that identifier before the next deployment. If someone accidentally runs an older package against an already-upgraded environment, the baseline check aborts before any harm is done.
 
+There is no built-in "previous version" token -- the package declares both versions itself, as ordinary `ScriptTokens`, and bumps them together on each release:
+
 ```json
 {
+  "ScriptTokens": {
+    "ReleaseVersion": "2.1.0",
+    "RequiredBaseline": "2.0.0"
+  },
   "VersionStampScript": "UPDATE dbo.DeploymentInfo SET Version = '{{ReleaseVersion}}'",
-  "BaselineValidationScript": "SELECT CAST(CASE WHEN EXISTS(SELECT 1 FROM dbo.DeploymentInfo WHERE Version = '{{PreviousVersion}}') THEN 1 ELSE 0 END AS BIT)"
+  "BaselineValidationScript": "SELECT CAST(CASE WHEN EXISTS(SELECT 1 FROM dbo.DeploymentInfo WHERE Version = '{{RequiredBaseline}}') THEN 1 ELSE 0 END AS BIT)"
 }
 ```
+
+> **Multi-platform note:** The examples above are T-SQL. The scripts return one scalar that SchemaQuench reads as true or false, so on PostgreSQL write `SELECT EXISTS(...)` (a boolean) and gate the version with `current_setting('server_version_num')::int >= 150000`; on MySQL and MariaDB `SELECT EXISTS(...)` returns `1` or `0`, and the version gate reads `VERSION()` or `@@version`. The identity check uses each engine's catalog: `pg_database` on PostgreSQL, `information_schema.schemata` on MySQL and MariaDB.
 
 **Version floor.** `MinimumVersion` is the declarative companion -- set it in `Product.json` and SchemaQuench enforces a hard engine version floor before running anything. Use it for the unconditional floor ("this package requires PostgreSQL 15 or later"); write `ValidationScript` logic for conditional gates or checks that need to read server state.
 
@@ -488,7 +496,7 @@ SchemaShears reads the manifest, pulls in the scaffolding (`Product.json` plus t
 ### Verify before deploying
 
 ```bash
-SchemaQuench --SchemaPackagePath=./MyProduct-patch --WhatIfONLY=true
+SchemaQuench --SchemaPackagePath=./MyProduct-patch --WhatIf
 ```
 
 The WhatIf output shows exactly which objects the patch will touch. Review it against your intent: if the manifest was complete, only the objects you chose will appear. If something unexpected shows up -- or something expected is missing -- adjust the manifest and rebuild.
@@ -578,29 +586,38 @@ SchemaQuench quenches scripts in a precise order. Understanding the execution sl
 
 | Order | Slot | What runs |
 |---|---|---|
-| 1 | Product `Before` | Cross-database setup, linked servers, server-level migrations |
-| 2 | Template `Setup` | Database settings the template relies on (CDC, Change Tracking, database options) -- runs on every deploy |
-| 3 | Template `Objects` | Programmable objects with dependency retry (schemas, types, functions, views, procedures) |
-| 4 | _(new tables / columns)_ | New tables and columns created from table JSON |
+| 1 | Product `Before` | Cross-database setup, linked servers, server-level migrations -- on the server connection, before any template |
+| 2 | Template `Setup` | Database settings the template relies on (CDC, Change Tracking, database options) -- after the helpers and the baseline check, before the first object, on every deploy |
+| 3 | Template `Objects` (first pass) | Programmable objects with dependency retry (schemas, types, functions, views, procedures); PostgreSQL domain and enum types and PostgreSQL / MariaDB sequences deploy right after, ahead of the tables that use them |
+| 4 | _(new tables / columns)_ | New tables and columns created from table JSON, then a second `Objects` pass for scripts that needed them |
 | 5 | Template `Before` | Pre-modification migration scripts |
-| 6 | _(table modification)_ | Existing tables altered to match JSON |
-| 7 | Template `BetweenTablesAndKeys` | Runs after table structure is final but before FK constraints |
-| 8 | _(indexes and constraints)_ | Missing indexes, checks, defaults, statistics |
-| 9 | Template `AfterTablesScripts` | Runs after structure and indexes, before triggers |
-| 10 | Template `AfterTablesObjects` | Triggers, DDL triggers, rules -- dependency retry |
-| 11 | Template `TableData` | Reference data sync scripts |
-| 12 | _(foreign keys)_ | Foreign key constraints applied after all data is in place |
-| 13 | _(indexed / materialized views)_ | SQL Server indexed views / PostgreSQL materialized views |
-| 14 | Template `After` | Post-migration final scripts |
-| 15 | Product `After` | Cross-database post-migration |
+| 6 | _(table modification)_ | Existing tables altered to match JSON; tables removed from the product dropped |
+| 7 | Template `AfterTablesObjects` (first pass) | Triggers, DDL triggers, rules -- dependency retry, against the final table structure |
+| 8 | Template `BetweenTablesAndKeys` | Runs after table structure is final but before indexes, constraints and foreign keys |
+| 9 | _(indexes and constraints)_ | Missing indexes, checks, defaults, statistics; SQL Server table features (CDC, Change Tracking, FILESTREAM) |
+| 10 | Template `AfterTablesScripts` | Runs after structure, indexes and constraints are in place |
+| 11 | `Objects` / `AfterTablesObjects` (final pass) | Any script not yet applied, including the ones that use query tokens |
+| 12 | Template `TableData` | Declarative `DataDelivery` merges first, then the hand-written data scripts |
+| 13 | _(foreign keys)_ | Foreign key constraints applied after all data is in place |
+| 14 | _(indexed / materialized views, events)_ | SQL Server indexed views, PostgreSQL materialized views, MySQL and MariaDB scheduled events |
+| 15 | Template `After` | Post-migration final scripts |
+| 16 | Product `After` | Cross-database post-migration -- skipped, with the product version stamp, when any template failed |
+
+This is the one copy of the slot order in the guide; [Core Concepts](03-core-concepts.md#the-deployment-model) and [Edge Cases](11-edge-cases.md#the-four-migration-slots) point here. The step-by-step engine sequence behind it, including the per-platform modular procedures, is [Database Quench Sequence](../reference/schemaquench.md#database-quench-sequence) in the reference.
 
 **Why Setup exists:** Some scripts have to run before any object does -- a database option a view assumes, CDC switched on before the tables that use it. `Setup` runs ahead of everything else in the template, and on every deploy, so each script should check before it changes anything. See [The Setup slot](../reference/schemaquench.md#the-setup-slot).
 
-**Why BetweenTablesAndKeys exists:** When you split a table or restructure foreign keys, you need a window after the new tables are created but before SchemaSmith tries to create the foreign keys. This slot gives you that window to move data into the new structure so the FK constraints succeed.
+**Why BetweenTablesAndKeys exists:** When you split a table or restructure foreign keys, you need a window after the new tables are created but before SchemaSmith tries to create the indexes, constraints and foreign keys. This slot gives you that window to move data into the new structure so the constraints succeed.
 
-**Why AfterTablesScripts exists:** Sometimes you need to run scripts after indexes and constraints are in place but before triggers are enabled. Data backfills that must satisfy constraints but shouldn't fire triggers go here.
+**Why AfterTablesScripts exists:** Sometimes you need to run scripts after indexes and constraints are in place. Data backfills that must satisfy a new constraint go here. Triggers are already deployed by this point (step 7), so a backfill that must not fire them disables them itself for the duration, or runs in `BetweenTablesAndKeys` before the constraints exist.
 
-For the complete deployment flow including per-platform modular procedures, see [SchemaQuench Reference](../reference/schemaquench.md#database-quench-sequence).
+## Large tables and online changes
+
+An index rebuilt or a column changed on a large table can hold a lock for the whole operation. `OnlineApply` (an environment setting, with a per-table override in the table's JSON) asks SchemaQuench to use the engine's online form where one exists, so readers and writers keep going while the change lands. What each engine can do online, what falls back to an offline change, and the `OnlineApplyMaxDuration` companion are in [OnlineApply](../reference/configuration.md#onlineapply).
+
+## Multiple products in one database
+
+Two products can share a database as long as each owns its own tables: SchemaSmith records which product a table belongs to, adopts unowned tables on first deploy, and refuses to alter or drop a table another product owns. The drop settings -- `DropTablesRemovedFromProduct`, `DropUnknownIndexes` and the rest -- are scoped by that ownership. See [Table ownership](../reference/schemaquench.md#table-ownership).
 
 ---
 

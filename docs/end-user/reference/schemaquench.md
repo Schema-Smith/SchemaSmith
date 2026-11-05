@@ -67,11 +67,11 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | `DropColumnsRemovedFromProduct` | bool | `true` | Drop columns that exist in the database but aren't defined in the schema package. Resolves across a four-tier cascade (env → product → template → table) with explicit-false-sticky semantics. See [DropColumnsRemovedFromProduct](#dropcolumnsremovedfromproduct). |
 | `DeliverData` | bool | `true` | Run the per-table `DataDelivery` step and the `TableData`-slot scripts. Set to `false` to ship a structure-only deployment that leaves reference data untouched -- pairs naturally with `UpdateTables: true` for "deploy schema, skip data" pipelines. |
 | `RunScriptsTwice` | bool | `false` | Run object scripts twice to verify idempotency. A CI/testing tool. |
-| `SkipUnchangedObjects` | bool | `true` | Do not re-run an object script whose text is unchanged since it last applied and whose object the server still renders as it was left. A hand change on the server, an edited script, an `[ALWAYS]` name or a `-- SchemaSmith: AlwaysRun` comment runs it again. See [Unchanged Object Scripts](#unchanged-object-scripts). |
+| `Target:SkipUnchangedObjects` | bool | `true` | Do not re-run an object script whose text is unchanged since it last applied and whose object the server still renders as it was left. A hand change on the server, an edited script, an `[ALWAYS]` name or a `-- SchemaSmith: AlwaysRun` comment runs it again. The key lives under `Target`; a top-level `SkipUnchangedObjects` is not read. See [Unchanged Object Scripts](#unchanged-object-scripts). |
 | `TrackRunOnceMigrations` | bool | `true` | Track run-once migration scripts. When `false`, all scripts run on every deployment. |
 | `PruneObsoleteMigrationTracking` | bool | `true` | Remove tracking entries for scripts no longer in the package. When `Target` filters are active, prune is restricted to the targeted scope. See [PruneObsoleteMigrationTracking](#pruneobsoletemigrationtracking). |
 | `CheckpointDirectory` | string | `""` | Directory for checkpoint files used by `--ResumeQuench`. When blank, defaults to a per-platform temp location. See [Checkpoint and Resume](#checkpoint-and-resume). |
-| `MaxThreads` | int | `10` | Maximum parallel work units. Covers both database-level and schema-level iterations. Range 1--20. See [MaxThreads](#maxthreads). |
+| `MaxThreads` | int | `10` | Maximum parallel work units. Covers both database-level and schema-level iterations. Range 1--20; a value outside it, or one that is not a whole number, falls back to `10`. See [MaxThreads](#maxthreads). |
 | `VerboseLogging` | bool | `false` | Include informational output from user scripts in the progress log: `PRINT` and low-severity messages on SQL Server, `RAISE NOTICE` on PostgreSQL. SchemaSmith's own progress messages always appear. SchemaQuench does not log informational messages from MySQL or MariaDB scripts, so the setting has no effect there. |
 | `ScriptTokens` | object | `{}` | Config-level overrides for product script tokens. |
 
@@ -90,7 +90,8 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
     },
     "Templates": [],
     "Databases": [],
-    "Schemas": []
+    "Schemas": [],
+    "SkipUnchangedObjects": true
   },
   "WhatIfONLY": false,
   "SchemaPackagePath": "./MyProduct",
@@ -100,7 +101,6 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
   "DropColumnsRemovedFromProduct": true,
   "DeliverData": true,
   "RunScriptsTwice": false,
-  "SkipUnchangedObjects": true,
   "TrackRunOnceMigrations": true,
   "PruneObsoleteMigrationTracking": true,
   "CheckpointDirectory": "",
@@ -129,7 +129,7 @@ SQL Server deployments targeting Availability Groups can quench to a primary plu
 
 A secondary on another port is named `host,port`, as for `Target:Server`. Use an array to list such servers, one per item: `"SecondaryServers": ["replica-1,14330", "replica-2,14330"]`. In the comma-separated string an all-digit item is read as the port of the server before it, so `"replica-1,14330,replica-2"` names two servers.
 
-When a secondary list is configured, SchemaQuench routes each product-level folder to the right server based on its `ServerToQuench` setting (`Primary`, `Secondary`, or `Both`). Templates target the primary; product-level scripts can target either side. Without a secondary list, a `Secondary` folder is skipped (and logged), never run on the primary. See [Schema Packages -- Secondary Servers](schema-packages.md#secondary-servers) for the package side of the configuration.
+When a secondary list is configured, SchemaQuench routes each product-level folder to the right server based on its `ServerToQuench` setting (`Primary`, `Secondary`, or `Both`). A template is routed the same way by its own `ServerToQuench` in `Template.json`: it runs the whole [database quench sequence](#database-quench-sequence) -- kindling, tables, scripts and data -- on every server the setting names, and `Primary` is the default, so a template that says nothing runs on the primary only. Without a secondary list, a `Secondary` folder is skipped (and logged), never run on the primary. See [Schema Packages -- Secondary Servers](schema-packages.md#secondary-servers) for the package side of the configuration.
 
 > **PostgreSQL, MySQL, and MariaDB** deployments use a single connection. Replication and read-only standbys are typically managed at the database engine level, not by the deployment tool.
 
@@ -239,7 +239,7 @@ For a worked end-to-end example -- single canonical package, per-region settings
 
 The `MaxThreads` setting controls how many work units run concurrently across the entire product deployment. A work unit is one database iteration for a regular template, or one `(database, schema)` iteration for a schema template. All work unit types share the same pool -- there is no separate budget per template type.
 
-Default: `10`. Range: `1`--`20`.
+Default: `10`. Range: `1`--`20`. A value outside that range, or one that does not parse as a whole number, is replaced by the default without a message, so `MaxThreads: 32` runs ten at a time, not twenty.
 
 With schema templates, a single database can contribute many work units -- one per discovered schema. A product with a single `TenantWorkspace` template applied to one database hosting 100 tenant schemas produces 100 work units. At `MaxThreads: 8`, the dispatcher runs up to 8 schema iterations concurrently regardless of how many templates or databases are in scope. If you also have regular-template work units queued alongside schema-template units, they all draw from the same pool.
 
@@ -310,29 +310,39 @@ After the quench returns, the calling program backs up log files to a numbered d
 
 For each work unit dispatched by a template -- one identified database for regular templates, one `(database, schema)` pair for schema templates -- the database quench runs the following sequence. All steps execute on the identified database. For schema templates, the active schema name is available throughout as `{{SchemaName}}`.
 
-1. **Kindle the Forge** -- Deploys SchemaSmith helper procedures, functions, and the migration tracking table for the active platform. Skipped if `KindleTheForge` is `false`.
-2. **Validate baseline** -- Executes `Template.BaselineValidationScript` if configured. Aborts if falsy.
-3. **Setup scripts** -- Executes scripts from any folder in the `Setup` slot, before any object or table is touched. Sequential, run on every deploy, and the first error stops the deploy. See [The Setup slot](#the-setup-slot).
-4. **Object scripts (first pass)** -- Executes `Objects`-slot scripts that need no query-token values, using the dependency retry loop. If `RunScriptsTwice` is enabled, runs a complete second pass to verify idempotency.
-5. **Domain types, enum types, sequences** (PostgreSQL) -- Deploys the template's declared domain types, enum types, and sequences, before the tables whose columns can use them.
-6. **MissingTableAndColumnQuench** -- Parses `Tables/*.json` into session staging tables for the later steps, then creates missing tables and adds missing columns.
-7. **Object scripts (second pass)** -- Retries the `Objects`-slot scripts that need no query-token values, now that missing tables exist, then resolves the template's query tokens. Scripts that use them run in step 16.
-8. **Before scripts** -- Executes migration scripts from any folder in the `Before` slot. Sequential and tracked.
-9. **Database-level CDC and Change Tracking check** (SQL Server, when the template has Before scripts) -- Decides whether the database has the Change Data Capture and Change Tracking its tables ask for, after the Setup and Before scripts so either can enable them. Without Before scripts this check runs at the start of step 6, before any table is created, which is still after the Setup scripts.
-10. **ModifiedTableQuench** -- Alters existing columns (type changes, nullability, defaults, computed/generated columns), drops tables removed from the product, and manages indexes and check constraints.
-11. **AfterTablesObjects scripts** -- Executes `AfterTablesObjects`-slot scripts (triggers, DDL triggers, rules, post-table views) using the dependency retry loop.
-12. **BetweenTablesAndKeys scripts** -- Executes migration scripts from any folder in the `BetweenTablesAndKeys` slot. Sequential and tracked.
-13. **MissingIndexesAndConstraintsQuench** -- Creates missing indexes, check constraints, default constraints, and (where supported) statistics.
-14. **Table features** (SQL Server) -- Applies Change Data Capture, Change Tracking, and FILESTREAM as declared.
-15. **AfterTablesScripts** -- Executes migration scripts from any folder in the `AfterTablesScripts` slot. Sequential and tracked.
-16. **Object scripts (final pass)** -- Runs every `Objects`- or `AfterTablesObjects`-slot script not yet applied, including those that use query tokens.
-17. **Table data delivery** -- Merges table data described by per-table `DataDelivery` blocks, ordered by foreign key dependencies. See [Table Data Delivery](#table-data-delivery). Then executes any hand-written scripts in the `TableData` slot using the dependency retry loop. Skipped when `DeliverData` is `false`.
-18. **ForeignKeyQuench** -- Creates, drops, and modifies foreign keys to match the schema package.
-19. **Materialized views** (PostgreSQL), **scheduled events** (MySQL, MariaDB), **indexed views** (SQL Server) -- Deployed through the platform's procedure when the template declares any.
-20. **After scripts** -- Executes migration scripts from any folder in the `After` slot. Sequential and tracked.
-21. **Stamp version** -- Executes `Template.VersionStampScript` if configured.
+This list is the authoritative order. A step named for a procedure (`ModifiedTableQuench`, `ForeignKeyQuench`) is the procedure SchemaQuench calls on the target; the engine-specific work inside each is listed under [Modular Quench Procedures](#modular-quench-procedures). Steps marked *checkpointed* are the ones a [resumed run](#checkpoint-and-resume) can skip.
 
-When `UpdateTables` is `false`, the table steps -- 6, 9, 10, 13, 14 and 18 -- are skipped; scripts, data delivery and step 19 still run. When `IndexOnlyTableQuenches` is enabled on a template, steps 6, 9, 10, 14 and 18 are skipped and step 13 runs the platform's `IndexOnlyQuench` procedure instead, so the template manages only the indexes of tables it does not own.
+1. **Target checks** -- A template with `SkipIfReadOnly` skips a read-only target (Availability Group secondary, hot standby, replica) and counts it as a success. For a schema template, the iteration's schema is checked; a missing one is provisioned or skipped per [CreateIfMissing](#createifmissing).
+2. **Detect the version** -- The server version and, on SQL Server, the database compatibility level are read once, up front; SQL Server also enforces its compatibility floor and selects the model-ingest encoding here. The values become the `{{ServerMajorVersion}}` and `{{CompatibilityLevel}}` tokens.
+3. **Folder gates** -- Every template folder with a `ShouldApplyExpression` is evaluated against this database (and schema), and the scripts of a folder whose gate is false leave every slot list for this iteration. The version tokens are then substituted into the scripts and the table, view, event, type and sequence payloads. See [When each gate is evaluated](#when-each-gate-is-evaluated).
+4. **Kindle the Forge** -- Installs or refreshes SchemaSmith's helper procedures, functions and tables, stamp-gated so an up-to-date database pays one read. Never checkpointed; skipped when `KindleTheForge` is `false`. See [What SchemaSmith Installs In Your Database](#what-schemasmith-installs-in-your-database).
+5. **Validate baseline** -- Executes `Template.BaselineValidationScript` if configured; a falsy result or an error stops the deploy. Checkpointed as `ValidateBaseline`.
+6. **Setup scripts** -- Executes scripts from any folder in the `Setup` slot, before any object or table is touched. Sequential, run on every deploy, and the first error stops the deploy. See [The Setup slot](#the-setup-slot).
+7. **Objects, first pass** -- Executes the `Objects`-slot scripts whose text holds no `{{…}}` token (a script that needs a query token is held back), using the dependency retry loop. If `RunScriptsTwice` is enabled, runs a complete second pass to verify idempotency.
+8. **Types and sequences** -- PostgreSQL deploys the template's declared domain types, enum types and sequences; MariaDB its sequences. Before the tables, because a column can be of a domain or enum type and a default can call `nextval()`. Checkpointed as `DomainTypeQuench`, `EnumTypeQuench` and `SequenceQuench`.
+9. **Add tables and columns** -- Parses `Tables/*.json` into session working tables for every later table step, then, in this order: refuses the deploy if another product owns a declared table (see [Table Ownership](#table-ownership)); on SQL Server neutralizes or refuses what the detected version cannot support (`DegradeUnsupportedFeatures`) and refuses a CDC change the capture-instance limit would block (`CdcPreflight`); checks each expression SchemaSmith has not recorded on a scratch copy (`ExpressionMapAdopt`, see [Expression change detection](#expression-change-detection)); and runs `MissingTableAndColumnQuench`, which renames tables and columns by `OldName`, creates missing tables and adds missing columns. Never checkpointed -- a resumed run repeats it to rebuild the session working tables. Skipped when `UpdateTables` is `false` or the template is index-only.
+10. **Objects, second pass** -- Retries the token-free `Objects`-slot scripts, now that missing tables exist, then resolves the template's query tokens into every slot's scripts.
+11. **Before scripts** -- Executes migration scripts from any folder in the `Before` slot. Sequential and tracked.
+12. **Database toggles check** (SQL Server, only when the template has Before scripts) -- Decides whether the database has the Change Data Capture and Change Tracking its tables ask for, after the Setup and Before scripts so either can enable them. Without Before scripts this check runs inside step 9, before any table is created, which is still after the Setup scripts.
+13. **ModifiedTableQuench** -- Drops tables removed from the product (their inbound foreign keys and temporal history first), elects tables for a [rebuild](configuration.md#rebuildpolicy), drops modified or removed indexes, foreign keys, check constraints, statistics and (PostgreSQL) exclude constraints, alters existing columns, drops columns removed from the product, and converges table attributes (compression on SQL Server; engine, collation, comment, row format, encryption, compression, auto-increment seed and system versioning on MySQL and MariaDB). On SQL Server it also converges a ledger table's generated columns and view name (SQL Server 2022) and stamps table ownership; on SQL Server and PostgreSQL the views and routines it had to drop for a column change are queued for the after-tables object pass. See [Column Changes](#column-changes). Checkpointed as `ModifiedTables`.
+14. **Vector index rebuild** (MariaDB 11.7 and later) -- Drops a `VECTOR` index whose `M` or `Distance` changed, for step 17 to build again as declared.
+15. **AfterTablesObjects pass** -- Executes `AfterTablesObjects`-slot scripts (triggers, DDL triggers, rules, post-table views, schema-bound modules) using the dependency retry loop, together with any `Objects`-slot script not yet applied -- including the ones steps 7 and 10 held back for a query token, whose values step 10 has since resolved.
+16. **BetweenTablesAndKeys** -- Executes migration scripts from any folder in the `BetweenTablesAndKeys` slot. Sequential and tracked.
+17. **MissingIndexesAndConstraintsQuench** -- Adds computed and generated columns, (SQL Server) period columns and system versioning for temporal tables, missing indexes, statistics, defaults, check constraints and full-text indexes, and (PostgreSQL) exclude constraints and row-level security policies. On PostgreSQL the same step then applies declared descriptions (`DescriptionQuench`), replica identity (`ReplicaIdentityQuench`) and records table and index ownership. An index-only template runs `IndexOnlyQuench` here instead. On PostgreSQL the index and constraint work queued for [OnlineApply](configuration.md#onlineapply) runs after the procedure returns. Checkpointed as `IndexesAndConstraints`.
+18. **Table features** (SQL Server) -- Converges declared index `Disabled` state (`IndexStateQuench`), FILESTREAM columns, Change Data Capture (`CdcQuench`, including a capture-instance rotation step 13 decided on) and Change Tracking, in that order, because each needs what the one before it created. Checkpointed as `TableFeatures`.
+19. **Record expressions** -- Records what each expression-bearing object was applied with, so the next deploy compares against it. A failure here is logged and does not fail the deploy.
+20. **AfterTablesScripts** -- Executes migration scripts from any folder in the `AfterTablesScripts` slot. Sequential and tracked.
+21. **Final object pass** -- Runs the `Objects`- and `AfterTablesObjects`-slot scripts not yet applied, with the final attempt's failures reported as errors.
+22. **Table data delivery** -- Merges table data described by per-table `DataDelivery` blocks, ordered by foreign key dependencies. See [Table Data Delivery](#table-data-delivery). Then executes any hand-written scripts in the `TableData` slot using the dependency retry loop. Skipped when `DeliverData` is `false`. Checkpointed as `TableDataDelivery`.
+23. **ForeignKeyQuench** -- Creates, drops and modifies foreign keys to match the schema package; after the data, so delivered rows satisfy them. In the same step: constraint enforcement and validation state (`ConstraintStateQuench`, SQL Server and PostgreSQL), and on SQL Server edge constraints (`EdgeConstraintQuench`, SQL Server 2019 and later) and the declared extended properties and descriptions of tables, columns, indexes, foreign keys and check constraints (`ExtendedPropertyQuench`). Checkpointed as `ForeignKeys`.
+24. **Materialized views** (PostgreSQL), **scheduled events** (MySQL, MariaDB), **indexed views** (SQL Server) -- Deployed through the platform's procedure when the template declares any; an indexed view's carried permissions are put back here. Checkpointed as `MaterializedViewQuench`, `EventQuench` and `IndexedViewQuench`.
+25. **Re-apply permissions** -- Puts back the grants captured off any module a script dropped and re-created. See [Preserved Permissions](#preserved-permissions).
+26. **After scripts** -- Executes migration scripts from any folder in the `After` slot. Sequential and tracked.
+27. **Stamp version** -- Executes `Template.VersionStampScript` if configured. Checkpointed as `VersionStamp`.
+
+As the work unit ends, SchemaQuench reads and clears the change-audit rows its procedures wrote for the deployment summary, and on MySQL and MariaDB drops the session working tables.
+
+When `UpdateTables` is `false`, the table steps -- 9, 12, 13, 14, 17, 18, 19 and 23 -- are skipped; scripts, data delivery and step 24 still run. When `IndexOnlyTableQuenches` is enabled on a template, steps 9, 12, 13, 18 and 23 are skipped and step 17 runs the platform's `IndexOnlyQuench` procedure instead, so the template manages only the indexes of tables it does not own.
 
 ---
 
@@ -667,10 +677,22 @@ SchemaQuench assigns every script folder to a quench slot that determines when t
 
 A setting is state, not a migration, so `Setup` scripts run on **every** deploy: a value someone changed by hand is put back the next time the package deploys. That makes each script responsible for checking before it changes anything. Some changes refuse to repeat, and some are expensive even when the value is already right -- `sp_cdc_enable_db` fails on a database that already has CDC, and setting `READ_COMMITTED_SNAPSHOT` needs exclusive access to the database even to set the value it already has. Guard them:
 
-```sql
-IF (SELECT is_cdc_enabled FROM sys.databases WHERE database_id = DB_ID()) = 0
-    EXEC sys.sp_cdc_enable_db;
-```
+> **SQL Server:**
+> ```sql
+> IF (SELECT is_cdc_enabled FROM sys.databases WHERE database_id = DB_ID()) = 0
+>     EXEC sys.sp_cdc_enable_db;
+> ```
+
+> **PostgreSQL:** an extension a later function relies on, created only when it is absent:
+> ```sql
+> CREATE EXTENSION IF NOT EXISTS pg_trgm;
+> ```
+
+> **MySQL and MariaDB:** the event scheduler a declared event relies on, switched on only when it is off (a `SET GLOBAL` runs through a prepared statement so it can be made conditional):
+> ```sql
+> SET @ss_setup = IF(@@GLOBAL.event_scheduler = 'ON', 'DO 0', 'SET GLOBAL event_scheduler = ON');
+> PREPARE ss_setup FROM @ss_setup; EXECUTE ss_setup; DEALLOCATE PREPARE ss_setup;
+> ```
 
 `Setup` scripts run once per database, and once per schema in a [schema template](#templatetargets). There is no retry: nothing in the template has run before them, so a script that fails will fail again, and the deploy stops at the first one. WhatIf lists them without running them, and a run resumed from a [checkpoint](#checkpoint-and-resume) skips the ones that already succeeded in it. Query tokens and `{{SchemaName}}` resolve in them as in any other script.
 
@@ -708,6 +730,24 @@ See exactly what SchemaQuench would do before it touches a single table. Set `Wh
 **Console verbosity — `--WhatIfDetail`.** By default WhatIf prints one line per script (`Would APPLY: …` / `Would SKIP …` / `Would DELIVER …`), which is thorough but noisy on a large package. Pass `--WhatIfDetail:concise` to collapse each section into a per-category count (for example `12 would apply, 3 would skip`); `--WhatIfDetail:normal` (the default) keeps the per-script lines; `--WhatIfDetail:verbose` is reserved for future extra detail and currently matches `normal`. This affects only the **console** stream — the `SchemaQuench - Summary.md`/`.json` files always carry the full per-script listing regardless of the switch.
 
 **Important limitation:** WhatIf shows the top level of changes, not the full cascade. Because nothing actually executes, WhatIf can't show ripple effects that depend on earlier changes having been applied. For example, if an object script drops an index, that script doesn't run in WhatIf mode, so the index still exists when WhatIf analyzes table changes -- meaning the table diff won't show the index as needing to be recreated. WhatIf is a confidence check, not a guarantee. It catches the majority of issues but the full deployment may produce additional changes that WhatIf couldn't predict.
+
+### What WhatIf does and does not show
+
+The gaps a dry run has are each explained where the feature is; this is the one list of them.
+
+- **The top level only.** The cascade limitation above: a change that only exists once an earlier change has applied is not in the preview.
+- **Helpers are installed.** Kindling runs as on a real deploy, so the target gets SchemaSmith's schema and procedures and the run needs the same [permissions](#permissions).
+- **Table steps preview.** Every quench procedure runs with its WhatIf flag, logs the SQL it would run and records `would*` actions for the deployment summary -- the foreign-key, materialized-view, event and indexed-view steps included.
+- **Scripts are listed.** Setup, object, migration, table-data and product scripts are logged as `Would APPLY` / `Would SKIP`; query tokens are not resolved, so a script that uses one is always previewed as would-apply, never as unchanged. Setup scripts and the version stamp are named, not run.
+- **Unchanged is a skip.** The stamps are read and a script that would not re-run is reported `SKIP (unchanged)`; nothing is recorded. See [Unchanged Object Scripts](#unchanged-object-scripts).
+- **Deliveries are decided.** Delivery gates are evaluated and each delivery is reported as it would run or be skipped. See [Gated deliveries and variants](#gated-deliveries-and-variants).
+- **No copy check on MySQL.** The scratch-copy comparison of an expression SchemaSmith has not recorded is skipped on MySQL and MariaDB, where the copy would be a real table, so such an expression previews as a change there. See [Expression change detection](#expression-change-detection).
+- **No mode on MySQL rows.** A MySQL or MariaDB preview row carries no `OnlineApply` `mode`, because only the engine can say which form it accepts. See [objectChanges](deployment-summary-report.md#objectchanges--what-actually-changed).
+- **Refusals still fire.** What the real run would refuse, the preview refuses: a table [another product owns](#table-ownership), a [rebuild](configuration.md#when-schemaquench-refuses) of a temporal, CDC, change-tracked, replicated or ledger table (SQL Server), a published, inherited or partitioned one (PostgreSQL) or a system-versioned one (MariaDB), a partitioned table due for drop by absence, a `DataDirectory` move or removal of `IsSystemVersioned` (MySQL, MariaDB), an Always Encrypted change, a CDC change a change table cannot take, and a column change blocked by a dependent the package does not declare.
+- **Nothing is created.** A database `CreateIfMissing` would create is reported, not created, and its work units preview every object as new. See [CreateIfMissing](#createifmissing).
+- **Ownership not stamped.** Ownership rows and markers are a real write, so the preview skips them; on SQL Server the extended-property statements are printed instead. See [Table Ownership](#table-ownership).
+- **No map is recorded.** Nothing is recorded and anything the scratch-copy check verified is put back at the end of the run.
+- **Steps are checkpointed.** The table steps are recorded under the same step names as a real run, and a clean preview deletes them at the end. A preview that fails leaves them behind, and a later `--ResumeQuench` reads them as completed work -- so do not resume a real run from a failed preview's checkpoints. See [WhatIf and checkpoints](#whatif-and-checkpoints).
 
 ### Debug SQL output
 
@@ -855,6 +895,91 @@ Set it in `SchemaQuench.settings.json`, or pass `--ForceReKindle` on the command
 
 ---
 
+## What SchemaSmith Installs In Your Database
+
+SchemaQuench does its comparing and changing from inside the target: the procedures that read the catalog, work out the difference and run the DDL live in the database they deploy to, beside a handful of tables that remember what was applied. That is what lets a DBA read every statement the tool can issue with the engine's own tools, and it is what a database carries once SchemaSmith has deployed to it. This section is the inventory -- where it lives, what each piece holds, when it is installed, and how to take it all out again.
+
+**Where it lives.** On SQL Server and PostgreSQL, a schema named `SchemaSmith`, created on the first kindle if it is absent, holds everything. MySQL and MariaDB have no schema inside a database, so every object sits in the target database itself with a `SchemaSmith_` prefix. Nothing is installed outside the databases being deployed to; the admin database (`master`, `postgres`, `information_schema`) only ever runs your product scripts and discovery queries.
+
+**The tables.** Six on SQL Server and PostgreSQL, seven on MySQL and MariaDB:
+
+| Table | What it holds |
+|---|---|
+| `KindleStamp` | One row: a hash of the helper scripts as installed. Compared at the start of every quench to decide whether kindling has anything to do. |
+| `CompletedMigrationScripts` | The run-once record: one row per migration script that has applied, per product, template and tenant schema. See [Migration Script Tracking](#migration-script-tracking). |
+| `ScriptStamp` | For each object script that applied, a hash of its text and a hash of the engine's rendering of the object it created, so an unchanged script is not re-run. See [Unchanged Object Scripts](#unchanged-object-scripts). |
+| `ExpressionMap` | For each check, computed or generated column, default or predicate SchemaSmith applied: the text you declared, the text the engine stored, and the engine version (and compatibility level) at the time. See [Expression change detection](#expression-change-detection). |
+| `ProductOwnership` | Which product (and template) owns a table, index, materialized view or event, and the table's sticky `PreventDrop` marker. On SQL Server only memory-optimized tables are recorded here; everything else carries its ownership as an extended property. See [Table Ownership](#table-ownership). |
+| `ChangeAudit` | A working queue, not a history: each procedure writes a row per object it changed (or, under WhatIf, would change) tagged with its session id, and SchemaQuench reads and deletes its own session's rows at the end of each work unit to build the [deployment summary](deployment-summary-report.md). Rows a session that died left behind are discarded at the start of the next run that reuses its id. |
+| `StatusMessages` (MySQL and MariaDB only) | The progress lines the procedures write as they go, since a procedure on these engines cannot print to the client. SchemaQuench reads them during a step and deletes its session's rows afterwards; anything older than an hour is cleared at kindle. |
+
+On MySQL and MariaDB the names are `SchemaSmith_KindleStamp`, `SchemaSmith_CompletedMigrationScripts`, and so on; the quench steps also create session temporary tables with a `_SchemaSmith_` prefix, which exist only for the connection and are dropped as each work unit ends.
+
+**The routines.** The quench procedures listed under [Modular Quench Procedures](#modular-quench-procedures), the functions they share, the procedures that generate table and view JSON for SchemaTongs, and the gate functions that tell the table pass what the detected version supports. Kindling runs about eighty scripts on SQL Server, seventy on PostgreSQL and a hundred and ten on MySQL and MariaDB, each creating one or two routines. On SQL Server a database below compatibility level 130 receives the XML-ingest versions of five of them under the same names. MariaDB receives its own versions of twenty MySQL routines, again under the same names, for the catalog views and syntax the two engines do not share. The PostgreSQL routines run with the caller's rights; on MySQL and MariaDB sixteen are declared `SQL SECURITY DEFINER` and run with the rights of the account that kindled them.
+
+**When kindling runs.** On every work unit, as step 4 of the [database quench sequence](#database-quench-sequence), after the target's version is detected and the folder gates have run, under a lock per database (`sp_getapplock`, `pg_advisory_lock` or `GET_LOCK`) so parallel work units on one database install once. The stamp is computed from the scripts as they would be installed -- which folds in the tooling version, the ingest encoding, the detected server version, the unsupported-feature policy and, on MySQL and MariaDB, the session `sql_mode` -- and compared with the `KindleStamp` row. A match returns after one read; anything else re-installs every routine and rewrites the stamp. A new SchemaSmith version, a changed policy, a server upgrade, a different `sql_mode` and [`ForceReKindle`](#forcerekindle) therefore all re-kindle. `KindleTheForge: false` skips the step entirely, as does `SkipKindlingForge` passed as the first command-line argument; a `--WhatIf` run kindles like a real one.
+
+**Removing it.** SchemaSmith's objects are ordinary objects, and dropping them takes nothing of yours with them. Your tables, indexes, scripts and data are untouched; what you lose is the memory of what was applied, so the next deploy re-kindles, runs every migration script again unless you keep the tracking table, and compares expressions by the engine's rendering until it has recorded them again.
+
+> **SQL Server:** the schema cannot be dropped while it holds objects, so generate the drops from the catalog and run them, then drop the schema. The script below takes the recyclebin hooks, if you installed them, along with everything else in the schema.
+> ```sql
+> DECLARE @sql NVARCHAR(MAX) = N'';
+> SELECT @sql += N'DROP ' + CASE WHEN o.[type] = 'U' THEN N'TABLE' WHEN o.[type] = 'P' THEN N'PROCEDURE' ELSE N'FUNCTION' END
+>              + N' SchemaSmith.' + QUOTENAME(o.[name]) + N';' + CHAR(10)
+>   FROM sys.objects o
+>   WHERE o.[schema_id] = SCHEMA_ID(N'SchemaSmith') AND o.[type] IN ('U', 'P', 'FN', 'IF', 'TF')
+>   ORDER BY CASE o.[type] WHEN 'P' THEN 1 WHEN 'U' THEN 2 ELSE 3 END;
+> EXEC sys.sp_executesql @sql;
+> DROP SCHEMA SchemaSmith;
+> ```
+> What stays behind: the `ProductName` and `PreventDrop` extended properties on your tables and the `ProductName` property on your indexes -- the ownership marks. They are harmless, and `sys.sp_dropextendedproperty` removes them table by table.
+
+> **PostgreSQL:** one statement, because every object is in the schema and `CASCADE` follows the dependencies. It also drops the recyclebin hooks and any table they keep in that schema.
+> ```sql
+> DROP SCHEMA "SchemaSmith" CASCADE;
+> ```
+
+> **MySQL and MariaDB:** generate the drops from `INFORMATION_SCHEMA` -- the routines and the tables share the prefix -- and run the statements it returns. `SchemaSmith_CustomTableDrop` and `SchemaSmith_CustomTableRestore` match the pattern too, if you installed them.
+> ```sql
+> SELECT CONCAT('DROP ', ROUTINE_TYPE, ' `', ROUTINE_NAME, '`;')
+>   FROM INFORMATION_SCHEMA.ROUTINES
+>   WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_NAME LIKE 'SchemaSmith\_%'
+> UNION ALL
+> SELECT CONCAT('DROP TABLE `', TABLE_NAME, '`;')
+>   FROM INFORMATION_SCHEMA.TABLES
+>   WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME LIKE 'SchemaSmith\_%';
+> ```
+
+The deploy machine keeps its own traces: the log directories and the [checkpoint files](#checkpoint-and-resume) under the checkpoint directory, which a clean run removes for its own targets.
+
+---
+
+## Permissions
+
+SchemaQuench runs as whatever login the connection string names, and it asks that login to do three different kinds of work: install and read its own helpers, change your tables, and run your scripts. The right grant set follows from which of those a deploy actually does -- a full release needs all three, a [data fix](#partial-package-deployments-data-fixes) needs almost none of the first two -- so this section says what the run executes on each engine and leaves the mapping to your engine's grants to you, where the engine's own documentation is the authority.
+
+**What every run does.**
+
+- **Connects and reads.** The pre-flight opens a connection to each configured server's admin database (`master`, `postgres`, `information_schema`) and runs `SELECT @@SERVERNAME`, `SELECT inet_server_addr()` or `SELECT @@hostname`; the product's `ValidationScript`, `BaselineValidationScript` and each template's `DatabaseIdentificationScript` run there too, and need whatever they read. Each work unit then reads the server version and, on SQL Server, the database's compatibility level from `sys.databases`.
+- **Kindles.** Unless `KindleTheForge` is `false`, step 4 of the [database quench sequence](#database-quench-sequence) creates or replaces everything listed under [What SchemaSmith Installs](#what-schemasmith-installs-in-your-database): the schema on SQL Server and PostgreSQL, the procedures and functions, the tables (through `BootstrapTableQuench`), and the kindle lock (`sp_getapplock`, `pg_advisory_lock`, `GET_LOCK`). The table steps create session temporary tables on every engine.
+- **Uses its own tables.** `KindleStamp` is read on every run; `CompletedMigrationScripts` is read before each tracked slot and written after each script (see [When the record cannot be read or written](#when-the-record-cannot-be-read-or-written)); `ScriptStamp` is read before and written after each object script; `ExpressionMap` is written at the end of the table work, and a failure there is logged, not fatal; `ChangeAudit` is written by the procedures and read and cleared by SchemaQuench; `StatusMessages` likewise on MySQL and MariaDB.
+- **Changes your tables.** With `UpdateTables` on, the procedures create, alter, rename and drop tables, columns, indexes, constraints and statistics in every schema the package declares, and write descriptions and ownership marks on them. What else they execute depends on the engine, below.
+- **Runs your scripts.** Object, migration, setup and product scripts run as written, under the deploy login. A script that creates a trigger, event, procedure or function needs the engine's right to do so.
+
+> **SQL Server:** kindling runs `CREATE SCHEMA SchemaSmith` once, then `CREATE PROCEDURE`, `CREATE FUNCTION` and `CREATE TABLE` in it. The table steps run `CREATE`, `ALTER` and `DROP` on tables, indexes, constraints and statistics in the product's schemas, `sp_rename` for an `OldName`, and `sp_addextendedproperty`, `sp_updateextendedproperty` and `sp_dropextendedproperty` on your tables and indexes for the `ProductName`, `PreventDrop` and `MS_Description` properties. Declared features add their own statements: `sys.sp_cdc_enable_table` and `sys.sp_cdc_disable_table` for Change Data Capture, which SQL Server restricts to members of `db_owner`; `ALTER TABLE … ENABLE / DISABLE CHANGE_TRACKING`; `ALTER TABLE … SET (FILESTREAM_ON = …)` and FILESTREAM columns; `ALTER TABLE … SET (SYSTEM_VERSIONING = …)` for temporal tables; ledger tables created `WITH (LEDGER = ON)`. A table rebuild under [`RebuildPolicy`](configuration.md#rebuildpolicy) creates, fills, renames and drops a copy of the table. Enabling CDC or Change Tracking on the *database* is never done by SchemaSmith; a [`Setup` script](#the-setup-slot) of yours does that.
+
+> **PostgreSQL:** kindling runs `CREATE SCHEMA IF NOT EXISTS "SchemaSmith"`, which needs `CREATE` on the database the first time, then `CREATE OR REPLACE PROCEDURE`, `CREATE OR REPLACE FUNCTION` and `CREATE TABLE` in that schema, which the role that created the schema owns. Every helper runs with the caller's rights -- none is `SECURITY DEFINER` -- and PostgreSQL lets only a table's owner, or a member of the owning role, run `ALTER TABLE`, `CREATE INDEX` on it, `COMMENT ON` it or set its `REPLICA IDENTITY`, so the deploy role must own the product's tables or be a member of the role that does. The table steps also use `CREATE TEMPORARY TABLE` (the database's `TEMPORARY` privilege), and a column type change that takes a published table out of its publication and back runs `ALTER PUBLICATION`, which only the publication's owner may do.
+
+> **MySQL and MariaDB:** kindling runs `DROP` and `CREATE PROCEDURE` and `FUNCTION` in the target database, `CREATE TABLE` for the `SchemaSmith_*` tables and `CREATE TEMPORARY TABLE` for the working set, so the account needs the right to create routines, tables and temporary tables there. With binary logging on, the server's own rule for who may create a stored function applies (`log_bin_trust_function_creators`, or the privilege your version substitutes for it). Sixteen of the routines are `SQL SECURITY DEFINER`, so they keep running with the kindling account's rights after a lower-privilege account takes over the deploys. The table steps run `CREATE`, `ALTER`, `DROP` and `RENAME TABLE`, `CREATE INDEX` and `ALTER TABLE … ADD CONSTRAINT … FOREIGN KEY` in the database; a declared event runs `CREATE EVENT` and `DROP EVENT`; and the permission carry-across reads `mysql.procs_priv` to see a routine's grants before a script drops it -- an account that cannot read it is told so and the deploy continues without them.
+
+**CreateIfMissing** provisions databases and schemas and needs the rights that implies; see [CreateIfMissing](#createifmissing).
+
+**WhatIf needs the same.** A `--WhatIf` run kindles, reads and writes SchemaSmith's own tables and runs every procedure in preview mode, which writes `ChangeAudit` and, on MySQL and MariaDB, `StatusMessages`. Only your objects are left unchanged, so a preview run under a reader account fails at kindling, not at the first table.
+
+**The reduced profile.** A deploy with `KindleTheForge`, `UpdateTables`, `DropTablesRemovedFromProduct` and `TrackRunOnceMigrations` off runs only your scripts and the reads above; the [Datafix Role Grants](datafix-role-grants.md) reference gives a per-engine grant set for it. With `TrackRunOnceMigrations` on, add `SELECT`, `INSERT` and `DELETE` on `CompletedMigrationScripts` (and `USAGE` on the schema on PostgreSQL); a deploy that also runs object scripts writes `ScriptStamp`, and an account that cannot is told once and continues.
+
+---
+
 ## Expression change detection
 
 Every engine rewrites an expression when it stores it. SQL Server turns `RetentionDays <= 365` into
@@ -911,19 +1036,54 @@ engine's own rewrite.
 
 ## Modular Quench Procedures
 
-The table quench is broken into modular stored procedures, each handling a specific aspect of the table schema. The procedures are deployed during the KindleTheForge step and called in sequence during the database quench. Every platform ships its own implementation, but the responsibilities are the same.
+The table quench is broken into modular stored procedures, each handling a specific aspect of the table schema. The procedures are deployed during the KindleTheForge step and called in sequence during the database quench. Every platform ships its own implementation; the core five are the same everywhere, and each engine adds the procedures its own features need.
+
+**On every engine:**
 
 | Procedure | Responsibility |
 |---|---|
-| **MissingTableAndColumnQuench** | Creates tables that exist in the schema package but not in the database. Adds columns that exist in the table definition but are missing from the existing table. |
-| **ModifiedTableQuench** | Alters existing columns to match the schema package definitions. Handles data type, nullability, default constraint, and computed/generated column changes. Drops removed tables when `DropTablesRemovedFromProduct` is enabled. |
-| **MissingIndexesAndConstraintsQuench** | Creates indexes, check constraints, default constraints, and (where supported) statistics that exist in the schema package but are missing from the database. |
-| **ForeignKeyQuench** | Creates, modifies, and drops foreign keys to match the schema package. Runs late in the sequence so all referenced tables and columns exist. |
+| **TableQuench** | The wrapper that runs the whole table sequence below in one call -- what a migration script calls to bootstrap a table. SchemaQuench itself calls the pieces, so it can run scripts between them. |
+| **BootstrapTableQuench** | A minimal create-or-rename-or-add-columns procedure with no dependency on the other helpers; it installs SchemaSmith's own tables during kindling. |
+| **MissingTableAndColumnQuench** | Renames tables and columns declared with `OldName`, creates tables that exist in the schema package but not in the database, and adds missing columns. |
+| **ModifiedTableQuench** | Drops tables removed from the product, elects rebuilds, drops modified or removed indexes, foreign keys, check constraints and statistics, alters existing columns (type, nullability, default, computed/generated), drops removed columns and converges table attributes. See [Column Changes](#column-changes). |
+| **MissingIndexesAndConstraintsQuench** | Adds computed and generated columns, and creates the indexes, check constraints, defaults, full-text indexes and (SQL Server, PostgreSQL) statistics the package declares and the database lacks. |
+| **ForeignKeyQuench** | Creates, modifies and drops foreign keys to match the schema package. Runs late in the sequence so all referenced tables, columns and data exist. |
 | **IndexOnlyQuench** | Alternative to the full sequence. Manages indexes (and, on SQL Server and PostgreSQL, statistics) only -- doesn't create tables, add columns, or manage foreign keys. Used when `IndexOnlyTableQuenches` is enabled on a template. |
-| **IndexedViewQuench** | Deploys indexed views with diff-based change detection (SQL Server). |
-| **MaterializedViewQuench** | Deploys PostgreSQL materialized views, including their indexes. |
 
-The implementation lives in the deployed SQL on the target database -- which means a DBA can read it on the server with `sp_helptext` (SQL Server), `\sf` (PostgreSQL), or `SHOW CREATE PROCEDURE` (MySQL). No black boxes.
+**SQL Server:**
+
+| Procedure | Responsibility |
+|---|---|
+| **PeriodColumnQuench** | Adds the period columns and `PERIOD FOR SYSTEM_TIME` to a table declared `IsTemporal` that has none yet, before any index can name them. |
+| **LedgerQuench** | Converges an existing ledger table's generated-column names and `HIDDEN` flags and its ledger view's name (SQL Server 2022 and later), and reports what the engine cannot change. |
+| **IndexStateQuench** | Converges each declared index's `Disabled` state once the index exists: disables a declared-disabled index, rebuilds one someone disabled by hand. |
+| **FileStreamColumnQuench** | Binds a table to its FILESTREAM filegroup and adds FILESTREAM columns, after the `ROWGUIDCOL` constraint they require exists. |
+| **CdcQuench** | Enables and disables Change Data Capture per table and performs the capture-instance rotation `ModifiedTableQuench` decided on. |
+| **ChangeTrackingQuench** | Enables and disables Change Tracking per table, after the primary key it requires exists. |
+| **EdgeConstraintQuench** | Edge constraints on graph edge tables (SQL Server 2019 and later): created, dropped and re-created on change, dropped by absence under `DropForeignKeysRemovedFromProduct`. |
+| **ConstraintStateQuench** | The `Enforced` and `Validated` state of declared foreign keys and check constraints, once they exist. |
+| **ExtendedPropertyQuench** | The declared extended properties and descriptions of tables, columns, indexes, foreign keys and check constraints, once they exist. |
+| **IndexedViewQuench** | Deploys indexed views with diff-based change detection. |
+
+**PostgreSQL:**
+
+| Procedure | Responsibility |
+|---|---|
+| **DomainTypeQuench**, **EnumTypeQuench**, **SequenceQuench** | Declared domain types, enum types (value-list edits included) and sequences, deployed before the tables that use them. |
+| **DescriptionQuench** | The declared `Description` of every table, column and index, as `COMMENT ON`, once the objects exist; `''` removes a comment and an omitted value leaves it alone. |
+| **ReplicaIdentityQuench** | `REPLICA IDENTITY`, after the index pass because the `USING INDEX` form names an index. |
+| **StatisticsTargetQuench** | The target of each declared extended-statistics object (PostgreSQL 13 and later). |
+| **ConstraintStateQuench** | `NOT ENFORCED` / enforced (PostgreSQL 18) and `NOT VALID` / validated state of declared foreign keys and check constraints. |
+| **MaterializedViewQuench**, **MissingMaterializedViewIndexesQuench** | Materialized views and their indexes. |
+
+**MySQL and MariaDB:**
+
+| Procedure | Responsibility |
+|---|---|
+| **EventQuench** | Declared scheduled events: created, dropped and re-created on change, dropped by absence under `DropEventsRemovedFromProduct`. |
+| **SequenceQuench** | Declared sequences on MariaDB 10.3 and later, every attribute converged in place and the current value never touched. The MySQL copy of this procedure refuses by name, since MySQL has no sequences. |
+
+The implementation lives in the deployed SQL on the target database -- which means a DBA can read it on the server with `sp_helptext` (SQL Server), `\sf` (PostgreSQL), or `SHOW CREATE PROCEDURE` (MySQL and MariaDB). No black boxes.
 
 ### Calling Procedures Directly from Migration Scripts
 
@@ -967,11 +1127,11 @@ Then call the procedure from your migration script using the token:
 > );
 > ```
 
-> **MySQL:**
+> **MySQL and MariaDB:**
 > ```sql
 > CALL SchemaSmith_TableQuench(
 >     '{{ProductName}}',
->     '{{MainDB}}',
+>     DATABASE(),  -- p_DatabaseName: the target database
 >     '[{{AuditLogTable}}]',
 >     0,  -- p_WhatIf
 >     0,  -- p_DropUnknownIndexes
@@ -997,7 +1157,9 @@ The same pattern works for views. Define the token, then pass it to the procedur
 >     @ProductName = '{{ProductName}}',
 >     @IndexedViewSchema = '[{{OrderSummaryView}}]',
 >     @WhatIf = 0,
->     @UpdateFillFactor = 0;
+>     @UpdateFillFactor = 0,
+>     @TemplateName = '{{TemplateName}}',
+>     @SchemaName = '';   -- the iteration's schema in a schema template; '' otherwise
 > ```
 
 **MaterializedViewQuench** (PostgreSQL):
@@ -1015,20 +1177,40 @@ You can also pass the full schema tokens (`{{TableSchema}}`, `{{IndexedViewSchem
 
 > **Legacy SQL Server tier:** these tokens hand your script JSON, which the built-in quench procs shred with `OPENJSON` (compatibility level 130+). If you shred a model-payload token in *your own* SQL on a below-130 database, `OPENJSON` parse-errors — use the [XML twin](script-tokens.md#model-payload-xml-twins) (`{{AuditLogTableXml}}`-style per-object tags, or `{{TableXml}}`) and XQuery `.nodes()`/`.value()` instead, gated behind `{{CompatibilityLevel}}`. The XML shape shreds at every compatibility level.
 
-**Parameter reference:**
+**TableQuench parameters.** The parameters, in declared order, with the default a direct call gets when it leaves one out. A named call (`@Name = …` on SQL Server, `p_Name := …` on PostgreSQL) can set any of them; the positional PostgreSQL form above sets the first six and relies on the defaults for the rest. MySQL and MariaDB have no parameter defaults: the six positional arguments are the whole signature.
 
-| Parameter | TableQuench | IndexedViewQuench | MaterializedViewQuench |
-|-----------|:-----------:|:-----------------:|:----------------------:|
+| Parameter | SQL Server | PostgreSQL | MySQL / MariaDB |
+|---|---|---|---|
 | ProductName | Required | Required | Required |
-| Definitions (JSON) | Required | Required | Required |
-| DatabaseName (MySQL only) | Required | -- | -- |
-| WhatIf | Default: off | Default: off | Default: off |
-| DropUnknownIndexes | Default: off | -- | -- |
-| DropTablesRemovedFromProduct | Default: on | -- | -- |
-| DropColumnsRemovedFromProduct | Default: on | -- | -- |
-| UpdateFillFactor | SQL Server / PG only -- Default: on | Default: off | Default: on |
+| DatabaseName | -- | -- | Required (second) |
+| TableDefinitions (JSON) | Required | Required | Required |
+| WhatIf | `0` | `FALSE` | Required |
+| DropUnknownIndexes | `0` | `FALSE` | Required |
+| DropTablesRemovedFromProduct | `1` | `TRUE` | Required |
+| UpdateFillFactor | `1` | `TRUE` | -- |
+| RebuildPolicyMode | `'NEVER'` | `'NEVER'` | session variable |
+| RebuildPolicyThreshold | `NULL` | `NULL` | session variable |
+| RebuildPolicyOnOrderMismatch | `0` | `FALSE` | session variable |
+| DropSchemaBoundDependents | `0` | -- | -- |
+| CdcFilegroup | `NULL` (unmanaged) | -- | -- |
+| CdcSupportsNetChanges | `NULL` (unset) | -- | -- |
+| OnlineApply | `'OFF'` | `'OFF'` | session variable |
+| OnlineApplyMaxDuration | `NULL` | -- | -- |
 
-> **MySQL note:** `SchemaSmith_TableQuench` on MySQL has no `UpdateFillFactor` parameter -- fill factor is a SQL Server / PostgreSQL concept and the MySQL procedure simply omits it. The MySQL example above (six positional args) reflects the actual signature.
+The by-absence drops of columns, foreign keys, check constraints, statistics and product-owned indexes are not parameters of the wrapper: on SQL Server and PostgreSQL it leaves them at the inner procedures' defaults (all on), and on MySQL and MariaDB it passes them on. On MySQL and MariaDB the rebuild policy and `OnlineApply` reach the procedures through session variables SchemaQuench sets before its own calls (`@ss_rebuild_policy_mode`, `@ss_rebuild_policy_threshold`, `@ss_rebuild_policy_on_order_mismatch`, `@ss_online_apply`); a direct call that sets none gets `NEVER`, which can never elect a rebuild. A PostgreSQL direct call with `OnlineApply` on queues its `CONCURRENTLY` statements for the caller to run afterwards -- SchemaQuench does that after its own calls, not after yours -- so leave it `OFF` in a direct call.
+
+**View parameters.**
+
+| Parameter | IndexedViewQuench (SQL Server) | MaterializedViewQuench (PostgreSQL) |
+|---|---|---|
+| ProductName | Required | Required |
+| Definitions (JSON) | Required | Required |
+| WhatIf | `0` | `FALSE` |
+| UpdateFillFactor | `0` | `TRUE` |
+| TemplateName | Required | `''` |
+| SchemaName | Required (`''` for a regular template) | `''` |
+
+`TemplateName` and `SchemaName` scope the "removed from product" detection to the calling template and, in a schema template, its iteration, so parallel iterations never drop each other's views. The `{{TemplateName}}` token resolves in template scripts; a regular template passes `''` for the schema.
 
 **When to use direct calls:** When a migration script needs a table or view to exist before it can run -- for example, bootstrapping an audit table in a Before Script before inserting migration tracking data, or ensuring a materialized view is deployed before populating dependent tables.
 
@@ -1098,6 +1280,15 @@ When SchemaQuench processes a slot, it compares the tracking table entries again
 
 To force a tracked script to run again, either delete the corresponding row from the migration tracking table in the target database (named per engine as above), or rename the script file (tracking is by path, so a renamed script is treated as new).
 
+### When the record cannot be read or written
+
+The run-once record is only as good as the deploy login's access to it, so SchemaQuench treats a problem with the table as a reason to stop rather than a reason to guess:
+
+- **Cannot read the record.** Before a tracked slot runs, SchemaQuench reads which of its scripts are already recorded. Only an absent table reads as "nothing has run yet" -- the first deploy of a database kindled by someone else. Any other failure, such as a login with no `SELECT` on the table, stops the run before the slot: `Cannot read which Before scripts have already run from SchemaSmith.CompletedMigrationScripts. Nothing in the slot was run, because a run-once script would run again.` On SQL Server, where a denied `SELECT` arrives as a message rather than an error, the login's `SELECT` and `INSERT` rights on the table are checked explicitly first, with the same outcome.
+- **Applied, not recorded.** A script that ran but whose row could not be inserted is reported as failed -- `The script applied, but could not be recorded as run, so the next deploy would run it again` -- and the run fails, so the problem is fixed before a second deploy repeats the script. A duplicate row is not an error.
+
+The grants that satisfy both are `SELECT`, `INSERT` and `DELETE` on the tracking table (plus `USAGE` on the `SchemaSmith` schema on PostgreSQL); the [Datafix Role Grants](datafix-role-grants.md) reference shows them per engine for a least-privilege deploy account.
+
 ---
 
 ## Dependency Retry Loop
@@ -1115,7 +1306,7 @@ This mechanism allows scripts with interdependencies to coexist in the same fold
 
 A script that is unchanged since it last applied is not part of the loop at all -- see [Unchanged Object Scripts](#unchanged-object-scripts).
 
-The Objects slot gets four opportunities to resolve: (1) before the table quench, (2) after missing tables are created, (3) after table modifications are complete, and (4) during the AfterTablesObjects pass alongside triggers. This handles cases where a view or function references a table column that doesn't yet exist on the first pass.
+Each pass is itself a retry loop, and the passes are placed so a script can wait for the tables it needs: the `Objects` slot runs before the table quench and again once missing tables and columns exist, and the `AfterTablesObjects` slot runs after table modifications and again after the `AfterTablesScripts` slot. Only that last pass reports what still fails as an error. This handles cases where a view or function references a table column that doesn't yet exist on the first pass. See the [Database Quench Sequence](#database-quench-sequence) for where each pass sits.
 
 ---
 
@@ -1123,11 +1314,11 @@ The Objects slot gets four opportunities to resolve: (1) before the table quench
 
 Most of a package does not change between two deployments, yet every view, function, procedure and trigger script used to run again on every quench. Each run was harmless on paper -- `CREATE OR ALTER` and its equivalents leave an unchanged object as it was -- but it still rewrote the object, invalidated cached plans, fired DDL triggers, and on MySQL and MariaDB, where a module is a `DROP` and a `CREATE`, briefly removed it. SchemaQuench now records what each object script left behind and runs it again only when something has moved.
 
-**What is recorded.** After an `Objects` or `AfterTablesObjects` script applies, SchemaQuench stores two hashes in the `SchemaSmith.ScriptStamp` table on the target database, keyed by product, template and the script's path within the package: a hash of the script text, and a hash of the engine's own rendering of the object the script created (`sys.sql_modules` on SQL Server; `pg_get_viewdef`, `pg_get_functiondef` and `pg_get_triggerdef` on PostgreSQL; `SHOW CREATE` on MySQL and MariaDB -- with a trigger's enabled state and a module's `sql_mode` included where the engine keeps them apart). A script is stamped only when it comes from a folder declared with an `ObjectType` and contains exactly one `CREATE` of a view, function, procedure, trigger or event, so the rendering is of the object it declares; any other script runs every time, as before.
+**What is recorded.** After an `Objects` or `AfterTablesObjects` script applies, SchemaQuench stores two hashes in the `SchemaSmith.ScriptStamp` table on the target database (`SchemaSmith_ScriptStamp` on MySQL and MariaDB), keyed by product, template and the script's path within the package: a hash of the script text, and a hash of the engine's own rendering of the object the script created (`sys.sql_modules` on SQL Server; `pg_get_viewdef`, `pg_get_functiondef` and `pg_get_triggerdef` on PostgreSQL; `SHOW CREATE` on MySQL and MariaDB -- with a trigger's enabled state and a module's `sql_mode` included where the engine keeps them apart). A script is stamped only when it comes from a folder declared with an `ObjectType` and contains exactly one `CREATE` of a view, function, procedure, trigger or event, so the rendering is of the object it declares; any other script runs every time, as before.
 
 **When a script runs again.** On the next quench the script is skipped only when both hashes still match: the text is as it was, *and* the server still renders the object as the last run left it. Edit the script and it runs. Change the object by hand on the server -- an `ALTER`, a disabled trigger, a dropped and recreated view -- and the rendering no longer matches, so the script runs and puts the declared definition back. Drop the object and it runs. A skipped script is logged as `Unchanged, not re-run`, recorded as `unchanged` in the change audit, and counted as `Unchanged (object scripts)` in the deployment summary, separately from the scripts that ran.
 
-**What is never skipped.** A script with `[ALWAYS]` in its name runs on every quench, as it always has, and so does a script carrying a `-- SchemaSmith: AlwaysRun` comment anywhere in its text -- the opt-out for a script with side effects whose object may well be unchanged. A script from a folder declared without an `ObjectType` (a custom folder) is never stamped. `RunScriptsTwice` runs every script twice, as before: it exists to prove scripts re-run cleanly, which a skipped script cannot. A script is stamped only when it creates exactly one view, function, procedure, trigger or (on MySQL and MariaDB) event; a `CREATE` inside a comment or a string literal does not count, so a header comment showing how to schedule a procedure is harmless. Scripts in the sequential slots (`Before`, `BetweenTablesAndKeys`, `AfterTablesScripts`, `After`) are migration scripts and keep their own run-once tracking. A WhatIf run reads the stamps and reports a script it would skip as `SKIP (unchanged)`, but records nothing; a script that uses query tokens is always previewed as would-apply, because WhatIf does not resolve the tokens and so cannot compare the text. Set `SkipUnchangedObjects: false` to run every object script on every deployment; while it is off nothing is stamped, so the first deploy after turning it back on runs everything once.
+**What is never skipped.** A script with `[ALWAYS]` in its name runs on every quench, as it always has, and so does a script carrying a `-- SchemaSmith: AlwaysRun` comment anywhere in its text -- the opt-out for a script with side effects whose object may well be unchanged. A script from a folder declared without an `ObjectType` (a custom folder) is never stamped. `RunScriptsTwice` runs every script twice, as before: it exists to prove scripts re-run cleanly, which a skipped script cannot. A script is stamped only when it creates exactly one view, function, procedure, trigger or (on MySQL and MariaDB) event; a `CREATE` inside a comment or a string literal does not count, so a header comment showing how to schedule a procedure is harmless. Scripts in the sequential slots (`Before`, `BetweenTablesAndKeys`, `AfterTablesScripts`, `After`) are migration scripts and keep their own run-once tracking. A WhatIf run reads the stamps and reports a script it would skip as `SKIP (unchanged)`, but records nothing; a script that uses query tokens is always previewed as would-apply, because WhatIf does not resolve the tokens and so cannot compare the text. Set `Target:SkipUnchangedObjects` to `false` to run every object script on every deployment; while it is off nothing is stamped, so the first deploy after turning it back on runs everything once. A stamp that cannot be written -- a login without rights on the table -- is logged once and the deploy continues; the scripts simply run again next time.
 
 > **A module the engine rewrites is still unchanged.** The rendering is compared only with the engine's own earlier rendering of the same object, never with the script text, so an engine that reformats a body, expands a `*` or re-quotes identifiers does not cause a re-run. Only a rendering that differs from the one recorded after the script last applied does.
 
@@ -1150,6 +1341,58 @@ MySQL and MariaDB key a table's grants by name, so a rebuilt table keeps them wi
 **What you see.** The log names the object as its permissions are put back, and the run manifest records a `reapplied` row for it. Under `WhatIf` the statements are printed and the manifest records `wouldReapply` instead.
 
 **Limits.** An extended property value is written back as text. A MySQL or MariaDB deploy user that cannot read `mysql.procs_priv` cannot see a routine's grants; the run says so and the deploy continues without them.
+
+---
+
+## Column Changes
+
+Changing a column that already holds data is where a declarative deploy earns its keep, and where the engines differ most. Some changes the engine makes in place; some SchemaQuench can only make by replacing the column or the table; a few it refuses, because the only way through would lose something it cannot put back. The tables below say, per engine, which path each change takes and what comes down and goes back up around it. A rebuild of the whole table is a separate decision, off by default, documented under [RebuildPolicy](configuration.md#rebuildpolicy); the online forms of these statements are under [OnlineApply](configuration.md#onlineapply).
+
+### SQL Server
+
+| Change | Path | Taken down and put back |
+|---|---|---|
+| Type, length, precision, scale, nullability, collation, sparse | In place: `ALTER TABLE … ALTER COLUMN` | Indexes, full-text indexes, statistics, foreign keys, defaults and check constraints over the column are dropped first and created again by the index, constraint and foreign-key passes of the same run. A CDC capture instance is not rotated: SQL Server carries an in-place change into the change table. |
+| `NOT FOR REPLICATION`, `ROWGUIDCOL`, a dynamic data mask | In place, as its own statement after any definition change | Nothing is dropped and CDC is not rotated. A `ROWGUIDCOL` is taken off before the column is altered and put back after; a mask the package keeps is re-added. |
+| Default | Drop and re-create the default constraint | -- |
+| Computed column expression | Drop and re-create the column | Indexes and statistics over it, as above. |
+| Identity added or removed, column set added or removed, a definition change on a column declared `AnsiPadding: false` | Replace: a new column is added, the data copied, the old column dropped and the new one renamed into place | The dependents above; a CDC capture instance is rotated, since the change table cannot follow a replaced column. The column comes back last in column order, which only a rebuild can correct. |
+| New column | Added by the missing-column step | A CDC capture instance is rotated. |
+| Renamed (`OldName`) | `sp_rename`, before any other change | -- |
+| Removed from the package | Dropped under `DropColumnsRemovedFromProduct` | Foreign keys and indexes over it first. |
+| Column order | Only by a [rebuild](configuration.md#rebuildpolicy) | A rebuild is refused for a temporal, change-tracked, replicated, CDC-enabled or ledger table. |
+
+A column change under a schema-bound view, function or security policy, and what `DropSchemaBoundDependents` does about it, is under [Schema-Bound Dependents](#schema-bound-dependents).
+
+> **Refused before any DDL:** an Always Encrypted change of any kind -- key, algorithm, encryption type, or removing encryption -- because a standard server cannot re-encrypt the data; a type change that one of the column's CDC change tables cannot take, because the capture job for the whole database would stop; a change that needs a capture-instance rotation when the table's two instances are both in use; a column change blocked by a schema-bound module the package does not declare, or an encrypted one; and a change `OnlineApply: Require` has no online form for. Each names the column and what to do, and nothing has been changed when it fires.
+
+### PostgreSQL
+
+| Change | Path | Taken down and put back |
+|---|---|---|
+| Type, nullability, default, collation, storage, compression, identity options | In place: `ALTER TABLE … ALTER COLUMN` -- a type with `SET DATA TYPE` and no `USING` clause, so the engine's own assignment cast converts the rows | Views and rules, SQL-standard routines (`BEGIN ATOMIC`, PostgreSQL 14) and materialized views that read the column are dropped and re-created by their scripts and passes; a row-level security policy, a trigger whose `WHEN` or `UPDATE OF` names the column and a publication with a row filter or column list over it (PostgreSQL 15) are scripted from the catalog, dropped and re-created in the same step; modified or removed indexes, foreign keys, check constraints, exclude constraints and statistics over the column are dropped and created again later in the run; a replica identity index is released ahead of a nullability change. |
+| Generated expression | Drop and re-add the column (below PostgreSQL 17) | -- |
+| `STORED` to `VIRTUAL` or back (PostgreSQL 18) | Drop and re-add the column | -- |
+| Plain column becoming generated | Drop and re-add the column | -- |
+| Generated column becoming plain | `DROP EXPRESSION`, values kept (PostgreSQL 13 and later); below 13 the column is dropped and re-added empty, reported through the [unsupported-feature policy](#version-adaptive-code-generation) | -- |
+| A generated column that reads a changing column | Dropped, re-added by the index pass | -- |
+| Renamed (`OldName`) | `ALTER TABLE … RENAME COLUMN`, before any other change | -- |
+| Removed from the package | Dropped under `DropColumnsRemovedFromProduct` | -- |
+| Column order | Only by a [rebuild](configuration.md#rebuildpolicy) | A rebuild is refused for a table in a publication, one that inherits or is inherited from, and a partitioned one. |
+
+> **Refused before any DDL:** a type change whose dependent the package does not declare -- a view, routine or materialized view that could not be put back. For a type PostgreSQL will not cast on its own, the engine refuses the statement itself; see [Column Type Changes on PostgreSQL](#column-type-changes-on-postgresql) for the `Before`-script pattern that supplies the `USING` clause.
+
+### MySQL and MariaDB
+
+| Change | Path | Taken down and put back |
+|---|---|---|
+| Type, character set, collation, nullability, default, comment, `ON UPDATE`, invisibility, SRID | In place: `ALTER TABLE … MODIFY COLUMN`, one statement per table | For a type or character-set change, the foreign keys on the column and the ones pointing at it are dropped first and created again by the foreign-key pass -- except a widening the engine makes with the key in place (a `VARCHAR` or `VARBINARY` made longer on the same side of 255 bytes, on MySQL and on MariaDB before the releases that refuse any change to a key column). On the MariaDB versions affected by MDEV-35630, widening a column that follows a `STORED` generated column takes every foreign key on the table down and back. |
+| Generated column added, removed or switched between `VIRTUAL` and `STORED` | Drop and re-add the column | -- |
+| Renamed (`OldName`) | `CHANGE COLUMN`, before any other change | On MySQL a declared functional index that reads the column is dropped ahead of the rename and rebuilt over the new name, and a declared generated column that reads it is re-stated in the same statement. MariaDB carries both across a rename itself. |
+| Removed from the package | Dropped under `DropColumnsRemovedFromProduct` | Foreign keys that reference it first. |
+| Column order | A [rebuild](configuration.md#rebuildpolicy), or with [OnlineApply](configuration.md#mysql-and-mariadb) on, `MODIFY COLUMN … AFTER` in place | A rebuild is refused for a system-versioned table or one with an application-time period (MariaDB). |
+
+> **Refused before any DDL:** a type or collation change under a foreign key the package does not declare -- another product's, or one made by hand -- which would be dropped and never put back; on MySQL, a rename blocked by a functional index or generated column the package does not declare; a `DataDirectory` move and the removal of `IsSystemVersioned`, which the engine cannot do in place. Each names the object, and nothing has been changed when it fires.
 
 ---
 
@@ -1207,6 +1450,32 @@ Declare the new type in the table's JSON as usual.
 A key whose private key is absent or password-protected cannot be used that way. The change still applies, and the run warns by name that the module needs signing by hand. An unchanged module is never altered, so its signatures are never touched.
 
 ---
+
+## Table Ownership
+
+Dropping by absence is only safe if SchemaQuench knows which tables are its to drop. A database holds tables from more than one product, tables a DBA made by hand and tables another tool manages, and "not in this package" describes all of them. So SchemaSmith marks what it deploys, and every by-absence drop, and every refusal to touch someone else's table, reads that mark. This is the model behind `DropTablesRemovedFromProduct`, `DropIndexesRemovedFromProduct`, `DropUnknownIndexes` and `PreventDrop`.
+
+**Becoming owned.** On the first deploy that finds a declared table physically present, SchemaQuench marks it with the product's name -- on SQL Server as a `ProductName` extended property on the table (and on each index the package declares), on PostgreSQL, MySQL and MariaDB as a row in `ProductOwnership` naming the product, the template and the object. The mark is written during the table work of that run, after the table exists, and refreshed on every run while the table is in the package; the sticky [`PreventDrop`](#preventdrop) marker lives beside it. A memory-optimized SQL Server table, which cannot carry extended properties, is recorded in `ProductOwnership` instead. Indexes are marked the same way: an index SchemaSmith created is a product-owned index, one it finds and did not create is unknown.
+
+**Another owner's table.** Before anything is created or renamed, the table step reads the owner of every table the package declares -- under its new name, or under its `OldName` when the rename has not happened yet -- and refuses the deploy if any owner is a different product:
+
+```
+One or more tables in this quench are already owned by another product
+```
+
+preceded by one line per table (`Table dbo.Orders owned by different product. [Billing]`). The refusal fires under `--WhatIf` too, and because it runs before the missing-table step, a refused deploy has not renamed the owner's columns, added its own or dropped anything. To hand a table from one product to another, change its mark on purpose -- the extended property or the `ProductOwnership` row -- with a migration script.
+
+**What reads the mark.**
+
+| Control | What it looks at |
+|---|---|
+| `DropTablesRemovedFromProduct` | A table this product owns that the package no longer declares. A table owned by another product, or by nobody, is never a candidate. |
+| `DropIndexesRemovedFromProduct` | An index this product owns, on a declared table, that the package no longer declares. |
+| [`DropUnknownIndexes`](configuration.md#dropunknownindexes) | An index on a declared table that nobody owns -- one made by hand or by another tool. Off by default, because nothing in the package could put it back. |
+| [`PreventDrop`](#preventdrop) | The marker stored with the ownership mark, read even after the table has left the package. |
+| [`ShouldApplyExpression`](#a-gate-that-turns-off-an-existing-object) | A gate that is false makes an owned object "not declared", and the controls above treat it as removed. |
+
+Ownership is reconciled against the live catalog each run: a mark whose table is gone is pruned, and a table the [recyclebin hook](recyclebin.md) moves elsewhere loses its `ProductName` property on SQL Server so the recycled copy is not treated as the product's. Materialized views (PostgreSQL) and scheduled events (MySQL, MariaDB) carry the same per-template ownership rows, which is what lets a multi-template product prune only its own.
 
 ---
 
@@ -1421,7 +1690,7 @@ It resolves across the same four tiers as [DropColumnsRemovedFromProduct](#dropc
 
 When you remove an index from a table's JSON, `DropIndexesRemovedFromProduct` controls whether SchemaQuench drops the **product-owned** index still in the database — an index SchemaSmith created and tracks. It's `true` by default.
 
-This is distinct from [DropUnknownIndexes](#dropunknownindexes): that flag targets *out-of-band* indexes SchemaSmith never created, while this one targets indexes SchemaSmith owns that have dropped out of the definition. It resolves across the same four tiers as [DropColumnsRemovedFromProduct](#dropcolumnsremovedfromproduct), with the same explicit-false-sticky semantics: a table can tighten to `false` to protect its own indexes but cannot re-enable a higher-tier suppression.
+This is distinct from [DropUnknownIndexes](configuration.md#dropunknownindexes): that flag targets *out-of-band* indexes SchemaSmith never created, while this one targets indexes SchemaSmith owns that have dropped out of the definition. It resolves across the same four tiers as [DropColumnsRemovedFromProduct](#dropcolumnsremovedfromproduct), with the same explicit-false-sticky semantics: a table can tighten to `false` to protect its own indexes but cannot re-enable a higher-tier suppression.
 
 **Index types.** Applies to nonclustered/secondary indexes that SchemaSmith manages; a primary key is never dropped by this path. All four engines gate the removed-from-product drop directly through this flag — MySQL and MariaDB previously coupled it to `DropUnknownIndexes` (so a removed index survived unless that flag was on) and are now brought to parity with SQL Server and PostgreSQL: a product-owned index removed from the definition is dropped by default.
 
@@ -1502,6 +1771,35 @@ The tokens resolve per target database, so the same folder deploys to a modern d
 
 On a **product** folder, only `{{ServerMajorVersion}}` is available -- there's no database selected yet at that scope, so `{{CompatibilityLevel}}` doesn't resolve. Gate a product-level folder on the server binary, not the database compatibility level.
 
+### When each gate is evaluated
+
+Every gate is evaluated against a live connection, but not at the same moment or against the same thing. Knowing which is which tells you what a predicate can see.
+
+| Gate | When | Against |
+|---|---|---|
+| A table, column, index, foreign key, check constraint or statistic (`ShouldApplyExpression` in the table JSON) | At the start of the table work for each database and schema, as the table JSON is parsed into the working set. Tokens in the expression were resolved when the package loaded. | The target database. A row whose predicate is false is deleted from the working set before anything is compared. |
+| A template folder | Once per database and schema, after the version is detected and before any slot runs. | The target database and schema, with the full token set. |
+| A product folder | Once per server, before the product's `Before` scripts. | The server's admin connection; `{{ServerMajorVersion}}` is the only token. |
+| A `DataDelivery` block | Once per quench, at the delivery step, before any content file is read. | The target database. See [Gated deliveries and variants](#gated-deliveries-and-variants). |
+| An indexed view, materialized view, event, domain type, enum type or sequence | Inside the procedure that deploys it, per target. | The target database. |
+
+A folder gate is run as a scalar query: write it as a `SELECT` that returns a boolean or `1`/`0`, or as a bare predicate, which SchemaQuench wraps in `SELECT CASE WHEN (…) THEN 1 ELSE 0 END`. A component gate is a bare predicate (a leading `SELECT` is stripped). The same test, on each engine:
+
+```jsonc
+// SQL Server
+"ShouldApplyExpression": "DB_NAME() LIKE '%_dev'"
+// PostgreSQL
+"ShouldApplyExpression": "current_database() LIKE '%_dev'"
+// MySQL and MariaDB
+"ShouldApplyExpression": "DATABASE() LIKE '%_dev'"
+```
+
+### A gate that turns off an existing object
+
+> **Warning:** A declared component whose expression evaluates false is, for this deploy, not declared. The parse removes it from the working set before any comparison, so nothing downstream can tell it from a component deleted from the package: an existing table the product owns is dropped under `DropTablesRemovedFromProduct`, an existing column under `DropColumnsRemovedFromProduct`, and an index, foreign key, check constraint or statistic under its own `Drop…RemovedFromProduct` flag -- on MySQL and MariaDB the log line reads `Drop index not declared for this deploy`. A gate is a declaration about this target, not a pause. To keep an object on a target where its gate is false, set the matching `Drop…RemovedFromProduct` flag to `false` for that environment, or mark the table [`PreventDrop`](#preventdrop).
+
+A folder gate has no such effect: the scripts of a gated-off folder are not run, and their run-once tracking rows are kept, because the scripts are still in the package.
+
 ---
 
 ## Script-Level Runtime Skip
@@ -1552,13 +1850,15 @@ For a narrative walkthrough and decision guide (when to use the sentinel vs. `Sh
 
 ## Exit Codes
 
+A pipeline reads one number from SchemaQuench, so each code means one kind of outcome: done, done but not everything asked for, failed for a reason you can fix, a defect, or the logs could not be kept. This table is SchemaQuench's own; the shared table in the [Configuration Reference](configuration.md#exit-codes) covers every tool and the bare-run case.
+
 | Code | Meaning |
 |------|---------|
-| 0 | Successful quench (or passing pre-flight). All databases quenched, logs backed up. |
-| 1 | Finished, but a feature the target lacks was downgraded under `UnsupportedFeaturePolicy: warn`; the deployment summary lists each one. With `--ExitNonZeroOnWarning`, also any run that logged a warning. |
-| 2 | Failure. A command-line argument was not recognized (nothing runs); the package could not be loaded; one or more database quenches failed; a `--TestConnection` / `--PreviewTargets` pre-flight found a connection error, version violation, or required-template target miss; or a `--Validate` pass found an Error-severity finding (warnings alone still exit `0`). |
-| 3 | Unhandled exception. An unexpected error occurred outside the normal quench flow. |
-| 4 | Unable to back up log files. |
+| 0 | Successful quench, or a passing `--TestConnection`, `--PreviewTargets` or `--Validate` (warnings alone from `--Validate` still exit `0`). All databases quenched, logs backed up. Also a run with no arguments on an install nobody has configured, which prints what to fill in and runs nothing. |
+| 1 | Finished, but not everything the package declares is in place: a feature the target lacks was downgraded under `UnsupportedFeaturePolicy: warn`, and the deployment summary lists each one. With `--ExitNonZeroOnWarning` (or the setting), also any run that would have exited `0` but logged a warning; the log then says so. |
+| 2 | Failed for a reason you can fix. A command-line argument was not recognized (nothing runs); a required setting is missing (the product has no `Platform`); the package could not be loaded; a validation script, product script or version check failed, a target was refused or a `TemplateTargets` rule was broken; one or more database quenches failed, in continue mode or not; the connection to the target was lost mid-deploy; a `--TestConnection` / `--PreviewTargets` pre-flight found a connection error, version violation or required-template target miss; or a `--Validate` pass found an Error-severity finding. |
+| 3 | Unhandled exception -- a defect in the tool. The exception is in both logs; please report it with them. |
+| 4 | Unable to back up log files. The quench itself finished; check permissions and disk space in the log directory. |
 
 ---
 
@@ -1647,7 +1947,7 @@ resumed run enters every template again and each database continues from its own
 | `ValidateBaseline` | Baseline validation script. |
 | `DomainTypeQuench` | PostgreSQL domain type deployment. |
 | `EnumTypeQuench` | PostgreSQL enum type deployment. |
-| `SequenceQuench` | PostgreSQL sequence deployment. |
+| `SequenceQuench` | PostgreSQL and MariaDB sequence deployment. |
 | `ModifiedTables` | Altering existing columns, computed / generated columns, dropping tables. |
 | `IndexesAndConstraints` | Creating missing indexes, check constraints, defaults, statistics. |
 | `TableFeatures` | SQL Server table features: Change Data Capture, Change Tracking, FILESTREAM. |
@@ -1660,7 +1960,20 @@ resumed run enters every template again and each database continues from its own
 
 Kindling the helper procedures and adding missing tables and columns are never checkpointed: they rebuild session state the later steps need, so a resumed run always repeats them. Both are safe to repeat.
 
-In addition, each template slot (`Before`, `Objects`, `BetweenTablesAndKeys`, `AfterTablesScripts`, `AfterTablesObjects`, `TableData`, `After`) records the exact scripts that ran, so resumed runs skip each individual script that already succeeded.
+In addition, each template slot (`Setup`, `Before`, `Objects`, `BetweenTablesAndKeys`, `AfterTablesScripts`, `AfterTablesObjects`, `TableData`, `After`) records the exact scripts that ran, so resumed runs skip each individual script that already succeeded.
+
+### Resuming after the package changed
+
+A checkpoint records names, not content: a step by its step name, a script by its path within the template. Nothing in it describes what the package declared when the step ran, and a resumed run does not compare the two. So, between the failed run and the resume:
+
+- A script you add to a slot runs; a script you rename runs under its new path; a script you edit in place, whose old version had completed, is skipped.
+- A table step recorded as complete is skipped even if the table JSON has changed since. The steps that add missing tables and columns are never checkpointed, so a column added to the JSON still arrives; a type changed in the JSON does not, because `ModifiedTables` is skipped.
+
+Resume is for finishing the run that failed, with the fix confined to what failed. After editing anything else in the package, run without `--ResumeQuench` and let the full sequence converge it.
+
+### WhatIf and checkpoints
+
+A `--WhatIf` run checkpoints the same way a real run does: the baseline validation, the PostgreSQL type and sequence steps and the three table steps (`ModifiedTables`, `IndexesAndConstraints`, `TableFeatures`) are recorded under the same names as they are previewed, and the scripts it lists are not. A preview that completes deletes its own checkpoints, as any clean run does. A preview that fails leaves them, and a later real run with `--ResumeQuench` reads them as completed work and skips those steps. Do not resume a real run from a failed preview's checkpoints: delete the files, or run without `--ResumeQuench`.
 
 ### Automatic cleanup after success
 
@@ -1682,6 +1995,22 @@ SchemaQuench reads the checkpoints, sees that KindleTheForge, ValidateBaseline, 
 - **CI pipelines that rebuild databases from scratch** -- Each run is a fresh slate, so resume has nothing to do.
 
 Use `--ResumeQuench` when you specifically expect that a prior run may have left partial state -- typically when re-running after a real failure in a non-trivial deployment.
+
+---
+
+## Transactions and Atomicity
+
+A deploy that fails halfway is a question every DBA asks before the first run: what is in the database now? The answer is the engine's, not SchemaQuench's. SchemaQuench opens no transaction of its own on any engine -- the only transactions in a run are the ones the engine wraps around each statement, the ones a few procedures open for themselves, and the ones your own scripts write -- so what a failure leaves behind follows directly from how each engine treats DDL.
+
+> **SQL Server:** each step is one `EXEC` of a procedure, and the procedure runs the statements it generated for a pass as a batch in autocommit: every statement commits as it completes, and a failure ends the step at the failing statement with everything before it kept. Three procedures open a transaction of their own. `RebuildTable` runs its whole destructive sequence -- inbound key drops, the copy, the swap, the drop -- in one transaction with `XACT_ABORT ON`, so a failure at any point, including a lost connection, leaves the original table untouched under its own name. `ExpressionMapAdopt` runs its scratch-copy check in a transaction it rolls back. `BootstrapTableQuench` wraps the drop and re-add of a kindling table's primary key in one. Your scripts are split on `GO` and each batch is sent as written, so a `BEGIN TRAN … COMMIT` inside a batch works as it would in a query window.
+
+> **PostgreSQL:** each step is one `CALL`, and PostgreSQL runs a statement -- DDL included -- as one transaction. Each pass's generated statements run as a `DO` block inside that call, and no procedure catches an exception, so a failure anywhere in a step rolls the whole step back, a table rebuild included: the shadow table is gone and the original is as it was. The one thing outside that transaction is the work [`OnlineApply`](configuration.md#onlineapply) queues (`CREATE INDEX CONCURRENTLY`, `VALIDATE CONSTRAINT`), which cannot run inside one and is run statement by statement after the procedure returns. Your scripts are split into statements and each is sent on its own, so each commits on its own unless the script brackets them with its own `BEGIN` and `COMMIT`; a `BEGIN ATOMIC` routine body goes as one statement.
+
+> **MySQL and MariaDB:** every DDL statement commits implicitly and cannot be rolled back, so a failed step leaves every statement before the failing one applied, and the procedures do not pretend otherwise. `RebuildTable` orders its work so the irreversible part is as short as possible: the shadow table is built and filled first (a failure strands only the shadow, which the next run refuses to overwrite and names), the swap is one atomic `RENAME TABLE`, and only then are the old table's keys dropped and the old table removed -- a failure there leaves the live table complete and a parked `_old` copy holding the pre-rebuild rows. Data delivery and migration scripts are DML and commit per statement unless the script starts a transaction.
+
+**What a failure leaves.** On every engine the result is a database somewhere between the old and the new declared state, with each completed statement -- or on PostgreSQL each completed step -- in place. The log names the failing statement, and with `WriteDebugSql` on, the file holding the step's resolved SQL; see [Where errors are logged](error-codes-and-reporting.md#where-errors-are-logged) and the [Failure triage roll-up](error-codes-and-reporting.md#failure-triage-roll-up). Other databases in the same run continue or stop per [ContinueOnDatabaseFailure](#continueondatabasefailure) and [ContinueOnSchemaFailure](#continueonschemafailure).
+
+**Recovery is a re-run.** Because every step compares the live state with the declared state, running the deploy again after the cause is fixed picks up where the failure left off: what applied is found in place and left alone, what did not is applied. [`--ResumeQuench`](#checkpoint-and-resume) does the same with less work, skipping the steps and scripts the failed run recorded as complete. What neither can do is undo a completed statement; for that, deploy the previous package, as the guide's [rollback chapter](../guide/08-rollback-and-recovery.md#a-platform-note-on-transactional-ddl) describes, with the same per-engine caveat about DDL that this section started from.
 
 ---
 

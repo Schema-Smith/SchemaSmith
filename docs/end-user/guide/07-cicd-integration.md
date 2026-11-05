@@ -255,7 +255,7 @@ jobs:
           schemaquench
 ```
 
-The exact same shape works for PostgreSQL (swap the service image to `postgres:16` and use `Host=localhost;...` credentials), MySQL (swap to `mysql:8.4`), and MariaDB (swap to `mariadb:11.4`). The SchemaQuench invocation is identical -- the platform adapter comes from the package.
+The exact same shape works for PostgreSQL (swap the service image to `postgres:16`), MySQL (`mysql:8.4`), and MariaDB (`mariadb:11.4`): the same `SmithySettings_Target__Server`, `__User` and `__Password` variables carry the connection, with `SmithySettings_Target__Port` when the service is not on the engine's default port. The SchemaQuench invocation is identical -- the platform adapter comes from the package.
 
 If WhatIf fails, the PR check fails. The author sees exactly which SQL statement would have broken, which token was missing, which dependency couldn't be resolved. Fix it in the PR, not in production.
 
@@ -291,18 +291,7 @@ The standard deployment profile. Structural changes land, helper procedures stay
 
 ### Datafix patch pipeline
 
-Migration scripts only. No DDL, no table quenching, no tracking inserts for run-once scripts — *SchemaSmith itself* performs no structural changes under this profile. Your migration scripts, though, often still need targeted rights: a fix that backs up the rows it changes needs `CREATE TABLE`. You can grant that without any power over your product tables by giving the deploy account its own schema to create backups in. See the [datafix-role grants reference](../reference/datafix-role-grants.md) for least-privilege grant sets on SQL Server, PostgreSQL, MySQL, and MariaDB.
-
-```json
-{
-  "KindleTheForge": false,
-  "UpdateTables": false,
-  "DropTablesRemovedFromProduct": false,
-  "TrackRunOnceMigrations": false
-}
-```
-
-Use this when shipping a data patch, hotfix, or bulk data load between structural releases. For the full per-flag reasoning, the comparison table, and patterns that pair well, see [Partial-Package Deployments (Data Fixes)](../reference/schemaquench.md#partial-package-deployments-data-fixes).
+Migration scripts only, between structural releases -- a data patch, a hotfix, a bulk load -- with *SchemaSmith itself* making no structural change. The four-flag profile that puts SchemaQuench in that posture, the per-flag reasoning, and the patterns that pair with it are defined once, in [Partial-Package Deployments (Data Fixes)](../reference/schemaquench.md#partial-package-deployments-data-fixes); the least-privilege grant sets a datafix account needs on each engine are in the [datafix-role grants reference](../reference/datafix-role-grants.md).
 
 ### WhatIf PR check
 
@@ -343,13 +332,15 @@ Every CI/CD platform has a built-in secret store. SchemaSmith's environment vari
 
 The pattern is the same regardless of platform: store the credential in the platform's secret store, reference it in the pipeline definition, and SchemaSmith picks it up as an environment variable. No custom integration, no plugins, no secret management SDKs. The tools read environment variables -- your platform manages the secrets.
 
+**Deploy account.** The credential the pipeline injects should be a dedicated login, not a shared admin. A full release needs rights to create and alter the objects the package declares and to install SchemaSmith's own helper objects in the target database -- WhatIf installs them too, so a WhatIf-only account needs the same. What a full quench needs on each engine is in [Permissions](../reference/schemaquench.md#permissions); the much smaller grant set a datafix-only pipeline can run with is in the [datafix-role grants reference](../reference/datafix-role-grants.md).
+
 ## Best practices
 
 **Test in dev first.** Deploy to a development environment restored from a production backup before promoting anywhere. This catches edge cases that only appear with real data volumes and real object counts.
 
 **Separate config per environment with env vars.** The same schema package deploys everywhere. Environment variables differentiate targets -- server, credentials, script tokens. No environment-specific config files to maintain, no risk of deploying the wrong config to the wrong server.
 
-**Validate before deploying.** Wire up JSON Schema validation on every PR to catch structural problems without a database. The SchemaSmith repository ships a complete, working example at `.github/workflows/validate-demo-schemas.yml` -- a per-PR, no-database validation workflow covering SQL Server, PostgreSQL, MySQL, and MariaDB using a content-type matrix. Copy it and adapt the paths for your own packages. See [Testing and Validation](06-testing-and-validation.md#schema-validation-in-ci) for the full pattern.
+**Validate before deploying.** Run `schemaquench --Validate` on every PR to catch structural problems -- malformed files, duplicates, dangling references, undefined tokens, JSON-schema violations -- without a database. One command, one exit code, the same on every CI platform and every engine. See [Testing and Validation](06-testing-and-validation.md#schema-validation-in-ci) for the full pattern.
 
 **WhatIf for tricky changes.** Reach for WhatIf when you're validating a complex migration, deploying an unfamiliar package, or working with an unfamiliar target. It costs minutes in CI and surfaces exactly which SQL statement or token would fail before it hits a real database. Once you trust the package and the pipeline, direct deploys are the normal mode.
 

@@ -36,6 +36,10 @@ SchemaSmith is a toolset of four components that cover the full schema lifecycle
 
 **[SchemaShears](../reference/schemashears.md)** carves an object-level patch (subset) package from a full product using a manifest. When you need to deploy only the objects that changed -- without touching everything else -- SchemaShears carves out exactly that slice and stamps the patch so omitted objects are preserved on the target.
 
+## Coming from migration tools
+
+If you run Flyway, Liquibase, EF Core migrations, a DACPAC publish, or a folder of numbered scripts today, the shift is smaller than it looks. You don't port the history: you extract the database's *current* state with SchemaTongs and that becomes the package -- the old versioned scripts have already done their work. The imperative step that genuinely can't be declared -- a backfill, a data transform, a split -- still has a home: a migration-script slot in the package, where each script runs once and is recorded in SchemaSmith's own run-once table, the same way your current tool's history table works. Both tools can run side by side while you move over -- SchemaSmith touches the objects its package declares and the tables it has stamped as its own, and leaves the rest of the database alone. The [Switching to SchemaSmith](https://learn.schemasmith.com/course5/00-stop-porting-migrations/) course walks the move for each tool: [Flyway](https://learn.schemasmith.com/course5/01-from-flyway/), [Liquibase](https://learn.schemasmith.com/course5/02-from-liquibase/), [EF Core](https://learn.schemasmith.com/course5/03-from-efcore/), [SSDT / DACPAC](https://learn.schemasmith.com/course5/04-from-ssdt-dacpac/), and [hand-rolled scripts](https://learn.schemasmith.com/course5/05-hand-rolled/).
+
 ## How teams actually use this
 
 A developer needs to add a column to the Orders table. They open `Orders.json`, add the column definition, and submit a pull request. The DBA opens the PR and reviews the table structure directly. Not "ALTER TABLE Orders ADD..." but the full table definition, clear and complete -- the final shape the database should converge to.
@@ -50,7 +54,7 @@ The developer thinks in terms of table design. The DBA reviews table design. The
 
 Self-contained executables -- download, extract, run. No .NET runtime to install, no dependency chains to manage. Available for Windows, macOS, and Linux on both x64 and ARM64.
 
-Licensed under the SchemaSmith Community License (SSCL v2.0). Manage databases for your own products and services -- any size organization, any revenue, any number of environments, any database size. No usage caps, no nickel-and-diming. What the license does restrict is redistributing SchemaSmith as a standalone product, bundling it inside another product you sell to third parties, or offering it as a hosted or managed service. See the [LICENSE](../../LICENSE) for the full terms. Otherwise: free means free.
+Licensed under the SchemaSmith Community License (SSCL v2.0). Manage databases for your own products and services -- any size organization, any revenue, any number of environments, any database size. No usage caps, no nickel-and-diming. What the license does restrict is redistributing SchemaSmith as a standalone product, bundling it inside another product you sell to third parties, or offering it as a hosted or managed service. See the [LICENSE](../../../LICENSE) for the full terms. Otherwise: free means free.
 
 Production-tested against real-world schemas. The demo products include Northwind, AdventureWorks, Chinook, and Sakila across all four platforms so you can see it work before pointing it at your own databases.
 

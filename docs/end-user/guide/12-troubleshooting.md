@@ -76,7 +76,7 @@ Every SchemaSmith CLI tool writes two log files during each run. These are the f
 - **Progress log** (`ToolName - Progress.log`) -- a step-by-step record of what the tool did. Start here.
 - **Error log** (`ToolName - Errors.log`) -- detailed exception information when something fails. Check this for stack traces and SQL error details.
 
-Logs are written to the tool's working directory by default. You can redirect them with `--LogPath`:
+Logs are written to the directory the tool's executable lives in by default -- not the directory you ran it from. You can redirect them with `--LogPath` (a relative path is resolved against the directory you ran from):
 
 ```
 SchemaQuench --LogPath:/var/log/schemasmith
@@ -94,17 +94,7 @@ The progress log records your full configuration -- and SchemaQuench's script to
 
 ## Exit codes
 
-Each tool exits with a code that indicates the outcome. Automation scripts should check this value.
-
-| Code | Meaning | What to do |
-|------|---------|------------|
-| 0 | Success | Nothing -- the run completed normally. |
-| 1 | Finished, but incomplete | Something was skipped or downgraded -- a feature the target lacks, a table DataTongs could not extract, an object SchemaTongs left out. The progress log names each one. |
-| 2 | Failed | The run stopped for a reason you can fix: an unrecognized argument, a missing setting, a package that will not load, or a failed database quench. The progress log starts the reason with `FAILED`; the error log has details. |
-| 3 | Unhandled exception | An unexpected error crashed the tool. Check the error log for the full stack trace. |
-| 4 | Unable to back up log files | The tool completed (or failed) but couldn't copy its logs to the backup directory. Check directory permissions and disk space. |
-
-For the full exit code reference, see [Configuration Reference -- Exit Codes](../reference/configuration.md#exit-codes).
+Each tool exits with a code that indicates the outcome, and automation scripts should check it: `0` is success, `1` is finished-but-incomplete (something was skipped or downgraded, named in the progress log), `2` is a failure you can fix (the progress log starts the reason with `FAILED`), and higher codes are crashes and log-backup problems. The one table of codes, with what each tool means by them, is [Configuration Reference -- Exit Codes](../reference/configuration.md#exit-codes).
 
 ---
 
@@ -462,7 +452,7 @@ On SQL Server the usual reason is a slow first boot on a resource-starved Docker
    ```
    docker logs schemasmith-sqlserver-demo-demoserver-1
    ```
-   (Swap `sqlserver` for `postgresql` or `mysql` for the other demos.) A run of `Converting database '...' from version N to ...` lines is the slow first-boot upgrade; a "requires ... 2000 megabytes" line is a real memory shortage.
+   (Swap `sqlserver` for `postgresql`, `mysql`, or `mariadb` for the other demos.) A run of `Converting database '...' from version N to ...` lines is the slow first-boot upgrade; a "requires ... 2000 megabytes" line is a real memory shortage.
 2. **Add CPU and memory.** Give the Docker engine more of both -- the first-boot upgrade is CPU-bound, so cores matter as much as RAM. Aim for 4 CPUs and 8 GB.
 
    > **Windows (WSL2):** set these in `%UserProfile%\.wslconfig`, not the Docker Desktop Resources pane -- on the WSL2 backend that pane doesn't govern the VM. Add a `[wsl2]` section with `processors=4` and `memory=8GB`, then run `wsl --shutdown` and restart Docker. On the Hyper-V backend, macOS, or Linux, use **Docker Desktop -> Settings -> Resources**.

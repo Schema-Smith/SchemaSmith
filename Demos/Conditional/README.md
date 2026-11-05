@@ -57,4 +57,4 @@ Each shape puts the conditional logic **in the schema package**, in the language
 
 ## Article
 
-The PostgreSQL, MySQL and SQL Server Rolling-Rollout demos are the bundle for *The Production Server That Can't Be Upgraded — and the Deployment Pipeline That Has to Live With It* (LinkedIn, 2026-06-11). Open the article alongside them and its three "run it in under ten minutes" claims are those demos. The MariaDB and compatibility-level demos were added later to close engine and gating-shape gaps.
+The PostgreSQL, MySQL and SQL Server Rolling-Rollout demos were built as the runnable companions to an article on deploying to a production server that cannot be upgraded; each is a "run it in under ten minutes" case from that piece. The MariaDB and compatibility-level demos were added later to close engine and gating-shape gaps.

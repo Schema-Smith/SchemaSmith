@@ -105,21 +105,23 @@ Start with two tenants already onboarded (the onboarding step is covered in the 
 
 ```bash
 schemaquench \
-  --SchemaPackagePath ./Demos/SqlServer/TenantCRM \
-  --Target:Server localhost \
-  --Target:User sa \
-  --Target:Password <yourpassword>
+  --SchemaPackagePath=./Demos/SqlServer/TenantCRM \
+  --Target__Server=localhost \
+  --Target__User=sa \
+  --Target__Password=<yourpassword>
 ```
 
 **PostgreSQL:**
 
 ```bash
 schemaquench \
-  --SchemaPackagePath ./Demos/PostgreSQL/TenantCRM \
-  --Target:Server localhost \
-  --Target:User postgres \
-  --Target:Password <yourpassword>
+  --SchemaPackagePath=./Demos/PostgreSQL/TenantCRM \
+  --Target__Server=localhost \
+  --Target__User=postgres \
+  --Target__Password=<yourpassword>
 ```
+
+A switch value attaches with `=` (or `:`), never a space -- `--Target:Server localhost` is refused as an unrecognized argument and the run exits `2` before touching anything. `__` stands in for the `:` nesting separator, so `--Target__Server=` and `--Target:Server=` name the same setting. See [CLI Switch Format](../reference/configuration.md#cli-switch-format).
 
 The deployment log shows three templates running in sequence -- the last of them, `TenantWorkspace`, fanning out across both tenant schemas:
 
@@ -136,7 +138,7 @@ Quenching Template: TenantWorkspace
 Completed quench of TenantCRM
 ```
 
-`Initialize` runs once and self-selects out after the database exists. `Shared` runs once, deploying the tenant directory, plans, countries, audit log, and the onboarding procedure. `TenantWorkspace` runs once per active tenant. With `AllowParallel: true` (the SQL Server default), the two iterations overlap -- note `tenant_acme` and `tenant_beta` both begin before either completes.
+`Initialize` runs once and self-selects out after the database exists. `Shared` runs once, deploying the tenant directory, plans, countries, audit log, and the onboarding procedure. `TenantWorkspace` runs once per active tenant. With `AllowParallel: true` (the default on every engine), the two iterations overlap -- note `tenant_acme` and `tenant_beta` both begin before either completes.
 
 After the quench, both `tenant_acme` and `tenant_beta` have the full workspace schema: `Customers`, `Contacts`, `Activities`, `ActivityTypes`, `AddCustomer`, `RecordActivity`, `ActiveCustomers`, and the `vw_ActiveCustomerCount` indexed view. The `Migration_001_BackfillCustomerCountryCode` Before-slot script ran once per tenant and was recorded in `SchemaSmith.CompletedMigrationScripts` with the `(TenantWorkspace, tenant_acme)` and `(TenantWorkspace, tenant_beta)` keys. A subsequent quench skips those migrations without any configuration change.
 

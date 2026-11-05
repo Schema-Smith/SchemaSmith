@@ -15,10 +15,10 @@ maps to a course like this:
 | **Course 1 · First deployment** | `module-01` … `module-04` | Install & connect, first package, WhatIf, extract an existing schema |
 | **Course 2 · Going deeper** | `level2-module-01` … `level2-module-06` | Products, template fan-out, conditional deployment, script tokens, data delivery, custom metadata |
 | **Course 3 · Ship it / operate it** | `course3-module-01` … `course3-module-05` | Team workflow, CI/CD gating, rollback, capstone (full dev→prod lifecycle + recyclebin recovery) |
-| **Course 4 · Recipes** | `course4-recipe-01` … `course4-recipe-14` | A cookbook of task-focused recipes |
+| **Course 4 · Recipes** | `course4-recipe-01` … `course4-recipe-19` | A cookbook of task-focused recipes |
 | **Course 5 · Switching tools** | `course5-module-01` … `course5-module-05` | Migrating from another migration tool |
-| **Course 6 · Production & least privilege** | `course6-module-01` … `course6-module-06` | Operating in CI under least privilege |
-| **Course 7 · Fleet fan-out** | `course7-module-01` … `course7-module-06` | One schema across a fleet of per-tenant databases |
+| **Course 6 · Production & least privilege** | `course6-module-01` … `course6-module-07` | Operating in CI under least privilege |
+| **Course 7 · Fleet fan-out** | `course7-module-01` … `course7-module-08` | One schema across a fleet of per-tenant databases |
 | **Course 8 · Troubleshooting & recovery** | `course8-module-01` … `course8-module-07` | The when-a-deploy-fails playbook |
 | **Course 9 · Polyglot shop** | `course9-module-01` … `course9-module-06` | All engines at once, each service independently deployable |
 | **Course 10 · Mixed-version fleet** | `course10-module-01` … `course10-module-05`, plus the `course10-xml-data-delivery` bonus recipe | One package across servers that are not all on the same version |
@@ -182,7 +182,7 @@ Full walkthrough, including how to install each engine's client:
 
 ## How this relates to the other demos
 
-The per-engine demos under `Demos/SqlServer`, `Demos/PostgreSQL`, and `Demos/MySQL` stand up a full
+The per-engine demos under `Demos/SqlServer`, `Demos/PostgreSQL`, `Demos/MySQL`, and `Demos/MariaDB` stand up a full
 demo: they build the CLI and auto-deploy the sample databases. This sandbox is deliberately lighter
 — it stands up empty engines so you install the CLI yourself (Module 1) and run it by hand, the way
 you would against your own database. It reuses the same engine versions and the MySQL

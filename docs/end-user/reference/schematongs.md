@@ -130,15 +130,18 @@ For the full explanation of configuration loading, environment variable mapping,
 
 ### Complete SchemaTongs.settings.json
 
-```json
+```jsonc
 {
   "Source": {
     "Server": "",
     "Port": "",
     "User": "",
     "Password": "",
+    "IntegratedSecurity": false,       // SQL Server: Windows authentication, ignoring User/Password
     "Database": "",
+    "Schema": "",                      // SQL Server / PostgreSQL: set to extract a schema template
     "Platform": "",
+    "CompatEncoding": "",              // auto (blank), legacy or modern
     "ConnectionProperties": {
       "TrustServerCertificate": "True"
     }
@@ -146,10 +149,13 @@ For the full explanation of configuration loading, environment variable mapping,
   "Product": {
     "Path": "",
     "Name": "",
-    "CheckConstraintStyle": "ColumnLevel"
+    "CheckConstraintStyle": "ColumnLevel",
+    "ObjectOrder": "Physical",
+    "PreserveExistingOrder": true
   },
   "Template": {
-    "Name": ""
+    "Name": "",
+    "SchemaIdentificationScript": ""   // schema templates only; blank writes a stub
   },
   "ShouldCast": {
     "Tables": true,
@@ -160,6 +166,7 @@ For the full explanation of configuration loading, environment variable mapping,
     "ObjectList": "",
     "ValidateScripts": false,
     "SaveInvalidScripts": true,
+    "ScriptDynamicDependencyRemovalForFunctions": false,   // deprecated; true only logs a warning
 
     "Schemas": true,
 
@@ -180,8 +187,16 @@ For the full explanation of configuration loading, environment variable mapping,
     "Sequences": true,
     "Rules": true,
     "MaterializedViews": true,
+    "Collations": true,
+    "Publications": true,
+    "RangeTypes": true,
+    "TextSearchConfigurations": true,
+    "Operators": true,
+    "Casts": true,
+    "EventTriggers": true,
 
-    "Events": true
+    "Events": true,
+    "Packages": true
   },
   "OrphanHandling": {
     "Mode": "Detect"
@@ -196,7 +211,7 @@ For the full explanation of configuration loading, environment variable mapping,
 }
 ```
 
-The platform-specific `ShouldCast` flags are simply ignored when they don't apply to the configured `Source:Platform`. You can leave the full set in place across all your environments.
+The platform-specific `ShouldCast` flags are simply ignored when they don't apply to the configured `Source:Platform`. You can leave the full set in place across all your environments. Every `ShouldCast` object flag defaults to `true` when it is left out; `ValidateScripts` and the deprecated `ScriptDynamicDependencyRemovalForFunctions` default to `false`. `Sequences` and `Packages` act on MariaDB only -- MySQL has neither object, so the flags mean nothing there whatever they say. `Source:CompatEncoding` takes `auto` (the default when blank), `legacy` or `modern`, choosing the payload encoding SchemaTongs uses against a SQL Server source; `auto` picks the legacy form when the database's compatibility level is below 130 or the server is older than SQL Server 2017.
 
 ### Source connection
 
@@ -355,8 +370,10 @@ This pairs naturally with the `ScriptFolders` array on `Template.json`. You can 
 The `ObjectList` setting restricts extraction to a specific set of objects. Provide a comma- or semicolon-separated list of object names:
 
 ```json
-"ShouldCast": {
-  "ObjectList": "dbo.Customer,dbo.vw_ActiveCustomers,usp_GetOrders"
+{
+  "ShouldCast": {
+    "ObjectList": "dbo.Customer,dbo.vw_ActiveCustomers,usp_GetOrders"
+  }
 }
 ```
 
@@ -732,12 +749,14 @@ Schema-template extraction is supported on **SQL Server and PostgreSQL only**. M
 Two settings activate schema-template extraction mode — `Source.Schema` in the `Source` section and `SchemaIdentificationScript` in the `Template` section of `SchemaTongs.settings.json`:
 
 ```json
-"Source": {
-  "Schema": "tenant_acme"
-},
-"Template": {
-  "Name": "TenantBody",
-  "SchemaIdentificationScript": ""
+{
+  "Source": {
+    "Schema": "tenant_acme"
+  },
+  "Template": {
+    "Name": "TenantBody",
+    "SchemaIdentificationScript": ""
+  }
 }
 ```
 
@@ -794,11 +813,11 @@ This is a punch list, not a blocker. References that target a shared schema (`db
 
 When `Source:Schema` is set and no `Template.json` exists yet at the output path, SchemaTongs creates a ready-to-use schema-template stub. For a SQL Server extraction with `Template.Name = "TenantBody"` and `Source.Schema = "tenant_acme"`:
 
-```json
+```jsonc
 {
   "Name": "TenantBody",
   "DatabaseIdentificationScript": "SELECT [Name] FROM master.sys.databases WHERE [Name] = '{{TenantBodyDb}}'",
-  "ScriptFolders": [ ... ],
+  "ScriptFolders": [ /* the platform's schema-template folder set */ ],
   "ScriptTokens": {},
   "SchemaIdentificationScript": "-- TODO: replace with a query returning the active iteration schemas.\n-- Placeholder uses the seed schema as a single-row example.\nSELECT 'tenant_acme' AS SchemaName"
 }

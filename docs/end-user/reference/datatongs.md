@@ -86,6 +86,7 @@ A source below the [supported engine floor](schemaquench.md#engine-version-compa
 |-----|------|---------|-------------|
 | `ScriptPath` | string | `"."` | Directory where the generated `Populate <schema>.<table>.sql` merge scripts are written. Created automatically if it doesn't exist. |
 | `ContentPath` | string | `"."` | Directory where the sibling `.tabledata` files (raw JSON row data) are written. When `--ConfigureDataDelivery` is on, this path is also used to locate the enclosing template -- DataTongs walks upward from `ContentPath` looking for a `Template.json`. |
+| `TemplatePath` | string | _(discovered)_ | The template directory the generated files belong to -- where `--ConfigureDataDelivery` finds the table JSON to update. Blank, DataTongs walks upward from `ContentPath` to the nearest directory holding a `Template.json`; the `--TemplatePath:<path>` switch overrides both. See [Template root discovery](#template-root-discovery). |
 
 The typical placement inside a schema package is `ScriptPath` pointing at `Templates/<Name>/Table Data` and `ContentPath` pointing at `Templates/<Name>/data`. That layout makes the script files visible to SchemaQuench's `TableData` quench slot and the `.tabledata` files reachable from each table's `DataDelivery` block.
 
@@ -224,7 +225,7 @@ The MySQL generator infers the right idiom from `MergeUpdate` and `MergeDelete`.
 
 Specify tables in `schema.table` format. If you omit the schema, the platform default is assumed:
 
-```json
+```jsonc
 { "Name": "dbo.Country" }                  // SQL Server: defaults to dbo
 { "Name": "config.feature_flags" }         // PostgreSQL: explicit schema
 { "Name": "Products" }                     // SQL Server: dbo.Products
@@ -398,8 +399,10 @@ Table and schema names containing characters that are illegal in file names are 
 Merge scripts are written to `ScriptPath` and `.tabledata` content files to `ContentPath`. Both directories are created automatically if they don't exist. The typical placement inside a schema package is `ScriptPath` pointing at the template's `Table Data` folder and `ContentPath` pointing at the template's `data` folder:
 
 ```json
-"ScriptPath":  "C:\\SchemaPackage\\Templates\\Main\\Table Data",
-"ContentPath": "C:\\SchemaPackage\\Templates\\Main\\data"
+{
+  "ScriptPath":  "C:\\SchemaPackage\\Templates\\Main\\Table Data",
+  "ContentPath": "C:\\SchemaPackage\\Templates\\Main\\data"
+}
 ```
 
 When the output lands inside a `Table Data` folder of a schema package, SchemaQuench picks it up automatically on the next deployment via the `TableData` quench slot. Reference data ships alongside schema, in the same package, in the same release.
@@ -577,9 +580,11 @@ Schema-template mode is detected by two signals -- both must be present:
 1. **The target `Template.json` has a non-empty `SchemaIdentificationScript` field.** DataTongs walks up from `ContentPath` to find the nearest `Template.json`, then reads it for this field. A template is a schema template when this field exists and is non-empty.
 2. **`Source:Schema` is set in `DataTongs.settings.json`.** This names the source schema DataTongs will extract data from.
 
-When signal 1 is true and signal 2 is absent, DataTongs throws an error:
+When signal 1 is true and signal 2 is absent, DataTongs stops with an error:
 
-> Target template is a schema template (has `SchemaIdentificationScript`), but `Source.Schema` is not set in `DataTongs.settings.json`. Set `Source.Schema` to the name of the source schema you are extracting data from (typically a seed-tenant schema), or point DataTongs at a regular template instead.
+```
+Target template is a schema template (has SchemaIdentificationScript), but Source.Schema is not set in DataTongs.settings.json. Set Source.Schema to the name of the source schema you are extracting data from (typically a seed-tenant schema), or point DataTongs at a regular template instead.
+```
 
 When signal 1 is false and `Source:Schema` is set anyway, DataTongs logs a warning and proceeds in regular extraction mode -- `Source:Schema` is ignored.
 
@@ -618,7 +623,9 @@ Schema-template mode enforces two requirements at startup, before any database c
 
 **Unqualified table names.** Each `Tables[N].Name` must be an unqualified table name -- no schema prefix. The schema comes from `Source:Schema`, not from the individual table entry. A qualified name like `"tenant_seed.Customers"` is rejected:
 
-> Table names in schema-template mode must be unqualified. `Tables[0].Name = "tenant_seed.Customers"`. Use `"Customers"` and let `Source.Schema` specify the source. Cross-schema data extraction (e.g., from `dbo`) goes in a separate DataTongs run targeting a regular template.
+```
+Table names in schema-template mode must be unqualified. Tables[0].Name = "tenant_seed.Customers". Use "Customers" and let Source.Schema specify the source. Cross-schema data extraction (e.g., from dbo) goes in a separate DataTongs run targeting a regular template.
+```
 
 **No cross-schema data extraction in one run.** Schema-template mode produces content for one schema's tables. If you need data from both `{{SchemaName}}.Customers` and a shared `dbo.Plans` table, run DataTongs twice -- once in schema-template mode for the per-tenant tables, once in regular mode for the shared ones. Regular-mode scripts use literal schema names and land in the appropriate folder of a non-schema template.
 

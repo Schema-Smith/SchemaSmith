@@ -1,6 +1,6 @@
 # Configuration Reference
 
-Applies to: SchemaQuench, SchemaTongs, DataTongs — SQL Server, PostgreSQL, MySQL, and MariaDB.
+Applies to: SchemaQuench, SchemaTongs, DataTongs, SchemaShears — SQL Server, PostgreSQL, MySQL, and MariaDB.
 
 ---
 
@@ -48,9 +48,55 @@ Every SchemaSmith CLI tool recognizes these switches. They're processed before a
 | `--help` | `-h`, `-?` | Print the available command-line switches, then exit. |
 | `--ConfigFile:<path>` | | Path to the settings file. Overrides the default `<ToolName>.settings.json`. |
 | `--LogPath:<path>` | | Directory for log files and backup subdirectories. Defaults to the tool's executable directory. |
-| `--ConnectionString:<connstr>` | | Full ADO.NET / Npgsql / MySqlConnector connection string appropriate to the target platform. When provided, this bypasses all individual connection settings (`Server`, `Port`, `User`, `Password`, `ConnectionProperties`). |
+| `--ConnectionString:<connstr>` | | Full ADO.NET / Npgsql / MySqlConnector connection string appropriate to the target platform. When provided, this bypasses all individual connection settings (`Server`, `Port`, `User`, `Password`, `ConnectionProperties`). SchemaQuench, SchemaTongs, and DataTongs. |
 | `--Encrypt` / `--NoEncrypt` | | Force transport encryption on or off using the right property per engine (SQL Server `Encrypt`, PostgreSQL `SSL Mode`, MySQL/MariaDB `SslMode`). Wins over `ConnectionProperties`. Applies to SchemaQuench, SchemaTongs, and DataTongs. |
 | `--ExitNonZeroOnWarning` | | Exit `1` instead of `0` when the run finished but logged a warning, for pipelines that treat warnings as failures. Never lowers or replaces a failure code. Also available as the `ExitNonZeroOnWarning` setting. All four tools. |
+| `--<Key>=<value>` | | Override any configuration option -- see [Overriding any setting](#overriding-any-setting). All four tools. |
+
+### Tool-specific switches
+
+Each tool adds its own switches on top of the common set. They are listed here so one page answers "what can I pass?"; the linked reference sections carry the detail.
+
+**SchemaQuench** ([reference](schemaquench.md))
+
+| Switch | Description |
+|---|---|
+| `--Validate` | Statically validate the schema package without connecting, then exit. See [Validate](validate.md). |
+| `--TestConnection` | Test every configured server connection and the minimum version, then exit. No deployment. See [Pre-Flight Diagnostics](schemaquench.md#pre-flight-diagnostics). |
+| `--PreviewTargets` | Validate, then list the databases and schemas each template would target (read-only), then exit. See [Pre-Flight Diagnostics](schemaquench.md#pre-flight-diagnostics). |
+| `--WhatIf` | Dry run: report what would change and change nothing of yours. The same as `WhatIfONLY: true` in settings (`--WhatIf:false` is the same as not passing the switch). See [WhatIf Mode](schemaquench.md#whatif-mode). |
+| `--WhatIfDetail:<mode>` | WhatIf console verbosity: `concise`, `normal` (default) or `verbose`. Does not affect the WhatIf summary file. |
+| `--report:<basepath>` | Write the deployment summary to `<basepath>.json` and `<basepath>.md` instead of the log directory. See [Redirecting the report](deployment-summary-report.md#redirecting-the-report). |
+| `--ResumeQuench` | Resume from an existing checkpoint when one is present. See [Checkpoint and Resume](schemaquench.md#checkpoint-and-resume). |
+| `--CheckpointDirectory:<path>` | Directory for checkpoint files. Also the `CheckpointDirectory` setting. |
+| `--ForceReKindle` | Re-deploy SchemaSmith's helper procedures this run even when the in-database kindle stamp is current. Also the `ForceReKindle` setting. See [ForceReKindle](schemaquench.md#forcerekindle). |
+| `--WriteDebugSql` | Write the resolved SQL of each step to `ArtifactPath`. Also the `WriteDebugSql` setting. See [Debug SQL files](#debug-sql-files). |
+| `SkipKindlingForge` | Positional, as the first argument (no dashes): skip kindling for this run, as `KindleTheForge: false` does. See [KindleTheForge](schemaquench.md#kindletheforge). |
+
+**SchemaTongs** ([reference](schematongs.md))
+
+| Switch | Description |
+|---|---|
+| `--WriteSchemasOnly` | Regenerate the `.json-schemas` for an existing product from `Product:Path` without connecting to a database, then exit. |
+
+**DataTongs** ([reference](datatongs.md))
+
+| Switch | Description |
+|---|---|
+| `--ConfigureDataDelivery` | Write data delivery configuration into the table JSON files after extraction. Also `ShouldCast:ConfigureDataDelivery`. See [--ConfigureDataDelivery](datatongs.md#--configuredatadelivery). |
+| `--TemplatePath:<path>` | The template root (containing `Tables/`) that `--ConfigureDataDelivery` writes into. Also the `TemplatePath` setting. |
+| `--DeliveryEncoding:<encoding>` | Content-file encoding for extracted data: `Json` (default) or `Xml`. Also `ShouldCast:DeliveryEncoding`. See [Delivery encoding](datatongs.md#delivery-encoding-xml-for-legacy-sql-server). |
+
+**SchemaShears** ([reference](schemashears.md#cli-switches))
+
+| Switch | Description |
+|---|---|
+| `--Source:<path>` | The full product folder to carve the patch from. Also the `SourcePath` setting. |
+| `--Manifest:<path>` | The file listing the product-relative paths to include. Also `ManifestPath`. |
+| `--AlwaysInclude:<path>` | Optional file listing paths and folders that are always included. Also `AlwaysIncludePath`. |
+| `--Output:<path>` | Destination folder for the patch package. Also `OutputPath`. |
+| `--Zip` | Also produce `<Output>.zip`. Also the `Zip` setting. |
+| `--AllowDrops:<list>` | Comma-separated drop categories to leave enabled (for example `Columns,Indexes`); empty suppresses every drop. Also `AllowDrops`. See [Drop Suppression](schemashears.md#drop-suppression). |
 
 ### Examples
 
@@ -125,7 +171,7 @@ The rule mirrors the environment-variable grammar exactly: an `=` separates the 
 
 | Command-line switch | Maps to config key | Environment-variable equivalent |
 |---|---|---|
-| `--MinimumVersion=16` | `MinimumVersion` | `SmithySettings_MinimumVersion` |
+| `--MaxThreads=4` | `MaxThreads` | `SmithySettings_MaxThreads` |
 | `--Target__Server=prod-db` | `Target:Server` | `SmithySettings_Target__Server` |
 | `--Source__Password=s3cret` | `Source:Password` | `SmithySettings_Source__Password` |
 | `--Target__ConnectionProperties__Encrypt=true` | `Target:ConnectionProperties:Encrypt` | `SmithySettings_Target__ConnectionProperties__Encrypt` |
@@ -141,6 +187,7 @@ Two things to keep in mind:
 
 - The `=` is required for an override. The named switches (`--LogPath`, `--ConfigFile`, `--ConnectionString`) accept a `:` separator, but nesting into arbitrary settings needs the `__`/`=` form so a value containing a colon (a Windows path, a `host:port`) is never mistaken for a key boundary.
 - `--ConnectionString` still bypasses the individual connection settings. If you pass both `--ConnectionString` and a `--Source__Server=` / `--Target__Server=` override, the full connection string wins for connecting.
+- An override is not range-checked for you. `MaxThreads`, for one, accepts `1` to `20`: a value outside that range, or one that is not a whole number, silently falls back to the default of `10` -- no warning is logged. Check the startup configuration dump when a value looks ignored.
 
 ---
 
@@ -153,6 +200,7 @@ Each tool looks for its own settings file by name:
 | SchemaQuench | `SchemaQuench.settings.json` |
 | SchemaTongs | `SchemaTongs.settings.json` |
 | DataTongs | `DataTongs.settings.json` |
+| SchemaShears | `SchemaShears.settings.json` |
 
 The tool searches for the file in two locations, in order:
 
@@ -184,7 +232,7 @@ This is the same treatment `--NoSuchSwitch` already gets on the command line, an
 Three things are deliberately **not** reported:
 
 - **Sections the tool does not own.** SchemaQuench says nothing about a `Source:` section, and neither Tongs tool comments on `Target:`. A file may serve more than one tool, or carry settings for a version you have not installed yet.
-- **Open sections**, where you choose the names: `ScriptTokens`, `Target:ConnectionProperties`, `Source:ConnectionProperties`, `Target:TemplateTargets`, and `FolderMapping`. Anything beneath these is your value, not a setting name.
+- **Open sections**, where you choose the names: `ScriptTokens`, `Target:ConnectionProperties`, `Source:ConnectionProperties`, `Target:TemplateTargets`, `FolderMapping`, and `LogHygiene`. Anything beneath these is your value, not a setting name (`LogHygiene` checks its own four keys itself -- see [Tuning the scrubbing](#tuning-the-scrubbing)).
 - **Array elements** such as `Target:Databases:0`.
 
 It is a warning, not an error -- the run continues. Treat one as a typo until proven otherwise.
@@ -374,7 +422,7 @@ Both log files are overwritten at the start of each run. Previous runs are prese
 
 The console is a live mirror of the progress log, not a separate channel. Watching the console while a quench runs lets you follow startup, per-object progress, and completion in real time without tailing a file. Log4Net colorizes the console stream by level -- informational entries in green, warnings in yellow, errors in red -- so trouble catches your eye the moment it appears.
 
-When a script fails, you see a short error summary on the console and in the progress log (red, so it's hard to miss): the failing script path and the engine's error message, along with a pointer to the resolved SQL: `Resolved SQL written to:` with [`WriteDebugSql`](#writedebugsql) on, or a `Rerun with --WriteDebugSql` hint with it off. That's enough to know what failed and where to look. The **full detail** -- the exception line numbers and the complete SQL batches SchemaSmith submitted -- lands in the error log only, so the console and progress stream don't drown in multi-KB failed-batch text during a rough deployment. When a run fails, the progress log tells you *what* broke; the error log tells you *exactly what SQL was sent* when it broke.
+When a script fails, you see a short error summary on the console and in the progress log (red, so it's hard to miss): `Unable to quench '<path>': <engine error>`, along with a pointer to the resolved SQL -- `Resolved SQL written to:` with [`WriteDebugSql`](#writedebugsql) on, or a `Rerun with --WriteDebugSql` hint with it off. That's enough to know what failed and where to look. The SQL itself never goes to a log: with `WriteDebugSql` on it is in the [debug file](#debug-sql-files), and the error log gets one line per failed script naming the error and that file. The error log also carries, on every engine, the failures that stop a run before or outside a script -- a refused argument or setting, a connection that could not be opened or was lost, a database or schema discovery that failed, a validation or version check -- each with its full exception. On SQL Server it additionally receives every error the engine raises on the deploy connection with its line number (`at Line: N`), which the progress log does not carry. The engine-by-engine split is in [Where errors are logged](error-codes-and-reporting.md#where-errors-are-logged).
 
 > **Tip:** CI agents that capture stdout get the progress stream for free. If your pipeline step only saves stdout, you still have a readable transcript of successes and error summaries; archive the error log separately to keep the failed-batch detail.
 
@@ -654,8 +702,10 @@ Two situations make a rebuild the better move:
 
 - **Cost.** A wide table with several pending column-type changes pays one table rewrite per change.
   A rebuild collapses those into a single copy.
-- **Column order.** Reordering existing columns is not something any supported engine can do in place.
-  A rebuild is the only mechanism that can make a deployed table match the order its package declares.
+- **Column order.** SQL Server and PostgreSQL cannot reorder existing columns in place, so a rebuild is the
+  only mechanism that can make a deployed table match the order its package declares there. MySQL and
+  MariaDB can (`ALTER TABLE … MODIFY … AFTER`), and under [`OnlineApply`](#onlineapply) `Prefer` or `Require`
+  a table whose only drift is column order is put in declared order that way instead of being rebuilt.
   On SQL Server a column the deploy must replace rather than alter -- an identity removal, an encryption
   change, a column-set or computed-column change, a column declared `AnsiPadding: false` -- comes back at
   the end of the table, so with `OnOrderMismatch` that pending move counts as drift and the same deploy
@@ -736,9 +786,10 @@ scripts for these.
 
 | Engine | Refused when the table… |
 |---|---|
-| SQL Server | is system-versioned (temporal), or has Change Data Capture, Change Tracking, or replication |
-| PostgreSQL | belongs to a logical replication publication, inherits or is inherited from, or is partitioned |
-| MariaDB | is system-versioned, or has an application-time period |
+| SQL Server | is system-versioned (temporal), is a ledger table, has Change Data Capture or Change Tracking, is published for replication, or is partitioned (the table itself or any of its indexes on a partition scheme) |
+| PostgreSQL | is a partitioned table or a partition of one, inherits from or is inherited by another table, or is a member of a logical replication publication |
+| MySQL | is partitioned |
+| MariaDB | is system-versioned, has an application-time period (seen from MariaDB 11.4, where the catalog first reports periods), or is partitioned |
 
 The refusal fires under `WhatIfONLY` too, so a preview shows the impossibility rather than leaving it to the
 real run.
@@ -1182,8 +1233,6 @@ A `false` at any tier is sticky — it locks the effective value to `false` for 
 On SQL Server, an index of a kind a package cannot declare (vector) is never dropped as unknown: nothing could put it back. A spatial index can be declared, in [`SpatialIndexes`](schema-packages.md#spatial-indexes-sql-server), a selective XML index in [`XmlIndexes`](schema-packages.md#selective-xml-indexes), and a JSON index in [`JsonIndexes`](schema-packages.md#json-indexes-sql-server), so one the package does not declare is unknown like any other index.
 
 A deploy never drops a foreign key it will not re-create to make way for an index change. An index a foreign key needs is kept as it is when the key is outside the package (a full deploy) or when the template is index-only (which never touches foreign keys). This applies to an unknown index, a removed one and a changed one. The kept index is reported as a warning naming the key that holds it, so a pipeline that treats a declared change the deploy did not apply as a failure can use `--ExitNonZeroOnWarning`. A later deploy drops or changes the index once no key needs it.
-
-The environment tier is new in this release. Previously `DropUnknownIndexes` was settable only in `Product.json` and `Template.json`. It can now be set or suppressed in `SchemaQuench.settings.json` (or via environment variable) as a deployment-wide guardrail.
 
 ```json
 // SchemaQuench.settings.json — suppress index drops for all products in this environment

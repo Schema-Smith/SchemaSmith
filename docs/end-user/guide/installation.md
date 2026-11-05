@@ -6,7 +6,7 @@ Most database tooling ships with a runtime to install, a service to configure, a
 
 | Platform | Recommended | Alternatives |
 |----------|-------------|--------------|
-| Windows | `choco install schemasmith` | Manual ZIP download |
+| Windows | `winget install SchemaSmith.SchemaSmith` or `choco install schemasmith` | Manual ZIP download |
 | Debian / Ubuntu | `.deb` package | `install.sh`, manual `.tar.gz` |
 | RHEL / Fedora / Amazon Linux | `.rpm` package | `install.sh`, manual `.tar.gz` |
 | Other Linux | `install.sh` | Manual `.tar.gz` |
@@ -26,13 +26,21 @@ One command, four CLIs, signed binaries embedded. No .NET runtime, no checksum f
 
 Every release republishes automatically when GitHub publishes the corresponding tag, so the version on Chocolatey tracks the version on the GitHub release page within minutes.
 
+## Windows: winget
+
+```powershell
+winget install SchemaSmith.SchemaSmith
+```
+
+The same four signed executables, installed from the release ZIP through the Windows Package Manager. The package id is `SchemaSmith.SchemaSmith`; `winget upgrade SchemaSmith.SchemaSmith` moves you to the next release.
+
 ## Debian and Ubuntu: .deb
 
-Download the `.deb` for your architecture and install with `dpkg`. Replace `v2.0.0` and the version in the filename with the release you want -- the [latest release page](https://github.com/Schema-Smith/SchemaSmith/releases/latest) lists what's available.
+Download the `.deb` for your architecture and install with `dpkg`. Replace `v2.8.0` and the version in the filename with the release you want -- the [latest release page](https://github.com/Schema-Smith/SchemaSmith/releases/latest) lists what's available.
 
 ```bash
-wget https://github.com/Schema-Smith/SchemaSmith/releases/download/v2.0.0/schemasmith_2.0.0_amd64.deb
-sudo dpkg -i schemasmith_2.0.0_amd64.deb
+wget https://github.com/Schema-Smith/SchemaSmith/releases/download/v2.8.0/schemasmith_2.8.0_amd64.deb
+sudo dpkg -i schemasmith_2.8.0_amd64.deb
 ```
 
 Binaries land under `/usr/lib/schemasmith/` with symlinks in `/usr/bin/` so `schemaquench`, `schematongs`, `datatongs`, and `schemashears` are immediately on PATH. Zero declared package dependencies -- the binaries are fully self-contained and bundle their own ICU runtime alongside the executables, so they work on minimal containers and hardened distros that ship without `libicu`.
@@ -44,8 +52,8 @@ Both `amd64` and `arm64` builds are published with every release. Use `schemasmi
 Same idea on RPM-based distros:
 
 ```bash
-wget https://github.com/Schema-Smith/SchemaSmith/releases/download/v2.0.0/schemasmith-2.0.0.x86_64.rpm
-sudo rpm -i schemasmith-2.0.0.x86_64.rpm
+wget https://github.com/Schema-Smith/SchemaSmith/releases/download/v2.8.0/schemasmith-2.8.0.x86_64.rpm
+sudo rpm -i schemasmith-2.8.0.x86_64.rpm
 ```
 
 Layout matches the `.deb` package -- binaries under `/usr/lib/schemasmith/`, symlinks in `/usr/bin/`, no system dependencies. Both `x86_64` and `aarch64` builds are published per release. Works on Fedora, RHEL/CentOS Stream, Amazon Linux 2023, and any other distro that supports `rpm -i`.
@@ -88,13 +96,13 @@ By default it installs to `/usr/local/bin` if you run it as root and `~/.local/b
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `INSTALL_VERSION` | latest release | Pin to a specific version (e.g., `2.0.0`) |
+| `INSTALL_VERSION` | latest release | Pin to a specific version (e.g., `2.8.0`) |
 | `INSTALL_DIR` | as above | Custom install path |
 
 Pin a version and target a custom directory in one go:
 
 ```sh
-INSTALL_VERSION=2.0.0 INSTALL_DIR=$HOME/tools sh -c "$(curl -fsSL https://schemasmith.com/dl/install.sh)"
+INSTALL_VERSION=2.8.0 INSTALL_DIR=$HOME/tools sh -c "$(curl -fsSL https://schemasmith.com/dl/install.sh)"
 ```
 
 When the install directory is not on your `$PATH`, the script prints shell-specific PATH-fixup instructions before exiting -- `export` lines for bash and zsh, `fish_add_path` for fish -- so you can paste once and move on.
@@ -104,8 +112,8 @@ When the install directory is not on your `$PATH`, the script prints shell-speci
 When policy or network constraints rule out the curl-pipe path, download the bundle directly. Linux and macOS bundles are `.tar.gz`; Windows bundles are `.zip`.
 
 ```bash
-gh release download v2.0.0 --repo Schema-Smith/SchemaSmith --pattern 'SchemaSmith-2.0.0-linux-x64.tar.gz'
-tar -xzf SchemaSmith-2.0.0-linux-x64.tar.gz
+gh release download v2.8.0 --repo Schema-Smith/SchemaSmith --pattern 'SchemaSmith-2.8.0-linux-x64.tar.gz'
+tar -xzf SchemaSmith-2.8.0-linux-x64.tar.gz
 for tool in SchemaQuench SchemaTongs DataTongs SchemaShears; do
     lower=$(echo "$tool" | tr '[:upper:]' '[:lower:]')
     sudo install -m 0755 "$tool" "/usr/local/bin/$lower"
@@ -117,8 +125,8 @@ The rename to lowercase matches the `schemaquench` / `schematongs` / `datatongs`
 On Windows:
 
 ```powershell
-gh release download v2.0.0 --repo Schema-Smith/SchemaSmith --pattern 'SchemaSmith-2.0.0-win-x64.zip'
-Expand-Archive SchemaSmith-2.0.0-win-x64.zip -DestinationPath C:\Tools\SchemaSmith
+gh release download v2.8.0 --repo Schema-Smith/SchemaSmith --pattern 'SchemaSmith-2.8.0-win-x64.zip'
+Expand-Archive SchemaSmith-2.8.0-win-x64.zip -DestinationPath C:\Tools\SchemaSmith
 # Add C:\Tools\SchemaSmith to PATH via System Properties or:
 [Environment]::SetEnvironmentVariable('Path', $env:Path + ';C:\Tools\SchemaSmith', 'User')
 ```
@@ -136,7 +144,7 @@ A few checks anyone can run, from a basic hash comparison available on any relea
 Every release publishes a single `SHA256SUMS` file alongside the artifacts. The `.deb`, `.rpm`, manual `.tar.gz`, and Windows `.zip` paths are exactly where this matters -- `install.sh` runs the same check automatically.
 
 ```bash
-gh release download v2.0.0 --repo Schema-Smith/SchemaSmith \
+gh release download v2.8.0 --repo Schema-Smith/SchemaSmith \
     --pattern 'SHA256SUMS' --pattern '*.tar.gz' --pattern '*.deb' --pattern '*.rpm'
 sha256sum -c SHA256SUMS                    # Linux
 shasum -a 256 -c SHA256SUMS                # macOS
@@ -146,22 +154,23 @@ The `-c` flag fails loudly if any line in the manifest doesn't match the local f
 
 ### Authenticode signing
 
-Every `.exe` in a Windows release is signed via Azure Trusted Signing. Chocolatey installs already-signed binaries, but the manual ZIP path is where this check earns its keep:
+Every `.exe` in a Windows release is signed via Azure Trusted Signing. Chocolatey and winget install already-signed binaries, but the manual ZIP path is where this check earns its keep:
 
 ```cmd
 signtool verify /pa /v SchemaQuench.exe
 signtool verify /pa /v SchemaTongs.exe
 signtool verify /pa /v DataTongs.exe
+signtool verify /pa /v SchemaShears.exe
 ```
 
 `signtool` ships with the Windows SDK. A successful verify confirms the signature chains to a Microsoft-trusted root and the binary hasn't been altered since signing.
 
 ### Build provenance attestation
 
-Starting with the v2.4.0 release, every release artifact also carries a signed build-provenance attestation, generated as part of the official release workflow. Verify one with the GitHub CLI:
+Starting with the v2.4.0 release, the release archives and packages -- every `.zip`, `.tar.gz`, `.deb`, and `.rpm` asset -- carry a signed build-provenance attestation, generated as part of the official release workflow. (`SHA256SUMS` and the SBOM are published alongside but are not themselves attested.) Verify one with the GitHub CLI:
 
 ```bash
-gh attestation verify SchemaSmith-2.4.0-linux-x64.tar.gz --repo Schema-Smith/SchemaSmith
+gh attestation verify SchemaSmith-2.8.0-linux-x64.tar.gz --repo Schema-Smith/SchemaSmith
 ```
 
 A successful verification confirms the artifact was built by `.github/workflows/release.yml` in the `Schema-Smith/SchemaSmith` repository -- not just that the file matches a hash, but where it came from. That's a step beyond SHA-256: a checksum proves the file matches a published value, an attestation proves who published it.
@@ -171,7 +180,7 @@ A successful verification confirms the artifact was built by `.github/workflows/
 Starting with the v2.4.0 release, each release also publishes a CycloneDX-format software bill of materials as a release asset named `SchemaSmith-<version>.cdx.json`, listing the components that went into that build.
 
 ```bash
-gh release download v2.4.0 --repo Schema-Smith/SchemaSmith --pattern 'SchemaSmith-2.4.0.cdx.json'
+gh release download v2.8.0 --repo Schema-Smith/SchemaSmith --pattern 'SchemaSmith-2.8.0.cdx.json'
 ```
 
 Useful for procurement review and dependency auditing.
@@ -182,7 +191,25 @@ Useful for procurement review and dependency auditing.
 
 > **Linux PATH:** `install.sh` prints shell-specific PATH-fixup instructions when `INSTALL_DIR` is not on `PATH` -- bash/zsh `export` lines, fish `fish_add_path`. The `.deb` and `.rpm` packages install symlinks in `/usr/bin/` so `PATH` works automatically. Manual `.tar.gz` extraction is where `PATH` guidance matters most: append `export PATH="$PATH:/path/to/install/dir"` to your shell rc, then `source` it or open a new terminal.
 
-> **macOS Gatekeeper:** `curl`-downloaded files don't carry the `com.apple.quarantine` xattr, so Gatekeeper typically does not interfere with `install.sh` or manually-downloaded `.tar.gz` archives. If you see "cannot be opened because the developer cannot be verified," strip the quarantine attribute: `xattr -d com.apple.quarantine /path/to/binary`. Apple Developer ID signing and notarization are on the post-v2 roadmap; once they land this workaround disappears.
+> **macOS Gatekeeper:** `curl`-downloaded files don't carry the `com.apple.quarantine` xattr, so Gatekeeper typically does not interfere with `install.sh` or manually-downloaded `.tar.gz` archives. If you see "cannot be opened because the developer cannot be verified," strip the quarantine attribute: `xattr -d com.apple.quarantine /path/to/binary`.
+
+## Upgrading and uninstalling
+
+**Upgrading the CLI** is the channel's own upgrade step -- there is no migration to run:
+
+| Channel | Upgrade |
+|---------|---------|
+| winget | `winget upgrade SchemaSmith.SchemaSmith` |
+| Chocolatey | `choco upgrade schemasmith` |
+| `install.sh` | Run it again -- it resolves the latest release (or the `INSTALL_VERSION` you pin) and replaces the four binaries in place |
+| `.deb` / `.rpm` | Install the newer package: `sudo dpkg -i schemasmith_<version>_amd64.deb` / `sudo rpm -U schemasmith-<version>.x86_64.rpm` |
+| AUR | Upgrade `schemasmith-bin` with your AUR helper |
+| Manual `.tar.gz` / `.zip` | Extract the new bundle over the old one |
+| Docker | Pull the newer tag |
+
+**Your databases follow.** SchemaQuench keeps a small set of helper procedures, functions and tracking tables in each database it deploys to, and stamps each database with a hash of the helper content it installed (`SchemaSmith.KindleStamp` on SQL Server and PostgreSQL, `SchemaSmith_KindleStamp` on MySQL and MariaDB). At the start of every deploy it compares that stamp with the helpers the running CLI would install; when a newer CLI ships different helpers, the first deploy from it re-kindles them before touching your objects. There is nothing to run by hand -- and `--ForceReKindle` re-installs them unconditionally if you ever need to. Deploying with an *older* CLI against a database a newer one kindled re-installs the older helpers the same way, so keep your runners on one version.
+
+**Uninstalling the CLI** removes the executables and nothing else: `winget uninstall SchemaSmith.SchemaSmith`, `choco uninstall schemasmith`, `sudo apt remove schemasmith` / `sudo dnf remove schemasmith`, or delete the four binaries `install.sh` or a manual extract put in place. The helper objects in each database stay where they are, inert; what they are and how to remove them from a database you are decommissioning is in [What SchemaSmith Installs In Your Database](../reference/schemaquench.md#what-schemasmith-installs-in-your-database).
 
 ## What's Next
 

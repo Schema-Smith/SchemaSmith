@@ -1,6 +1,16 @@
 # SQL Script Conventions
 
-This guide covers how the stored-procedure and function scripts under `Schema/Scripts/{SqlServer,PostgreSQL,MySQL}/` should be written. It's the convention contributors and reviewers check a PR against — read it before touching a quench/generate procedure, and expect review comments to point back here.
+This guide covers how the stored-procedure and function scripts under `Schema/Scripts/{SqlServer,PostgreSQL,MySQL}/` -- and the per-file MariaDB overrides under `Schema/Scripts/MariaDb/` -- should be written. It's the convention contributors and reviewers check a PR against — read it before touching a quench/generate procedure, and expect review comments to point back here.
+
+## MariaDb Overrides
+
+MariaDB is not a fourth script tree. `Platform.MariaDb` maps to `Platform.MySQL` through `GetBasePlatform()` (`Schema/Domain/Platform.cs`), and `ForgeKindler.GetKindlingScripts` builds the kindling list from that base platform, so a MariaDB target kindles the MySQL list, in the MySQL order, under the MySQL names. What differs is how each name is resolved: `ResourceLoader.GetPlatformResourceStream` (`Schema/Utility/ResourceLoader.cs`) looks for the file in the variant folder first (`Scripts/MariaDb/<name>`) and falls back to the base folder (`Scripts/MySQL/<name>`). So:
+
+- **An override replaces the same-named MySQL script wholesale** on MariaDB. It must keep the file name and the routine's name and signature, because the shared MySQL procedures `CALL` it by those.
+- **A file that exists only under `MariaDb/` is never kindled** unless the MySQL kindling list names it. Add the name to the list (with a MySQL body, even a stub that returns `NULL`) and put the MariaDB behaviour in the override -- `SchemaSmith_TableTablespace.sql` is the shape: the MySQL body reads `INNODB_TABLESPACES`, the MariaDb override sets its `OUT` parameter `NULL`.
+- **Keep a MariaDB-only catalog object out of the MySQL body.** On both engines a procedure resolves the catalog columns, system variables and views it names when it is `CREATE`d, not when it runs, so a version guard around the reference does not protect it -- the mention itself fails kindling on the engine or version that lacks it. That is the usual reason an override exists at all (`SchemaSmith_ColumnLevelCheck.sql`, `SchemaSmith_IndexPeriodJson.sql`); the other is a feature MySQL does not have at any version (`SchemaSmith_SequenceQuench.sql`). The one exception runs the other way: `ForgeKindler.ResolveKindleScript` kindles the MySQL body of `SchemaSmith_ColumnLevelCheck.sql` on a MariaDB below 10.2.22, which has no `INFORMATION_SCHEMA.CHECK_CONSTRAINTS` for the override to read.
+
+Everything below applies to an override exactly as it applies to the MySQL script it replaces, including the crash-safety rule.
 
 ## The Convention
 

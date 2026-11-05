@@ -193,11 +193,11 @@ Programmable objects — procedures, functions, triggers, views — deploy via `
 
 ## SchemaQuench — Deployment Engine
 
-The deployment engine. Templates run in 9 ordered execution slots, with state-based table reconciliation handled by a set of modular procedures. Conditional application, secondary-server fan-out, parallel execution, checkpoint/resume, and WhatIf are all first-class capabilities.
+The deployment engine. Templates run in 10 ordered execution slots, with state-based table reconciliation handled by a set of modular procedures. Conditional application, secondary-server fan-out, parallel execution, checkpoint/resume, and WhatIf are all first-class capabilities.
 
 | Feature | SQL Server | PostgreSQL | MySQL | MariaDB | Notes |
 |---|---|---|---|---|---|
-| 9 execution slots (7 template + 2 product) | ✓ | ✓ | ✓ | ✓ | Before, Objects, BetweenTablesAndKeys, AfterTablesScripts, AfterTablesObjects, TableData, After + Product Before/After |
+| 10 execution slots (8 template + 2 product) | ✓ | ✓ | ✓ | ✓ | Setup, Before, Objects, BetweenTablesAndKeys, AfterTablesScripts, AfterTablesObjects, TableData, After + Product Before/After |
 | MissingTableAndColumnQuench | ✓ | ✓ | ✓ | ✓ | |
 | ModifiedTableQuench | ✓ | ✓ | ✓ | ✓ | |
 | MissingIndexesAndConstraintsQuench | ✓ | ✓ | ✓ | ✓ | |

@@ -4,11 +4,11 @@ What if rolling back a database change was as simple as deploying the previous v
 
 ## What rolls back automatically
 
-When you deploy a prior release's schema package, SchemaQuench automatically reverts all schema objects to match that state.
+When you deploy a prior release's schema package, SchemaQuench automatically reverts all schema objects to match that state -- within the drop settings you have chosen. Two of them decide how much of the list below actually happens: `DropTablesRemovedFromProduct` governs the tables, `DropColumnsRemovedFromProduct` the columns. Both default to `true`, and the reference's production guidance for both leans to `false`, because a drop destroys data and a rollback is exactly the moment you are least sure. With either set to `false`, that part of the rollback is left in place for you to clean up deliberately.
 
 **Table structure:**
-- Tables added in the newer release are dropped
-- Columns added are dropped; columns removed are re-added
+- Tables added in the newer release are dropped (`DropTablesRemovedFromProduct`)
+- Columns added are dropped (`DropColumnsRemovedFromProduct`); columns removed are re-added
 - Column modifications (data type, nullability, defaults) revert
 - Indexes, constraints, and foreign keys revert to prior definitions
 - Check constraints and computed / generated columns revert
@@ -33,6 +33,16 @@ SchemaSmith's rollback semantics are the same across platforms, but the individu
 
 > **Warning:** Regardless of platform, rolling back with SchemaSmith means deploying the prior package. On MySQL and MariaDB especially, test rollbacks carefully because the engine won't unwind a half-applied deployment for you.
 
+## When a deploy fails part-way
+
+A deployment can stop in the middle -- a migration script trips on unexpected data, a connection drops, a constraint refuses the rows it finds. What SchemaQuench itself does at that point is simple, and worth knowing before it happens:
+
+- **No single transaction.** SchemaQuench does not hold a deployment-wide transaction. Each step -- a table quench, an index pass, a script -- commits as it completes, and the step that failed is the first thing that is not in the database. How much of the *failing* step itself landed depends on the engine; see [Transactions and Atomicity](../reference/schemaquench.md#transactions-and-atomicity).
+- **Other targets continue.** The rest of that database's deploy stops. With `ContinueOnDatabaseFailure` at its default of `true`, the other databases in the template keep deploying and the run exits `2` when they are done. `SchemaQuench - Failures.log` names every scope that failed, with its error and the lines leading up to it, so you are not grepping an interleaved log. The product's `After` scripts and version stamp are skipped, so the next run is not told this version is deployed.
+- **Recovery is a re-run.** Fix the cause and run the same package again. SchemaQuench computes the delta from where the database actually is, so everything that already landed is a no-op and the deploy converges -- there is nothing to undo first. On a long deployment, `--ResumeQuench` skips the steps and scripts the failed run already recorded instead of re-checking them.
+
+Read the failure with [My deployment failed](12-troubleshooting.md#my-deployment-failed), resume with [Resuming a failed deployment](09-power-workflows.md#resuming-a-failed-deployment), and set the failure routing with [ContinueOnDatabaseFailure](../reference/schemaquench.md#continueondatabasefailure).
+
 ## What needs migration scripts
 
 While schema structure reverts automatically, **data preservation** for destructive operations requires planning. SchemaSmith handles the schema; you handle the data when needed.
@@ -53,10 +63,10 @@ Most rollbacks don't require migration scripts. Data preservation is only needed
 2. **Review what will change.** Run SchemaQuench in WhatIf mode to see what the rollback will modify:
 
    ```bash
-   SmithySettings_WhatIfONLY=true SchemaQuench
+   SchemaQuench --WhatIf
    ```
 
-   Read the generated SQL. Identify any data-destructive operations (column drops, table drops) that need preservation scripts.
+   Read the plan in `SchemaQuench - Summary.md`. Identify any data-destructive operations (column drops, table drops) that need preservation scripts. A rollback is the kind of deployment WhatIf is for: a package going backwards is rarely one the pipeline has rehearsed.
 
 3. **Run data preservation scripts if needed.** If the WhatIf output shows columns or tables being dropped that contain data you need, run your preservation scripts first.
 
@@ -80,9 +90,9 @@ Most rollbacks don't require migration scripts. Data preservation is only needed
 
 **Back up major rollbacks.** For significant rollbacks, take a database backup first. This gives you a safety net if you discover unexpected data dependencies after the rollback completes. Especially important on MySQL and MariaDB, where the engine can't unwind partial DDL on its own.
 
-**WhatIf first, always.** Never roll back production without running WhatIf mode and reading every line of the generated SQL. The same discipline that applies to forward deployments applies to rollbacks.
+**Rehearse the rollback.** A rollback is a deployment the pipeline has usually not run before, against data that has moved on since the prior release -- the case WhatIf exists for. Run it, read the drops it lists, and run the preservation scripts those drops call for before the real run.
 
-**Choose your auto-drop posture.** `DropTablesRemovedFromProduct` defaults to `true`, so rolling back to a prior package removes the tables the newer release added -- clean convergence, but an outright drop destroys their data. Two safe postures fit a rollback-friendly deployment: (1) set `DropTablesRemovedFromProduct: false` so the rollback leaves those tables in place until you're sure it's permanent, then clean them up explicitly -- the conservative default when you have no other safety net; or (2) keep auto-drops on but install the `SchemaSmith.CustomTableDrop` / `SchemaSmith.CustomTableRestore` recyclebin hooks that move a removed table to a recoverable holding area instead of destroying it, so the rollback converges *and* the data is recoverable. Either way, **a dropped column is never caught by these mechanisms** -- preserve column data yourself before a rollback that drops it. See [SchemaQuench -- DropTablesRemovedFromProduct](../reference/schemaquench.md#droptablesremovedfromproduct) and [Recyclebin -- Soft-Drop and Restore Hooks](../reference/recyclebin.md).
+**Choose your auto-drop posture.** `DropTablesRemovedFromProduct` defaults to `true`, so rolling back to a prior package removes the tables the newer release added -- clean convergence, but an outright drop destroys their data. Two safe postures fit a rollback-friendly deployment: (1) set `DropTablesRemovedFromProduct: false` so the rollback leaves those tables in place until you're sure it's permanent, then clean them up explicitly -- the conservative default when you have no other safety net; or (2) keep auto-drops on but install the `SchemaSmith.CustomTableDrop` / `SchemaSmith.CustomTableRestore` recyclebin hooks that move a removed table to a recoverable holding area instead of destroying it, so the rollback converges *and* the data is recoverable. Either way, **a dropped column is never caught by these mechanisms** -- `DropColumnsRemovedFromProduct: false` keeps the column, or preserve its data yourself before a rollback that drops it. See [SchemaQuench -- DropTablesRemovedFromProduct](../reference/schemaquench.md#droptablesremovedfromproduct), [DropColumnsRemovedFromProduct](../reference/schemaquench.md#dropcolumnsremovedfromproduct) and [Recyclebin -- Soft-Drop and Restore Hooks](../reference/recyclebin.md).
 
 > **Tip:** When one specific table must never be dropped -- not on a rollback, not when the package is trimmed -- set `PreventDrop: true` on it. The protection is *sticky*: SchemaSmith persists it in the database, so the table is skipped even after you remove it from the package entirely. See [SchemaQuench -- PreventDrop](../reference/schemaquench.md#preventdrop).
 

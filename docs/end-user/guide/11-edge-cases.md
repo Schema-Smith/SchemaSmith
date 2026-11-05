@@ -2,6 +2,44 @@
 
 Most of the time, SchemaSmith's [state-based approach](03-core-concepts.md#state-based-vs-migration-based) handles everything. You declare the desired state, quench, and the tooling figures out the diff. But some situations are inherently imperative -- data transforms, rename operations, dependency tangles, version constraints. For those, SchemaSmith provides deliberate escape hatches. You won't need these every day, but when you do, here's exactly how to reach for them. These apply across **SQL Server**, **PostgreSQL**, **MySQL**, and **MariaDB** with minor syntax differences noted where they matter.
 
+The first one is not a feature at all. It is the order in which to bring a database that already has years of history under management -- and it is where most adoptions either succeed quietly or go wrong loudly.
+
+## The adoption approach
+
+Multiple settings in SchemaSmith share the same story: **start conservative, align in stages, enforce once you're ready.** Whether it's indexes, fill factors, table drops, or the whole schema adoption journey -- the pattern is the same.
+
+### Why big-bang alignment fails
+
+Attempting to bring everything into alignment in a single deployment is one of the most common mistakes teams make. The consequences are real: hours-long deployment windows when every index on every table gets rebuilt, unexpected performance degradation when indexes are dropped that hadn't been captured in the repository yet, or accidental data loss when tables are dropped that still had dependencies.
+
+One company worked on index drift alignment for over two years only to find that nothing was really better in production because new drift kept happening. The tools that stopped the drift were deployed in controlled stages with careful planning and testing -- and only after the repository was complete did they enable enforcement.
+
+### The phased pattern
+
+The practical approach works the same way across all alignment settings:
+
+1. **Extract and inventory.** Use SchemaTongs to capture your current schema. Review what comes out. You may find vast differences across environments -- objects in production that don't exist in dev, duplicates, contradictions.
+
+2. **Build up the repository in stages.** Don't try to capture everything in one shot. Add objects to your schema package in controlled stages -- maybe one schema area at a time. Deploy each stage, verify performance, confirm the deployment window is acceptable.
+
+3. **Keep enforcement off during alignment.** While building up the repository, you don't want to accidentally drop objects you haven't captured yet. Leave enforcement settings (`DropUnknownIndexes`, `DropTablesRemovedFromProduct`) off until you're confident the repository represents the complete desired state.
+
+4. **Turn on enforcement to prevent drift from returning.** Once the schema definition is clear and you have verified alignment across environments, enable the enforcement settings. Now SchemaSmith prevents drift from coming back the moment you turn your back.
+
+### Settings that follow this pattern
+
+| Setting | What it enforces | What goes wrong if you enable too early |
+|---------|-----------------|----------------------------------------|
+| `DropUnknownIndexes` | Index alignment | Indexes dropped that you haven't captured yet. Deployment may take much longer than expected, and query performance may degrade. |
+| `DropTablesRemovedFromProduct` | Table cleanup | Tables dropped, data gone, rollback requires restore from backup. |
+| `UpdateFillFactor` | Fill factor alignment | Every index on every table rebuilt to match declared fill factors -- potentially hours of deployment time on large databases. |
+
+### Bite-sized is the only size
+
+You won't get every table or scripted object into the repository in one pass. You'll find alignment problems and environmental dependencies across multiple environments that need to be resolved before those objects can be safely managed by state-based deployment. This is a long-term cure, not a miracle pill that solves everything on day one.
+
+Add what is safe, deploy, verify, repeat. Each iteration brings more of your schema under management and stops more drift from recurring. If you get stumped on how to bring a particular object or pattern into alignment, reach out -- [ForgeBarrett@SchemaSmith.com](mailto:ForgeBarrett@SchemaSmith.com). With more than 20 years of doing this with and without proper tooling, we have likely solved a similar problem already. The hands-on version of this journey, including leaving a migration tool's history table behind, is the [Switching to SchemaSmith](https://learn.schemasmith.com/course5/00-stop-porting-migrations/) course on Learn SchemaSmith.
+
 ## Migration scripts
 
 State-based deployment excels at structural changes: add a column, change a data type, create an index. But some operations require explicit steps that can't be inferred from a before-and-after comparison. Splitting a table in two. Backfilling a new column from existing data. Running a one-time data cleanup. These are migration script territory -- the escape hatch for when the declarative approach needs a hand.
@@ -18,12 +56,12 @@ Migration scripts run at specific points in the deployment sequence. Choose the 
 
 | Slot | Default folder | Runs... |
 |------|----------------|---------|
-| **Before** | `Before Scripts/` | Before any object scripts. Use for data transforms that must happen before schema changes. |
-| **BetweenTablesAndKeys** | declare via `ScriptFolders` | After tables are created/altered but before foreign keys and indexes. Use when you need tables to exist but constraints would block your operation. |
-| **AfterTablesScripts** | declare via `ScriptFolders` | After tables, keys, and indexes are complete. Use for data migrations that depend on the full table structure being in place. |
-| **After** | `After Scripts/` | After all object scripts (views, procedures, triggers, etc.) have run. Use for final cleanup or validation. |
+| **Before** | `Before Scripts/` | After the first object pass and after new tables and columns exist, but before existing tables are altered. Use for data transforms that must happen before a column is changed or dropped. |
+| **BetweenTablesAndKeys** | declare via `ScriptFolders` | After tables are created and altered but before indexes, constraints and foreign keys. Use when you need tables to exist but constraints would block your operation. |
+| **AfterTablesScripts** | declare via `ScriptFolders` | After indexes and constraints are in place, before data delivery and foreign keys. Use for data migrations that must satisfy the new constraints. |
+| **After** | `After Scripts/` | After every object script, data delivery and foreign key has run. Use for final cleanup or validation. |
 
-`BetweenTablesAndKeys` and `AfterTablesScripts` aren't in the default folder set -- declare them via `Template.ScriptFolders` when you need them. The slot names stay the same; only the folder paths are yours to choose.
+`BetweenTablesAndKeys` and `AfterTablesScripts` aren't in the default folder set -- declare them via `Template.ScriptFolders` when you need them. The slot names stay the same; only the folder paths are yours to choose. The `Setup` slot is not a migration slot: it runs on every deploy and is never tracked. Where each slot sits relative to the table, index and foreign-key work is the one table in [Power Workflows -- Script folder execution order](09-power-workflows.md#script-folder-execution-order).
 
 Scripts within each slot run in alphabetical order by filename. A common convention is to prefix with a sequence number:
 
@@ -51,7 +89,7 @@ The `[ALWAYS]` marker is case-sensitive and must be uppercase. It must appear at
 
 Reach for migration scripts when state-based can't express what you need. If you find yourself writing migration scripts for routine schema changes, step back -- the declarative approach can almost certainly handle it. The goal is a schema package where the JSON and SQL files describe the target state, with migration scripts reserved for the genuinely imperative operations. Keep the escape hatch for when you truly need it.
 
-> For the complete deployment sequence and slot details, see [SchemaQuench Reference](../reference/schemaquench.md).
+For the engine's step-by-step sequence, see [Database Quench Sequence](../reference/schemaquench.md#database-quench-sequence); for how tracking works in detail, including `[ALWAYS]` and forcing a re-run, see [Migration Script Tracking](../reference/schemaquench.md#migration-script-tracking).
 
 ## Table and column renames via OldName
 
@@ -104,7 +142,7 @@ The same pattern works at the table level. In the table's JSON file:
 
 Quench, verify, remove `OldName`. The workflow is identical.
 
-> For the full table and column JSON schema, see [Schema Packages Reference](../reference/schema-packages.md).
+The mechanics behind this -- what happens when both names are present, how a rename is ordered against drop-by-absence, what is taken down and restored around the renamed object, and case-only renames -- are in [Renames with OldName](../reference/schema-packages.md#renames-with-oldname). For the full table and column JSON schema, see the [Schema Packages Reference](../reference/schema-packages.md).
 
 ## RunScriptsTwice -- idempotency testing
 
@@ -124,13 +162,13 @@ When `RunScriptsTwice` is enabled, SchemaQuench runs the entire set of object sc
 - **Local development** -- Enable when authoring `[ALWAYS]` scripts to verify idempotency as you write them.
 - **Not for production deployments** -- It doubles the execution time for the object script phase with no production benefit. It's a testing tool.
 
-> See [SchemaQuench Reference -- RunScriptsTwice](../reference/schemaquench.md#runscriptstwice) for the full configuration details.
+See [SchemaQuench Reference -- RunScriptsTwice](../reference/schemaquench.md#runscriptstwice) for the full configuration details.
 
 ## Deploying across engine versions
 
 Declare `MinimumVersion` in `Product.json` to set the version floor for a product. SchemaQuench detects each target's version before deployment begins -- if any target is below the floor, the run aborts cleanly with a diagnostic naming the offending servers. For targets that meet the floor, SchemaSmith adapts the DDL it generates to match the engine version automatically. You deploy the same package to older and newer targets; SchemaSmith picks the right form for each.
 
-> See [SchemaQuench -- Engine Version Compatibility](../reference/schemaquench.md#engine-version-compatibility) for the full pre-flight behavior, version-adaptive code generation cases, and the supported engine floors. See the [Schema Packages Reference](../reference/schema-packages.md#productjson) for accepted `MinimumVersion` value formats.
+See [SchemaQuench -- Engine Version Compatibility](../reference/schemaquench.md#engine-version-compatibility) for the full pre-flight behavior, version-adaptive code generation cases, and the supported engine floors. See the [Schema Packages Reference](../reference/schema-packages.md#productjson) for accepted `MinimumVersion` value formats.
 
 ## Orphan handling strategies
 
@@ -152,7 +190,7 @@ When SchemaTongs casts your database schema, it may find objects on the server t
 
 Start with `Detect` to understand what is out there. Move to `DetectWithCleanupScripts` when you're ready to act but want manual review. Use `DetectDeleteAndCleanup` only when you trust the extraction and want a fully clean schema package. You control the pace.
 
-> For the complete extraction configuration, see [SchemaTongs Reference](../reference/schematongs.md).
+This is the guide's one copy of the orphan-mode table; [Defining Your Schema](04-defining-your-schema.md#extraction-intelligence) points here. For the complete extraction configuration, see [SchemaTongs Reference](../reference/schematongs.md).
 
 ## Complex type handling in DataTongs
 
@@ -181,7 +219,11 @@ DataTongs generates sync scripts from live data. Most column types serialize to 
 - **Spatial types** -- Basic WKT support.
 - **TEXT / BLOB families** -- Supported via string and binary literals.
 
-> For the full DataTongs configuration and type handling details, see [DataTongs Reference](../reference/datatongs.md).
+**MariaDB:**
+
+- Follows the MySQL list above -- same driver, same column handling. DataTongs detects a MariaDB server and shapes the JSON it builds for each row to what MariaDB's JSON functions accept, so the same configuration works on both.
+
+For the full DataTongs configuration and type handling details, see [DataTongs Reference](../reference/datatongs.md).
 
 ## Filesystem-illegal characters
 
@@ -232,7 +274,7 @@ Modern database configurations often require additional connection string parame
 }
 ```
 
-**MySQL:**
+**MySQL and MariaDB:**
 
 ```json
 {
@@ -249,9 +291,9 @@ Modern database configurations often require additional connection string parame
 }
 ```
 
-Each platform's supported keys come straight from its official client library (`Microsoft.Data.SqlClient`, `Npgsql`, `MySqlConnector`). SchemaTongs uses the same structure under its `Source` configuration section.
+Each platform's supported keys come straight from its client library: `Microsoft.Data.SqlClient` for SQL Server, `Npgsql` for PostgreSQL, and `MySqlConnector` for both MySQL and MariaDB -- a MariaDB package opens the same connector, so the same keys apply. SchemaTongs uses the same structure under its `Source` configuration section.
 
-> For the complete connection configuration, see [Configuration Reference](../reference/configuration.md).
+For the complete connection configuration, see [Configuration Reference](../reference/configuration.md).
 
 ## Managing indexes you don't own
 
@@ -277,43 +319,7 @@ This works across SQL Server, PostgreSQL, MySQL, and MariaDB -- wherever you can
 
 > **Note:** `IndexOnlyTableQuenches` is a template-level flag (default `false`). Each template in your product runs independently, so you can mix an index-only template for the third-party schema alongside a normal template for your own tables, all in one product.
 
-> For the full property description, see [Schema Packages Reference -- Template.json](../reference/schema-packages.md#templatejson). For the quench-sequence detail of what runs and what's skipped, see [Database Quench Sequence](../reference/schemaquench.md#database-quench-sequence).
-
-## The adoption approach
-
-Multiple settings in SchemaSmith share the same story: **start conservative, align in stages, enforce once you're ready.** Whether it's indexes, fill factors, table drops, or the whole schema adoption journey -- the pattern is the same.
-
-### Why big-bang alignment fails
-
-Attempting to bring everything into alignment in a single deployment is one of the most common mistakes teams make. The consequences are real: hours-long deployment windows when every index on every table gets rebuilt, unexpected performance degradation when indexes are dropped that hadn't been captured in the repository yet, or accidental data loss when tables are dropped that still had dependencies.
-
-One company worked on index drift alignment for over two years only to find that nothing was really better in production because new drift kept happening. The tools that stopped the drift were deployed in controlled stages with careful planning and testing -- and only after the repository was complete did they enable enforcement.
-
-### The phased pattern
-
-The practical approach works the same way across all alignment settings:
-
-1. **Extract and inventory.** Use SchemaTongs to capture your current schema. Review what comes out. You may find vast differences across environments -- objects in production that don't exist in dev, duplicates, contradictions.
-
-2. **Build up the repository in stages.** Don't try to capture everything in one shot. Add objects to your schema package in controlled stages -- maybe one schema area at a time. Deploy each stage, verify performance, confirm the deployment window is acceptable.
-
-3. **Keep enforcement off during alignment.** While building up the repository, you don't want to accidentally drop objects you haven't captured yet. Leave enforcement settings (`DropUnknownIndexes`, `DropTablesRemovedFromProduct`) off until you're confident the repository represents the complete desired state.
-
-4. **Turn on enforcement to prevent drift from returning.** Once the schema definition is clear and you have verified alignment across environments, enable the enforcement settings. Now SchemaSmith prevents drift from coming back the moment you turn your back.
-
-### Settings that follow this pattern
-
-| Setting | What it enforces | What goes wrong if you enable too early |
-|---------|-----------------|----------------------------------------|
-| `DropUnknownIndexes` | Index alignment | Indexes dropped that you haven't captured yet. Deployment may take much longer than expected, and query performance may degrade. |
-| `DropTablesRemovedFromProduct` | Table cleanup | Tables dropped, data gone, rollback requires restore from backup. |
-| `UpdateFillFactor` | Fill factor alignment | Every index on every table rebuilt to match declared fill factors -- potentially hours of deployment time on large databases. |
-
-### Bite-sized is the only size
-
-You won't get every table or scripted object into the repository in one pass. You'll find alignment problems and environmental dependencies across multiple environments that need to be resolved before those objects can be safely managed by state-based deployment. This is a long-term cure, not a miracle pill that solves everything on day one.
-
-Add what is safe, deploy, verify, repeat. Each iteration brings more of your schema under management and stops more drift from recurring. If you get stumped on how to bring a particular object or pattern into alignment, reach out -- [ForgeBarrett@SchemaSmith.com](mailto:ForgeBarrett@SchemaSmith.com). With more than 20 years of doing this with and without proper tooling, we have likely solved a similar problem already.
+For the full property description, see [Schema Packages Reference -- Template.json](../reference/schema-packages.md#templatejson). For the quench-sequence detail of what runs and what's skipped, see [Database Quench Sequence](../reference/schemaquench.md#database-quench-sequence).
 
 ---
 

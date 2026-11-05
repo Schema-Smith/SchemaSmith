@@ -21,7 +21,7 @@ Self-contained, single-file executables for Windows, Linux, and macOS. No .NET r
 ## Tools
 
 - **SchemaTongs** — Extracts databases into schema packages across all four platforms. Pure SQL extraction with no external SDKs, orphan detection with cleanup-script generation, post-extraction script validation, and subfolder preservation so your repository organization survives re-extraction.
-- **SchemaQuench** — Deploys schema packages to SQL Server, PostgreSQL, MySQL, and MariaDB. 9 execution slots, conditional deployment via `ShouldApplyExpression`, secondary-server fan-out, FK-aware data delivery, checkpoint/resume, WhatIf analysis, indexed views (SQL Server), materialized views (PostgreSQL), and a token system that reaches every script.
+- **SchemaQuench** — Deploys schema packages to SQL Server, PostgreSQL, MySQL, and MariaDB. 10 execution slots (8 template, 2 product), conditional deployment via `ShouldApplyExpression`, secondary-server fan-out, FK-aware data delivery, checkpoint/resume, WhatIf analysis, indexed views (SQL Server), materialized views (PostgreSQL), and a token system that reaches every script.
 - **DataTongs** — Extracts table data and generates platform-aware MERGE scripts for SQL Server, PostgreSQL, MySQL, and MariaDB. Auto primary-key detection, complex type support (geometry, hierarchyid, binary), and full token resolution including MySQL.
 - **SchemaShears** — Carves an object-level patch (subset) package from a full product via a manifest. Emitted patches suppress drop-by-absence so omitted objects are preserved.
 
@@ -120,7 +120,7 @@ docker run --rm \
 # GHCR (reliable pulls behind corporate NAT / Docker Hub's anonymous rate limit)
 docker run --rm -v "$PWD/schema:/pkg" \
   -e SmithySettings_SchemaPackagePath=/pkg \
-  ghcr.io/schema-smith/schemaquench:2.7.0 --Validate
+  ghcr.io/schema-smith/schemaquench:2.8.0 --Validate
 ```
 
 Tags: `latest`, `X.Y.Z` (immutable), `X.Y`, `X`. Multi-arch (`linux/amd64` + `linux/arm64`). Configure via `SmithySettings_` environment variables (`__` denotes nesting) or a mounted `SchemaQuench.settings.json`; append `--Key:value` overrides as needed.
@@ -215,7 +215,7 @@ Four sample databases ship across all four platforms:
 - **Northwind** (13 tables) — classic small-business sample
 - **Sakila** — DVD rental store, originally a MySQL reference
 
-See [Demos/README.md](Demos/README.md) for the per-platform layout, credentials, and SQL Server tutorials.
+See [Demos/README.md](Demos/README.md) for the per-platform layout, where each demo's credentials live, the conditional-deployment demos, and how to run the demos on a server you already have.
 
 ## Security
 

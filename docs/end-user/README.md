@@ -16,7 +16,7 @@ New to SchemaSmith? The guide takes you from "what is this?" to confidently mana
 
 ## Get the Tools
 
-Before the walkthrough, install SchemaSmith. One command per platform — Chocolatey on Windows, `.deb` / `.rpm` / `install.sh` on Linux and macOS. No .NET runtime to install.
+Before the walkthrough, install SchemaSmith. One command per platform — winget or Chocolatey on Windows, `.deb` / `.rpm` / `install.sh` on Linux and macOS. No .NET runtime to install.
 
 **[Installation →](guide/installation.md)**
 
@@ -31,7 +31,7 @@ A hands-on journey from first contact to confident production deployment, organi
 | Chapter | What you'll learn |
 |---------|-------------------|
 | [1. Why SchemaSmith](guide/01-why-schemasmith.md) | The problem, the vision, and why state-based changes everything |
-| [2. Quick Start](guide/02-quick-start.md) | Extract, view, deploy, and change a database in under 15 minutes |
+| [2. Quick Start](guide/02-quick-start.md) | Extract, view, deploy, and change a database -- the full cycle, end to end |
 
 ### Shape -- Give your database form
 
@@ -81,6 +81,9 @@ Already know what you're looking for? Jump straight to the details.
 | [Custom Properties](reference/custom-properties.md) | Attach your own metadata via the `Extensions` carrier, driving tokens and governance |
 | [Script Tokens](reference/script-tokens.md) | Token syntax, resolution order, overrides, environment variables |
 | [Error Codes & Reporting](reference/error-codes-and-reporting.md) | Per-platform error codes, the three reporting channels, where each engine logs faults, `VerboseLogging` |
+| [`--Validate`](reference/validate.md) | The no-database package lint — every check and its code, reading the output, exit codes, use in CI |
+| [Deployment Summary Report](reference/deployment-summary-report.md) | The `SchemaQuench - Summary.md` / `.json` pair every run writes — redirecting it with `--report`, reading `Summary.json` in a pipeline |
+| [Datafix Role Grants](reference/datafix-role-grants.md) | Least-privilege grant sets for a datafix-only deploy account on SQL Server, PostgreSQL, MySQL, and MariaDB |
 
 ---
 
