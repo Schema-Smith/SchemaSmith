@@ -1,0 +1,42 @@
+name: CI (doc contract)
+
+# A few documentation files are read by unit tests: CapabilityDocumentationTests parses the reference page's Engine
+# Version Compatibility section and holds it to the capability registry. An edit to one of those files cannot change
+# what the engines do, so it runs the tests that read it instead of the full integration matrix. The paths below are
+# a copy of the [unit-tested] section of .github/ci-tested-paths.txt (a trigger cannot read a file), and
+# CiTestedPathsTests fails when the copies and the list disagree. A change that also touches a [tested] path runs
+# these tests again inside continuous-integration.yml's unit-test job.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/end-user/reference/schemaquench.md'
+      - '.github/workflows/ci-doc-contract.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'docs/end-user/reference/schemaquench.md'
+      - '.github/workflows/ci-doc-contract.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  doc-contract:
+    name: Documentation Contract Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Tests that read the documentation
+        run: |
+          set -o pipefail
+          dotnet test Schema/Schema.UnitTests/Schema.UnitTests.csproj -c Debug --filter "FullyQualifiedName~CapabilityDocumentationTests" | tee doc-contract.log
+          # A filter that selects nothing exits 0, which would read as a pass.
+          grep -Eq 'Total: +[1-9]' doc-contract.log || { echo '::error::the filter selected no tests'; exit 1; }
