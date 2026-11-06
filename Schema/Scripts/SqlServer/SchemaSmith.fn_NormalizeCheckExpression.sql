@@ -23,35 +23,66 @@ BEGIN
 
   DECLARE @v_Result NVARCHAR(MAX) = SchemaSmith.fn_StripParenWrapping(LTRIM(RTRIM(@p_Expression)))
 
-  -- Spaces adjacent to an operator or punctuation only. A space BETWEEN word characters is left alone, so
-  -- `IS NOT NULL` keeps its shape and a literal like 'two words' is not silently glued together.
-  DECLARE @v_Previous NVARCHAR(MAX) = N''
-  WHILE @v_Result <> @v_Previous
+  -- Both folds below apply outside string literals only. Applied to the whole text, IN ('A, B') read as IN ('A,B') and
+  -- '(5)' as '5', so a changed literal compared equal and the constraint was never re-created: a missed change.
+  DECLARE @v_Out NVARCHAR(MAX) = N'', @v_Segment NVARCHAR(MAX), @v_Previous NVARCHAR(MAX)
+  DECLARE @v_At INT = 1, @v_Len INT = DATALENGTH(@v_Result) / 2, @v_Quote INT, @v_End INT
+  WHILE @v_At <= @v_Len
   BEGIN
-    SET @v_Previous = @v_Result
-    SET @v_Result = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
-                    REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(@v_Result,
-                      ' <', '<'), '< ', '<'), ' >', '>'), '> ', '>'),
-                      ' =', '='), '= ', '='), ' (', '('), '( ', '('),
-                      ' )', ')'), ') ', ')'), ' ,', ','), ', ', ','),
-                      ' +', '+'), '+ ', '+')
-  END
+    SET @v_Quote = CHARINDEX('''', @v_Result, @v_At)
+    SET @v_Segment = SUBSTRING(@v_Result, @v_At, CASE WHEN @v_Quote = 0 THEN @v_Len - @v_At + 1 ELSE @v_Quote - @v_At END)
 
-  -- Parens the engine puts around a bare numeric literal: (365) -> 365. Bounded by the loop's own progress,
-  -- so a malformed expression cannot spin here.
-  SET @v_Previous = N''
-  WHILE @v_Result <> @v_Previous
+    -- Spaces adjacent to an operator or punctuation only. A space BETWEEN word characters is left alone, so
+    -- `IS NOT NULL` keeps its shape.
+    SET @v_Previous = N''
+    WHILE @v_Segment <> @v_Previous
+    BEGIN
+      SET @v_Previous = @v_Segment
+      SET @v_Segment = REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                       REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(@v_Segment,
+                         ' <', '<'), '< ', '<'), ' >', '>'), '> ', '>'),
+                         ' =', '='), '= ', '='), ' (', '('), '( ', '('),
+                         ' )', ')'), ') ', ')'), ' ,', ','), ', ', ','),
+                         ' +', '+'), '+ ', '+')
+    END
+    SET @v_Out = @v_Out + @v_Segment
+    IF @v_Quote = 0 BREAK
+
+    -- The literal, copied as it is: through its closing quote, a doubled quote being part of it.
+    SET @v_End = @v_Quote
+    WHILE 1 = 1
+    BEGIN
+      SET @v_End = CHARINDEX('''', @v_Result, @v_End + 1)
+      IF @v_End = 0 OR SUBSTRING(@v_Result, @v_End + 1, 1) <> '''' BREAK
+      SET @v_End = @v_End + 1
+    END
+    IF @v_End = 0
+    BEGIN
+      SET @v_Out = @v_Out + SUBSTRING(@v_Result, @v_Quote, @v_Len - @v_Quote + 1)
+      BREAK
+    END
+    SET @v_Out = @v_Out + SUBSTRING(@v_Result, @v_Quote, @v_End - @v_Quote + 1)
+    SET @v_At = @v_End + 1
+  END
+  SET @v_Result = @v_Out
+
+  -- Parens the engine puts around a bare numeric literal: (365) -> 365, outside a string literal. Bounded by the
+  -- search position, so a malformed expression cannot spin here.
+  DECLARE @v_From INT = 1, @v_Pos INT, @v_Close INT, @v_Inner NVARCHAR(MAX)
+  WHILE @v_From <= LEN(@v_Result)
   BEGIN
-    SET @v_Previous = @v_Result
-    DECLARE @v_Pos INT = PATINDEX('%(%[0-9]%)%', @v_Result)
+    SET @v_Pos = PATINDEX('%(%[0-9]%)%', SUBSTRING(@v_Result, @v_From, LEN(@v_Result)))
     IF @v_Pos = 0 BREAK
-    DECLARE @v_Close INT = CHARINDEX(')', @v_Result, @v_Pos)
+    SET @v_Pos = @v_Pos + @v_From - 1
+    SET @v_Close = CHARINDEX(')', @v_Result, @v_Pos)
     IF @v_Close = 0 BREAK
-    DECLARE @v_Inner NVARCHAR(MAX) = SUBSTRING(@v_Result, @v_Pos + 1, @v_Close - @v_Pos - 1)
-    IF @v_Inner NOT LIKE '%[^0-9.-]%' AND LEN(@v_Inner) > 0
+    SET @v_Inner = SUBSTRING(@v_Result, @v_Pos + 1, @v_Close - @v_Pos - 1)
+    -- An odd number of quotes before it puts it inside a literal.
+    IF (LEN(LEFT(@v_Result, @v_Pos)) - LEN(REPLACE(LEFT(@v_Result, @v_Pos), '''', ''))) % 2 = 0
+       AND @v_Inner NOT LIKE '%[^0-9.-]%' AND LEN(@v_Inner) > 0
       SET @v_Result = STUFF(@v_Result, @v_Pos, @v_Close - @v_Pos + 1, @v_Inner)
     ELSE
-      BREAK
+      SET @v_From = @v_Pos + 1
   END
 
   RETURN @v_Result

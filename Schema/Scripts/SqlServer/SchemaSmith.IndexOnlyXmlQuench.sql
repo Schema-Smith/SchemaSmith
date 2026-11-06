@@ -296,7 +296,7 @@ BEGIN TRY
          -- default is AUTO, but an explicit "ChangeTracking": null in a table file overwrites it. 'AUTO'
          -- here matches that C# default, so an omitted and an explicitly-null value behave the same.
          [ChangeTracking] = COALESCE(NULLIF(RTRIM(f.[ChangeTracking]), ''), 'AUTO'),
-         [StopList] = SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM(f.[StopList]), ''), 'SYSTEM')),
+         [StopList] = CASE WHEN UPPER(SchemaSmith.fn_StripBracketWrapping(RTRIM(f.[StopList]))) = 'OFF' THEN 'OFF' ELSE SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM(f.[StopList]), ''), 'SYSTEM')) END,
          -- Full-text LANGUAGE churn: same round-trip contract as the JSON twin -- peel off a trailing
          -- "LANGUAGE nnnn" suffix before bracket-wrapping the column (+ optional TYPE COLUMN) part, then
          -- reattach it, so this matches the live-side build below byte-for-byte.
@@ -678,7 +678,7 @@ BEGIN TRY
          FullTextCatalog = QUOTENAME((SELECT c.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
          KeyIndex = QUOTENAME((SELECT i.[Name] COLLATE DATABASE_DEFAULT FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
          ChangeTracking = change_tracking_state_desc COLLATE DATABASE_DEFAULT,
-         [StopList] = QUOTENAME(COALESCE((SELECT fs.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id), 'SYSTEM'))
+         [StopList] = CASE WHEN fi.stoplist_id IS NULL THEN 'OFF' ELSE QUOTENAME(COALESCE((SELECT fs.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id), 'SYSTEM')) END
     INTO #ExistingFullTextIndexes
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.fulltext_indexes fi ON fi.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])

@@ -288,6 +288,8 @@ BEGIN TRY
             END
 
             RAISERROR('  Rebuilding PRIMARY KEY on %s: the deployed key does not match its declaration', 10, 100, @v_QualifiedName) WITH NOWAIT;
+            -- Without XACT_ABORT a failed ADD left the DROP to be committed, and the table without its key.
+            SET XACT_ABORT ON;
             BEGIN TRANSACTION;
             SET @v_SQL = N'ALTER TABLE ' + @v_QualifiedName + N' DROP CONSTRAINT ' + QUOTENAME(@v_PkName);
             EXEC(@v_SQL);
@@ -296,6 +298,7 @@ BEGIN TRY
                          N' (' + @v_DeclPkCols + N')';
             EXEC(@v_SQL);
             COMMIT TRANSACTION;
+            SET XACT_ABORT OFF;
         END
     END
 

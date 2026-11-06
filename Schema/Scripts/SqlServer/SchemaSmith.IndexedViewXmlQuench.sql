@@ -348,8 +348,18 @@ BEGIN
                     [SchemaSmith].[fn_StripBracketWrapping](idx.value('(Name/text())[1]', 'NVARCHAR(500)')),
                     CAST(ISNULL(idx.value('(Unique/text())[1]', 'VARCHAR(8)'), 'false') AS BIT),
                     CAST(ISNULL(idx.value('(Clustered/text())[1]', 'VARCHAR(8)'), 'false') AS BIT),
-                    REPLACE(idx.value('(IndexColumns/text())[1]', 'NVARCHAR(MAX)'), ', ', ','),
-                    REPLACE(ISNULL(idx.value('(IncludeColumns/text())[1]', 'NVARCHAR(MAX)'), ''), ', ', ','),
+                    -- Each name bracketed as the live side's QUOTENAME writes it (the JSON tier's twin).
+                    STUFF((SELECT ',' + CASE WHEN RTRIM(LTRIM(l.[value])) LIKE '% DESC'
+                                             THEN SchemaSmith.fn_SafeBracketWrap(SUBSTRING(RTRIM(LTRIM(l.[value])), 1, LEN(RTRIM(LTRIM(l.[value]))) - 5)) + ' DESC'
+                                             ELSE SchemaSmith.fn_SafeBracketWrap(LTRIM(RTRIM(l.[value])))
+                                             END
+                             FROM SchemaSmith.fn_SplitList(idx.value('(IndexColumns/text())[1]', 'NVARCHAR(MAX)'), ',') l
+                            WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM(l.[value]))) <> ''
+                            ORDER BY l.[Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''),
+                    ISNULL(STUFF((SELECT ',' + SchemaSmith.fn_SafeBracketWrap(LTRIM(RTRIM(l.[value])))
+                                    FROM SchemaSmith.fn_SplitList(idx.value('(IncludeColumns/text())[1]', 'NVARCHAR(MAX)'), ',') l
+                                   WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM(l.[value]))) <> ''
+                                   ORDER BY l.[Ordinal] FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, ''), ''),
                     ISNULL(idx.value('(CompressionType/text())[1]', 'NVARCHAR(200)'), 'NONE'),
                     CAST(ISNULL(idx.value('(FillFactor/text())[1]', 'NVARCHAR(20)'), '0') AS INT),
                     CAST(ISNULL(idx.value('(PadIndex/text())[1]', 'VARCHAR(8)'), 'false') AS BIT)

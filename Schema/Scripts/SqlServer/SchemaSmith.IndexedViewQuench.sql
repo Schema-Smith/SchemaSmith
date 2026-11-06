@@ -344,8 +344,17 @@ BEGIN
                     [SchemaSmith].[fn_StripBracketWrapping](JSON_VALUE(idx.value, '$.Name')),
                     CAST(ISNULL(JSON_VALUE(idx.value, '$.Unique'), 'false') AS BIT),
                     CAST(ISNULL(JSON_VALUE(idx.value, '$.Clustered'), 'false') AS BIT),
-                    REPLACE(JSON_VALUE(idx.value, '$.IndexColumns'), ', ', ','),
-                    REPLACE(ISNULL(JSON_VALUE(idx.value, '$.IncludeColumns'), ''), ', ', ','),
+                    -- Each name bracketed as the live side's QUOTENAME writes it, as the table path does: written unbracketed,
+                    -- or with a space after a comma, the index was dropped and re-created on every deploy.
+                    (SELECT STRING_AGG(CAST(CASE WHEN RTRIM(LTRIM([value])) LIKE '% DESC'
+                                                 THEN SchemaSmith.fn_SafeBracketWrap(SUBSTRING(RTRIM(LTRIM([value])), 1, LEN(RTRIM(LTRIM([value]))) - 5)) + ' DESC'
+                                                 ELSE SchemaSmith.fn_SafeBracketWrap(LTRIM(RTRIM([value])))
+                                                 END AS NVARCHAR(MAX)), ',')
+                       FROM STRING_SPLIT(JSON_VALUE(idx.value, '$.IndexColumns'), ',')
+                      WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
+                    ISNULL((SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap(LTRIM(RTRIM([value]))) AS NVARCHAR(MAX)), ',')
+                              FROM STRING_SPLIT(JSON_VALUE(idx.value, '$.IncludeColumns'), ',')
+                             WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''), ''),
                     ISNULL(JSON_VALUE(idx.value, '$.CompressionType'), 'NONE'),
                     CAST(ISNULL(JSON_VALUE(idx.value, '$.FillFactor'), '0') AS INT),
                     CAST(ISNULL(JSON_VALUE(idx.value, '$.PadIndex'), 'false') AS BIT)

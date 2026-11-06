@@ -194,6 +194,33 @@ WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         conn.Close();
     }
 
+    // B6: an indexed view's index columns were compared as written against the bracketed live list, so a hand-written
+    // "Name" or "Id, Name" dropped and re-created the index on every deploy.
+    [Test]
+    public void ReQuench_UnbracketedIndexColumns_DoesNotRecreateTheIndex()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+
+        var json = @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""Id""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""Name, Id""}]}]";
+        RunIndexedViewQuench(cmd, json);
+
+        string Partitions()
+        {
+            cmd.CommandText = $@"SELECT STRING_AGG(CAST(p.partition_id AS VARCHAR(30)), ',') WITHIN GROUP (ORDER BY i.index_id)
+  FROM sys.indexes i JOIN sys.partitions p ON p.[object_id] = i.[object_id] AND p.index_id = i.index_id
+ WHERE i.[object_id] = OBJECT_ID('{_schema}.vTestSummary')";
+            return cmd.ExecuteScalar()?.ToString();
+        }
+        var before = Partitions();
+        RunIndexedViewQuench(cmd, json);
+        Assert.That(Partitions(), Is.EqualTo(before), "the unchanged indexes are left as they are");
+
+        conn.Close();
+    }
+
     [Test]
     public void DefinitionChange_TriggersRebuild()
     {

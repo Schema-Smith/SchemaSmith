@@ -575,7 +575,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        JSON_QUERY((SELECT FullTextCatalog = QUOTENAME((SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
                KeyIndex = QUOTENAME((SELECT i.[Name] FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
                ChangeTracking = change_tracking_state_desc,
-               [StopList] = QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)),
+               [StopList] = CASE WHEN fi.stoplist_id IS NULL THEN 'OFF' ELSE QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)) END,
                (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)) +
                                        CASE WHEN fc.type_column_id IS NOT NULL
                                             THEN ' TYPE COLUMN ' + QUOTENAME(COL_NAME(fc.[object_id], fc.type_column_id)) + ''

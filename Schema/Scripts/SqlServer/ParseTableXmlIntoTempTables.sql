@@ -573,7 +573,7 @@
          -- default is AUTO, but an explicit "ChangeTracking": null in a table file overwrites it. 'AUTO'
          -- here matches that C# default, so an omitted and an explicitly-null value behave the same.
          [ChangeTracking] = COALESCE(NULLIF(RTRIM(f.[ChangeTracking]), ''), 'AUTO'),
-         [StopList] = SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM(f.[StopList]), ''), 'SYSTEM')),
+         [StopList] = CASE WHEN UPPER(SchemaSmith.fn_StripBracketWrapping(RTRIM(f.[StopList]))) = 'OFF' THEN 'OFF' ELSE SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM(f.[StopList]), ''), 'SYSTEM')) END,
          -- Full-text LANGUAGE churn: same round-trip contract as the JSON twin -- peel off a trailing
          -- "LANGUAGE nnnn" suffix before bracket-wrapping the column (+ optional TYPE COLUMN) part, then
          -- reattach it, so this matches the live-side build in ModifiedTableQuench.sql byte-for-byte.

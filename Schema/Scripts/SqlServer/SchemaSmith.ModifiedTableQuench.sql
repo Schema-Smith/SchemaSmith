@@ -300,7 +300,14 @@ BEGIN TRY
 
   RAISERROR('Identify indexes removed from the product', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexesRemovedFromProduct') IS NOT NULL DROP TABLE #IndexesRemovedFromProduct
-  SELECT xp.[Schema], xp.TableName, xp.IndexName, IsConstraint = CAST(CASE WHEN OBJECT_ID(xp.[Schema] + '.' + QUOTENAME(xp.IndexName)) IS NOT NULL THEN 1 ELSE 0 END AS BIT)
+  -- A constraint by what the index is, not by whether any object in the schema has its name: a view or a default named
+  -- like a plain index made its removal a DROP CONSTRAINT, which fails.
+  SELECT xp.[Schema], xp.TableName, xp.IndexName,
+         IsConstraint = CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.indexes si
+                                                WHERE si.[object_id] = OBJECT_ID(xp.[Schema] + '.' + xp.TableName)
+                                                  AND si.[name] = xp.IndexName
+                                                  AND (si.is_primary_key = 1 OR si.is_unique_constraint = 1))
+                                  THEN 1 ELSE 0 END AS BIT)
     INTO #IndexesRemovedFromProduct
     FROM #IndexProperties xp
     WHERE xp.[value] = @ProductName
@@ -1428,7 +1435,7 @@ BEGIN TRY
          FullTextCatalog = QUOTENAME((SELECT c.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
          KeyIndex = QUOTENAME((SELECT i.[Name] COLLATE DATABASE_DEFAULT FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
          ChangeTracking = change_tracking_state_desc COLLATE DATABASE_DEFAULT,
-         [StopList] = QUOTENAME(COALESCE((SELECT fs.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id), 'SYSTEM'))
+         [StopList] = CASE WHEN fi.stoplist_id IS NULL THEN 'OFF' ELSE QUOTENAME(COALESCE((SELECT fs.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id), 'SYSTEM')) END
     FROM #Tables t WITH (NOLOCK)
     JOIN sys.fulltext_indexes fi ON fi.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
     WHERE t.NewTable = 0

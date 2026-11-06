@@ -1300,7 +1300,7 @@
          -- the C# default is AUTO, but an explicit "ChangeTracking": null in a table file overwrites it.
          -- 'AUTO' here matches that C# default, so omitted and explicitly-null behave the same.
          [ChangeTracking]  = COALESCE(NULLIF(RTRIM([ChangeTracking]), ''), 'AUTO'),
-         [StopList]        = SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM([StopList]), ''), 'SYSTEM')),
+         [StopList]        = CASE WHEN UPPER(SchemaSmith.fn_StripBracketWrapping(RTRIM([StopList]))) = 'OFF' THEN 'OFF' ELSE SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM([StopList]), ''), 'SYSTEM')) END,
          -- Full-text LANGUAGE churn: a per-column "LANGUAGE nnnn" suffix must round-trip byte-identical
          -- against the live-side build in ModifiedTableQuench.sql (drift compares these as strings). Peel
          -- it off before bracket-wrapping the column (+ optional TYPE COLUMN) part -- same shape as the
