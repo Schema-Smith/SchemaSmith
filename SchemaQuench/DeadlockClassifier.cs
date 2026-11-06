@@ -120,12 +120,6 @@ internal static class DeadlockClassifier
     }
 
     /// <summary>
-    /// InnoDB's lock-wait timeout (1205). Exposed as a code predicate rather than checked inline for the
-    /// same reason <see cref="ConnectionLostClassifier.IsMySqlConnectionLostCode"/> is: MySqlConnector's
-    /// exception cannot be constructed from a test, so this is the only surface where the classification
-    /// can be proven rather than assumed.
-    /// </summary>
-    /// <summary>
     /// A command stopped by the client for running past Target:CommandTimeoutSeconds: SqlClient reports -2, Npgsql wraps a
     /// <see cref="TimeoutException"/>, MySqlConnector reports CommandTimeoutExpired. Not contention, and not retried.
     /// </summary>
@@ -143,6 +137,12 @@ internal static class DeadlockClassifier
         return false;
     }
 
+    /// <summary>
+    /// InnoDB's lock-wait timeout (1205). Exposed as a code predicate rather than checked inline for the
+    /// same reason <see cref="ConnectionLostClassifier.IsMySqlConnectionLostCode"/> is: MySqlConnector's
+    /// exception cannot be constructed from a test, so this is the only surface where the classification
+    /// can be proven rather than assumed.
+    /// </summary>
     public static bool IsMySqlLockTimeoutCode(MySqlErrorCode code) =>
         code == MySqlErrorCode.LockWaitTimeout;
 
