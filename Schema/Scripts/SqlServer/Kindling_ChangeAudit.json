@@ -33,6 +33,16 @@
       "Nullable": true
     },
     {
+      "Name": "[Detail]",
+      "DataType": "NVARCHAR(400)",
+      "Nullable": true
+    },
+    {
+      "Name": "[EstimatedRows]",
+      "DataType": "BIGINT",
+      "Nullable": true
+    },
+    {
       "Name": "[CreatedAt]",
       "DataType": "DATETIME",
       "Nullable": false,

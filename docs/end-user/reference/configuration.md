@@ -638,6 +638,40 @@ Indexed views are unaffected either way. Those are already dropped and recreated
 ```
 ---
 
+## DestructiveChangePolicy
+
+A package that stops declaring a table or a column has the deploy drop it -- and its rows or values with it.
+`Target:DestructiveChangePolicy` decides what a deploy does about that, per environment:
+
+| Value | Effect |
+|---|---|
+| `allow` | The table or column is dropped, with an information line in the log. |
+| `warn` (default) | The same, with a `WARN` line per change, and each one listed in the [deployment summary](deployment-summary-report.md#destructive) with its table's row count. The exit code is unchanged: a deliberate removal is not a failure. `--ExitNonZeroOnWarning` turns it into `1`. |
+| `fail` | The step is refused before anything in it is dropped, naming each change and its row count, and the database fails (exit code `2`) -- unless the change is named in `Target:AcceptDestructive`. |
+
+`Target:AcceptDestructive` names the changes that are intended, as `schema.table` (every change to the table) or
+`schema.table.column`, separated by `;` or `,` or as a JSON array; on MySQL and MariaDB the schema is the database.
+Names compare without case and without delimiters. A named change goes ahead under any policy and is recorded as
+accepted; an unnamed one is still refused, so the list is not a switch that lets everything through. Set it for the run
+that makes the change -- on the command line or in the pipeline -- not in the package: a package travels to every
+environment, and an acceptance in it would carry itself into production. An unknown policy value stops the run with
+exit code `2`, because a typo must not quietly disarm the setting.
+
+**What counts.** A table dropped because the package no longer declares it (handed to a `CustomTableDrop` hook
+included), and a column dropped for the same reason -- including a column a rebuild leaves out. A drop the deploy does
+not make is not destructive: with `DropTablesRemovedFromProduct` or `DropColumnsRemovedFromProduct` off, or under
+`PreventDrop`, nothing is dropped and nothing is refused. A change the engine refuses when the data does not fit (a
+length cut, `NOT NULL` over existing nulls) fails the deploy on its own and is not listed. A partitioned table removed
+from the product is refused by its own guard, whose message the deploy stops on.
+
+**Row counts are the catalog's estimate**, never a count of the table: SQL Server `sys.partitions`, PostgreSQL
+`reltuples` (unknown until the table has been analyzed), MySQL and MariaDB `INFORMATION_SCHEMA.TABLES.TABLE_ROWS`.
+The summary says which with `rowSource`.
+
+**Under `fail`, what has already run stays.** The refusal comes before the step drops anything, but the steps before it
+-- new tables and columns, `Before` scripts -- have run; a re-run converges. To check a deploy without changing
+anything, preview it: `--WhatIf` under `fail` lists every change it would refuse and exits `2`, which makes it a CI gate.
+
 ## DropTablesRemovedFromProduct
 
 Controls whether SchemaQuench drops tables that exist in the database but no longer appear in the schema package. Three tiers compose to produce the effective value, resolved environment → product → template.

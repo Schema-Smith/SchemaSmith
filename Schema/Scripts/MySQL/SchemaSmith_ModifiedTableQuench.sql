@@ -776,6 +776,11 @@ BEGIN
     -- a renamed column is in place before the add-columns pass and a table+column rename in one
     -- deploy works. Nothing to do here.
 
+    -- H3: the destructive-change gate, before the rebuilds below and before STEP 2.9's first DDL, so a refusal leaves every
+    -- table as it was.
+    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Check destructive changes');
+    CALL SchemaSmith_DestructiveChangeGate(p_ProductName, p_DatabaseName, p_WhatIf, p_DropTablesRemovedFromProduct, p_DropColumnsRemovedFromProduct);
+
     -- =======================
     -- STEP 2.95: THE REBUILD DECISION POINT
     -- =======================

@@ -32,7 +32,11 @@ CREATE PROCEDURE SchemaSmith.ModifiedTableQuench
   -- OnlineApply (OFF, PREFER or REQUIRE), which a table's own OnlineApply overrides, and the minutes a resumable index
   -- build may run before it pauses (NULL: no resumable build).
   @OnlineApply VARCHAR(7) = 'OFF',
-  @OnlineApplyMaxDuration INT = NULL
+  @OnlineApplyMaxDuration INT = NULL,
+  -- H3: allow, warn or fail, and the changes named as intended (see DestructiveChangeGate). The default keeps a direct
+  -- caller on what a deploy always did.
+  @DestructiveChangePolicy VARCHAR(5) = 'allow',
+  @AcceptDestructive NVARCHAR(MAX) = NULL
 AS
 BEGIN TRY
   DECLARE @v_SQL NVARCHAR(MAX) = '',
@@ -227,6 +231,27 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
+  -- The tables this deploy drops for leaving the product: owned by it, not PreventDrop, no longer declared. Read by the
+  -- destructive-change gate and by DropTablesRemovedFromProduct, on both paths below.
+  IF OBJECT_ID('tempdb..#TablesRemovedFromProduct') IS NOT NULL DROP TABLE #TablesRemovedFromProduct
+  SELECT tp.[Schema], tp.TableName
+    INTO #TablesRemovedFromProduct
+    FROM #TableProperties tp
+    WHERE @DropTablesRemovedFromProduct = 1
+      AND tp.PropertyName = 'ProductName'
+      AND tp.[value] = @ProductName
+      AND NOT EXISTS (SELECT 1
+                        FROM #TableProperties px WITH (NOLOCK)
+                        WHERE px.[Schema] = tp.[Schema]
+                          AND px.TableName = tp.TableName
+                          AND px.PropertyName = 'PreventDrop'
+                          AND px.[value] = 'true')
+      AND NOT EXISTS (SELECT *
+                        FROM #Tables t WITH (NOLOCK)
+                        WHERE t.[Schema] = tp.[Schema]
+                          AND t.[Name] = QUOTENAME(tp.TableName))
+      AND tp.TableName NOT LIKE 'MSSQL[_]DroppedLedger%'
+
   -- Filegroup placement (#filegroups): a NEW index/constraint declaring a filegroup name that does not
   -- exist on this target must fail loudly BEFORE any DDL runs, naming both the index and the filegroup --
   -- same contract as the table-create check in MissingTableAndColumnQuench.sql. Only indexes not yet
@@ -284,6 +309,7 @@ BEGIN TRY
   IF NOT EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE [NewTable] = 0)
   BEGIN
     RAISERROR('Skipping table modifications: no declared table existed before this deploy', 10, 100) WITH NOWAIT
+    EXEC SchemaSmith.DestructiveChangeGate @Policy = @DestructiveChangePolicy, @Accept = @AcceptDestructive, @WhatIf = @WhatIf, @IncludeColumns = 0
     IF @DropTablesRemovedFromProduct = 1
       EXEC SchemaSmith.DropTablesRemovedFromProduct @ProductName = @ProductName, @WhatIf = @WhatIf
     EXEC SchemaSmith.StampTableOwnership @ProductName = @ProductName, @WhatIf = @WhatIf
@@ -1313,7 +1339,10 @@ BEGIN TRY
   END
 
   -- Every refusal in this step comes before the first drop (#511), and dropping a table is the drop that loses most:
-  -- a refused deploy used to have destroyed the tables the package no longer declares, rows included.
+  -- a refused deploy used to have destroyed the tables the package no longer declares, rows included. The
+  -- destructive-change gate (H3) is the last of them.
+  RAISERROR('Check destructive changes', 10, 100) WITH NOWAIT
+  EXEC SchemaSmith.DestructiveChangeGate @Policy = @DestructiveChangePolicy, @Accept = @AcceptDestructive, @WhatIf = @WhatIf, @IncludeColumns = 1
   IF @DropTablesRemovedFromProduct = 1
     EXEC SchemaSmith.DropTablesRemovedFromProduct @ProductName = @ProductName, @WhatIf = @WhatIf
 

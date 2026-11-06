@@ -48,6 +48,7 @@ public static class DeploymentSummaryText
         RenderObjectChanges(summary, lines);
         RenderPreventDrop(summary, lines);
         RenderUnsupportedDowngrade(summary, lines);
+        RenderDestructive(summary, lines);
 
         return string.Join("\n", lines);
     }
@@ -227,6 +228,24 @@ public static class DeploymentSummaryText
         lines.Add($"- {downgrade.Downgrades.Count} feature(s) declared but unsupported at the target version — emitted without the unsupported aspect:");
         foreach (var entry in downgrade.Downgrades)
             lines.Add($"  - {entry.Feature}: {entry.ObjectName}");
+    }
+
+    private static void RenderDestructive(DeploymentSummary summary, List<string> lines)
+    {
+        var destructive = summary.Destructive;
+        if (destructive == null)
+            return;
+
+        lines.Add("");
+        lines.Add("## Destructive Changes");
+        lines.Add($"- DestructiveChangePolicy: {destructive.Policy}");
+        foreach (var change in destructive.Changes)
+        {
+            var what = change.Kind switch { "tableDrop" => "table dropped", "columnDrop" => "column dropped", _ => change.Kind };
+            var rows = change.EstimatedRows is { } n ? $", about {n.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} rows" : "";
+            var accepted = change.Accepted ? ", accepted" : "";
+            lines.Add($"  - {change.ObjectName}: {what}{rows} -- {change.Outcome}{accepted} ({FormatScope(change.Server, change.Database, null)})");
+        }
     }
 
     private static string FormatScope(string server, string database, string schema)

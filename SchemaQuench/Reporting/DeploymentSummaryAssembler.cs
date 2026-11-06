@@ -35,7 +35,8 @@ public static class DeploymentSummaryAssembler
         ChangeAuditCapture changeAudit,
         bool protectedModeEnabled = false,
         IReadOnlyList<LockWait> lockWaits = null,
-        SessionTimeouts settings = null)
+        SessionTimeouts settings = null,
+        string destructivePolicy = null)
     {
         var run = new RunInfo(
             Product: product,
@@ -100,7 +101,8 @@ public static class DeploymentSummaryAssembler
             ObjectChanges: objectChanges,
             PreventDrop: preventDrop,
             UnsupportedDowngrade: unsupportedDowngrade,
-            LockWaits: lockWaits ?? []);
+            LockWaits: lockWaits ?? [],
+            Destructive: BuildDestructive(changeAudit, destructivePolicy, mode));
     }
 
     /// <summary>
@@ -124,6 +126,35 @@ public static class DeploymentSummaryAssembler
             .ToArray();
 
         return downgrades.Length == 0 ? null : new UnsupportedDowngradeSummary(downgrades);
+    }
+
+    /// <summary>
+    /// The changes that removed data (H3): each table or column dropped because the package no longer declares it, with
+    /// the table's rows from the catalog and what the policy did. Null when there were none, so a run that removed nothing
+    /// keeps the shape it had.
+    /// </summary>
+    private static DestructiveSummary BuildDestructive(ChangeAuditCapture changeAudit, string policy, RunMode mode)
+    {
+        if (changeAudit == null) return null;
+        var changes = changeAudit.Snapshot()
+            .Where(r => r.Action == DestructiveLog.Action)
+            .Select(r => new DestructiveChange(
+                Kind: r.ObjectType switch { "table drop" => "tableDrop", "column drop" => "columnDrop", _ => r.ObjectType },
+                ObjectName: r.ObjectName,
+                Detail: r.Detail,
+                Server: r.Target?.Server,
+                Database: r.Target?.Database,
+                EstimatedRows: r.EstimatedRows,
+                RowSource: r.EstimatedRows is null ? "unknown" : "catalog",
+                Accepted: r.Mode == "accepted",
+                Outcome: r.Mode switch
+                {
+                    "refused" => "refused",
+                    "wouldRefuse" => "wouldRefuse",
+                    _ => mode == RunMode.WhatIf ? "wouldApply" : "applied",
+                }))
+            .ToList();
+        return changes.Count == 0 ? null : new DestructiveSummary(policy ?? DestructivePolicy.Warn, changes);
     }
 
     /// <summary>
@@ -199,7 +230,7 @@ public static class DeploymentSummaryAssembler
         // likewise belong to the UnsupportedDowngradeSummary manifest, not the detail. WhatIf 'would*'
         // rows ARE previewed changes and stay in the detail.
         var details = rows
-            .Where(r => r.Action != "dropSuppressed" && r.Action != "downgraded")
+            .Where(r => r.Action != "dropSuppressed" && r.Action != "downgraded" && r.Action != DestructiveLog.Action)
             .Select(r => new ObjectChangeDetail(r.ObjectType, r.ObjectName, r.Action, r.Mode, r.Target?.Server, r.Target?.Database, r.Target?.Schema))
             .ToArray();
 

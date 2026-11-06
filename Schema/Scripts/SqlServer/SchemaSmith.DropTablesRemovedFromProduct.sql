@@ -15,29 +15,7 @@ BEGIN
   DECLARE @v_SQL NVARCHAR(MAX) = ''
 
 
-  RAISERROR('Identify tables removed from the product', 10, 100) WITH NOWAIT
-  IF OBJECT_ID('tempdb..#TablesRemovedFromProduct') IS NOT NULL DROP TABLE #TablesRemovedFromProduct
-  SELECT tp.[Schema], tp.TableName
-    INTO #TablesRemovedFromProduct
-    FROM #TableProperties tp
-    WHERE tp.PropertyName = 'ProductName'
-      AND tp.[value] = @ProductName
-      AND NOT EXISTS (SELECT 1
-                        FROM #TableProperties px WITH (NOLOCK)
-                        WHERE px.[Schema] = tp.[Schema]
-                          AND px.TableName = tp.TableName
-                          AND px.PropertyName = 'PreventDrop'
-                          AND px.[value] = 'true')
-      AND NOT EXISTS (SELECT *
-                        FROM #Tables t WITH (NOLOCK)
-                        WHERE t.[Schema] = tp.[Schema]
-                          AND t.[Name] = QUOTENAME(tp.TableName))
-      -- A dropped ledger table is RETAINED as MSSQL_DroppedLedgerTable_<name>_<guid>, inheriting the
-      -- extended properties of the table it came from -- including the ProductName stamp this pass
-      -- selects on. Without this it reads as "a table removed from the product" on every later
-      -- deploy, and SQL Server refuses to drop it ("because it is a ledger dropped object"), so the
-      -- deploy fails permanently on an object the user cannot remove either.
-      AND tp.TableName NOT LIKE 'MSSQL[_]DroppedLedger%'
+  -- The caller (ModifiedTableQuench) identifies the tables, once, for this and for the destructive-change gate.
 
   IF EXISTS (SELECT * FROM #TablesRemovedFromProduct WITH (NOLOCK))
   BEGIN

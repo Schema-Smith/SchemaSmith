@@ -20,6 +20,11 @@
                                         // last applied AND the server still renders the object as it was left.
                                         // A hand change on the server, an edited script, or an [ALWAYS] name
                                         // runs it again. false re-runs every object script on every deploy.
+        // "DestructiveChangePolicy": "warn", // allow | warn (default) | fail -- what to do about a change that removes
+                                            // data: a table or column dropped because the package no longer declares
+                                            // it. fail refuses the step before anything in it is dropped.
+        // "AcceptDestructive": "sales.Orders.Region; sales.LegacyOrders", // Changes that are intended, by schema.table
+                                            // or schema.table.column; they go ahead under fail. Set per run.
         // "CommandTimeoutSeconds": 0, // How long one deploy command may run. 0 (default) = no limit.
         // "LockTimeoutSeconds": 10, // How long a deploy waits for a lock another session holds before giving up.
                                      // Blank (default) = the engine's own wait, which on SQL Server and PostgreSQL

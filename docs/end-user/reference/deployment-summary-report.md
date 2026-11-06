@@ -148,6 +148,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `timing` | Aggregate timing plus the bottleneck outliers. |
 | `failures` | One entry per failed scope — the same content as the failure roll-up log. |
 | `lockWaits` | Each statement that had to wait on another session's lock, or lost a deadlock, and was tried again — its own section below. Empty when nothing waited. |
+| `destructive` | Each table or column the run dropped, or refused to drop, because the package no longer declares it — its own section below. `null` when there were none. Schema version 1.3 added it. |
 | `whatIf` | The would-apply / would-skip / would-deliver plan; `null` unless the run was `WhatIf` mode. |
 | `objectChanges` | Verified DDL changes and object-script runs — its own section below. |
 | `preventDrop` | The no-drop protection manifest: what the run would have dropped by absence and withheld — its own section below. `null` unless the environment's `PreventDrop` is on. |
@@ -228,6 +229,25 @@ retried; a script or a data delivery that hits a lock timeout fails at once and 
 | `attempts` | How many times it ran, the last one included. |
 | `waitedMs` | Milliseconds from its first attempt to its last. |
 | `outcome` | `succeeded`, or `failed` when it ran out of `Target:ContentionRetryAttempts`. |
+
+### `destructive`
+
+The data a run removed, or would have, and what [`DestructiveChangePolicy`](configuration.md#destructivechangepolicy)
+did about it. `policy` is the run's policy; `changes[]` has one entry per change per target:
+
+| Key | Meaning |
+| --- | --- |
+| `kind` | `tableDrop` or `columnDrop`. |
+| `objectName` | `schema.table` or `schema.table.column` (the database for the schema on MySQL and MariaDB). |
+| `detail` | Reserved for a change that alters rather than removes; `null` for a drop. |
+| `server` / `database` | The target. |
+| `estimatedRows` | The table's rows from the catalog; `null` when the catalog does not know. |
+| `rowSource` | `catalog`, or `unknown` when `estimatedRows` is `null`. |
+| `accepted` | `true` when `Target:AcceptDestructive` named it. |
+| `outcome` | `applied`, `refused` (under `fail`, the step stopped before it), `wouldApply` or `wouldRefuse` (a `WhatIf` run). |
+
+A destructive change is not counted again in `objectChanges`: the drop itself is there as it always was, and this
+section says that it removed data.
 
 ### `whatIf`
 

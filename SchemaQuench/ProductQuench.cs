@@ -48,6 +48,7 @@ public class ProductQuench
     private readonly ICheckpointing _checkpointing;
     private readonly SessionTimeouts _timeouts = SessionTimeouts.Default;
     private readonly ContentionLog _contention = new();
+    private readonly DestructivePolicy _destructive = DestructivePolicy.Default;
     private bool _updateFailed;
 
     // Run-level timing collector (#243 Deployment Summary Report, slice 1). Started/stopped around
@@ -154,6 +155,7 @@ public class ProductQuench
         _templateTargets = ReadTemplateTargets(_config);
         // Read here so a bad value stops the run before anything connects, naming the setting.
         _timeouts = SessionTimeouts.Read(_config);
+        _destructive = DestructivePolicy.Read(_config);
         // A preview neither records progress nor reads or discards a failed deploy's resume point (A16).
         _checkpointing = IsWhatIfOnly ? NoCheckpointing.Instance : FileCheckpointManager.GetFromFactory();
 
@@ -1070,7 +1072,8 @@ public class ProductQuench
                 _startedUtc, DateTime.UtcNow, mode, outcome, exitCode, resumed,
                 _targetResults.ToArray(), _runTiming, _migrationScripts.Snapshot(),
                 _whatIf.Snapshot(), _failureRecords.ToArray(), BottleneckThresholdMs(), _changeAudit,
-                protectedModeEnabled: _protectedMode, lockWaits: _contention.Snapshot(), settings: _timeouts);
+                protectedModeEnabled: _protectedMode, lockWaits: _contention.Snapshot(), settings: _timeouts,
+                destructivePolicy: _destructive.Policy);
             var (jsonPath, mdPath) = ResolveReportPaths(CommandLineParser.ValueOfSwitch("report", null), ConfigHelper.ResolveLogPath(), "SchemaQuench");
             EnsureReportDirectory(jsonPath);
             var file = FileWrapper.GetFromFactory();
@@ -2220,6 +2223,7 @@ public class ProductQuench
             TrackRunOnceMigrations = _trackRunOnceMigrations,
             PruneObsoleteMigrationTracking = _pruneObsoleteMigrationTracking,
             ForceReKindle = _forceReKindle,
+            Destructive = _destructive,
             Drops = new DropPolicy(dropRemovedTables, dropRemovedColumns, dropRemovedForeignKeys, dropRemovedCheckConstraints,
                 dropRemovedExcludeConstraints, dropRemovedStatistics, dropRemovedIndexes, dropUnknownIndexes),
         }, _checkpointing)

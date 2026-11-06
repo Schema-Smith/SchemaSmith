@@ -27,7 +27,11 @@ CREATE OR REPLACE PROCEDURE "SchemaSmith"."ModifiedTableQuench"
    p_RebuildPolicyOnOrderMismatch BOOLEAN = FALSE,
    -- OnlineApply (OFF, PREFER, REQUIRE), a table's own value over it: an index dropped because the package no longer
    -- declares it goes CONCURRENTLY after this procedure (DeferOnlineWork), and REQUIRE refuses a build that cannot.
-   p_OnlineApply TEXT = 'OFF')
+   p_OnlineApply TEXT = 'OFF',
+   -- H3: allow, warn or fail, and the changes named as intended (see DestructiveChangeGate). The default keeps a direct
+   -- caller on what a deploy always did.
+   p_DestructiveChangePolicy TEXT = 'allow',
+   p_AcceptDestructive TEXT = NULL)
   LANGUAGE plpgsql
   -- JIT off: see the measurement in SchemaSmith.TableQuench.sql. Every procedure carries this, not just
   -- the ones that look like entry points -- the product CALLs ModifiedTableQuench and its siblings
@@ -474,6 +478,13 @@ BEGIN
       -- ones where that difference matters.
       CALL "SchemaSmith"."RebuildTable"(rebuild_target."Schema", rebuild_target."Name", p_WhatIf);
     END LOOP;
+
+    -- H3: the last check before the first in-place change. The table drops and rebuilds above ran in this procedure's
+    -- transaction, so a refusal here rolls them back too; it reads temp_existing_columns before a rebuilt table's rows
+    -- leave it, so a column a rebuild leaves out is listed as dropped.
+    RAISE NOTICE 'Check destructive changes';
+    CALL "SchemaSmith"."DestructiveChangeGate"(p_DestructiveChangePolicy, p_AcceptDestructive, p_WhatIf,
+                                               p_DropTablesRemovedFromProduct, p_DropColumnsRemovedFromProduct);
 
     -- BYPASS THE IN-PLACE COLUMN PHASES. Every column pass below joins temp_existing_columns, so removing
     -- a rebuilt table's rows from it is the WHOLE bypass, in one place, instead of a "was it rebuilt?"

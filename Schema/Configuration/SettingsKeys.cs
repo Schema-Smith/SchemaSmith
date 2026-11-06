@@ -245,6 +245,8 @@ public static class SettingsKeys
     public const string CommandTimeoutSeconds = "Target:CommandTimeoutSeconds";
     public const string LockTimeoutSeconds = "Target:LockTimeoutSeconds";
     public const string ContentionRetryAttempts = "Target:ContentionRetryAttempts";
+    public const string DestructiveChangePolicy = "Target:DestructiveChangePolicy";
+    public const string AcceptDestructive = "Target:AcceptDestructive";
     public const string CompatEncoding = "Target:CompatEncoding";
     public const string SourceCompatEncoding = "Source:CompatEncoding";
     public const string ArtifactPath = "ArtifactPath";

@@ -28,7 +28,15 @@ public sealed record DeploymentSummary(
     PreventDropSummary PreventDrop = null,
     UnsupportedDowngradeSummary UnsupportedDowngrade = null,
     // 1.3: every statement that waited on another session's lock, retried or not.
-    IReadOnlyList<LockWait> LockWaits = null);
+    IReadOnlyList<LockWait> LockWaits = null,
+    // 1.3: the changes that removed data, and what the policy did with each; null when there were none.
+    DestructiveSummary Destructive = null);
+
+public sealed record DestructiveSummary(string Policy, IReadOnlyList<DestructiveChange> Changes);
+
+/// <summary>Outcome: applied, refused, wouldApply or wouldRefuse. RowSource: catalog, or unknown when EstimatedRows is null.</summary>
+public sealed record DestructiveChange(string Kind, string ObjectName, string Detail, string Server, string Database,
+    long? EstimatedRows, string RowSource, bool Accepted, string Outcome);
 
 public sealed record RunInfo(
     string Product,

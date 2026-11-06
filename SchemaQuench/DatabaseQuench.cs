@@ -455,7 +455,10 @@ public partial class DatabaseQuench
         _trackRunOnceMigrations = options.TrackRunOnceMigrations;
         _pruneObsoleteMigrationTracking = options.PruneObsoleteMigrationTracking;
         _forceReKindle = options.ForceReKindle;
+        _destructive = options.Destructive;
     }
+
+    private readonly DestructivePolicy _destructive;
 
     internal Platform Platform => _product.Platform;
 
@@ -645,6 +648,13 @@ public partial class DatabaseQuench
                 lanes?.DeliveryConnection?.Close();
             }
 
+            // A preview under DestructiveChangePolicy fail lists every change it would refuse and then fails the target, so a
+            // WhatIf run is a CI gate that changes nothing.
+            var wouldRefuse = ChangeAudit?.Snapshot().Where(r => r.Action == DestructiveLog.Action && r.Mode == "wouldRefuse" && r.Target == AuditTarget).ToList();
+            if (wouldRefuse is { Count: > 0 })
+                throw new RunFailedException("Destructive change would be refused (DestructiveChangePolicy is fail): "
+                                             + string.Join("; ", wouldRefuse.Select(DestructiveLog.Describe)) + ".");
+
             SafeProgressLog("Successfully Quenched");
             QuenchSuccessful = true;
         }
@@ -655,6 +665,19 @@ public partial class DatabaseQuench
             // error without classification. Lead with a purpose-built message; the full stack is
             // preserved in the error log. Initial-connect failures are handled earlier by the
             // pre-flight connection test, so at this point a lost connection is a mid-run drop.
+            RecordDestructiveFromRefusal(e);
+            var refusedChanges = ChangeAudit?.Snapshot().Where(r => r.Action == DestructiveLog.Action && r.Mode == "refused" && r.Target == AuditTarget).ToList();
+            if (refusedChanges is { Count: > 0 })
+            {
+                var refusal = "Destructive change refused (DestructiveChangePolicy is fail): " + string.Join("; ", refusedChanges.Select(DestructiveLog.Describe))
+                              + ". Nothing in this step was dropped or altered. Name each one in AcceptDestructive to proceed, restore it to the package, "
+                              + "or keep it with DropColumnsRemovedFromProduct or PreventDrop.";
+                _errorLog.Error(refusal, e);
+                SafeProgressLogError(refusal);
+                LastFailure = FailureCtx.ToRecord(refusal, null, "destructive");
+                SafeProgressLogError($"*** FAILED [Template:{_template?.Name}] ***");
+                return;
+            }
             var timeoutKind = DeadlockClassifier.IsLockTimeout(e) ? "lockTimeout" : DeadlockClassifier.IsCommandTimeout(e) ? "commandTimeout" : null;
             if (timeoutKind != null)
             {
@@ -703,6 +726,23 @@ public partial class DatabaseQuench
             // above and in the end-of-run roll-up, so it is not restated here (avoids duplicating
             // error content into the progress stream, which exact-count log assertions rely on).
             SafeProgressLogError($"*** FAILED [Template:{_template?.Name}] ***");
+        }
+    }
+
+    // H3: PostgreSQL's ModifiedTableQuench is one transaction, so a destructive-change refusal rolls back the audit rows it
+    // wrote; the gate sends them in the exception's HINT instead (Npgsql redacts DETAIL), as JSON after a marker.
+    private const string DestructiveDetailMarker = "SchemaSmith.Destructive:";
+
+    private void RecordDestructiveFromRefusal(Exception e)
+    {
+        if (ChangeAudit == null) return;
+        for (var inner = e; inner != null; inner = inner.InnerException)
+        {
+            if (inner is not PostgresException { Hint: { } detail } || !detail.StartsWith(DestructiveDetailMarker, StringComparison.Ordinal)) continue;
+            foreach (var row in JArray.Parse(detail[DestructiveDetailMarker.Length..]))
+                ChangeAudit.Record((string)row["kind"], (string)row["name"], DestructiveLog.Action, (string)row["mode"], AuditTarget,
+                    estimatedRows: (long?)row["rows"]);
+            return;
         }
     }
 
@@ -1306,11 +1346,11 @@ CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {SqlFlag(_whatIfOnly)});
         switch (_product.Platform.GetBasePlatform())
         {
             case Platform.SqlServer:
-                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {SqlFlag(_dropUnknownIndexes)}, @WhatIf = {SqlFlag(_whatIfOnly)}, @DropTablesRemovedFromProduct = {SqlFlag(_dropRemovedTables)}, @DropColumnsRemovedFromProduct = {SqlFlag(_dropRemovedColumns)}, @DropForeignKeysRemovedFromProduct = {SqlFlag(_dropRemovedForeignKeys)}, @DropCheckConstraintsRemovedFromProduct = {SqlFlag(_dropRemovedCheckConstraints)}, @DropExcludeConstraintsRemovedFromProduct = {SqlFlag(_dropRemovedExcludeConstraints)}, @DropStatisticsRemovedFromProduct = {SqlFlag(_dropRemovedStatistics)}, @DropIndexesRemovedFromProduct = {SqlFlag(_dropRemovedIndexes)}, @CaptureWouldDrop = {SqlFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}, @OnlineApply = '{OnlineApply}', @OnlineApplyMaxDuration = {OnlineApplyMaxDuration}";
+                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {SqlFlag(_dropUnknownIndexes)}, @WhatIf = {SqlFlag(_whatIfOnly)}, @DropTablesRemovedFromProduct = {SqlFlag(_dropRemovedTables)}, @DropColumnsRemovedFromProduct = {SqlFlag(_dropRemovedColumns)}, @DropForeignKeysRemovedFromProduct = {SqlFlag(_dropRemovedForeignKeys)}, @DropCheckConstraintsRemovedFromProduct = {SqlFlag(_dropRemovedCheckConstraints)}, @DropExcludeConstraintsRemovedFromProduct = {SqlFlag(_dropRemovedExcludeConstraints)}, @DropStatisticsRemovedFromProduct = {SqlFlag(_dropRemovedStatistics)}, @DropIndexesRemovedFromProduct = {SqlFlag(_dropRemovedIndexes)}, @CaptureWouldDrop = {SqlFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}, @OnlineApply = '{OnlineApply}', @OnlineApplyMaxDuration = {OnlineApplyMaxDuration}, @DestructiveChangePolicy = '{_destructive.Policy}', @AcceptDestructive = N'{EscapeSqlLiteral(_destructive.AcceptedForSql)}'";
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"
-CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {SqlFlag(_dropUnknownIndexes)}, p_WhatIf := {SqlFlag(_whatIfOnly)}, p_DropTablesRemovedFromProduct := {SqlFlag(_dropRemovedTables)}, p_DropColumnsRemovedFromProduct := {SqlFlag(_dropRemovedColumns)}, p_DropForeignKeysRemovedFromProduct := {SqlFlag(_dropRemovedForeignKeys)}, p_DropCheckConstraintsRemovedFromProduct := {SqlFlag(_dropRemovedCheckConstraints)}, p_DropExcludeConstraintsRemovedFromProduct := {SqlFlag(_dropRemovedExcludeConstraints)}, p_DropStatisticsRemovedFromProduct := {SqlFlag(_dropRemovedStatistics)}, p_DropIndexesRemovedFromProduct := {SqlFlag(_dropRemovedIndexes)}, p_CaptureWouldDrop := {SqlFlag(CaptureWouldDrop)}, p_RebuildPolicyMode := '{RebuildPolicyMode}', p_RebuildPolicyThreshold := {RebuildPolicyThreshold}, p_RebuildPolicyOnOrderMismatch := {RebuildPolicyOnOrderMismatch}, p_OnlineApply := '{OnlineApply}');";
+CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {SqlFlag(_dropUnknownIndexes)}, p_WhatIf := {SqlFlag(_whatIfOnly)}, p_DropTablesRemovedFromProduct := {SqlFlag(_dropRemovedTables)}, p_DropColumnsRemovedFromProduct := {SqlFlag(_dropRemovedColumns)}, p_DropForeignKeysRemovedFromProduct := {SqlFlag(_dropRemovedForeignKeys)}, p_DropCheckConstraintsRemovedFromProduct := {SqlFlag(_dropRemovedCheckConstraints)}, p_DropExcludeConstraintsRemovedFromProduct := {SqlFlag(_dropRemovedExcludeConstraints)}, p_DropStatisticsRemovedFromProduct := {SqlFlag(_dropRemovedStatistics)}, p_DropIndexesRemovedFromProduct := {SqlFlag(_dropRemovedIndexes)}, p_CaptureWouldDrop := {SqlFlag(CaptureWouldDrop)}, p_RebuildPolicyMode := '{RebuildPolicyMode}', p_RebuildPolicyThreshold := {RebuildPolicyThreshold}, p_RebuildPolicyOnOrderMismatch := {RebuildPolicyOnOrderMismatch}, p_OnlineApply := '{OnlineApply}', p_DestructiveChangePolicy := '{_destructive.Policy}', p_AcceptDestructive := '{EscapeSqlLiteral(_destructive.AcceptedForSql)}');";
                 break;
             case Platform.MySQL:
             {
@@ -1335,6 +1375,9 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {SqlFlag(_d
                 var dropUnknown = _dropUnknownIndexes ? 1 : 0;
                 var dropRemovedIndexes = _dropRemovedIndexes ? 1 : 0;
                 SetMySqlRebuildPolicy(tableCommand);
+                // H3: in session variables, as the rebuild policy is -- a new parameter would break every direct caller.
+                tableCommand.CommandText = $"SET @schemasmith_destructive_policy = '{_destructive.Policy}', @schemasmith_accept_destructive = '{EscapeMySqlLiteral(_destructive.AcceptedForSql)}'";
+                tableCommand.ExecuteNonQuery();
                 tableCommand.CommandText = $"CALL SchemaSmith_ModifiedTableQuench('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(_databaseName)}', {whatIf}, {dropRemoved}, {dropRemovedCols}, {dropRemovedChecks}, {dropRemovedExcludes}, {dropRemovedStats}, {captureWouldDrop}, {dropUnknown}, {dropRemovedIndexes})";
                 break;
             }
@@ -2365,8 +2408,13 @@ SET NOCOUNT ON
         // returns null, leaving the run honestly not-instrumented; the record/mark steps can't throw.
         var rows = ChangeAuditReader.ReadAndDrain(_product.Platform, auditCmd);
         if (rows == null) return;
-        foreach (var r in rows) ChangeAudit.Record(r.ObjectType, r.ObjectName, r.Action, r.Mode, AuditTarget);
+        foreach (var r in rows) ChangeAudit.Record(r.ObjectType, r.ObjectName, r.Action, r.Mode, AuditTarget, r.Detail, r.EstimatedRows);
         foreach (var line in DowngradeLog.Lines(_product.Platform, rows)) SafeProgressLog(line);
+        foreach (var (warn, line) in DestructiveLog.Lines(LogPrefix, rows))
+        {
+            if (warn) lock (_lockObject) _progressLog.Warn(line);
+            else SafeProgressLog(line);
+        }
         ChangeAudit.MarkInstrumented();
     }
 

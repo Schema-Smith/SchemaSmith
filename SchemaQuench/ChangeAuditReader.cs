@@ -50,22 +50,29 @@ public static class ChangeAuditReader
         }
     }
 
+    // Detail and EstimatedRows arrived with 2.9; an audit table kindled before them is read without them (see ReadRows).
     private static (string Select, string Delete)? SessionSql(Platform platform) =>
         platform.GetBasePlatform() switch
         {
             Platform.SqlServer => (
-                "SELECT ObjectType, ObjectName, ActionType, Mode FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID ORDER BY Id",
+                "SELECT ObjectType, ObjectName, ActionType, Mode, Detail, EstimatedRows FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID ORDER BY Id",
                 "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID"),
             Platform.PostgreSQL => (
-                "SELECT \"ObjectType\", \"ObjectName\", \"ActionType\", \"Mode\" FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() ORDER BY \"Id\"",
+                "SELECT \"ObjectType\", \"ObjectName\", \"ActionType\", \"Mode\", \"Detail\", \"EstimatedRows\" FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() ORDER BY \"Id\"",
                 "DELETE FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid()"),
             Platform.MySQL => (
-                "SELECT ObjectType, ObjectName, ActionType, Mode FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() ORDER BY Id",
+                "SELECT ObjectType, ObjectName, ActionType, Mode, Detail, EstimatedRows FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() ORDER BY Id",
                 "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()"),
             _ => null
         };
 
-    private static IReadOnlyList<ChangeAuditRow> ReadRows(IDbCommand command, string selectSql, string deleteSql)
+    private static IReadOnlyList<ChangeAuditRow> ReadRows(IDbCommand command, string selectSql, string deleteSql) =>
+        TryReadRows(command, selectSql, deleteSql)
+        // An audit table kindled before Detail and EstimatedRows existed (a target whose helpers were not kindled by this
+        // version): the four columns it has.
+        ?? TryReadRows(command, selectSql.Replace(", Detail, EstimatedRows", "").Replace(", \"Detail\", \"EstimatedRows\"", ""), deleteSql);
+
+    private static IReadOnlyList<ChangeAuditRow> TryReadRows(IDbCommand command, string selectSql, string deleteSql)
     {
         try
         {
@@ -76,7 +83,9 @@ public static class ChangeAuditReader
             {
                 while (reader.Read())
                     rows.Add(new ChangeAuditRow(reader.GetString(0), reader.GetString(1), reader.GetString(2),
-                        reader.IsDBNull(3) ? null : reader.GetString(3)));
+                        reader.IsDBNull(3) ? null : reader.GetString(3),
+                        Detail: reader.FieldCount > 4 && !reader.IsDBNull(4) ? reader.GetString(4) : null,
+                        EstimatedRows: reader.FieldCount > 5 && !reader.IsDBNull(5) ? System.Convert.ToInt64(reader.GetValue(5)) : null));
             }
 
             if (deleteSql != null)

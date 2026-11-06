@@ -35,4 +35,6 @@ public sealed record DatabaseQuenchOptions
     public bool TrackRunOnceMigrations { get; init; } = true;
     public bool PruneObsoleteMigrationTracking { get; init; } = true;
     public DropPolicy Drops { get; init; } = DropPolicy.None;
+    /// <summary>What to do about a change that removes data (H3); allow keeps a caller that sets nothing on today's behaviour.</summary>
+    public DestructivePolicy Destructive { get; init; } = new(DestructivePolicy.Allow, []);
 }

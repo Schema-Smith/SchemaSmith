@@ -761,6 +761,7 @@ public static class ForgeKindler
                 new("SchemaSmith.StampTableOwnership.sql"),
                 // Must precede ModifiedTableQuench, which CALLs it after the last refusal of its step.
                 new("SchemaSmith.DropTablesRemovedFromProduct.sql"),
+                new("SchemaSmith.DestructiveChangeGate.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 // A temporal table's period columns; MissingIndexesAndConstraintsQuench CALLs it before its index pass.
                 new("SchemaSmith.PeriodColumnQuench.sql"),
@@ -865,6 +866,7 @@ public static class ForgeKindler
                 new("SchemaSmith.RefuseUnmetOnlineRequire.sql"),
                 new("SchemaSmith.MissingTableAndColumnQuench.sql"),
                 new("SchemaSmith.BuildExistingIndexesSnapshot.sql"),
+                new("SchemaSmith.DestructiveChangeGate.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 new("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"),
                 // Declared descriptions (COMMENT ON), converged once every table, column and index exists.
@@ -1076,6 +1078,7 @@ public static class ForgeKindler
                 // #530: a table's FullTextIndexes, created and re-created by both index paths, not only the index-only one.
                 new("SchemaSmith_DropModifiedFullTextIndexes.sql"),
                 new("SchemaSmith_CreateMissingFullTextIndexes.sql"),
+                new("SchemaSmith_DestructiveChangeGate.sql"),
                 new("SchemaSmith_ModifiedTableQuench.sql"),
                 // An existing table's declared primary key, added or replaced; both index paths call it.
                 new("SchemaSmith_ConvergePrimaryKeys.sql"),
