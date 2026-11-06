@@ -162,7 +162,7 @@ INSERT INTO [dbo].[TestTable] ([Id], [Name], Description)
 
             file.Received(2).WriteAllText(Arg.Any<string>(), Arg.Any<string>());
             file.Received(1).WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("dbo.TestTable.tabledata")), Arg.Is<string>(s => s.ContainsIgnoringCase("\"Description\":\"This is a test item.\",\"Id\":1,\"Name\":\"Test Item 1\"}")));
-            file.Received(1).WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("Populate dbo.TestTable.sql")), Arg.Is<string>(s => s.ContainsIgnoringCase("DECLARE @v_json NVARCHAR(MAX) = '{{dbo.TestTable.tabledata}}';")));
+            file.Received(1).WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("Populate dbo.TestTable.sql")), Arg.Is<string>(s => s.ContainsIgnoringCase("DECLARE @v_json NVARCHAR(MAX) = N'{{dbo.TestTable.tabledata}}';")));
             errorLog.DidNotReceive().Error(Arg.Any<string>());
             progressLog.DidNotReceive().Error(Arg.Is<string>(s => s.ContainsIgnoringCase("No match columns found")));
 
