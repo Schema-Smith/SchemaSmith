@@ -1,0 +1,15 @@
+{
+  "Target": {
+    "Server": "localhost",
+    "Port": "15432",
+    "User": "postgres",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": {}
+  },
+  "WhatIfONLY": true,
+  "SchemaPackagePath": "./Package",
+  "KindleTheForge": true,
+  "ScriptTokens": {
+    "MainDb": "shop_brownfield_prod"
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[Customer]",
+  "Columns": [
+    {
+      "Name": "[CustomerId]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[Email]",
+      "DataType": "NVARCHAR(256)"
+    },
+    {
+      "Name": "[FullName]",
+      "DataType": "NVARCHAR(200)",
+      "Nullable": true
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_Customer]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "[CustomerId]",
+      "Clustered": true
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "Schema": "[dbo]",
+  "XmlIndexes": [],
+  "Statistics": []
+}

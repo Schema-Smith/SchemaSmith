@@ -1,0 +1,127 @@
+{
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time."
+    },
+    "Name": {
+      "type": "string"
+    },
+    "Schema": {
+      "type": "string"
+    },
+    "Definition": {
+      "type": "string"
+    },
+    "WithData": {
+      "type": "boolean"
+    },
+    "Tablespace": {
+      "type": "string"
+    },
+    "AccessMethod": {
+      "type": "string"
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+    },
+    "Description": {
+      "type": "string",
+      "description": "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it."
+    },
+    "Indexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "PrimaryKey": {
+            "type": "boolean"
+          },
+          "Unique": {
+            "type": "boolean"
+          },
+          "UniqueConstraint": {
+            "type": "boolean"
+          },
+          "IndexColumns": {
+            "type": "string"
+          },
+          "Description": {
+            "type": "string",
+            "description": "Optional. A description stored on the object: an MS_Description extended property on SQL Server, COMMENT ON on PostgreSQL, the COMMENT clause on MySQL and MariaDB. On SQL Server and PostgreSQL an omitted value leaves an existing description alone and \"\" removes it; on MySQL and MariaDB an omitted value clears the comment, as the engine's own DDL does."
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "FilterExpression": {
+            "type": "string"
+          },
+          "Clustered": {
+            "type": "boolean"
+          },
+          "IncludeColumns": {
+            "type": "string"
+          },
+          "AccessMethod": {
+            "type": "string"
+          },
+          "FillFactor": {
+            "type": "integer",
+            "minimum": 0.0,
+            "maximum": 100.0
+          },
+          "NullsNotDistinct": {
+            "type": "boolean"
+          },
+          "Deferrable": {
+            "type": "boolean"
+          },
+          "InitiallyDeferred": {
+            "type": "boolean"
+          },
+          "UpdateFillFactor": {
+            "type": "boolean"
+          },
+          "Tablespace": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "PostgreSQL only. The tablespace this index lives on. Omit to leave placement unmanaged — an omitted value does NOT mean the database default, and an index does not automatically follow its table. Create-time only: moving an existing index rebuilds it, so a declared tablespace that differs from where the index already lives is refused rather than moved."
+          },
+          "StorageParameters": {
+            "type": "object"
+          },
+          "WithoutOverlaps": {
+            "type": "boolean",
+            "description": "PostgreSQL 18+. On a primary key or unique constraint whose last column is a range or multirange: rows with the same other key values may not have overlapping ranges (WITHOUT OVERLAPS). The backing index is GiST (a scalar key column needs the btree_gist extension). Below 18 the key is created without the clause and a downgrade is recorded."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name",
+          "IndexColumns"
+        ]
+      }
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name",
+    "Definition"
+  ]
+}

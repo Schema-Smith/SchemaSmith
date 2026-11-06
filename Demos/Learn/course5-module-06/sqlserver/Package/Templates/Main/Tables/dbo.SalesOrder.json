@@ -1,0 +1,46 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[SalesOrder]",
+  "Columns": [
+    {
+      "Name": "[OrderId]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[CustomerId]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[OrderDate]",
+      "DataType": "DATETIME2(7)"
+    },
+    {
+      "Name": "[Status]",
+      "DataType": "VARCHAR(20)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_SalesOrder]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "[OrderId]",
+      "Clustered": true
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "[FK_SalesOrder_Customer]",
+      "Columns": "[CustomerId]",
+      "RelatedTable": "[Customer]",
+      "RelatedColumns": "[CustomerId]",
+      "DeleteAction": "NO ACTION",
+      "UpdateAction": "NO ACTION",
+      "RelatedTableSchema": "[dbo]"
+    }
+  ],
+  "CheckConstraints": [],
+  "Schema": "[dbo]",
+  "XmlIndexes": [],
+  "Statistics": []
+}

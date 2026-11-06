@@ -1,0 +1,13 @@
+{
+  "$schema": ".json-schemas/products.sqlserver.schema",
+  "Name": "Shop",
+  "ValidationScript": "SELECT CAST(CASE WHEN EXISTS(SELECT * FROM master.sys.databases WHERE [Name] = '{{MainDb}}') THEN 1 ELSE 0 END AS BIT)",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptTokens": {
+    "MainDb": "shop_brownfield_dev"
+  },
+  "ScriptFolders": [],
+  "Platform": "SqlServer"
+}

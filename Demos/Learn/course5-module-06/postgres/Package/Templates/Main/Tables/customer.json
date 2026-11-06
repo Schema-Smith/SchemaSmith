@@ -1,0 +1,45 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Name": "customer",
+  "Columns": [
+    {
+      "Name": "customerid",
+      "DataType": "int4",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "email",
+      "DataType": "text",
+      "Generated": "NEVER",
+      "Storage": "EXTENDED",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "fullname",
+      "DataType": "text",
+      "Nullable": true,
+      "Generated": "NEVER",
+      "Storage": "EXTENDED",
+      "Compression": "DEFAULT"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_customer",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "customerid",
+      "AccessMethod": "btree"
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "Statistics": [],
+  "ExcludeConstraints": [],
+  "Policies": [],
+  "AccessMethod": "heap",
+  "PersistenceType": "Logged",
+  "FillFactor": 100
+}

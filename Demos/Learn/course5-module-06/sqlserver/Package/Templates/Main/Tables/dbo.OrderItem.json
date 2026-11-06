@@ -1,0 +1,59 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[OrderItem]",
+  "Columns": [
+    {
+      "Name": "[OrderItemId]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[OrderId]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[ProductId]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[Quantity]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[UnitPrice]",
+      "DataType": "DECIMAL(10, 2)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_OrderItem]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "[OrderItemId]",
+      "Clustered": true
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "[FK_OrderItem_Product]",
+      "Columns": "[ProductId]",
+      "RelatedTable": "[Product]",
+      "RelatedColumns": "[ProductId]",
+      "DeleteAction": "NO ACTION",
+      "UpdateAction": "NO ACTION",
+      "RelatedTableSchema": "[dbo]"
+    },
+    {
+      "Name": "[FK_OrderItem_SalesOrder]",
+      "Columns": "[OrderId]",
+      "RelatedTable": "[SalesOrder]",
+      "RelatedColumns": "[OrderId]",
+      "DeleteAction": "NO ACTION",
+      "UpdateAction": "NO ACTION",
+      "RelatedTableSchema": "[dbo]"
+    }
+  ],
+  "CheckConstraints": [],
+  "Schema": "[dbo]",
+  "XmlIndexes": [],
+  "Statistics": []
+}

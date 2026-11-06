@@ -1,0 +1,69 @@
+{
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
+  "Name": "`OrderItem`",
+  "Columns": [
+    {
+      "Name": "`OrderItemId`",
+      "DataType": "int(11)"
+    },
+    {
+      "Name": "`OrderId`",
+      "DataType": "int(11)"
+    },
+    {
+      "Name": "`ProductId`",
+      "DataType": "int(11)"
+    },
+    {
+      "Name": "`Quantity`",
+      "DataType": "int(11)"
+    },
+    {
+      "Name": "`UnitPrice`",
+      "DataType": "decimal(10,2)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "FK_OrderItem_Product",
+      "IndexColumns": "`ProductId`"
+    },
+    {
+      "Name": "FK_OrderItem_SalesOrder",
+      "IndexColumns": "`OrderId`"
+    },
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "UniqueConstraint": true,
+      "IndexColumns": "`OrderItemId`"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "FK_OrderItem_Product",
+      "Columns": "`ProductId`",
+      "RelatedTable": "`Product`",
+      "RelatedColumns": "`ProductId`",
+      "DeleteAction": "RESTRICT",
+      "UpdateAction": "RESTRICT",
+      "RelatedTableSchema": ""
+    },
+    {
+      "Name": "FK_OrderItem_SalesOrder",
+      "Columns": "`OrderId`",
+      "RelatedTable": "`SalesOrder`",
+      "RelatedColumns": "`OrderId`",
+      "DeleteAction": "RESTRICT",
+      "UpdateAction": "RESTRICT",
+      "RelatedTableSchema": ""
+    }
+  ],
+  "CheckConstraints": [],
+  "RowFormat": "Dynamic",
+  "CharacterSet": "utf8mb4",
+  "Collation": "utf8mb4_uca1400_ai_ci",
+  "FullTextIndexes": [],
+  "Periods": []
+}

@@ -1,0 +1,51 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Name": "product",
+  "Columns": [
+    {
+      "Name": "productid",
+      "DataType": "int4",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "sku",
+      "DataType": "varchar(64)",
+      "Generated": "NEVER",
+      "Storage": "EXTENDED",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "name",
+      "DataType": "varchar(200)",
+      "Generated": "NEVER",
+      "Storage": "EXTENDED",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "unitprice",
+      "DataType": "numeric(10, 2)",
+      "Generated": "NEVER",
+      "Storage": "MAIN",
+      "Compression": "DEFAULT"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_product",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "productid",
+      "AccessMethod": "btree"
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "Statistics": [],
+  "ExcludeConstraints": [],
+  "Policies": [],
+  "AccessMethod": "heap",
+  "PersistenceType": "Logged",
+  "FillFactor": 100
+}

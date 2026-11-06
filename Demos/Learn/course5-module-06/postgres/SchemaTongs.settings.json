@@ -1,0 +1,25 @@
+{
+  "Source": {
+    "Server": "localhost",
+    "Port": "15432",
+    "User": "postgres",
+    "Password": "Learn!Passw0rd",
+    "Database": "shop_brownfield_dev",
+    "Platform": "PostgreSQL",
+    "ConnectionProperties": {}
+  },
+  "Product": {
+    "Path": "./Package",
+    "Name": "Shop"
+  },
+  "Template": {
+    "Name": "Main"
+  },
+  "ShouldCast": {
+    "Tables": true,
+    "ObjectList": "public.customer,public.product,public.salesorder,public.orderitem"
+  },
+  "OrphanHandling": {
+    "Mode": "Detect"
+  }
+}

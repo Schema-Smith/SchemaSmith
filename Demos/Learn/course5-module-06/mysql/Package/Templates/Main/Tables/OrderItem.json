@@ -1,0 +1,68 @@
+{
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
+  "Name": "`OrderItem`",
+  "Columns": [
+    {
+      "Name": "`OrderItemId`",
+      "DataType": "int"
+    },
+    {
+      "Name": "`OrderId`",
+      "DataType": "int"
+    },
+    {
+      "Name": "`ProductId`",
+      "DataType": "int"
+    },
+    {
+      "Name": "`Quantity`",
+      "DataType": "int"
+    },
+    {
+      "Name": "`UnitPrice`",
+      "DataType": "decimal(10,2)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "FK_OrderItem_Product",
+      "IndexColumns": "`ProductId`"
+    },
+    {
+      "Name": "FK_OrderItem_SalesOrder",
+      "IndexColumns": "`OrderId`"
+    },
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "UniqueConstraint": true,
+      "IndexColumns": "`OrderItemId`"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "FK_OrderItem_Product",
+      "Columns": "`ProductId`",
+      "RelatedTable": "`Product`",
+      "RelatedColumns": "`ProductId`",
+      "DeleteAction": "NO ACTION",
+      "UpdateAction": "NO ACTION",
+      "RelatedTableSchema": ""
+    },
+    {
+      "Name": "FK_OrderItem_SalesOrder",
+      "Columns": "`OrderId`",
+      "RelatedTable": "`SalesOrder`",
+      "RelatedColumns": "`OrderId`",
+      "DeleteAction": "NO ACTION",
+      "UpdateAction": "NO ACTION",
+      "RelatedTableSchema": ""
+    }
+  ],
+  "CheckConstraints": [],
+  "RowFormat": "Dynamic",
+  "CharacterSet": "utf8mb4",
+  "Collation": "utf8mb4_0900_ai_ci",
+  "FullTextIndexes": []
+}

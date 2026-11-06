@@ -1,0 +1,13 @@
+{
+  "$schema": ".json-schemas/products.mysql.schema",
+  "Name": "Shop",
+  "ValidationScript": "SELECT EXISTS(SELECT * FROM information_schema.schemata WHERE SCHEMA_NAME = '{{MainDb}}')",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptTokens": {
+    "MainDb": "shop_brownfield_dev"
+  },
+  "ScriptFolders": [],
+  "Platform": "MySQL"
+}
