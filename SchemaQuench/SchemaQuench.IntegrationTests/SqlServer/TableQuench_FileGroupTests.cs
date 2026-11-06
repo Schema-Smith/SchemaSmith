@@ -287,6 +287,84 @@ END";
         conn.Close();
     }
 
+    // A table the package no longer declares was dropped before the refusals further down the same step ran, so a
+    // refused deploy (exit 2) had already destroyed it and its rows. Every refusal now comes before the first drop.
+    [TestCase(false, TestName = "TableQuench_RefusedIndexMove_LeavesRemovedTableAndRows")]
+    [TestCase(true, TestName = "TableQuench_RefusedMissingFileGroup_LeavesRemovedTableAndRows")]
+    public void TableQuench_RefusedDeploy_DropsNoTableRemovedFromThePackage(bool missingFileGroup)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"FGRemovedProduct_{uid}";
+        var keep = $"FGKeep_{uid}";
+        var gone = $"FGGone_{uid}";
+
+        using var conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            var first = missingFileGroup ? WithTable(keep) : WithTableAndIndexOnDifferentFileGroups(keep, null, FileGroupA);
+            RunTableQuenchProc(cmd, Both(first, WithTable(gone)), dropTablesRemovedFromProduct: true, productName: product);
+            cmd.CommandText = $"INSERT INTO [dbo].[{gone}] ([Id], [Somedata]) VALUES (1, 'a'), (2, 'b');";
+            cmd.ExecuteNonQuery();
+
+            var refused = WithTableAndIndexOnDifferentFileGroups(keep, null, missingFileGroup ? $"FG_Missing_{uid}" : FileGroupB);
+            Assert.Throws<SqlException>(() => RunTableQuenchProc(cmd, refused, dropTablesRemovedFromProduct: true, productName: product));
+
+            cmd.CommandText = $"SELECT CASE WHEN OBJECT_ID('dbo.{gone}') IS NULL THEN 0 ELSE 1 END";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(1), "the refused deploy must leave the table it would have dropped");
+            cmd.CommandText = $"SELECT COUNT(*) FROM [dbo].[{gone}]";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(2), "and its rows");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS [dbo].[{keep}]; DROP TABLE IF EXISTS [dbo].[{gone}];";
+            cmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+
+    // The other side of the same move: with no refusal the removed table is still dropped, both when a declared table
+    // existed before the deploy and when every declared table is new (the step that skips the modification pass).
+    [TestCase(false, TestName = "TableQuench_RemovedTable_IsDroppedBesideAnExistingTable")]
+    [TestCase(true, TestName = "TableQuench_RemovedTable_IsDroppedWhenEveryDeclaredTableIsNew")]
+    public void TableQuench_TableRemovedFromThePackage_IsStillDropped(bool everyDeclaredTableIsNew)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"FGDropProduct_{uid}";
+        var keep = $"FGKeep_{uid}";
+        var fresh = $"FGFresh_{uid}";
+        var gone = $"FGGone_{uid}";
+
+        using var conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, everyDeclaredTableIsNew ? WithTable(gone) : Both(WithTable(keep), WithTable(gone)),
+                dropTablesRemovedFromProduct: true, productName: product);
+            RunTableQuenchProc(cmd, WithTable(everyDeclaredTableIsNew ? fresh : keep), dropTablesRemovedFromProduct: true, productName: product);
+
+            cmd.CommandText = $"SELECT CASE WHEN OBJECT_ID('dbo.{gone}') IS NULL THEN 0 ELSE 1 END";
+            Assert.That(cmd.ExecuteScalar(), Is.EqualTo(0), "a table the package no longer declares is dropped when nothing is refused");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS [dbo].[{keep}]; DROP TABLE IF EXISTS [dbo].[{fresh}]; DROP TABLE IF EXISTS [dbo].[{gone}];";
+            cmd.ExecuteNonQuery();
+        }
+        conn.Close();
+    }
+
+    private static string Both(string first, string second) =>
+        first.TrimEnd().TrimEnd(']').TrimEnd() + "," + second.TrimStart().TrimStart('[');
+
     [Test]
     public void TableQuench_NoFileGroupDeclared_IsCompletelyUnaffected()
     {

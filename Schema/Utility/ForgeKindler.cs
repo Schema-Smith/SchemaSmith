@@ -759,6 +759,8 @@ public static class ForgeKindler
                 new("SchemaSmith.CdcIndexGuard.sql"),
                 // Must precede ModifiedTableQuench, which CALLs it, also on a deploy whose tables are all new.
                 new("SchemaSmith.StampTableOwnership.sql"),
+                // Must precede ModifiedTableQuench, which CALLs it after the last refusal of its step.
+                new("SchemaSmith.DropTablesRemovedFromProduct.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 // A temporal table's period columns; MissingIndexesAndConstraintsQuench CALLs it before its index pass.
                 new("SchemaSmith.PeriodColumnQuench.sql"),
