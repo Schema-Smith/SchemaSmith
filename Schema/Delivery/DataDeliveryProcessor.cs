@@ -319,7 +319,7 @@ public class DataDeliveryProcessor : IDataDelivery
                 var mergeScript = helper.BuildMergeScript(context.Command, schemaOrDb, table.Name,
                     content.Data, keyColumns, update, delete, delivery.MergeDisableTriggers, false, mergeFilter,
                     delivery.MergeDisableRules, delivery.MergeUpdateDescendents, context.PostgreSqlServerVersionNum, context.MySqlServerVersionNum,
-                    content.Encoding);
+                    content.Encoding, delivery.Columns);
 
                 if (!context.WhatIf)
                 {
@@ -426,7 +426,7 @@ public class DataDeliveryProcessor : IDataDelivery
                 var mergeScript = helper.BuildMergeScript(context.Command, schemaOrDb, table.Name,
                     content.Data, keyColumns, update, delete, delivery.MergeDisableTriggers, false, mergeFilter,
                     delivery.MergeDisableRules, delivery.MergeUpdateDescendents, context.PostgreSqlServerVersionNum, context.MySqlServerVersionNum,
-                    content.Encoding);
+                    content.Encoding, delivery.Columns);
 
                 try
                 {

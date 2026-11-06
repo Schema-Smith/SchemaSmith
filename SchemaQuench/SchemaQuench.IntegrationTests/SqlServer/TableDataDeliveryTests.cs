@@ -209,6 +209,26 @@ public class TableDataDeliveryTests
         }
     }
 
+    // B23: SQL Server's FOR JSON leaves out a column that is NULL in every extracted row, and delivery took its columns
+    // from the keys present in the data, so that column was never written and an update kept the target's old values.
+    // DataTongs now records the extracted columns, and a listed column is delivered as NULL.
+    [Test]
+    public void DeliverTableData_AColumnNullInEveryRow_IsDeliveredWhenListed()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"INSERT INTO [{SchemaName}].[{_testTableName}] ([code], [name], [value]) VALUES ('A001', 'Old', 5.00)";
+        command.ExecuteNonQuery();
+
+        var script = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, SchemaName, _testTableName,
+            @"[{""code"":""A001"",""name"":""New""}]", "[code]", mergeUpdate: true, mergeDelete: false, disableTriggers: false,
+            tokenizeScripts: false, mergeFilter: null, declaredColumns: "code,name,value");
+        command.CommandText = script;
+        command.ExecuteNonQuery();
+
+        command.CommandText = $"SELECT CONCAT([name], '|', ISNULL(CAST([value] AS VARCHAR(20)), 'NULL')) FROM [{SchemaName}].[{_testTableName}] WHERE [code] = 'A001'";
+        Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("New|NULL"), "the listed column absent from every row is written NULL");
+    }
+
     [Test]
     public void DeliverTableData_XmlEncoding_InsertsAndUpdatesRows()
     {

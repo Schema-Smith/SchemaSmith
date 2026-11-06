@@ -59,12 +59,12 @@ public class MergeScriptHelperAdapter : IMergeScriptHelper
         bool tokenizeScripts, string mergeFilter,
         bool disableRules = false, bool updateDescendents = false,
         int pgServerVersionNum = 0, int mySqlServerVersionNum = 0,
-        string contentEncoding = "Json")
+        string contentEncoding = "Json", string declaredColumns = null)
         => MergeScriptHelper.BuildMergeScript(_platform, cmd, schemaOrDb, tableName,
             tableData, keyColumns, mergeUpdate, mergeDelete, disableTriggers,
             tokenizeScripts, mergeFilter, disableRules, updateDescendents,
             destSchemaOverride: null, pgServerVersionNum: pgServerVersionNum,
-            mySqlServerVersionNum: mySqlServerVersionNum, contentEncoding: contentEncoding);
+            mySqlServerVersionNum: mySqlServerVersionNum, contentEncoding: contentEncoding, declaredColumns: declaredColumns);
 
     public List<MergeColumnInfo> GetColumnMetadata(IDbCommand cmd, string schemaOrDb, string tableName, HashSet<string> jsonKeys = null)
         => MergeScriptHelper.GetColumnMetadata(_platform, cmd, schemaOrDb, tableName, jsonKeys);

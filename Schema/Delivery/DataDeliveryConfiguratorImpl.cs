@@ -100,6 +100,8 @@ public class DataDeliveryConfiguratorImpl : IDataDeliveryConfigurator
         var contentEncoding = string.Equals(context.ContentEncoding, "Xml", StringComparison.OrdinalIgnoreCase) ? "Xml" : null;
         changed |= SetIfDifferent(delivery, "ContentEncoding", contentEncoding);
 
+        changed |= SetIfDifferent(delivery, "Columns", string.IsNullOrWhiteSpace(context.Columns) ? null : context.Columns);
+
         // The zone the data was extracted in (MySQL family); absent means the target session's zone.
         changed |= SetIfDifferent(delivery, "TimeZone", string.IsNullOrWhiteSpace(context.TimeZone) ? null : context.TimeZone);
 

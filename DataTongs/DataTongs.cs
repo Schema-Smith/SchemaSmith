@@ -403,6 +403,13 @@ public class DataTongs
                     if (extractAsXml) tableData = MergeScriptHelper.JsonPayloadToXml(tableData);
                 }
 
+                // SQL Server's FOR JSON and FOR XML leave out a column that is NULL in every row, and delivery takes its
+                // columns from the data, so the extracted column list is recorded beside it. Only for the list DataTongs
+                // builds itself: a hand-written SelectColumns can hold any expression.
+                var extractedColumns = _platform.GetBasePlatform() == Platform.SqlServer && string.IsNullOrWhiteSpace(table.SelectColumns)
+                    ? SelectListNames(selectColumns ?? GetSelectColumns(cmd, querySchema, tableName))
+                    : null;
+
                 // Empty markers differ by encoding: XML delivery shreds <rows></rows>, JSON shreds [].
                 var emptyContent = extractAsXml ? "<rows></rows>" : "[]";
                 if (string.IsNullOrEmpty(tableData) || tableData == "null" || tableData == "[]" || tableData == "<rows></rows>" || tableData == "<rows/>")
@@ -444,6 +451,7 @@ public class DataTongs
                         TableName = tableName,
                         ContentFilePath = contentFilePath,
                         KeyColumns = keyColumns,
+                        Columns = extractedColumns,
                         DefaultMergeType = mergeDelete ? "Insert/Update/Delete" : mergeUpdate ? "Insert/Update" : "Insert",
                         ContentEncoding = extractAsXml ? "Xml" : "Json",
                         TimeZone = extractionTimeZone,
@@ -505,7 +513,7 @@ public class DataTongs
                 var mergeSQL = MergeScriptHelper.BuildMergeScript(_platform, cmd, querySchema, tableName, tableData,
                     keyColumns, mergeUpdate, mergeDelete, disableTriggers, tokenizeScripts, table.Filter,
                     disableRules, updateDescendents, destSchemaOverride, pgServerVersionNum, mySqlServerVersionNum,
-                    extractAsXml ? "Xml" : "Json", contentFileToken);
+                    extractAsXml ? "Xml" : "Json", contentFileToken, declaredColumns: extractedColumns);
 
                 if (extractionTimeZone != null)
                     mergeSQL = MySqlSessionSettings.WithTimeZone(mergeSQL, extractionTimeZone);
@@ -736,6 +744,17 @@ SELECT EXISTS (
     #endregion
 
     #region Select Columns
+
+    // The output names of a select list DataTongs built: each item ends in its bracketed name or alias.
+    internal static string SelectListNames(string selectList)
+    {
+        if (string.IsNullOrWhiteSpace(selectList)) return null;
+        var names = System.Text.RegularExpressions.Regex.Matches(selectList, @"\[(?<n>(?:[^\]]|\]\])+)\](?=\s*(?:,|$))")
+            .Select(m => m.Groups["n"].Value.Replace("]]", "]"))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+        return names.Count == 0 ? null : string.Join(",", names);
+    }
 
     internal string GetSelectColumns(IDbCommand cmd, string schemaOrDb, string tableName)
     {

@@ -1746,5 +1746,17 @@ public class DataTongsTests
         Assert.That(global::DataTongs.DataTongs.CountXmlRows(""), Is.EqualTo(0));
     }
 
+    // B23: the names a DataTongs select list produces, whether an item is a bare column or an aliased conversion.
+    [Test]
+    public void SelectListNames_ReadsEachItemsOutputName()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(global::DataTongs.DataTongs.SelectListNames("[Id],[Shape].ToString() AS [Shape], [Shape].STSrid AS [Shape.STSrid],[We]]ird]"),
+                Is.EqualTo("Id,Shape,Shape.STSrid,We]ird"));
+            Assert.That(global::DataTongs.DataTongs.SelectListNames(""), Is.Null);
+        });
+    }
+
     #endregion
 }

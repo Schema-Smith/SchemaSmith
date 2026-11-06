@@ -803,7 +803,7 @@ WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
         bool tokenizeScripts, string mergeFilter,
         bool disableRules = false, bool updateDescendents = false,
         string destSchemaOverride = null, int pgServerVersionNum = 0, int mySqlServerVersionNum = 0,
-        string contentEncoding = "Json", string contentFileToken = null)
+        string contentEncoding = "Json", string contentFileToken = null, string declaredColumns = null)
     {
         var isXml = string.Equals(contentEncoding, "Xml", StringComparison.OrdinalIgnoreCase);
         // An object or array value reaches a text column as its own text, so the whitespace between tokens is removed
@@ -826,6 +826,10 @@ WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
         var dataKeys = tokenizeScripts ? null
             : mySqlIsXml ? GetJsonDataKeys(mySqlTableData)
             : isXml ? GetXmlDataKeys(tableData) : GetJsonDataKeys(tableData);
+        // A declared column list adds the columns no row carries (all NULL), so they are delivered too.
+        if (dataKeys != null && !string.IsNullOrWhiteSpace(declaredColumns))
+            foreach (var column in declaredColumns.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+                dataKeys.Add(column.Trim('[', ']', '"', '`'));
 
         return platform.GetBasePlatform() switch
         {
