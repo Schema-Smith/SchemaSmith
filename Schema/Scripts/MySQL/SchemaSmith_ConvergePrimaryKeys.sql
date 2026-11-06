@@ -26,7 +26,7 @@ BEGIN
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT INTO _SchemaSmith_LivePrimaryKeys (TableKey, NormColumns)
     SELECT SchemaSmith_IdentifierKey(s.TABLE_NAME),
-           GROUP_CONCAT(CONCAT('`', s.COLUMN_NAME, '`',
+           GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(s.COLUMN_NAME), '`',
                                IF(s.SUB_PART IS NOT NULL, CONCAT('(', s.SUB_PART, ')'), ''),
                                CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                         ORDER BY s.SEQ_IN_INDEX SEPARATOR ',')
@@ -114,20 +114,20 @@ BEGIN
     IF EXISTS (SELECT 1 FROM _SchemaSmith_PrimaryKeyStmts WHERE HasKey = 1) THEN
         INSERT INTO _SchemaSmith_PkForeignKeyColumns (TableKey, Cols)
         SELECT SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_NAME),
-               LOWER(GROUP_CONCAT(CONCAT('`', k.REFERENCED_COLUMN_NAME, '`') ORDER BY k.POSITION_IN_UNIQUE_CONSTRAINT SEPARATOR ','))
+               LOWER(GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(k.REFERENCED_COLUMN_NAME), '`') ORDER BY k.POSITION_IN_UNIQUE_CONSTRAINT SEPARATOR ','))
           FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
          WHERE k.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_SCHEMA) = v_DbKey
          GROUP BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.REFERENCED_TABLE_NAME;
         INSERT INTO _SchemaSmith_PkForeignKeyColumns (TableKey, Cols)
         SELECT SchemaSmith_IdentifierKey(k.TABLE_NAME),
-               LOWER(GROUP_CONCAT(CONCAT('`', k.COLUMN_NAME, '`') ORDER BY k.ORDINAL_POSITION SEPARATOR ','))
+               LOWER(GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(k.COLUMN_NAME), '`') ORDER BY k.ORDINAL_POSITION SEPARATOR ','))
           FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
          WHERE k.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.TABLE_SCHEMA) = v_DbKey
            AND k.REFERENCED_TABLE_NAME IS NOT NULL
          GROUP BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME;
         INSERT INTO _SchemaSmith_PkOtherIndexColumns (TableKey, Cols)
         SELECT SchemaSmith_IdentifierKey(s.TABLE_NAME),
-               LOWER(GROUP_CONCAT(CONCAT('`', s.COLUMN_NAME, '`') ORDER BY s.SEQ_IN_INDEX SEPARATOR ','))
+               LOWER(GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(s.COLUMN_NAME), '`') ORDER BY s.SEQ_IN_INDEX SEPARATOR ','))
           FROM INFORMATION_SCHEMA.STATISTICS s
          WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
            AND s.INDEX_NAME <> 'PRIMARY'
@@ -151,10 +151,10 @@ BEGIN
         SELECT TableName, AuditName, HasKey, ForeignKeyBlocks,
                -- The key MySQL generated for a keyless table goes with its column, in the statement that adds the
                -- declared key: the column cannot be dropped on its own, nor the key replaced while it stays.
-               CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
+               CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
                       IF(HasKey = 1, 'DROP PRIMARY KEY, ', ''),
                       'ADD PRIMARY KEY (', KeyColumns, ')',
-                      IF(AutoIncrementColumn IS NULL, '', CONCAT(', ADD KEY (`', AutoIncrementColumn, '`)')))
+                      IF(AutoIncrementColumn IS NULL, '', CONCAT(', ADD KEY (`', SchemaSmith_EscapeBackticks(AutoIncrementColumn), '`)')))
           INTO @ss_pk_table, @ss_pk_audit, @ss_pk_haskey, @ss_pk_fk_needs, @exec_sql
           FROM _SchemaSmith_PrimaryKeyStmts WHERE RowId = @ss_pk_id;
         SET @ss_pk_generated := IF(@ss_pk_haskey = 1, SchemaSmith_IsGeneratedInvisiblePrimaryKey(p_DatabaseName, @ss_pk_table, 'my_row_id'), 0);

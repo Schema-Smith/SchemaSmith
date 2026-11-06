@@ -965,6 +965,7 @@ public static class ForgeKindler
                 // expression stops reading as a change. Kindled like the other bootstrap tables.
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith_QuoteIdentifier.sql"),
+                new("SchemaSmith_EscapeBackticks.sql"),
                 new("SchemaSmith_StripBacktickWrapping.sql"),
                 new("SchemaSmith_SafeBacktickWrap.sql"),
                 new("SchemaSmith_StripLeadingSelect.sql"),
@@ -1034,6 +1035,8 @@ public static class ForgeKindler
                 new("SchemaSmith_IsExpressionDefault.sql"),
                 new("SchemaSmith_ExpressionDefaultText.sql"),
                 new("SchemaSmith_CleanCheckClause.sql"),
+                new("SchemaSmith_DecodeStringLiteral.sql"),
+                new("SchemaSmith_CheckClauseText.sql"),
                 new("SchemaSmith_ExpressionDefaultsEqual.sql"),
                 new("SchemaSmith_ColumnOnUpdateClause.sql"),
                 new("SchemaSmith_IndexIsVisible.sql"),

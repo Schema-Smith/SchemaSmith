@@ -30,13 +30,15 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
     // Every table starts with it, so the fixture finds its own in the shared database.
     private const string Prefix = "ids" + H;
     private const string Table = Prefix, Child = Prefix + "2", Gone = Prefix + "3";
-    private const string Key = "k" + H, Col = H, Text = "t" + H, ChildKey = "k" + H, ChildRef = H + "r";
+    private const string Key = "k" + H, Col = H, Text = "t" + H, Defaulted = "d" + H, ChildKey = "k" + H, ChildRef = H + "r";
     private static readonly string Long = ("l" + H).PadRight(64, 'x');
-    private const string Ix = H + "_ix", Ck = H + "_ck", CkLike = H + "_like", Fk = H + "_fk", Ft = H + "_ft";
+    private const string Ix = H + "_ix", Ck = H + "_ck", CkLike = H + "_like", Fk = H + "_fk", Ft = H + "_ft", KeyIx = H + "_kx";
     private static readonly string LongIx = ("i" + H).PadRight(64, 'x');
     private const string TableComment = "has \\d+ and 'quote' and 100% and \\\\ and a\nbreak";
     private const string ColumnComment = "col \\d+ 'x'";
     private const string IndexComment = "ix \\d+ \\\\ 'y'";
+    // The SQL literal for the value  x\d'q  : a backslash and a quote, each written escaped.
+    private const string DefaultLiteral = "'x\\\\d''q'";
 
     private static string B(string name) => "`" + name.Replace("`", "``") + "`";
     private static string L(string value) => "'" + value.Replace("\\", "\\\\").Replace("'", "''") + "'";
@@ -62,15 +64,16 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
     }
 
     private string ParentJson(string col = Col, string colOldName = null, string ix = Ix, bool withCheck = true, string longType = "INT",
-        string likePattern = "%x%") => $$"""
+        string likePattern = "%x%", bool withLongIndex = true, string keyIx = KeyIx) => $$"""
         { "Name": "{{J(Table)}}", "Comment": "{{J(TableComment)}}",
           "Columns": [ { "Name": "{{J(Key)}}", "DataType": "INT", "Nullable": false },
                        { "Name": "{{J(col)}}", "DataType": "INT", "Nullable": true, "Comment": "{{J(ColumnComment)}}"{{(colOldName == null ? "" : $", \"OldName\": \"{J(colOldName)}\"")}} },
                        { "Name": "{{J(Long)}}", "DataType": "{{longType}}", "Nullable": true },
-                       { "Name": "{{J(Text)}}", "DataType": "TEXT", "Nullable": true } ],
+                       { "Name": "{{J(Text)}}", "DataType": "TEXT", "Nullable": true },
+                       { "Name": "{{J(Defaulted)}}", "DataType": "VARCHAR(40)", "Nullable": true, "Default": "{{J(DefaultLiteral)}}" } ],
           "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "{{J(B(Key))}}" },
                        { "Name": "{{J(ix)}}", "IndexColumns": "{{J(B(col))}}", "Comment": "{{J(IndexComment)}}" },
-                       { "Name": "{{J(LongIx)}}", "IndexColumns": "{{J(B(Long))}}" } ],
+                       { "Name": "{{J(keyIx)}}", "IndexColumns": "{{J(B(Key))}}" }{{(withLongIndex ? $", {{ \"Name\": \"{J(LongIx)}\", \"IndexColumns\": \"{J(B(Long))}\" }}" : "")}} ],
           "FullTextIndexes": [ { "Name": "{{J(Ft)}}", "Columns": "{{J(B(Text))}}", "Comment": "{{J(IndexComment)}}" } ],
           "CheckConstraints": [ {{(withCheck ? $"{{ \"Name\": \"{J(Ck)}\", \"Expression\": \"{J(B(Key) + " >= 0")}\" }}, " : "")}}
                                 { "Name": "{{J(CkLike)}}", "Expression": "{{J($"'a''b' like '{likePattern}'")}}" } ] }
@@ -98,11 +101,11 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
         WriteFile("Tables", "gone.json", GoneJson());
     }
 
-    // Renames of a column and a table; a check and a foreign key dropped; a check rewritten; a type changed; a table removed.
+    // Renames of a column, an index and a table; a check, a foreign key and an index dropped; a check rewritten; a type changed; a table removed.
     private void WriteChangeSet()
     {
         WritePackage("");
-        WriteFile("Tables", "parent.json", ParentJson(col: Col + "n", colOldName: Col, ix: Ix + "n", withCheck: false, longType: "BIGINT", likePattern: "%y%"));
+        WriteFile("Tables", "parent.json", ParentJson(col: Col + "n", colOldName: Col, ix: Ix + "n", withCheck: false, longType: "BIGINT", likePattern: "%y%", withLongIndex: false, keyIx: KeyIx + "r"));
         WriteFile("Tables", "child.json", ChildJson(Child + "n", oldName: Child, withForeignKey: false));
     }
 
@@ -252,6 +255,9 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
         ExpectEqual(Text1($"SELECT COLUMN_COMMENT FROM information_schema.COLUMNS WHERE {InDb} AND TABLE_NAME = {L(Table)} AND COLUMN_NAME = {L(Col)}"), ColumnComment, "the column's comment");
         ExpectEqual(Text1($"SELECT INDEX_COMMENT FROM information_schema.STATISTICS WHERE {InDb} AND TABLE_NAME = {L(Table)} AND INDEX_NAME = {L(Ix)}"), IndexComment, "the index's comment");
         ExpectEqual(Text1($"SELECT INDEX_COMMENT FROM information_schema.STATISTICS WHERE {InDb} AND TABLE_NAME = {L(Table)} AND INDEX_NAME = {L(Ft)}"), IndexComment, "the FULLTEXT index's comment");
+        // MySQL reports a string default as its value, MariaDB as the literal that produces it.
+        ExpectEqual(Text1($"SELECT COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE {InDb} AND TABLE_NAME = {L(Table)} AND COLUMN_NAME = {L(Defaulted)}"),
+            GetType().Namespace!.EndsWith("MariaDb") ? DefaultLiteral : @"x\d'q", "the column's default");
         ExpectNone(Mangled(run), "progress lines that name the table");
         ExpectNone(run.Audit.Where(r => r.Action == "created").Select(r => r.ObjectName).Where(n => n.Contains("f,g h") && !n.Contains("a'b%c")), "audit names");
     }
@@ -296,6 +302,11 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
         var run = Deploy(dropRemovedTables: true, settings: AllowTheChanges);
         Expect(ColumnExists(Table, Col + "n") && !ColumnExists(Table, Col), "the column renamed");
         Expect(IndexExists(Table, Ix + "n") && !IndexExists(Table, Ix), "the index replaced");
+        // Same columns, new name: renamed in place, which needs its ownership row found under a name holding a dot.
+        Expect(IndexExists(Table, KeyIx + "r") && !IndexExists(Table, KeyIx), "the index renamed");
+        ExpectNone(Changes(run).Where(c => c.Contains(KeyIx)), "the renamed index rebuilt");
+        // Its table and name together run past 64 characters, the width of a single identifier.
+        Expect(!IndexExists(Table, LongIx), "the index with the longest name dropped");
         Expect(TableExists(Child + "n") && !TableExists(Child), "the table renamed");
         Expect(!TableExists(Gone), "the removed table dropped");
         Expect(!ConstraintExists(Table, Ck, "CHECK"), "the check dropped");

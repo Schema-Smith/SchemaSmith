@@ -470,9 +470,9 @@ BEGIN
                                                     SchemaSmith_StripBacktickWrapping(@ss_add_table)));
 
                     IF p_WhatIf = 0 THEN
-                        SET @ss_sql = CONCAT('ALTER TABLE `', p_DatabaseName, '`.`',
-                                             SchemaSmith_StripBacktickWrapping(@ss_add_table),
-                                             '` ADD PARTITION (PARTITION `', @ss_add_name, '`',
+                        SET @ss_sql = CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(p_DatabaseName), '`.`',
+                                             SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(@ss_add_table)),
+                                             '` ADD PARTITION (PARTITION `', SchemaSmith_EscapeBackticks(@ss_add_name), '`',
                                              CASE WHEN @ss_add_list = 1 THEN CONCAT(' VALUES IN (', @ss_add_values, ')')
                                                   WHEN UPPER(TRIM(COALESCE(@ss_add_values, ''))) = 'MAXVALUE'
                                                   THEN ' VALUES LESS THAN MAXVALUE'
@@ -751,12 +751,10 @@ BEGIN
           AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
           AND po.ObjectType COLLATE utf8mb4_unicode_ci = _utf8mb4'TABLE' COLLATE utf8mb4_unicode_ci;
 
-        -- OldName constraint-rename parity: INDEX ownership rows are keyed as 'tablename.indexname'
-        -- (see MissingIndexesAndConstraintsQuench). The TABLE update above only moved TABLE rows, so an
-        -- index ownership row still carries the OLD table prefix after the rename. The downstream index
-        -- rename/drop passes key on the NEW table name, so they would miss the carried-over index and
-        -- leave the old-named index behind as a silent duplicate. Rewrite the table prefix old->new for
-        -- INDEX rows on renamed tables so those passes recognise and rename (or drop) it.
+        -- Index, foreign-key and check ownership rows are keyed 'tablename.objectname'. The TABLE update above only
+        -- moved TABLE rows, so theirs still carry the OLD table prefix after the rename, and the rename and drop passes,
+        -- which key on the NEW name, would miss them: an index left behind as a silent duplicate, a foreign key removed
+        -- from the package left in place. Rewrite the prefix old->new so those passes find them.
         UPDATE SchemaSmith_ProductOwnership po
         INNER JOIN _SchemaSmith_TableRenames r
             ON SUBSTRING(po.ObjectName, CHAR_LENGTH(r.OldTableName) + 1, 1) = '.'
@@ -764,7 +762,7 @@ BEGIN
         SET po.ObjectName = CONCAT(r.NewTableName, SUBSTRING(po.ObjectName FROM CHAR_LENGTH(r.OldTableName) + 1))
         WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
           AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
-          AND po.ObjectType COLLATE utf8mb4_unicode_ci = _utf8mb4'INDEX' COLLATE utf8mb4_unicode_ci;
+          AND po.ObjectType COLLATE utf8mb4_unicode_ci IN ('INDEX', 'FOREIGN KEY', 'CHECK CONSTRAINT');
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_TableRenames;
     END IF;
@@ -1212,7 +1210,7 @@ BEGIN
                     VALUES (CONNECTION_ID(), CONCAT('  WARNING: ', SchemaSmith_StripBacktickWrapping(v_SpTable),
                             ' declares ROW START / ROW END columns; adding them rewrites its history, so set SystemVersioningAlterHistory=KEEP to apply it'));
                 ELSEIF p_WhatIf = 0 THEN
-                    SET @ss_sp_sql = CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', v_SpTable,
+                    SET @ss_sp_sql = CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', v_SpTable,
                                             ' ADD COLUMN ', v_SpStartScript, ', ADD COLUMN ', v_SpEndScript,
                                             ', ADD PERIOD FOR SYSTEM_TIME(', v_SpStart, ', ', v_SpEnd, ')');
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -1260,8 +1258,8 @@ BEGIN
             DECLARE v_ColCollFkDone INT DEFAULT FALSE;
             DECLARE v_ColCollFkSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_ColCollFks CURSOR FOR
-                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci,
-                              '`.`', TableName, '` DROP FOREIGN KEY `', ConstraintName, '`')
+                SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci,
+                              '`.`', SchemaSmith_EscapeBackticks(TableName), '` DROP FOREIGN KEY `', SchemaSmith_EscapeBackticks(ConstraintName), '`')
                   FROM _SchemaSmith_ColumnCollationFKsToDrop;
             DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_ColCollFkDone = TRUE;
 
@@ -1432,7 +1430,7 @@ BEGIN
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Modify columns');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' DROP CONSTRAINT `', REPLACE(tl.ConstraintName, '`', '``'), '`')
         FROM _SchemaSmith_TableLevelColumnChecks tl
         JOIN _SchemaSmith_Columns c ON c.TableKey = tl.TableKey AND c.ColumnKey = tl.ColumnKey
@@ -1448,7 +1446,7 @@ BEGIN
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' ', GROUP_CONCAT(CONCAT('MODIFY COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
@@ -1656,7 +1654,7 @@ BEGIN
     ELSE
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Modify columns');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Drop check constraint: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+        SELECT CONNECTION_ID(), CONCAT('  Drop check constraint: ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' DROP CONSTRAINT `', REPLACE(tl.ConstraintName, '`', '``'), '`')
         FROM _SchemaSmith_TableLevelColumnChecks tl
         JOIN _SchemaSmith_Columns c ON c.TableKey = tl.TableKey AND c.ColumnKey = tl.ColumnKey
@@ -1777,7 +1775,7 @@ BEGIN
         -- The same-named table-level check goes first (a lower RowId drains first): from MariaDB 11.4.13 / 13.0.2 the
         -- MODIFY below is refused with it in place (1826), and below that the two coexist and the column stays text.
         INSERT INTO _SchemaSmith_ModifyColStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' DROP CONSTRAINT `', REPLACE(tl.ConstraintName, '`', '``'), '`')
         FROM _SchemaSmith_TableLevelColumnChecks tl
         JOIN _SchemaSmith_Columns c ON c.TableKey = tl.TableKey AND c.ColumnKey = tl.ColumnKey
@@ -1793,7 +1791,7 @@ BEGIN
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO _SchemaSmith_ModifyColStmts (Stmt, TableName, OnlineMode)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
                       GROUP_CONCAT(CONCAT('MODIFY COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', ')),
                SchemaSmith_StripBacktickWrapping(c.TableName), MAX(t.OnlineMode)
         FROM _SchemaSmith_Columns c
@@ -1918,8 +1916,8 @@ BEGIN
         -- Show DROP COLUMN statements
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
-                      SchemaSmith_StripBacktickWrapping(c.TableName), '` DROP COLUMN `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`')
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
+                      SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.TableName)), '` DROP COLUMN `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`')
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
         INNER JOIN _SchemaSmith_CatColumns isc
@@ -1941,8 +1939,8 @@ BEGIN
         -- Show ADD COLUMN statements
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
-                      SchemaSmith_StripBacktickWrapping(c.TableName), '` ADD COLUMN ', c.ColumnScript)
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
+                      SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.TableName)), '` ADD COLUMN ', c.ColumnScript)
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
         INNER JOIN _SchemaSmith_CatColumns isc
@@ -1998,8 +1996,8 @@ BEGIN
 
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_GenStatusStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_StripBacktickWrapping(c.TableName), '` ',
-                      GROUP_CONCAT(CONCAT('DROP COLUMN `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`') ORDER BY c.ColumnName SEPARATOR ', '))
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.TableName)), '` ',
+                      GROUP_CONCAT(CONCAT('DROP COLUMN `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`') ORDER BY c.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
         INNER JOIN _SchemaSmith_CatColumns isc
@@ -2022,7 +2020,7 @@ BEGIN
 
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_GenStatusStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_StripBacktickWrapping(c.TableName), '` ',
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.TableName)), '` ',
                       GROUP_CONCAT(CONCAT('ADD COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_Columns c
         INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
@@ -2219,8 +2217,8 @@ BEGIN
             AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Drop FK for column: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName,
-                      '` DROP FOREIGN KEY `', ConstraintName, '`')
+        SELECT CONNECTION_ID(), CONCAT('  Drop FK for column: ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName),
+                      '` DROP FOREIGN KEY `', SchemaSmith_EscapeBackticks(ConstraintName), '`')
         FROM _SchemaSmith_FKsToDrop;
 
         -- Materialize: fold each table's FK drops into one multi-clause ALTER, then drain.
@@ -2228,8 +2226,8 @@ BEGIN
         CREATE TEMPORARY TABLE _SchemaSmith_FKDropForColStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_FKDropForColStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                      GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', ConstraintName, '`') ORDER BY ConstraintName SEPARATOR ', '))
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
+                      GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', SchemaSmith_EscapeBackticks(ConstraintName), '`') ORDER BY ConstraintName SEPARATOR ', '))
         FROM _SchemaSmith_FKsToDrop
         GROUP BY TableName;
 
@@ -2286,8 +2284,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         END IF;
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Drop check constraint for column: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName,
-                      '` DROP CONSTRAINT `', ConstraintName, '`')
+        SELECT CONNECTION_ID(), CONCAT('  Drop check constraint for column: ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName),
+                      '` DROP CONSTRAINT `', SchemaSmith_EscapeBackticks(ConstraintName), '`')
         FROM _SchemaSmith_CKsToDrop;
 
         -- Materialize: fold each table's check-constraint drops into one multi-clause ALTER, then drain.
@@ -2295,8 +2293,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         CREATE TEMPORARY TABLE _SchemaSmith_CKDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_CKDropStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                      GROUP_CONCAT(CONCAT('DROP CONSTRAINT `', ConstraintName, '`') ORDER BY ConstraintName SEPARATOR ', '))
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
+                      GROUP_CONCAT(CONCAT('DROP CONSTRAINT `', SchemaSmith_EscapeBackticks(ConstraintName), '`') ORDER BY ConstraintName SEPARATOR ', '))
         FROM _SchemaSmith_CKsToDrop
         GROUP BY TableName;
 
@@ -2337,15 +2335,15 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- "ALTER TABLE ... DROP INDEX ..." form so multiple indexes on the same table can fold
         -- into one statement.
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Drop index for column: DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
+        SELECT CONNECTION_ID(), CONCAT('  Drop index for column: DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '` ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`')
         FROM _SchemaSmith_IdxsToDrop;
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDropStmts;
         CREATE TEMPORARY TABLE _SchemaSmith_IdxDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_IdxDropStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                      GROUP_CONCAT(CONCAT('DROP INDEX `', IndexName, '`') ORDER BY IndexName SEPARATOR ', '))
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
+                      GROUP_CONCAT(CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '`') ORDER BY IndexName SEPARATOR ', '))
         FROM _SchemaSmith_IdxsToDrop
         GROUP BY TableName;
 
@@ -2388,7 +2386,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             AND isc_gen.GENERATION_EXPRESSION != ''
             -- Explicit COLLATE to avoid collation mismatch between INFORMATION_SCHEMA and temp table
             AND CONVERT(isc_gen.GENERATION_EXPRESSION USING utf8mb4) COLLATE utf8mb4_unicode_ci
-                LIKE CONCAT('%`', ctd.ColumnName COLLATE utf8mb4_unicode_ci, '`%')
+                LIKE CONCAT('%`', SchemaSmith_EscapeBackticks(ctd.ColumnName) COLLATE utf8mb4_unicode_ci, '`%')
         -- Only drop generated columns that are also not in the definition
         -- (use _SchemaSmith_DefinedColumns to avoid MySQL's "Can't reopen table" error)
         LEFT JOIN _SchemaSmith_DefinedColumns dc_gen
@@ -2397,8 +2395,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         WHERE dc_gen.ColumnName IS NULL;
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Drop generated column: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName,
-                      '` DROP COLUMN `', ColumnName, '`')
+        SELECT CONNECTION_ID(), CONCAT('  Drop generated column: ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName),
+                      '` DROP COLUMN `', SchemaSmith_EscapeBackticks(ColumnName), '`')
         FROM _SchemaSmith_GenColsToDrop;
 
         -- Materialize: fold each table's generated-column drops into one multi-clause ALTER, then drain.
@@ -2406,8 +2404,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         CREATE TEMPORARY TABLE _SchemaSmith_GenColDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_GenColDropStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                      GROUP_CONCAT(CONCAT('DROP COLUMN `', ColumnName, '`') ORDER BY ColumnName SEPARATOR ', '))
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
+                      GROUP_CONCAT(CONCAT('DROP COLUMN `', SchemaSmith_EscapeBackticks(ColumnName), '`') ORDER BY ColumnName SEPARATOR ', '))
         FROM _SchemaSmith_GenColsToDrop
         GROUP BY TableName;
 
@@ -2430,9 +2428,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- Now drop the columns themselves
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Drop column: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
-                      CONVERT(ctd.TableName USING utf8mb4) COLLATE utf8mb4_unicode_ci,
-                      '` DROP COLUMN `', CONVERT(ctd.ColumnName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`')
+        SELECT CONNECTION_ID(), CONCAT('  Drop column: ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
+                      SchemaSmith_EscapeBackticks(CONVERT(ctd.TableName USING utf8mb4)) COLLATE utf8mb4_unicode_ci,
+                      '` DROP COLUMN `', SchemaSmith_EscapeBackticks(CONVERT(ctd.ColumnName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`')
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN _SchemaSmith_CatColumns isc
             ON isc.TableKey = ctd.TableKey
@@ -2451,9 +2449,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_ColDropStmts (Stmt, TableKey, TableName)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
-                      CONVERT(ctd.TableName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '` ',
-                      GROUP_CONCAT(CONCAT('DROP COLUMN `', CONVERT(ctd.ColumnName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`') ORDER BY ctd.ColumnName SEPARATOR ', ')),
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
+                      SchemaSmith_EscapeBackticks(CONVERT(ctd.TableName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '` ',
+                      GROUP_CONCAT(CONCAT('DROP COLUMN `', SchemaSmith_EscapeBackticks(CONVERT(ctd.ColumnName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`') ORDER BY ctd.ColumnName SEPARATOR ', ')),
                ctd.TableKey, ctd.TableName
         FROM _SchemaSmith_ColumnsToDrop ctd
         INNER JOIN _SchemaSmith_CatColumns isc
@@ -2532,9 +2530,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                                                       TableName VARCHAR(128) COLLATE utf8mb4_bin, OnlineMode VARCHAR(8))
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT INTO _SchemaSmith_ReorderStmts (Stmt, TableName)
-    SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', a.TableName, ' ',
+    SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', a.TableName, ' ',
                   GROUP_CONCAT(CONCAT('MODIFY COLUMN ', a.ColumnScript,
-                                      COALESCE((SELECT CONCAT(' AFTER `', SchemaSmith_StripBacktickWrapping(b.ColumnName), '`')
+                                      COALESCE((SELECT CONCAT(' AFTER `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(b.ColumnName)), '`')
                                                   FROM _SchemaSmith_ReorderColsPeer b
                                                  WHERE b.TableName = a.TableName
                                                    AND (b.Pos < a.Pos OR (b.Pos = a.Pos AND b.Seq < a.Seq))
@@ -2575,7 +2573,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table engine');
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ENGINE = ', t.Engine)
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ENGINE = ', t.Engine)
         FROM _SchemaSmith_Tables t
         INNER JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = t.TableKey
@@ -2587,7 +2585,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DECLARE v_EngineDone INT DEFAULT FALSE;
             DECLARE v_EngineSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_EngineChanges CURSOR FOR
-                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ENGINE = ', t.Engine) AS AlterEngineStatement
+                SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ENGINE = ', t.Engine) AS AlterEngineStatement
                 FROM _SchemaSmith_Tables t
                 INNER JOIN _SchemaSmith_CatTables ist
                     ON ist.TableKey = t.TableKey
@@ -2624,7 +2622,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table collation');
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                       ' DEFAULT CHARACTER SET ',
                       COALESCE(SUBSTRING_INDEX(t.Collation, '_', 1), t.CharacterSet),
                       IF(t.Collation IS NULL, '', CONCAT(' COLLATE ', t.Collation)))
@@ -2642,7 +2640,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DECLARE v_CollationDone INT DEFAULT FALSE;
             DECLARE v_CollationSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_CollationChanges CURSOR FOR
-                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
+                SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                               ' DEFAULT CHARACTER SET ',
                               COALESCE(SUBSTRING_INDEX(t.Collation, '_', 1), t.CharacterSet),
                               IF(t.Collation IS NULL, '', CONCAT(' COLLATE ', t.Collation))) AS AlterCollationStatement
@@ -2704,8 +2702,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table comment');
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
-                      ' COMMENT=''', REPLACE(COALESCE(t.Comment, ''), '''', ''''''), '''')
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
+                      ' COMMENT=', QUOTE(COALESCE(t.Comment, '')), '')
         FROM _SchemaSmith_Tables t
         INNER JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = t.TableKey
@@ -2716,8 +2714,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DECLARE v_CommentDone INT DEFAULT FALSE;
             DECLARE v_CommentSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_CommentChanges CURSOR FOR
-                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
-                              ' COMMENT=''', REPLACE(COALESCE(t.Comment, ''), '''', ''''''), '''') AS AlterCommentStatement
+                SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
+                              ' COMMENT=', QUOTE(COALESCE(t.Comment, '')), '') AS AlterCommentStatement
                 FROM _SchemaSmith_Tables t
                 INNER JOIN _SchemaSmith_CatTables ist
                     ON ist.TableKey = t.TableKey
@@ -2756,7 +2754,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table row format');
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ROW_FORMAT=', t.RowFormat)
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ROW_FORMAT=', t.RowFormat)
         FROM _SchemaSmith_Tables t
         INNER JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = t.TableKey
@@ -2769,7 +2767,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DECLARE v_RowFormatDone INT DEFAULT FALSE;
             DECLARE v_RowFormatSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_RowFormatChanges CURSOR FOR
-                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ROW_FORMAT=', t.RowFormat) AS AlterRowFormatStatement
+                SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ROW_FORMAT=', t.RowFormat) AS AlterRowFormatStatement
                 FROM _SchemaSmith_Tables t
                 INNER JOIN _SchemaSmith_CatTables ist
                     ON ist.TableKey = t.TableKey
@@ -2823,7 +2821,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Change table encryption');
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                       CASE WHEN VERSION() NOT LIKE '%MariaDB%'
                            THEN CONCAT(' ENCRYPTION=''', t.Encryption, '''')
                            ELSE CONCAT(' ENCRYPTED=', CASE WHEN t.Encrypted = 1 THEN 'YES' ELSE 'NO' END,
@@ -2864,7 +2862,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DECLARE v_EncryptionDone INT DEFAULT FALSE;
             DECLARE v_EncryptionSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_EncryptionChanges CURSOR FOR
-                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
+                SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName,
                               CASE WHEN VERSION() NOT LIKE '%MariaDB%'
                                    THEN CONCAT(' ENCRYPTION=''', t.Encryption, '''')
                                    ELSE CONCAT(' ENCRYPTED=', CASE WHEN t.Encrypted = 1 THEN 'YES' ELSE 'NO' END,
@@ -2929,7 +2927,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     CREATE TEMPORARY TABLE _SchemaSmith_CompressionStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT INTO _SchemaSmith_CompressionStmts (Stmt)
-    SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, c.Options)
+    SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, c.Options)
     FROM (
         SELECT t.TableName,
                CONCAT(
@@ -2986,7 +2984,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     CALL SchemaSmith_BypassStatisticsCache();
     INSERT INTO _SchemaSmith_AutoIncStmts (Stmt)
-    SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' AUTO_INCREMENT=', t.AutoIncrementValue)
+    SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' AUTO_INCREMENT=', t.AutoIncrementValue)
     FROM _SchemaSmith_Tables t
     INNER JOIN _SchemaSmith_CatTables k
         ON k.TableKey = t.TableKey
@@ -3146,7 +3144,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Add system versioning to existing tables');
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ADD SYSTEM VERSIONING')
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ADD SYSTEM VERSIONING')
         FROM _SchemaSmith_Tables t
         INNER JOIN _SchemaSmith_CatTables ist
             ON ist.TableKey = t.TableKey
@@ -3159,7 +3157,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DECLARE v_AddVersioningDone INT DEFAULT FALSE;
             DECLARE v_AddVersioningSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_AddVersioning CURSOR FOR
-                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ADD SYSTEM VERSIONING') AS AlterAddVersioningStatement
+                SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' ADD SYSTEM VERSIONING') AS AlterAddVersioningStatement
                 FROM _SchemaSmith_Tables t
                 INNER JOIN _SchemaSmith_CatTables ist
                     ON ist.TableKey = t.TableKey
@@ -3214,7 +3212,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             DECLARE v_ExclDone INT DEFAULT FALSE;
             DECLARE v_ExclSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
             DECLARE cur_Excl CURSOR FOR
-                SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+                SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                               ' MODIFY COLUMN ', c.ColumnScript)
                 FROM _SchemaSmith_Columns c
                 INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
@@ -3399,8 +3397,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop inbound foreign keys referencing tables removed from product');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Drop inbound FK: ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName,
-                      '` DROP FOREIGN KEY `', ConstraintName, '`')
+        SELECT CONNECTION_ID(), CONCAT('  Drop inbound FK: ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName),
+                      '` DROP FOREIGN KEY `', SchemaSmith_EscapeBackticks(ConstraintName), '`')
         FROM _SchemaSmith_InboundFKsToDrop;
 
         -- Materialize: fold each table's inbound FK drops into one multi-clause ALTER, then drain.
@@ -3408,8 +3406,8 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         CREATE TEMPORARY TABLE _SchemaSmith_InboundFKDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_InboundFKDropStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                      GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', ConstraintName, '`') ORDER BY ConstraintName SEPARATOR ', '))
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
+                      GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', SchemaSmith_EscapeBackticks(ConstraintName), '`') ORDER BY ConstraintName SEPARATOR ', '))
         FROM _SchemaSmith_InboundFKsToDrop
         GROUP BY TableName;
 
@@ -3444,7 +3442,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             SELECT CONNECTION_ID(),
                    CASE WHEN @has_custom_drop = 1
                         THEN CONCAT('CALL SchemaSmith_CustomTableDrop(''', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, ''', ''', po.ObjectName, ''')')
-                        ELSE CONCAT('DROP TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', po.ObjectName, '`')
+                        ELSE CONCAT('DROP TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(po.ObjectName), '`')
                         END
             FROM SchemaSmith_ProductOwnership po
             WHERE CONVERT(po.ProductName USING utf8mb4) = CONVERT(p_ProductName USING utf8mb4)
@@ -3494,7 +3492,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 po.ObjectName,
                 CASE WHEN @has_custom_drop = 1
                      THEN CONCAT('CALL SchemaSmith_CustomTableDrop(''', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, ''', ''', po.ObjectName, ''')')
-                     ELSE CONCAT('DROP TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', po.ObjectName, '`')
+                     ELSE CONCAT('DROP TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(po.ObjectName), '`')
                      END
             FROM SchemaSmith_ProductOwnership po
             WHERE CONVERT(po.ProductName USING utf8mb4) = CONVERT(p_ProductName USING utf8mb4)
@@ -3542,7 +3540,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                     ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
                 INSERT INTO _SchemaSmith_DropTableFoldStmt (Stmt)
                 SELECT CONCAT('DROP TABLE ',
-                              GROUP_CONCAT(CONCAT('`', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`') ORDER BY TableName SEPARATOR ', '))
+                              GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`') ORDER BY TableName SEPARATOR ', '))
                 FROM _SchemaSmith_TablesToDrop
                 HAVING COUNT(*) > 0;
 
@@ -3567,10 +3565,11 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
             DELETE po FROM SchemaSmith_ProductOwnership po
             INNER JOIN _SchemaSmith_TablesToDrop d
-                ON SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1)) = SchemaSmith_IdentifierKey(d.TableName)
+                ON SchemaSmith_IdentifierKey(LEFT(po.ObjectName, CHAR_LENGTH(d.TableName))) = SchemaSmith_IdentifierKey(d.TableName)
+               AND SUBSTRING(po.ObjectName, CHAR_LENGTH(d.TableName) + 1, 1) = '.'
             WHERE CONVERT(po.ProductName USING utf8mb4) = CONVERT(p_ProductName USING utf8mb4)
               AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
-              AND po.ObjectType = 'INDEX';
+              AND po.ObjectType IN ('INDEX', 'FOREIGN KEY', 'CHECK CONSTRAINT');
 
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_TablesToDrop;
         END IF;
@@ -3768,7 +3767,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                CONVERT(MAX(s.INDEX_TYPE) USING utf8mb4),
                GROUP_CONCAT(
                    CASE WHEN s.COLUMN_NAME IS NOT NULL THEN
-                       CONCAT('`', s.COLUMN_NAME, '`',
+                       CONCAT('`', SchemaSmith_EscapeBackticks(s.COLUMN_NAME), '`',
                               -- SPATIAL's SUB_PART is a phantom internal value (always 32), not a declared prefix; exclude it or spatial indexes never converge
                               -- MySQL 5.7 gives a BTREE key on a POINT column an implicit 25-byte prefix, the whole value: no prefix either
                               IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')), CONCAT('(', s.SUB_PART, ')'), ''),
@@ -3793,7 +3792,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                MAX(s.NON_UNIQUE),
                CONVERT(MAX(s.INDEX_TYPE) USING utf8mb4),
                GROUP_CONCAT(
-                   CONCAT('`', s.COLUMN_NAME, '`',
+                   CONCAT('`', SchemaSmith_EscapeBackticks(s.COLUMN_NAME), '`',
                           IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')), CONCAT('(', s.SUB_PART, ')'), ''),
                           CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    ORDER BY s.SEQ_IN_INDEX
@@ -3870,7 +3869,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         ON CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
         AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
         AND po.ObjectType = 'INDEX'
-        AND CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(snap.TableKey, '.', snap.IndexKey)
+        AND SchemaSmith_OwnedKeyMatches(po.ObjectName, snap.TableKey, snap.IndexKey) = 1
     WHERE i.IsPrimaryKey = 0
       -- New index name doesn't exist
       AND NOT EXISTS (
@@ -3888,7 +3887,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Handle index renames');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
                       SchemaSmith_BuildIndexRenameClause(p_DatabaseName, TableName, OldIndexName, NewIndexName))
         FROM _SchemaSmith_IndexRenames;
     ELSE
@@ -3900,7 +3899,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO _SchemaSmith_RenameStmts (LogMsg, Stmt)
         SELECT
             CONCAT('  Rename index: ', TableName, '.', OldIndexName, ' -> ', NewIndexName),
-            CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
+            CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
                    SchemaSmith_BuildIndexRenameClause(p_DatabaseName, TableName, OldIndexName, NewIndexName))
         FROM _SchemaSmith_IndexRenames;
 
@@ -3920,7 +3919,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- a live index), so no old name equals another rename's new name and one pass suffices.
         UPDATE SchemaSmith_ProductOwnership po
         INNER JOIN _SchemaSmith_IndexRenames r
-            ON CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(r.TableKey, '.', r.OldIndexKey)
+            ON SchemaSmith_OwnedKeyMatches(po.ObjectName, r.TableKey, r.OldIndexKey) = 1
         SET po.ObjectName = CONCAT(r.TableName, '.', r.NewIndexName)
         WHERE CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
           AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
@@ -3957,9 +3956,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO _SchemaSmith_IndexCaseRenames (LogMsg, Stmt)
         SELECT CONCAT('  Rename index (spelling): ', SchemaSmith_StripBacktickWrapping(i.TableName), '.', snap.IndexName,
                       ' -> ', SchemaSmith_StripBacktickWrapping(i.IndexName)),
-               CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
-                      SchemaSmith_StripBacktickWrapping(i.TableName), '` RENAME INDEX `', snap.IndexName, '` TO `',
-                      SchemaSmith_StripBacktickWrapping(i.IndexName), '`')
+               CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
+                      SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(i.TableName)), '` RENAME INDEX `', SchemaSmith_EscapeBackticks(snap.IndexName), '` TO `',
+                      SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(i.IndexName)), '`')
           FROM _SchemaSmith_Indexes i
           JOIN _SchemaSmith_IdxDetectSnap snap
             ON snap.TableKey = i.TableKey
@@ -4086,7 +4085,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop and recreate modified indexes');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
+        SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '` ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`')
         FROM _SchemaSmith_ModifiedIndexes;
 
         -- WhatIf twin of the 'index'/'dropped' audit below.
@@ -4105,9 +4104,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO _SchemaSmith_DropModIdxStmts (LogMsg, Stmt, AuditName, TableName, IndexName, AlterStmt)
         SELECT
             CONCAT('  Drop and recreate index: ', TableName, '.', IndexName),
-            CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
+            CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '` ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`'),
             CONCAT(TableName, '.', IndexName), TableName, IndexName,
-            CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP INDEX `', IndexName, '`')
+            CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '`')
         FROM _SchemaSmith_ModifiedIndexes;
         UPDATE _SchemaSmith_DropModIdxStmts s
           JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
@@ -4198,31 +4197,31 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- AXIS 1 — removed-from-product (env gate p_DropIndexesRemovedFromProduct dropped; per-table opt-out kept).
         INSERT IGNORE INTO _SchemaSmith_WouldDropStep8Indexes (TableName, IndexName)
         SELECT DISTINCT
-            SUBSTRING_INDEX(po.ObjectName, '.', 1),
-            SUBSTRING_INDEX(po.ObjectName, '.', -1)
+            ei.TableName,
+            ei.IndexName
         FROM SchemaSmith_ProductOwnership po
+        INNER JOIN _SchemaSmith_WouldDropStep8IdxCat ei
+            ON CHAR_LENGTH(po.ObjectName) = CHAR_LENGTH(ei.TableName) + 1 + CHAR_LENGTH(ei.IndexName)
+            AND SchemaSmith_OwnedNameMatches(po.ObjectName, ei.TableName, ei.IndexName) = 1
         INNER JOIN _SchemaSmith_Tables t
-            ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+            ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(ei.TableName)
         LEFT JOIN _SchemaSmith_WouldDropStep8DefIdx di
-            ON SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-            AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
-        LEFT JOIN _SchemaSmith_WouldDropStep8IdxCat ei
-            ON SchemaSmith_IdentifierKey(ei.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-            AND SchemaSmith_NameKeyCI(ei.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
+            ON SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+            AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
         WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
           AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
           AND po.ObjectType COLLATE utf8mb4_unicode_ci = _utf8mb4'INDEX' COLLATE utf8mb4_unicode_ci
           -- Per-table tightening (the env/product gate is removed for capture)
           AND COALESCE(t.DropIndexesRemovedFromProduct, 1) = 1
           -- Never drop PRIMARY KEY
-          AND UPPER(SUBSTRING_INDEX(po.ObjectName, '.', -1) COLLATE utf8mb4_unicode_ci) != _utf8mb4'PRIMARY' COLLATE utf8mb4_unicode_ci
+          AND UPPER(ei.IndexName COLLATE utf8mb4_unicode_ci) != _utf8mb4'PRIMARY' COLLATE utf8mb4_unicode_ci
           -- Not in current definition (LEFT JOIN produces NULL when not found) — also excludes modified indexes
           AND di.IndexName IS NULL
           -- Not a renamed index
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-                AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
+              WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
           )
           -- Verify index actually exists (snapshot bridge)
           AND ei.IndexName IS NOT NULL;
@@ -4317,33 +4316,33 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         IF p_DropIndexesRemovedFromProduct = 1 THEN
             INSERT INTO _SchemaSmith_IndexesToDrop (TableName, IndexName, IsUnique)
             SELECT
-                SUBSTRING_INDEX(po.ObjectName, '.', 1) AS TableName,
-                SUBSTRING_INDEX(po.ObjectName, '.', -1) AS IndexName,
+                ei.TableName AS TableName,
+                ei.IndexName AS IndexName,
                 COALESCE(ei.NonUnique = 0, 0) AS IsUnique
             FROM SchemaSmith_ProductOwnership po
+            INNER JOIN _SchemaSmith_Step8Idx ei
+                ON CHAR_LENGTH(po.ObjectName) = CHAR_LENGTH(ei.TableName) + 1 + CHAR_LENGTH(ei.IndexName)
+                AND SchemaSmith_OwnedNameMatches(po.ObjectName, ei.TableName, ei.IndexName) = 1
             -- Join with _SchemaSmith_Tables to only consider indexes on tables in the current definition
             INNER JOIN _SchemaSmith_Tables t
-                ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-            LEFT JOIN _SchemaSmith_Step8Idx ei
-                ON SchemaSmith_IdentifierKey(ei.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-                AND SchemaSmith_NameKeyCI(ei.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
+                ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(ei.TableName)
             LEFT JOIN _SchemaSmith_Indexes i
-                ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(i.TableName)) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-                AND CONVERT(SchemaSmith_StripBacktickWrapping(i.IndexName) USING utf8mb4) = CONVERT(SUBSTRING_INDEX(po.ObjectName, '.', -1) USING utf8mb4)
+                ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(i.TableName)) = SchemaSmith_IdentifierKey(ei.TableName)
+                AND CONVERT(SchemaSmith_StripBacktickWrapping(i.IndexName) USING utf8mb4) = CONVERT(ei.IndexName USING utf8mb4)
             WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
               AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
               AND po.ObjectType COLLATE utf8mb4_unicode_ci = _utf8mb4'INDEX' COLLATE utf8mb4_unicode_ci
               -- Per-table tightening (the env/product gate is the enclosing IF)
               AND COALESCE(t.DropIndexesRemovedFromProduct, 1) = 1
               -- Never drop PRIMARY KEY
-              AND UPPER(SUBSTRING_INDEX(po.ObjectName, '.', -1) COLLATE utf8mb4_unicode_ci) != _utf8mb4'PRIMARY' COLLATE utf8mb4_unicode_ci
+              AND UPPER(ei.IndexName COLLATE utf8mb4_unicode_ci) != _utf8mb4'PRIMARY' COLLATE utf8mb4_unicode_ci
               -- Not in current definition (LEFT JOIN produces NULL when not found)
               AND i.IndexName IS NULL
               -- Not a renamed index
               AND NOT EXISTS (
                   SELECT 1 FROM _SchemaSmith_IndexRenames r
-                  WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-                    AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
+                  WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                    AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
               )
               -- Verify index actually exists
               AND ei.IndexName IS NOT NULL;
@@ -4393,7 +4392,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                         AND CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(CONCAT(d.TableName, '.', d.IndexName) USING utf8mb4) COLLATE utf8mb4_bin);
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop indexes not declared for this deploy');
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
+            SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '` ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`')
             FROM _SchemaSmith_IndexesToDrop;
 
             -- #363: WhatIf twin of the ELSE-branch 'index'/'dropped' audit; same source + AuditName form.
@@ -4414,9 +4413,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             INSERT INTO _SchemaSmith_DropIdxStmts (LogMsg, Stmt, AuditName, TableName, AlterStmt)
             SELECT
                 CONCAT('  Drop index not declared for this deploy: ', TableName, '.', IndexName),
-                CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
+                CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '` ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`'),
                 CONCAT(TableName, '.', IndexName), TableName,
-                CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP INDEX `', IndexName, '`')
+                CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '`')
             FROM _SchemaSmith_IndexesToDrop;
             UPDATE _SchemaSmith_DropIdxStmts s
               JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
@@ -4584,7 +4583,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                     IF p_WhatIf = 0 THEN
                         -- DROP PERIOD FOR, not the DROP PERIOD the engine's own 4158 message suggests --
                         -- that shorthand does not parse.
-                        SET @ss_pdd_stmt = CONCAT('ALTER TABLE `', p_DatabaseName, '`.', @ss_pdd_table,
+                        SET @ss_pdd_stmt = CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(p_DatabaseName), '`.', @ss_pdd_table,
                                                   ' DROP PERIOD FOR ', @ss_pdd_name);
                         PREPARE ss_pdd_exec FROM @ss_pdd_stmt;
                         EXECUTE ss_pdd_exec;
@@ -4617,7 +4616,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                                    SchemaSmith_StripBacktickWrapping(@ss_pd_table)),
                                'one', SchemaSmith_StripBacktickWrapping(@ss_pd_name),
                                NULL, '$[*].Name') IS NULL THEN
-                    SET @ss_pd_sql = CONCAT('ALTER TABLE `', p_DatabaseName, '`.', @ss_pd_table,
+                    SET @ss_pd_sql = CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(p_DatabaseName), '`.', @ss_pd_table,
                                             ' ADD PERIOD FOR ', @ss_pd_name,
                                             '(', @ss_pd_start, ', ', @ss_pd_end, ')');
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)

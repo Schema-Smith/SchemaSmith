@@ -557,7 +557,10 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_TypeChangeKeepsForeignKey (a widening the engine makes under a foreign key keeps the key).
         // +1 = SchemaSmith_ExpressionReadsColumn (a generated column's reads matched as whole identifiers).
         // +1 = SchemaSmith_ColumnChangeLoss (H3: a type change that rounds or cuts values, for the destructive-change gate).
-        Assert.That(mysql.Length, Is.EqualTo(115));
+        // +1 = SchemaSmith_EscapeBackticks (a bare name's backticks doubled, whatever collation it arrives in).
+        // +1 = SchemaSmith_CheckClauseText (MySQL's CHECK_CLAUSE read back as the SQL that was declared).
+        // +1 = SchemaSmith_DecodeStringLiteral (a default's literal compared as the value it stands for).
+        Assert.That(mysql.Length, Is.EqualTo(118));
     }
 
     [Test]

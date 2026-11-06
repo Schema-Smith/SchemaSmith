@@ -737,7 +737,7 @@ BEGIN
         -- Escaping (double the embedded single quotes) mirrors that same established form -- see
         -- _SchemaSmith_FullTextIndexes.Comment's CREATE/ADD FULLTEXT INDEX emit in
         -- SchemaSmith_IndexOnlyQuench.sql.
-        CASE WHEN Comment IS NOT NULL AND Comment != '' THEN CONCAT(' COMMENT ''', REPLACE(Comment, '''', ''''''), '''') ELSE '' END,
+        CASE WHEN Comment IS NOT NULL AND Comment != '' THEN CONCAT(' COMMENT ', QUOTE(Comment), '') ELSE '' END,
         -- Truly last: MariaDB accepts this clause either side of COMMENT (verified on 11.4), so it goes
         -- where the grammar documents it rather than interleaved. Gated the same way SRID and INVISIBLE
         -- are -- below MariaDB 10.3, and on MySQL at any version, the keyword is a hard syntax error, so
@@ -773,7 +773,7 @@ BEGIN
            SET sp.EndColumn = c.ColumnName, sp.EndScript = c.ColumnScript;
         DELETE FROM _SchemaSmith_SystemPeriods WHERE EndColumn IS NULL;
         UPDATE _SchemaSmith_SystemPeriods sp
-           SET sp.LiveEndColumn = (SELECT CONCAT('`', c.COLUMN_NAME, '`')
+           SET sp.LiveEndColumn = (SELECT CONCAT('`', SchemaSmith_EscapeBackticks(c.COLUMN_NAME), '`')
                                      FROM INFORMATION_SCHEMA.COLUMNS c
                                     WHERE c.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(c.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
                                       AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(sp.TableName))
@@ -1331,9 +1331,9 @@ BEGIN
       JOIN _SchemaSmith_Columns c ON c.TableName = t.TableName AND c.IsAutoIncrement = 1
       LEFT JOIN _SchemaSmith_Indexes i ON i.TableName = t.TableName AND i.IsPrimaryKey = 1
        SET t.AutoIncrementColumn = SchemaSmith_StripBacktickWrapping(c.ColumnName),
-           t.AutoIncrementKeyClause = CONCAT(', KEY (`', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`)')
+           t.AutoIncrementKeyClause = CONCAT(', KEY (`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`)')
      WHERE i.RowId IS NULL
-        OR LOCATE(CONCAT('`', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`') COLLATE utf8mb4_unicode_ci, i.IndexColumns COLLATE utf8mb4_unicode_ci) > 1;
+        OR LOCATE(CONCAT('`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`') COLLATE utf8mb4_unicode_ci, i.IndexColumns COLLATE utf8mb4_unicode_ci) > 1;
 
     -- A declared index that leads with the column is that index, created in the CREATE under its own name and options,
     -- so the index pass finds it present. An unnamed KEY is left only when the package declares none: it belongs to no
@@ -1343,10 +1343,10 @@ BEGIN
                                  AND UPPER(i.IndexType) IN ('BTREE', 'HASH')
        SET t.AutoIncrementKeyClause = CONCAT(', ', IF(i.IsUnique = 1, 'UNIQUE ', ''), 'KEY ', i.IndexName, ' (', i.IndexColumns, ')',
                                              IF(UPPER(i.IndexType) = 'HASH', ' USING HASH', ''),
-                                             IF(COALESCE(i.Comment, '') <> '', CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), ''''), ''),
+                                             IF(COALESCE(i.Comment, '') <> '', CONCAT(' COMMENT ', QUOTE(i.Comment), ''), ''),
                                              IF(i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1, SchemaSmith_IndexInvisibleClause(), ''))
      WHERE t.AutoIncrementColumn IS NOT NULL
-       AND LOCATE(CONCAT('`', t.AutoIncrementColumn, '`') COLLATE utf8mb4_unicode_ci, i.IndexColumns COLLATE utf8mb4_unicode_ci) = 1;
+       AND LOCATE(CONCAT('`', SchemaSmith_EscapeBackticks(t.AutoIncrementColumn), '`') COLLATE utf8mb4_unicode_ci, i.IndexColumns COLLATE utf8mb4_unicode_ci) = 1;
 
     -- Now that ShouldApply has filtered each temp table down to at most one row per natural
     -- key, promote the natural-key indexes to UNIQUE so MySQL's optimizer can infer functional

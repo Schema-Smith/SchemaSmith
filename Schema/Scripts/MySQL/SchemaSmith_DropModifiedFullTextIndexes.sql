@@ -30,7 +30,7 @@ BEGIN
     INSERT INTO _SchemaSmith_FTLive (TableName, IndexName, TableKey, IndexKey, ColumnList, IndexComment)
     SELECT CONVERT(s.TABLE_NAME USING utf8mb4), CONVERT(s.INDEX_NAME USING utf8mb4),
            SchemaSmith_IdentifierKey(s.TABLE_NAME), SchemaSmith_NameKeyCI(s.INDEX_NAME),
-           CONVERT(GROUP_CONCAT(LOWER(s.COLUMN_NAME) ORDER BY s.SEQ_IN_INDEX SEPARATOR ',') USING utf8mb4),
+           CONVERT(GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(LOWER(s.COLUMN_NAME)), '`') ORDER BY s.SEQ_IN_INDEX SEPARATOR ',') USING utf8mb4),
            CONVERT(MAX(s.INDEX_COMMENT) USING utf8mb4)
     FROM INFORMATION_SCHEMA.STATISTICS s
     WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
@@ -47,15 +47,15 @@ BEGIN
     SELECT l.TableName, l.IndexName
     FROM _SchemaSmith_FullTextIndexes ft
     JOIN _SchemaSmith_FTLive l ON l.TableKey = ft.TableKey AND l.IndexKey = ft.IndexKey
-    WHERE CAST(LOWER(REPLACE(REPLACE(ft.Columns, '`', ''), ' ', '')) AS BINARY) != CAST(l.ColumnList AS BINARY)
+    WHERE CAST(LOWER(SchemaSmith_NormalizeIndexColumns(ft.Columns)) AS BINARY) != CAST(l.ColumnList AS BINARY)
        OR CAST(COALESCE(ft.Comment, '') AS BINARY) != CAST(COALESCE(l.IndexComment, '') AS BINARY);
 
     IF EXISTS (SELECT 1 FROM _SchemaSmith_FTModified) THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop modified fulltext indexes');
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Drop modified fulltext index: DROP INDEX `', IndexName, '` ON `',
-                                         CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
+            SELECT CONNECTION_ID(), CONCAT('  Drop modified fulltext index: DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '` ON `',
+                                         SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`')
             FROM _SchemaSmith_FTModified;
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
             SELECT CONNECTION_ID(), 'fullTextIndex', CONCAT(TableName, '.', IndexName), 'wouldDrop'
@@ -65,8 +65,8 @@ BEGIN
             CREATE TEMPORARY TABLE _SchemaSmith_FTModStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT, AuditName VARCHAR(257))
                 ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             INSERT INTO _SchemaSmith_FTModStmts (Stmt, AuditName)
-            SELECT CONCAT('ALTER TABLE `', REPLACE(CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`', '``'), '`.`',
-                          REPLACE(TableName, '`', '``'), '` DROP INDEX `', REPLACE(IndexName, '`', '``'), '`'),
+            SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
+                          SchemaSmith_EscapeBackticks(TableName), '` DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '`'),
                    CONCAT(TableName, '.', IndexName)
             FROM _SchemaSmith_FTModified;
             SET @v_ftmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_FTModStmts);

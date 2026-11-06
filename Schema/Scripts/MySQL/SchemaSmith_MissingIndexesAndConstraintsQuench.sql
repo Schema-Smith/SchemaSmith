@@ -114,10 +114,10 @@ BEGIN
         INSERT INTO _SchemaSmith_GenColStmts (LogMsg, Stmt, AuditName)
         SELECT
             CONCAT('  Add generated column: ',
-                   CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+                   CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                           ' ADD COLUMN ', c.ColumnScript),
                    CASE WHEN COALESCE(c.VariantName, '') <> '' THEN CONCAT(' (variant: ', c.VariantName, ')') ELSE '' END),
-            CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+            CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                    ' ADD COLUMN ', c.ColumnScript),
             CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName))
         FROM _SchemaSmith_Columns c
@@ -201,14 +201,14 @@ BEGIN
                            WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE '
                            ELSE '' END,
                       'INDEX ', i.IndexName,
-                      ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
+                      ' ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
                       ' (', i.EmitColumns, ')',
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
-                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
+                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=', QUOTE(i.VectorDistance), ''))) ELSE '' END,
                       CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
-                           THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
+                           THEN CONCAT(' COMMENT ', QUOTE(i.Comment), '')
                            ELSE '' END)
         FROM _SchemaSmith_Indexes i
         WHERE i.IsPrimaryKey = 0
@@ -261,7 +261,7 @@ BEGIN
                 CASE WHEN COALESCE(i.VariantName, '') <> '' THEN CONCAT(' (variant: ', i.VariantName, ')') ELSE '' END),
             CONCAT(
                 CASE WHEN d.IndexName IS NOT NULL
-                     THEN CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
+                     THEN CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
                                  ' DROP INDEX ', i.IndexName, ', ADD ')
                      ELSE 'CREATE ' END,
                 CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL '
@@ -270,14 +270,14 @@ BEGIN
                      ELSE '' END,
                 'INDEX ', i.IndexName,
                 CASE WHEN d.IndexName IS NOT NULL THEN ''
-                     ELSE CONCAT(' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName) END,
+                     ELSE CONCAT(' ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', i.TableName) END,
                 ' (', i.EmitColumns, ')',
                 CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                      WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                      ELSE '' END,
-                CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
+                CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=', QUOTE(i.VectorDistance), ''))) ELSE '' END,
                 CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
-                     THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
+                     THEN CONCAT(' COMMENT ', QUOTE(i.Comment), '')
                      ELSE '' END,
                 CASE WHEN i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1 THEN SchemaSmith_IndexInvisibleClause() ELSE '' END
             ),
@@ -429,7 +429,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop modified check constraints');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`')
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ', SchemaSmith_DropCheckClause(), ' `', SchemaSmith_EscapeBackticks(ConstraintName), '`')
         FROM _SchemaSmith_ModifiedChecks;
         -- WhatIf twin of the 'constraint'/'dropped' audit in the ELSE branch; same source.
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -444,7 +444,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
         INSERT INTO _SchemaSmith_DropModChkStmts (LogMsg, Stmt, AuditName)
         SELECT
             CONCAT('  Drop modified check constraint: ', TableName, '.', ConstraintName),
-            CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`'),
+            CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ', SchemaSmith_DropCheckClause(), ' `', SchemaSmith_EscapeBackticks(ConstraintName), '`'),
             CONCAT(TableName, '.', ConstraintName)
         FROM _SchemaSmith_ModifiedChecks;
 
@@ -605,7 +605,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop check constraints removed from product');
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`')
+            SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ', SchemaSmith_DropCheckClause(), ' `', SchemaSmith_EscapeBackticks(ConstraintName), '`')
             FROM _SchemaSmith_ChecksToDropByAbsence;
 
             -- #363: WhatIf twin of the ELSE-branch 'constraint'/'dropped' audit; same source, wouldDrop.
@@ -619,7 +619,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
             CREATE TEMPORARY TABLE _SchemaSmith_DropAbsChkStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT, AuditName TEXT)
                 ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             INSERT INTO _SchemaSmith_DropAbsChkStmts (Stmt, AuditName)
-            SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`'),
+            SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ', SchemaSmith_DropCheckClause(), ' `', SchemaSmith_EscapeBackticks(ConstraintName), '`'),
                    CONCAT(TableName, '.', ConstraintName)
             FROM _SchemaSmith_ChecksToDropByAbsence;
 
@@ -669,10 +669,10 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
     -- Refused here, before any check is created.
     IF SchemaSmith_SupportsCheckConstraints() = 1 AND VERSION() NOT LIKE '%MariaDB%' THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkDeclared;
-        CREATE TEMPORARY TABLE _SchemaSmith_ChkDeclared ENGINE=InnoDB
+        CREATE TEMPORARY TABLE _SchemaSmith_ChkDeclared (RowId INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB
             SELECT c.TableName, c.ConstraintName, c.TableKey, c.ConstraintKey FROM _SchemaSmith_CheckConstraints c;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkCollisions;
-        CREATE TEMPORARY TABLE _SchemaSmith_ChkCollisions (Message TEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        CREATE TEMPORARY TABLE _SchemaSmith_ChkCollisions (RowId INT AUTO_INCREMENT PRIMARY KEY, Message TEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_ChkCollisions (Message)
         SELECT DISTINCT CONCAT('  CHECK constraint ', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ' declared on ',
                                SchemaSmith_StripBacktickWrapping(c.TableName), ' is already the name of a check on ', e.TableName)
@@ -744,7 +744,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
     ELSEIF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing check constraints');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' ADD CONSTRAINT ', c.ConstraintName,
                       ' CHECK (', c.Expression, ')', IF(c.Enforced = 0 AND VERSION() NOT LIKE '%MariaDB%', ' NOT ENFORCED', ''))
         FROM _SchemaSmith_CheckConstraints c
@@ -776,7 +776,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
             CONCAT('  Create check constraint: ', c.TableName, '.', c.ConstraintName,
                 CASE WHEN COALESCE(c.VariantName, '') <> '' THEN CONCAT(' (variant: ', c.VariantName, ')') ELSE '' END),
             CONCAT(
-                'ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+                'ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                 ' ADD CONSTRAINT ', c.ConstraintName,
                 ' CHECK (', c.Expression, ')',
                 -- NOT ENFORCED is part of the definition (MySQL 8.0.16+, the CHECK gate itself); a change re-creates.

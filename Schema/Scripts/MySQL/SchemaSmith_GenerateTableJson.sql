@@ -166,7 +166,9 @@ BEGIN
                 WHEN c.COLUMN_DEFAULT LIKE 'b''%' THEN CONVERT(c.COLUMN_DEFAULT USING utf8mb4)
                 WHEN c.COLUMN_DEFAULT LIKE '0x%' THEN CONVERT(c.COLUMN_DEFAULT USING utf8mb4)
                 -- String literals: normalize (strips MariaDB's outer quotes) then wrap consistently
-                ELSE CONVERT(CONCAT('''', REPLACE(CONVERT(SchemaSmith_NormalizeColumnDefault(c.COLUMN_DEFAULT) USING utf8mb4), '''', ''''''), '''') USING utf8mb4)
+                -- The value written back as a literal: quotes doubled, the established form in a package, and backslashes
+                -- doubled too, or a deploy reads them as escapes.
+                ELSE CONVERT(CONCAT('''', REPLACE(REPLACE(CONVERT(SchemaSmith_NormalizeColumnDefault(c.COLUMN_DEFAULT) USING utf8mb4), '\\', '\\\\'), '''', ''''''), '''') USING utf8mb4)
             END,
             -- ON UPDATE CURRENT_TIMESTAMP[(n)] -- deliberately independent of Default above: a column's
             -- DEFAULT CURRENT_TIMESTAMP governs INSERT-time initialization, this governs UPDATE-time
@@ -435,7 +437,7 @@ BEGIN
         SET @v_ccSql = CONCAT('SELECT CONCAT(''['', IFNULL(GROUP_CONCAT(
     JSON_OBJECT(
         ''Name'', cc.CONSTRAINT_NAME,
-        ''Expression'', SchemaSmith_CleanCheckClause(cc.CHECK_CLAUSE)', IF(VERSION() LIKE '%MariaDB%', '', ', ''Enforced'', CASE WHEN tc.ENFORCED = ''NO'' THEN FALSE END'), '
+        ''Expression'', SchemaSmith_CleanCheckClause(SchemaSmith_CheckClauseText(cc.CHECK_CLAUSE))', IF(VERSION() LIKE '%MariaDB%', '', ', ''Enforced'', CASE WHEN tc.ENFORCED = ''NO'' THEN FALSE END'), '
     )
     ORDER BY cc.CONSTRAINT_NAME SEPARATOR '',''
 ), ''''), '']'') INTO @v_ccResult

@@ -29,6 +29,7 @@ gate: BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Destructive;
     CREATE TEMPORARY TABLE _SchemaSmith_Destructive (
+        RowId INT AUTO_INCREMENT PRIMARY KEY,
         Kind VARCHAR(16) NOT NULL,
         TableName VARCHAR(300) COLLATE utf8mb4_unicode_ci NOT NULL,
         ObjectName VARCHAR(512) COLLATE utf8mb4_unicode_ci NOT NULL,
@@ -64,7 +65,7 @@ gate: BEGIN
 
     IF p_DropColumns = 1 THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GateDefined;
-        CREATE TEMPORARY TABLE _SchemaSmith_GateDefined ENGINE=InnoDB
+        CREATE TEMPORARY TABLE _SchemaSmith_GateDefined (RowId INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB
             SELECT c.TableKey, c.ColumnKey, c.OldNameKey FROM _SchemaSmith_Columns c;
         CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_Destructive (Kind, TableName, ObjectName, TableKey)
@@ -92,7 +93,7 @@ gate: BEGIN
     -- other the rows after the first are converted with a warning.
     CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GateEngines;
-    CREATE TEMPORARY TABLE _SchemaSmith_GateEngines ENGINE=InnoDB
+    CREATE TEMPORARY TABLE _SchemaSmith_GateEngines (RowId INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB
         SELECT CONVERT(IF(@@lower_case_table_names = 0, it.TABLE_NAME, LOWER(it.TABLE_NAME)) USING utf8mb4) COLLATE utf8mb4_bin AS TableKey,
                IF(@@SESSION.sql_mode LIKE '%STRICT_ALL_TABLES%'
                   OR (@@SESSION.sql_mode LIKE '%STRICT_TRANS_TABLES%' AND it.ENGINE = 'InnoDB'), 1, 0) AS Strict
@@ -141,7 +142,7 @@ gate: BEGIN
         DEALLOCATE PREPARE ss_gate_stmt;
     END IF;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GateRows;
-    CREATE TEMPORARY TABLE _SchemaSmith_GateRows ENGINE=InnoDB
+    CREATE TEMPORARY TABLE _SchemaSmith_GateRows (RowId INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB
         SELECT CONVERT(IF(@@lower_case_table_names = 0, it.TABLE_NAME, LOWER(it.TABLE_NAME)) USING utf8mb4) COLLATE utf8mb4_bin AS TableKey,
                CASE WHEN it.ENGINE IN ('InnoDB', 'MyISAM', 'Aria') THEN it.TABLE_ROWS END AS EstimatedRows
           FROM INFORMATION_SCHEMA.TABLES it

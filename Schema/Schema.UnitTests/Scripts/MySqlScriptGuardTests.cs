@@ -114,6 +114,35 @@ public class MySqlScriptGuardTests
             + "MySQL 8.0. Compare it to a variable instead (`<column> = v_DbCi`):\n  " + string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// Every working table the scripts create has a primary key. A server running MariaDB's innodb_force_primary_key
+    /// or MySQL's sql_require_primary_key refuses a temporary table without one too, so a single keyless table fails
+    /// every deploy there.
+    /// </summary>
+    [Test]
+    public void EveryWorkingTable_HasAPrimaryKey()
+    {
+        var offenders = new List<string>();
+        var tablesChecked = 0;
+        foreach (var (name, sql) in Scripts())
+        {
+            var code = Regex.Replace(sql, @"--[^\r\n]*", string.Empty);
+            foreach (Match start in Regex.Matches(code, @"CREATE\s+TEMPORARY\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(`?\w+`?)",
+                         RegexOptions.IgnoreCase))
+            {
+                tablesChecked++;
+                var statement = code[start.Index..].Split(';')[0];
+                if (!Regex.IsMatch(statement, @"\bPRIMARY\s+KEY\b", RegexOptions.IgnoreCase))
+                    offenders.Add($"{name}: {start.Groups[1].Value}");
+            }
+        }
+
+        Assert.That(tablesChecked, Is.GreaterThan(100), "too few working tables found; the scan is broken");
+        Assert.That(offenders, Is.Empty,
+            "A working table has no primary key, so every deploy fails on a server that requires one. Give it one "
+            + "(a RowId INT AUTO_INCREMENT PRIMARY KEY column also works ahead of a SELECT):\n  " + string.Join("\n  ", offenders));
+    }
+
     private static int ClosingParen(string text, int open)
     {
         var depth = 0;

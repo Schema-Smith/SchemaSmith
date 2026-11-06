@@ -24,10 +24,10 @@ BEGIN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT(
                       'CREATE FULLTEXT INDEX ', ft.IndexName,
-                      ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', ft.TableName,
+                      ' ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', ft.TableName,
                       ' (', ft.Columns, ')',
                       CASE WHEN ft.Comment IS NOT NULL AND ft.Comment != ''
-                           THEN CONCAT(' COMMENT ''', REPLACE(ft.Comment, '''', ''''''), '''')
+                           THEN CONCAT(' COMMENT ', QUOTE(ft.Comment), '')
                            ELSE '' END,
                       CASE WHEN ft.Parser IS NOT NULL AND ft.Parser != ''
                            THEN CONCAT(' WITH PARSER ', ft.Parser)
@@ -71,17 +71,17 @@ BEGIN
         CREATE TEMPORARY TABLE _SchemaSmith_FTCreateStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT, AuditName VARCHAR(257), TableRef TEXT, DisplayName TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_FTCreateStmts (Stmt, AuditName, TableRef, DisplayName)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', ft.TableName,
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', ft.TableName,
                       ' ADD FULLTEXT INDEX ', ft.IndexName,
                       ' (', ft.Columns, ')',
                       CASE WHEN ft.Comment IS NOT NULL AND ft.Comment != ''
-                           THEN CONCAT(' COMMENT ''', REPLACE(ft.Comment, '''', ''''''), '''')
+                           THEN CONCAT(' COMMENT ', QUOTE(ft.Comment), '')
                            ELSE '' END,
                       CASE WHEN ft.Parser IS NOT NULL AND ft.Parser != ''
                            THEN CONCAT(' WITH PARSER ', ft.Parser)
                            ELSE '' END),
                CONCAT(SchemaSmith_StripBacktickWrapping(ft.TableName), '.', SchemaSmith_StripBacktickWrapping(ft.IndexName)),
-               CONCAT('`', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', ft.TableName),
+               CONCAT('`', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', ft.TableName),
                CONCAT(ft.TableName, '.', ft.IndexName)
         FROM _SchemaSmith_FullTextIndexes ft
         WHERE NOT EXISTS (

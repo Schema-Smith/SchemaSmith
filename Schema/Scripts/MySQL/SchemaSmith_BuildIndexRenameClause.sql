@@ -30,7 +30,7 @@ BEGIN
   DECLARE v_ErrMsg VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
   IF SchemaSmith_SupportsRenameIndex() = 1 THEN
-    RETURN CONCAT('RENAME INDEX `', p_OldIndexName, '` TO `', p_NewIndexName, '`');
+    RETURN CONCAT('RENAME INDEX `', SchemaSmith_EscapeBackticks(p_OldIndexName), '` TO `', SchemaSmith_EscapeBackticks(p_NewIndexName), '`');
   END IF;
 
   -- The degrade path reads the ONE row the caller already built in _SchemaSmith_IdxDetectSnap
@@ -52,9 +52,9 @@ BEGIN
       SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_ErrMsg;
   END IF;
 
-  RETURN CONCAT('DROP INDEX `', p_OldIndexName, '`, ADD ',
+  RETURN CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(p_OldIndexName), '`, ADD ',
       IF(v_NonUnique = 0, 'UNIQUE ', ''),
-      'INDEX `', p_NewIndexName, '` (', v_NormColumns, ')');
+      'INDEX `', SchemaSmith_EscapeBackticks(p_NewIndexName), '` (', v_NormColumns, ')');
 END //
 
 DELIMITER ;

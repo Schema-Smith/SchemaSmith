@@ -703,6 +703,7 @@ CREATE TABLE `{_integrationDb}`.`DefaultKinds` (
     `ELit` VARCHAR(40) NULL DEFAULT ('abc'),
     `SParen` VARCHAR(40) NULL DEFAULT 'n/a (unknown)',
     `SQuote` VARCHAR(40) NULL DEFAULT 'it''s',
+    `SBack` VARCHAR(40) NULL DEFAULT 'a\\d+\\b',
     `TStamp` DATETIME NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`Id`)
 )";
@@ -721,6 +722,8 @@ CREATE TABLE `{_integrationDb}`.`DefaultKinds` (
             // a literal is a literal whatever it contains
             AssertColumnProperties(ColumnNamed(result, "SParen"), "SParen", "varchar(40)", true, "'n/a (unknown)'");
             AssertColumnProperties(ColumnNamed(result, "SQuote"), "SQuote", "varchar(40)", true, "'it''s'");
+            // a backslash written so a deploy reads it back as a backslash, not as an escape
+            AssertColumnProperties(ColumnNamed(result, "SBack"), "SBack", "varchar(40)", true, @"'a\\d+\\b'");
             AssertColumnProperties(ColumnNamed(result, "TStamp"), "TStamp", "datetime", true, "CURRENT_TIMESTAMP");
         });
     }

@@ -21,7 +21,7 @@
     },
     {
       "Name": "ObjectName",
-      "DataType": "VARCHAR(64)",
+      "DataType": "VARCHAR(129)",
       "Nullable": false,
       "Collation": "utf8mb4_bin"
     },

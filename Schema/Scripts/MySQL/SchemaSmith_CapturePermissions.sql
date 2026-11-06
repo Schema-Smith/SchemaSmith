@@ -34,9 +34,9 @@ BEGIN
                     CONCAT_WS(', ',
                       IF(FIND_IN_SET('Execute', pp.Proc_priv) > 0, 'EXECUTE', NULL),
                       IF(FIND_IN_SET('Alter Routine', pp.Proc_priv) > 0, 'ALTER ROUTINE', NULL)),
-                    ' ON ', p_Kind, ' `', REPLACE(p_Db, '`', '``'), '`.`', REPLACE(p_Name, '`', '``'), '` TO ''',
-                    REPLACE(CONVERT(pp.User USING utf8mb4), '''', ''''''), '''',
-                    IF(pp.Host = '' AND VERSION() LIKE '%MariaDB%', '', CONCAT('@''', REPLACE(CONVERT(pp.Host USING utf8mb4), '''', ''''''), '''')),
+                    ' ON ', p_Kind, ' `', SchemaSmith_EscapeBackticks(p_Db), '`.`', SchemaSmith_EscapeBackticks(p_Name), '` TO ',
+                    QUOTE(CONVERT(pp.User USING utf8mb4)), '',
+                    IF(pp.Host = '' AND VERSION() LIKE '%MariaDB%', '', CONCAT('@', QUOTE(CONVERT(pp.Host USING utf8mb4)), '')),
                     IF(FIND_IN_SET('Grant', pp.Proc_priv) > 0, ' WITH GRANT OPTION', ''), ';')
              ORDER BY pp.User, pp.Host SEPARATOR '\n')
       INTO v_Script

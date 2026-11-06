@@ -30,9 +30,9 @@ BEGIN
        AND UPPER(COALESCE(t.Engine, 'InnoDB')) NOT IN ('MEMORY', 'HEAP')
        AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
                     WHERE c.TableKey = i.TableKey
-                      AND LOCATE(CONVERT(LOWER(CONCAT('`', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`')) USING utf8mb4) COLLATE utf8mb4_bin,
+                      AND LOCATE(CONVERT(LOWER(CONCAT('`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`')) USING utf8mb4) COLLATE utf8mb4_bin,
                                  CONVERT(LOWER(i.IndexColumns) USING utf8mb4) COLLATE utf8mb4_bin) > 0
-                      AND LOCATE(CONVERT(LOWER(CONCAT('`', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`(')) USING utf8mb4) COLLATE utf8mb4_bin,
+                      AND LOCATE(CONVERT(LOWER(CONCAT('`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`(')) USING utf8mb4) COLLATE utf8mb4_bin,
                                  CONVERT(LOWER(i.IndexColumns) USING utf8mb4) COLLATE utf8mb4_bin) = 0
                       AND (UPPER(c.DataType) REGEXP '^(TINY|MEDIUM|LONG)?(TEXT|BLOB)|^JSON'
                            OR (UPPER(c.DataType) REGEXP '^(VAR)?(CHAR|BINARY)[[:space:]]*[(][0-9]+'

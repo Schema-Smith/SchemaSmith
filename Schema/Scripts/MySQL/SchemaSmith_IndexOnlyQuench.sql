@@ -181,7 +181,7 @@ BEGIN
                CONVERT(MAX(s.INDEX_TYPE) USING utf8mb4),
                GROUP_CONCAT(
                    CASE WHEN s.COLUMN_NAME IS NOT NULL THEN
-                       CONCAT('`', s.COLUMN_NAME, '`',
+                       CONCAT('`', SchemaSmith_EscapeBackticks(s.COLUMN_NAME), '`',
                               -- SPATIAL's SUB_PART is a phantom internal value (always 32), not a declared prefix; exclude it or spatial indexes never converge
                               -- MySQL 5.7 gives a BTREE key on a POINT column an implicit 25-byte prefix, the whole value: no prefix either
                               IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')), CONCAT('(', s.SUB_PART, ')'), ''),
@@ -206,7 +206,7 @@ BEGIN
                MAX(s.NON_UNIQUE),
                CONVERT(MAX(s.INDEX_TYPE) USING utf8mb4),
                GROUP_CONCAT(
-                   CONCAT('`', s.COLUMN_NAME, '`',
+                   CONCAT('`', SchemaSmith_EscapeBackticks(s.COLUMN_NAME), '`',
                           IF(s.SUB_PART IS NOT NULL AND s.INDEX_TYPE != 'SPATIAL' AND NOT (s.SUB_PART = 25 AND EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS pc WHERE pc.TABLE_SCHEMA = s.TABLE_SCHEMA AND pc.TABLE_NAME = s.TABLE_NAME AND pc.COLUMN_NAME = s.COLUMN_NAME AND pc.DATA_TYPE = 'point')), CONCAT('(', s.SUB_PART, ')'), ''),
                           CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                    ORDER BY s.SEQ_IN_INDEX
@@ -282,7 +282,7 @@ BEGIN
         ON CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
         AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
         AND po.ObjectType = 'INDEX'
-        AND CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(snap.TableKey, '.', snap.IndexKey)
+        AND SchemaSmith_OwnedKeyMatches(po.ObjectName, snap.TableKey, snap.IndexKey) = 1
     WHERE i.IsPrimaryKey = 0
       -- New index name doesn't exist
       AND NOT EXISTS (
@@ -300,7 +300,7 @@ BEGIN
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Handle index renames');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
                       SchemaSmith_BuildIndexRenameClause(p_DatabaseName, TableName, OldIndexName, NewIndexName))
         FROM _SchemaSmith_IndexRenames;
     ELSE
@@ -314,7 +314,7 @@ BEGIN
         CREATE TEMPORARY TABLE _SchemaSmith_IndexRenameStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_IndexRenameStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
                       GROUP_CONCAT(SchemaSmith_BuildIndexRenameClause(p_DatabaseName, TableName, OldIndexName, NewIndexName) ORDER BY OldIndexName SEPARATOR ', '))
         FROM _SchemaSmith_IndexRenames
         GROUP BY TableName;
@@ -332,7 +332,7 @@ BEGIN
         -- Update ProductOwnership with new names (set-based; mirrors the per-row UPDATE this loop replaced).
         UPDATE SchemaSmith_ProductOwnership po
         INNER JOIN _SchemaSmith_IndexRenames r
-            ON CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(r.TableKey, '.', r.OldIndexKey)
+            ON SchemaSmith_OwnedKeyMatches(po.ObjectName, r.TableKey, r.OldIndexKey) = 1
         SET po.ObjectName = CONCAT(r.TableName, '.', r.NewIndexName)
         WHERE CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
           AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
@@ -369,9 +369,9 @@ BEGIN
         INSERT INTO _SchemaSmith_IndexCaseRenames (LogMsg, Stmt)
         SELECT CONCAT('  Rename index (spelling): ', SchemaSmith_StripBacktickWrapping(i.TableName), '.', snap.IndexName,
                       ' -> ', SchemaSmith_StripBacktickWrapping(i.IndexName)),
-               CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
-                      SchemaSmith_StripBacktickWrapping(i.TableName), '` RENAME INDEX `', snap.IndexName, '` TO `',
-                      SchemaSmith_StripBacktickWrapping(i.IndexName), '`')
+               CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
+                      SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(i.TableName)), '` RENAME INDEX `', SchemaSmith_EscapeBackticks(snap.IndexName), '` TO `',
+                      SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(i.IndexName)), '`')
           FROM _SchemaSmith_Indexes i
           JOIN _SchemaSmith_IdxDetectSnap snap
             ON snap.TableKey = i.TableKey
@@ -498,7 +498,7 @@ BEGIN
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop and recreate modified indexes');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
+        SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '` ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`')
         FROM _SchemaSmith_ModifiedIndexes;
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -516,9 +516,9 @@ BEGIN
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_IndexModStmts (LogMsg, Stmt, AuditName, TableName, IndexName, AlterStmt)
         SELECT CONCAT('  Drop and recreate index: ', TableName, '.', IndexName),
-               CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
+               CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '` ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`'),
                CONCAT(TableName, '.', IndexName), TableName, IndexName,
-               CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP INDEX `', IndexName, '`')
+               CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '`')
         FROM _SchemaSmith_ModifiedIndexes;
         UPDATE _SchemaSmith_IndexModStmts s
           JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
@@ -601,31 +601,31 @@ BEGIN
         -- AXIS 1 — removed-from-product (env gate p_DropIndexesRemovedFromProduct dropped; per-table opt-out kept).
         INSERT IGNORE INTO _SchemaSmith_WouldDropIndexes (TableName, IndexName)
         SELECT DISTINCT
-            SUBSTRING_INDEX(po.ObjectName, '.', 1),
-            SUBSTRING_INDEX(po.ObjectName, '.', -1)
+            ei.TableName,
+            ei.IndexName
         FROM SchemaSmith_ProductOwnership po
+        INNER JOIN _SchemaSmith_WouldDropIdxCat ei
+            ON CHAR_LENGTH(po.ObjectName) = CHAR_LENGTH(ei.TableName) + 1 + CHAR_LENGTH(ei.IndexName)
+            AND SchemaSmith_OwnedNameMatches(po.ObjectName, ei.TableName, ei.IndexName) = 1
         INNER JOIN _SchemaSmith_Tables t
-            ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+            ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(ei.TableName)
         LEFT JOIN _SchemaSmith_WouldDropDefIdx di
-            ON SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-            AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
-        LEFT JOIN _SchemaSmith_WouldDropIdxCat ei
-            ON SchemaSmith_IdentifierKey(ei.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-            AND SchemaSmith_NameKeyCI(ei.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
+            ON SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+            AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
         WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
           AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
           AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci
           -- Per-table tightening (the env/product gate is removed for capture)
           AND COALESCE(t.DropIndexesRemovedFromProduct, 1) = 1
           -- Never drop PRIMARY KEY
-          AND UPPER(SUBSTRING_INDEX(po.ObjectName, '.', -1) COLLATE utf8mb4_unicode_ci) != 'PRIMARY' COLLATE utf8mb4_unicode_ci
+          AND UPPER(ei.IndexName COLLATE utf8mb4_unicode_ci) != 'PRIMARY' COLLATE utf8mb4_unicode_ci
           -- Not in current definition (LEFT JOIN produces NULL when not found)
           AND di.IndexName IS NULL
           -- Not a renamed index
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_IndexRenames r
-              WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-                AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
+              WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
           )
           -- Verify index actually exists (snapshot bridge)
           AND ei.IndexName IS NOT NULL;
@@ -723,32 +723,32 @@ BEGIN
         IF p_DropIndexesRemovedFromProduct = 1 THEN
             INSERT INTO _SchemaSmith_IndexesToDrop (TableName, IndexName, IsUnique)
             SELECT DISTINCT
-                SUBSTRING_INDEX(po.ObjectName, '.', 1) AS TableName,
-                SUBSTRING_INDEX(po.ObjectName, '.', -1) AS IndexName,
+                ei.TableName AS TableName,
+                ei.IndexName AS IndexName,
                 COALESCE(ei.NonUnique = 0, 0) AS IsUnique
             FROM SchemaSmith_ProductOwnership po
+            INNER JOIN _SchemaSmith_IdxOnlyIdx ei
+                ON CHAR_LENGTH(po.ObjectName) = CHAR_LENGTH(ei.TableName) + 1 + CHAR_LENGTH(ei.IndexName)
+                AND SchemaSmith_OwnedNameMatches(po.ObjectName, ei.TableName, ei.IndexName) = 1
             INNER JOIN _SchemaSmith_Tables t
-                ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
+                ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(ei.TableName)
             LEFT JOIN _SchemaSmith_DefinedIndexes di
-                ON SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-                AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
-            LEFT JOIN _SchemaSmith_IdxOnlyIdx ei
-                ON SchemaSmith_IdentifierKey(ei.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-                AND SchemaSmith_NameKeyCI(ei.IndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
+                ON SchemaSmith_IdentifierKey(di.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                AND SchemaSmith_NameKeyCI(di.IndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
             WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
               AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
               AND po.ObjectType COLLATE utf8mb4_unicode_ci = 'INDEX' COLLATE utf8mb4_unicode_ci
               -- Per-table tightening (the env/product gate is the enclosing IF)
               AND COALESCE(t.DropIndexesRemovedFromProduct, 1) = 1
               -- Never drop PRIMARY KEY
-              AND UPPER(SUBSTRING_INDEX(po.ObjectName, '.', -1) COLLATE utf8mb4_unicode_ci) != 'PRIMARY' COLLATE utf8mb4_unicode_ci
+              AND UPPER(ei.IndexName COLLATE utf8mb4_unicode_ci) != 'PRIMARY' COLLATE utf8mb4_unicode_ci
               -- Not in current definition (LEFT JOIN produces NULL when not found)
               AND di.IndexName IS NULL
               -- Not a renamed index
               AND NOT EXISTS (
                   SELECT 1 FROM _SchemaSmith_IndexRenames r
-                  WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(SUBSTRING_INDEX(po.ObjectName, '.', 1))
-                    AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(SUBSTRING_INDEX(po.ObjectName, '.', -1))
+                  WHERE SchemaSmith_IdentifierKey(r.TableName) = SchemaSmith_IdentifierKey(ei.TableName)
+                    AND SchemaSmith_NameKeyCI(r.OldIndexName) = SchemaSmith_NameKeyCI(ei.IndexName)
               )
               -- Verify index actually exists (snapshot bridge)
               AND ei.IndexName IS NOT NULL;
@@ -796,7 +796,7 @@ BEGIN
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop indexes not declared for this deploy');
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
+            SELECT CONNECTION_ID(), CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '` ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`')
             FROM _SchemaSmith_IndexesToDrop;
 
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -815,9 +815,9 @@ BEGIN
                 ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             INSERT INTO _SchemaSmith_IndexDropStmts (LogMsg, Stmt, AuditName, TableName, AlterStmt)
             SELECT CONCAT('  Drop index not declared for this deploy: ', TableName, '.', IndexName),
-                   CONCAT('DROP INDEX `', IndexName, '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`'),
+                   CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '` ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`'),
                    CONCAT(TableName, '.', IndexName), TableName,
-                   CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` DROP INDEX `', IndexName, '`')
+                   CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '`')
             FROM _SchemaSmith_IndexesToDrop;
             UPDATE _SchemaSmith_IndexDropStmts s
               JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
@@ -889,14 +889,14 @@ BEGIN
                            WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE '
                            ELSE '' END,
                       'INDEX ', i.IndexName,
-                      ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
+                      ' ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
                       ' (', i.EmitColumns, ')',
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
-                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
+                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=', QUOTE(i.VectorDistance), ''))) ELSE '' END,
                       CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
-                           THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
+                           THEN CONCAT(' COMMENT ', QUOTE(i.Comment), '')
                            ELSE '' END,
                       CASE WHEN i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1 THEN SchemaSmith_IndexInvisibleClause() ELSE '' END)
         FROM _SchemaSmith_Indexes i
@@ -948,7 +948,7 @@ BEGIN
                                                               TableKey VARCHAR(260) COLLATE utf8mb4_bin, OnlineMode VARCHAR(8) NOT NULL DEFAULT 'OFF')
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_IndexCreateStmts (Stmt, AuditName, IsSwap, TableKey)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName, ' ',
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', i.TableName, ' ',
                       CASE WHEN d.IndexName IS NOT NULL THEN CONCAT('DROP INDEX ', i.IndexName, ', ') ELSE '' END,
                       'ADD ',
                       CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL INDEX '
@@ -960,9 +960,9 @@ BEGIN
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
-                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
+                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=', QUOTE(i.VectorDistance), ''))) ELSE '' END,
                       CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
-                           THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
+                           THEN CONCAT(' COMMENT ', QUOTE(i.Comment), '')
                            ELSE '' END,
                       CASE WHEN i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1 THEN SchemaSmith_IndexInvisibleClause() ELSE '' END),
                CONCAT(SchemaSmith_StripBacktickWrapping(i.TableName), '.', SchemaSmith_StripBacktickWrapping(i.IndexName)),
@@ -1065,7 +1065,7 @@ BEGIN
               WHERE CAST(po.ProductName AS BINARY) = CAST(p_ProductName AS BINARY)
                 AND CAST(po.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
                 AND po.ObjectType = 'INDEX'
-                AND CONVERT(CONCAT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))), '.', LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1))) USING utf8mb4) COLLATE utf8mb4_bin = CONCAT(s.TableKey, '.', s.IndexKey)
+                AND SchemaSmith_OwnedKeyMatches(po.ObjectName, s.TableKey, s.IndexKey) = 1
           )
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_FullTextIndexes ft
@@ -1074,8 +1074,8 @@ BEGIN
           );
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Drop unknown fulltext index: DROP INDEX `', IndexName,
-                      '` ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '`')
+        SELECT CONNECTION_ID(), CONCAT('  Drop unknown fulltext index: DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName),
+                      '` ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '`')
         FROM _SchemaSmith_FTIndexesToDrop;
 
         IF p_WhatIf = 1 THEN
@@ -1089,8 +1089,8 @@ BEGIN
             CREATE TEMPORARY TABLE _SchemaSmith_FTDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
                 ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             INSERT INTO _SchemaSmith_FTDropStmts (Stmt)
-            SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                          GROUP_CONCAT(CONCAT('DROP INDEX `', IndexName, '`') ORDER BY IndexName SEPARATOR ', '))
+            SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
+                          GROUP_CONCAT(CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '`') ORDER BY IndexName SEPARATOR ', '))
             FROM _SchemaSmith_FTIndexesToDrop
             GROUP BY TableName;
 

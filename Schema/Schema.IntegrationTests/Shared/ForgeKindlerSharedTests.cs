@@ -440,6 +440,43 @@ public abstract class ForgeKindlerSharedTests
         }
     }
 
+    [Test]
+    public void KindleTheForge_LegacyNarrowOwnershipName_BootstrapWidensItToHoldATableAndAnIndexName()
+    {
+        // An ownership row names 'table.index': two 64-character names and a dot. An installation created while the
+        // column was 64 wide keeps truncating longer pairs, so a removed index under one is never matched and dropped.
+        using var freshConnection = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(MainConnectionString);
+        freshConnection.Open();
+        using var command = freshConnection.CreateCommand();
+        const string table = "SchemaSmith_ProductOwnership";
+        try
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $@"
+                CREATE TABLE `{table}` (
+                    `Id` INT AUTO_INCREMENT PRIMARY KEY,
+                    `ObjectSchema` VARCHAR(64) COLLATE utf8mb4_bin NOT NULL,
+                    `ObjectName` VARCHAR(64) COLLATE utf8mb4_bin NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
+            command.ExecuteNonQuery();
+
+            ForgeKindler.KindleTheForge(command, Platform, forceReKindle: true);
+
+            command.CommandText = $@"
+                SELECT CONCAT(CHARACTER_MAXIMUM_LENGTH, ' ', COLLATION_NAME, ' ', IS_NULLABLE)
+                  FROM INFORMATION_SCHEMA.COLUMNS
+                 WHERE TABLE_SCHEMA = '{MainDb}' AND TABLE_NAME = '{table}' AND COLUMN_NAME = 'ObjectName'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("129 utf8mb4_bin NO"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+            command.ExecuteNonQuery();
+            ForgeKindler.KindleTheForge(command, Platform, forceReKindle: true);
+        }
+    }
+
     private List<string> CollationsOf(IDbCommand command, string table, IEnumerable<string> columns)
     {
         var list = string.Join(",", columns.Select(c => $"'{c}'"));

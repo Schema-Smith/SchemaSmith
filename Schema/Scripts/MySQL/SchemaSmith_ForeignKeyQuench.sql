@@ -64,16 +64,15 @@ BEGIN
         KEY ix_key (ConstraintKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-    -- One pass over KEY_COLUMN_USAGE, aggregated per constraint. GROUP_CONCAT ordering and the
-    -- default ',' separator match the correlated subqueries this replaces, so composite FKs compare
-    -- byte-for-byte as before. Grouped per TABLE as well as name: from MariaDB 12.1 foreign-key names are
+    -- One pass over KEY_COLUMN_USAGE, aggregated per constraint, each column in the canonical form
+    -- SchemaSmith_NormalizeIndexColumns gives the declared list (`name`, backticks doubled, ',' between). Grouped per TABLE as well as name: from MariaDB 12.1 foreign-key names are
     -- unique per table (unnamed ones are all "1"), and grouping by name alone merged their column lists.
     INSERT INTO _SchemaSmith_ExistingFKCols (TableName, ConstraintName, ConstraintKey, FkColumns, RefColumns)
     SELECT kcu.TABLE_NAME,
            kcu.CONSTRAINT_NAME,
            SchemaSmith_NameKeyCI(kcu.CONSTRAINT_NAME),
-           GROUP_CONCAT(kcu.COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION),
-           GROUP_CONCAT(kcu.REFERENCED_COLUMN_NAME ORDER BY kcu.ORDINAL_POSITION)
+           GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(kcu.COLUMN_NAME), '`') ORDER BY kcu.ORDINAL_POSITION SEPARATOR ','),
+           GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(kcu.REFERENCED_COLUMN_NAME), '`') ORDER BY kcu.ORDINAL_POSITION SEPARATOR ',')
       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
      WHERE kcu.CONSTRAINT_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.CONSTRAINT_SCHEMA) = v_DbKey
        AND kcu.REFERENCED_TABLE_NAME IS NOT NULL
@@ -138,22 +137,19 @@ BEGIN
         -- MariaDB and MySQL 5.7 and NO ACTION on MySQL 8.0, so the two compare equal or the key churned every deploy.
         OR CAST(REPLACE(UPPER(TRIM(e.DeleteRule)), 'RESTRICT', 'NO ACTION') AS BINARY) != CAST(REPLACE(UPPER(TRIM(COALESCE(f.DeleteAction, 'NO ACTION'))), 'RESTRICT', 'NO ACTION') AS BINARY)
         OR CAST(REPLACE(UPPER(TRIM(e.UpdateRule)), 'RESTRICT', 'NO ACTION') AS BINARY) != CAST(REPLACE(UPPER(TRIM(COALESCE(f.UpdateAction, 'NO ACTION'))), 'RESTRICT', 'NO ACTION') AS BINARY)
-        -- Or different columns (aggregate comparison handles composite FKs;
-        -- REPLACE strips backticks from comma-separated column lists like `Col1`,`Col2`)
-        -- (column names compare case-insensitively, as the engine does). The spaces around a comma go too: the catalog
-        -- list has none, so a hand-written `a`, `b` dropped and re-created the key every deploy. REPLACE, not
-        -- REGEXP_REPLACE, which MySQL 5.7 lacks.
-        OR CAST(LOWER(c.FkColumns) AS BINARY) != CAST(LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(f.Columns, '`', ''), ', ', ','), ' ,', ','), ', ', ','))) AS BINARY)
+        -- Or different columns, compared case-insensitively as the engine does. Both sides are in the normalized form,
+        -- so a hand-written `a`, `b` matches the catalog's list and a name holding a comma, space or backtick survives.
+        OR CAST(LOWER(c.FkColumns) AS BINARY) != CAST(LOWER(SchemaSmith_NormalizeIndexColumns(f.Columns)) AS BINARY)
         -- Or different referenced columns
-        OR CAST(LOWER(c.RefColumns) AS BINARY) != CAST(LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(f.RelatedColumns, '`', ''), ', ', ','), ' ,', ','), ', ', ','))) AS BINARY)
+        OR CAST(LOWER(c.RefColumns) AS BINARY) != CAST(LOWER(SchemaSmith_NormalizeIndexColumns(f.RelatedColumns)) AS BINARY)
     );
 
     -- Drop modified FKs
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop and recreate modified foreign keys');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName,
-                      '` DROP FOREIGN KEY `', ConstraintName, '`')
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName),
+                      '` DROP FOREIGN KEY `', SchemaSmith_EscapeBackticks(ConstraintName), '`')
         FROM _SchemaSmith_ModifiedFKs;
     ELSE
         -- Per-FK progress messages, set-based (preserves the per-FK log lines).
@@ -173,13 +169,13 @@ BEGIN
         -- referenced twice in one statement. AUTO_INCREMENT RowId is monotonic across the two,
         -- so the FK drops (inserted first) always get lower RowIds than the index drops.
         INSERT INTO _SchemaSmith_FKModStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                      GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', ConstraintName, '`') ORDER BY ConstraintName SEPARATOR ', '))
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
+                      GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', SchemaSmith_EscapeBackticks(ConstraintName), '`') ORDER BY ConstraintName SEPARATOR ', '))
         FROM _SchemaSmith_ModifiedFKs
         GROUP BY TableName;
         INSERT INTO _SchemaSmith_FKModStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', m.TableName, '` ',
-                      GROUP_CONCAT(CONCAT('DROP INDEX `', m.ConstraintName, '`') ORDER BY m.ConstraintName SEPARATOR ', '))
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(m.TableName), '` ',
+                      GROUP_CONCAT(CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(m.ConstraintName), '`') ORDER BY m.ConstraintName SEPARATOR ', '))
         FROM _SchemaSmith_ModifiedFKs m
         JOIN INFORMATION_SCHEMA.STATISTICS s
             ON s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
@@ -212,10 +208,13 @@ BEGIN
     CREATE TEMPORARY TABLE _SchemaSmith_FkExist (
         TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableKey, ConstraintKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    INSERT IGNORE INTO _SchemaSmith_FkExist (TableKey, ConstraintKey)
-    SELECT SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME)
+    INSERT IGNORE INTO _SchemaSmith_FkExist (TableKey, ConstraintKey, TableName, ConstraintName)
+    SELECT SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME),
+           CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4)
       FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
      WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
        AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
@@ -224,13 +223,13 @@ BEGIN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing foreign keys');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT(
-                      'ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', f.TableName,
+                      'ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', f.TableName,
                       ' ADD CONSTRAINT ', f.KeyName,
                       ' FOREIGN KEY (', f.Columns, ')',
                       ' REFERENCES ',
                       CASE WHEN f.RelatedTableSchema IS NOT NULL AND f.RelatedTableSchema != ''
-                           THEN CONCAT('`', f.RelatedTableSchema, '`.')
-                           ELSE CONCAT('`', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.')
+                           THEN CONCAT('`', SchemaSmith_EscapeBackticks(f.RelatedTableSchema), '`.')
+                           ELSE CONCAT('`', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.')
                       END,
                       f.RelatedTable, ' (', f.RelatedColumns, ')',
                       ' ON DELETE ', f.DeleteAction,
@@ -281,15 +280,15 @@ BEGIN
         CREATE TEMPORARY TABLE _SchemaSmith_FKCreateStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_FKCreateStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', f.TableName, ' ',
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', f.TableName, ' ',
                       GROUP_CONCAT(
                           CONCAT(
                               'ADD CONSTRAINT ', f.KeyName,
                               ' FOREIGN KEY (', f.Columns, ')',
                               ' REFERENCES ',
                               CASE WHEN f.RelatedTableSchema IS NOT NULL AND f.RelatedTableSchema != ''
-                                   THEN CONCAT('`', f.RelatedTableSchema, '`.')
-                                   ELSE CONCAT('`', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.')
+                                   THEN CONCAT('`', SchemaSmith_EscapeBackticks(f.RelatedTableSchema), '`.')
+                                   ELSE CONCAT('`', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.')
                               END,
                               f.RelatedTable, ' (', f.RelatedColumns, ')',
                               ' ON DELETE ', f.DeleteAction,
@@ -322,10 +321,13 @@ BEGIN
     CREATE TEMPORARY TABLE _SchemaSmith_FkExist (
         TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
         ConstraintKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        TableName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
+        ConstraintName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL,
         PRIMARY KEY (TableKey, ConstraintKey)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-    INSERT IGNORE INTO _SchemaSmith_FkExist (TableKey, ConstraintKey)
-    SELECT SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME)
+    INSERT IGNORE INTO _SchemaSmith_FkExist (TableKey, ConstraintKey, TableName, ConstraintName)
+    SELECT SchemaSmith_IdentifierKey(tc.TABLE_NAME), SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME),
+           CONVERT(tc.TABLE_NAME USING utf8mb4), CONVERT(tc.CONSTRAINT_NAME USING utf8mb4)
       FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
      WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
        AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY';
@@ -360,30 +362,23 @@ BEGIN
             PRIMARY KEY (TableName, ConstraintName)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-        INSERT INTO _SchemaSmith_WouldDropFKs (TableName, ConstraintName)
-        SELECT
-            SUBSTRING_INDEX(po.ObjectName, '.', 1) AS TableName,
-            SUBSTRING_INDEX(po.ObjectName, '.', -1) AS ConstraintName
-        FROM SchemaSmith_ProductOwnership po
+        INSERT IGNORE INTO _SchemaSmith_WouldDropFKs (TableName, ConstraintName)
+        SELECT fe.TableName, fe.ConstraintName
+        FROM _SchemaSmith_FkExist fe
+        JOIN SchemaSmith_ProductOwnership po
+          ON SchemaSmith_OwnedNameMatches(po.ObjectName, fe.TableName, fe.ConstraintName) = 1
         WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
           AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
           AND po.ObjectType COLLATE utf8mb4_unicode_ci = _utf8mb4'FOREIGN KEY' COLLATE utf8mb4_unicode_ci
           -- Not in current definition
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_ForeignKeys f
-              WHERE f.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
-                AND f.KeyNameKey = CONVERT(LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1)) USING utf8mb4) COLLATE utf8mb4_bin
-          )
-          -- Verify FK actually exists
-          AND EXISTS (
-              SELECT 1 FROM _SchemaSmith_FkExist fe
-              WHERE fe.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
-                AND fe.ConstraintKey = CONVERT(LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1)) USING utf8mb4) COLLATE utf8mb4_bin
+              WHERE f.TableKey = fe.TableKey AND f.KeyNameKey = fe.ConstraintKey
           )
           -- Per-table tightening: a table may set DropForeignKeysRemovedFromProduct:false to protect its own FKs.
           AND COALESCE((SELECT t.DropForeignKeysRemovedFromProduct
                           FROM _SchemaSmith_Tables t
-                          WHERE t.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
+                          WHERE t.TableKey = fe.TableKey
                           LIMIT 1), 1) = 1;
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -407,30 +402,23 @@ BEGIN
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
         -- Find FKs owned by product but not in current definition
-        INSERT INTO _SchemaSmith_FKsToDrop (TableName, ConstraintName)
-        SELECT
-            SUBSTRING_INDEX(po.ObjectName, '.', 1) AS TableName,
-            SUBSTRING_INDEX(po.ObjectName, '.', -1) AS ConstraintName
-        FROM SchemaSmith_ProductOwnership po
+        INSERT IGNORE INTO _SchemaSmith_FKsToDrop (TableName, ConstraintName)
+        SELECT fe.TableName, fe.ConstraintName
+        FROM _SchemaSmith_FkExist fe
+        JOIN SchemaSmith_ProductOwnership po
+          ON SchemaSmith_OwnedNameMatches(po.ObjectName, fe.TableName, fe.ConstraintName) = 1
         WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
           AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
           AND po.ObjectType COLLATE utf8mb4_unicode_ci = _utf8mb4'FOREIGN KEY' COLLATE utf8mb4_unicode_ci
           -- Not in current definition
           AND NOT EXISTS (
               SELECT 1 FROM _SchemaSmith_ForeignKeys f
-              WHERE f.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
-                AND f.KeyNameKey = CONVERT(LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1)) USING utf8mb4) COLLATE utf8mb4_bin
-          )
-          -- Verify FK actually exists
-          AND EXISTS (
-              SELECT 1 FROM _SchemaSmith_FkExist fe
-              WHERE fe.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
-                AND fe.ConstraintKey = CONVERT(LOWER(SUBSTRING_INDEX(po.ObjectName, '.', -1)) USING utf8mb4) COLLATE utf8mb4_bin
+              WHERE f.TableKey = fe.TableKey AND f.KeyNameKey = fe.ConstraintKey
           )
           -- Per-table tightening: a table may set DropForeignKeysRemovedFromProduct:false to protect its own FKs.
           AND COALESCE((SELECT t.DropForeignKeysRemovedFromProduct
                           FROM _SchemaSmith_Tables t
-                          WHERE t.TableKey = CONVERT(IF(@@lower_case_table_names = 0, SUBSTRING_INDEX(po.ObjectName, '.', 1), LOWER(SUBSTRING_INDEX(po.ObjectName, '.', 1))) USING utf8mb4) COLLATE utf8mb4_bin
+                          WHERE t.TableKey = fe.TableKey
                           LIMIT 1), 1) = 1;
 
         IF p_WhatIf = 1 THEN
@@ -441,8 +429,8 @@ BEGIN
                         AND CONVERT(a.ObjectName USING utf8mb4) COLLATE utf8mb4_bin = CONVERT(CONCAT(f.TableName, '.', f.ConstraintName) USING utf8mb4) COLLATE utf8mb4_bin);
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop unknown foreign keys');
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName,
-                          '` DROP FOREIGN KEY `', ConstraintName, '`')
+            SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName),
+                          '` DROP FOREIGN KEY `', SchemaSmith_EscapeBackticks(ConstraintName), '`')
             FROM _SchemaSmith_FKsToDrop;
 
             -- #363: WhatIf twin of the ELSE-branch 'foreignKey'/'dropped' audit; same source, wouldDrop.
@@ -462,13 +450,13 @@ BEGIN
             -- Two separate INSERTs (MySQL TEMPORARY table can't be referenced twice per statement);
             -- FK drops inserted first get lower RowIds than the index drops.
             INSERT INTO _SchemaSmith_FKDropStmts (Stmt)
-            SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
-                          GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', ConstraintName, '`') ORDER BY ConstraintName SEPARATOR ', '))
+            SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
+                          GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', SchemaSmith_EscapeBackticks(ConstraintName), '`') ORDER BY ConstraintName SEPARATOR ', '))
             FROM _SchemaSmith_FKsToDrop
             GROUP BY TableName;
             INSERT INTO _SchemaSmith_FKDropStmts (Stmt)
-            SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', d.TableName, '` ',
-                          GROUP_CONCAT(CONCAT('DROP INDEX `', d.ConstraintName, '`') ORDER BY d.ConstraintName SEPARATOR ', '))
+            SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(d.TableName), '` ',
+                          GROUP_CONCAT(CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(d.ConstraintName), '`') ORDER BY d.ConstraintName SEPARATOR ', '))
             FROM _SchemaSmith_FKsToDrop d
             JOIN INFORMATION_SCHEMA.STATISTICS s
                 ON s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey

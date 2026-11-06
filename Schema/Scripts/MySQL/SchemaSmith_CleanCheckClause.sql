@@ -37,6 +37,11 @@ BEGIN
             SET v_Pos = LOCATE('''', v_Text, v_Pos + 1);
         END IF;
     END WHILE;
-    RETURN REPLACE(v_Text, '\\''', '''');
+    -- A clause extracted before SchemaSmith_CheckClauseText was string-escaped: every quote follows a backslash. Only then
+    -- is it unescaped; a declared 'a\'b' has quotes of its own and is kept as written.
+    IF LOCATE('''', v_Text) > 0 AND NOT (CONCAT(' ', v_Text) REGEXP '[^\\\\]''') THEN
+        RETURN REPLACE(REPLACE(REPLACE(v_Text, '\\\\', CHAR(1 USING utf8mb4)), '\\''', ''''), CHAR(1 USING utf8mb4), '\\');
+    END IF;
+    RETURN v_Text;
 END //
 DELIMITER ;
