@@ -28,6 +28,10 @@ Demonstrations of `ShouldApplyExpression` (conditional deployment) on real engin
 
 These demos use a different docker layout than the products above (engine pairs, or one instance with several databases) and live in `Conditional/` rather than per-platform subdirectories.
 
+## Working Alongside Other Tools
+
+- [`MySQL-PtOsc-Coexistence`](MySQL-PtOsc-Coexistence) — MySQL with 2.5 million rows. SchemaQuench declares the change and prints the exact `ALTER` clause under WhatIf, `pt-online-schema-change` applies it online, and the next deploy finds the swapped table matching the package. Use it for a change MySQL can't make without blocking writes, such as a column type change, where `OnlineApply` has no lower-lock form to ask for.
+
 ## Quick Start
 
 Choose a platform and run the matching launcher.
