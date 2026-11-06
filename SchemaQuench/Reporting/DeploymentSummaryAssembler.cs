@@ -110,7 +110,8 @@ public static class DeploymentSummaryAssembler
     /// </summary>
     private static UnsupportedDowngradeSummary BuildUnsupportedDowngrade(ChangeAuditCapture changeAudit)
     {
-        if (changeAudit is not { Instrumented: true })
+        // Not gated on Instrumented: a delivery downgrade is recorded in C#, on runs that never drain the table audit.
+        if (changeAudit == null)
             return null;
 
         var downgrades = changeAudit.Snapshot()

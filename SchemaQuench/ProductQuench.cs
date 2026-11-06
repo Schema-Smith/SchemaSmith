@@ -124,8 +124,13 @@ public class ProductQuench
 
         _logHygiene = LogHygieneOptions.FromConfiguration(_config);
 
-        if (!int.TryParse(_config[SettingsKeys.MaxThreads], out _maxThreads) || _maxThreads < 1 || _maxThreads > 20)
+        var maxThreadsSetting = _config[SettingsKeys.MaxThreads];
+        if (!int.TryParse(maxThreadsSetting, out _maxThreads) || _maxThreads < 1 || _maxThreads > 20)
+        {
+            if (!string.IsNullOrWhiteSpace(maxThreadsSetting))
+                _progressLog.Warn($"MaxThreads '{maxThreadsSetting}' is not a whole number from 1 to 20; using 10.");
             _maxThreads = 10;
+        }
         // --WhatIf is the switch people reach for; it is the same dry run as the WhatIfONLY setting.
         var whatIfSwitch = CommandLineParser.ContainsSwitch("WhatIf")
                            && !string.Equals(CommandLineParser.ValueOfSwitch("WhatIf"), "false", StringComparison.OrdinalIgnoreCase);
@@ -1087,11 +1092,12 @@ public class ProductQuench
     // for template scripts.
     internal static string MakeScriptPathRelative(string filePath, string baseDir)
     {
-        var stripped = LongPathSupport.StripLongPathPrefix(filePath);
-        if (!string.IsNullOrEmpty(baseDir)) stripped = stripped.Replace(baseDir, "");
-        return stripped
-            .Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .TrimStart(Path.AltDirectorySeparatorChar);
+        var path = LongPathSupport.StripLongPathPrefix(filePath).Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var root = (baseDir ?? "").Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).TrimEnd(Path.AltDirectorySeparatorChar);
+        // Only in front: the root can occur inside the rest of the path, and "." occurs in nearly every file name.
+        if (root.Length > 0 && path.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            path = path[(root.Length + 1)..];
+        return path.TrimStart(Path.AltDirectorySeparatorChar);
     }
 
     private int BottleneckThresholdMs() =>
@@ -2350,10 +2356,12 @@ public class ProductQuench
     /// at this level (product Before/After scripts run before/around per-database template work), so
     /// the product name + server stand in for the scope DatabaseQuench.GetDebugFileName uses.
     /// </summary>
-    private string GetProductDebugFileName(string label, string server)
+    private string GetProductDebugFileName(string label, string server) => ProductDebugFileName(label, server, _product.Name);
+
+    internal static string ProductDebugFileName(string label, string server, string productName)
     {
-        var serverSuffix = string.IsNullOrEmpty(server) ? "" : $" {server}";
-        return $"SchemaQuench - {label}{serverSuffix} {_product.Name}.sql";
+        var serverSuffix = string.IsNullOrEmpty(server) ? "" : $" {FileNameEncoder.Encode(server)}";
+        return $"SchemaQuench - {label}{serverSuffix} {FileNameEncoder.Encode(productName)}.sql";
     }
 
     private void ResetDb(IDbCommand destCmd)

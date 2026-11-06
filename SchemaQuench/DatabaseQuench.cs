@@ -3728,8 +3728,8 @@ SET NOCOUNT ON
     /// </summary>
     internal string GetDebugFileName(string label)
     {
-        var schemaSuffix = string.IsNullOrEmpty(_schemaName) ? "" : $".{_schemaName}";
-        return $"SchemaQuench - {label} {_server}.{_databaseName}{schemaSuffix}.sql";
+        var schemaSuffix = string.IsNullOrEmpty(_schemaName) ? "" : $".{FileNameEncoder.Encode(_schemaName)}";
+        return $"SchemaQuench - {label} {FileNameEncoder.Encode(_server)}.{FileNameEncoder.Encode(_databaseName)}{schemaSuffix}.sql";
     }
 
     private bool _explicitTimestampDefaultsReadOnlyReported;

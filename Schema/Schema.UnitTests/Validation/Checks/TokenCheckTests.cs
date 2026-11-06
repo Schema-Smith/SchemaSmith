@@ -334,6 +334,23 @@ public class TokenCheckTests
         Assert.That(findings, Is.Empty);
     }
 
+    // Template.cs adds a JSON token for each declared-object collection; --Validate knew only the table, materialized
+    // view and indexed view ones, so a script using one of these failed SS-TOK-001 though it resolves at deploy.
+    [TestCase("EventSchema")]
+    [TestCase("DomainTypeSchema")]
+    [TestCase("EnumTypeSchema")]
+    [TestCase("SequenceSchema")]
+    public void DeclaredObjectSchemaToken_NotFlagged(string token)
+    {
+        var scriptFile = Path.Join(PackagePath, "Templates", "Main", "Before Scripts", "Init.sql");
+        SqlFiles(scriptFile);
+        FileContent(scriptFile, "SELECT '{{" + token + "}}'");
+
+        var findings = new TokenCheck().Run(Context()).ToList();
+
+        Assert.That(findings, Is.Empty);
+    }
+
     [Test]
     public void PostgresXpathArrayLiteral_NotFlagged()
     {

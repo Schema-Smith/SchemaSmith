@@ -2075,6 +2075,27 @@ public class DatabaseQuenchTests
             Is.EqualTo("SchemaQuench - Quench Indexes srv.AppProd.sql"));
     }
 
+    // A named instance (host\INSTANCE) or a tcp: prefix put a path separator or a colon in the file name, so every debug and
+    // failure artifact for that server failed to write. The names are encoded as the checkpoint file names are.
+    [Test]
+    public void GetDebugFileName_EncodesCharactersAFileNameCannotHold()
+    {
+        var product = new Product { Name = "Test", Platform = Platform.SqlServer };
+        var template = new Template { Name = "Core" };
+        var quench = new DatabaseQuench("tcp:host\\SQLEXPRESS", product, template, "App/Prod", "a:b",
+            false, "0", false, "0", "1", "1", "1", "1", "1", "1", false, false, false, null);
+
+        Assert.That(quench.GetDebugFileName("Quench Indexes"),
+            Is.EqualTo("SchemaQuench - Quench Indexes tcp%3Ahost%5CSQLEXPRESS.App%2FProd.a%3Ab.sql"));
+    }
+
+    [Test]
+    public void ProductDebugFileName_EncodesCharactersAFileNameCannotHold()
+    {
+        Assert.That(ProductQuench.ProductDebugFileName("Failed Init", "host\\SQLEXPRESS", "Acme:Core"),
+            Is.EqualTo("SchemaQuench - Failed Init host%5CSQLEXPRESS Acme%3ACore.sql"));
+    }
+
     #endregion
 
     #region PrepareIterationContent — BaselineValidationScript / VersionStampScript / Table Schema

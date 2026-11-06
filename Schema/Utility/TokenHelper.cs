@@ -344,7 +344,8 @@ END $$;
             }
             catch (Exception ex)
             {
-                throw new Exception($"Error resolving {token.Key}\r\n{token.Value}\r\n{ex.Message}\r\n{cmd.CommandText}");
+                // The query as sent has every token substituted, so it can hold a secret; it is not part of the message.
+                throw new Exception($"Error resolving {token.Key}: {ex.Message}", ex);
             }
         }
     }

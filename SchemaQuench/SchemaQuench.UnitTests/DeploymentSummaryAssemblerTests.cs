@@ -139,6 +139,19 @@ public class DeploymentSummaryAssemblerTests
         Assert.That(AssembleWith().UnsupportedDowngrade, Is.Null);
     }
 
+    // A delivery downgrade is recorded on the C# side, and a run that changes no tables (a datafix profile) never
+    // drains the procedures' audit, so it is not instrumented: the run exited 1 "Incomplete" with no manifest saying why.
+    [Test]
+    public void Assemble_UnsupportedDowngrade_ManifestEvenWhenTheTableAuditDidNotRun()
+    {
+        var cap = new ChangeAuditCapture();
+        cap.Record("JSON data delivery (SQL Server compat 130)", "dbo.Orders", "downgraded");
+
+        var summary = AssembleWith(changeAudit: cap);
+
+        Assert.That(summary.UnsupportedDowngrade?.Downgrades.Select(d => d.ObjectName), Is.EquivalentTo(new[] { "dbo.Orders" }));
+    }
+
     [Test]
     public void Assemble_UnsupportedDowngrade_ManifestFromDowngradeRows()
     {
