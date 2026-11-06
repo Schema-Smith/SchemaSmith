@@ -228,10 +228,10 @@ BEGIN
         SELECT CONNECTION_ID(),
                CONCAT('  Declared partitioning does not match the deployed table (refused -- repartitioning rewrites every row): ',
                       SchemaSmith_StripBacktickWrapping(t.TableName),
-                      ' declares ', t.PartitionMethod, '(', t.PartitionExpression, ')',
-                      COALESCE(CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, '(', t.SubpartitionExpression, ')'), ''),
-                      ', deployed ', COALESCE(CONCAT(lp.PARTITION_METHOD, '(', lp.PARTITION_EXPRESSION, ')',
-                                                     COALESCE(CONCAT(' SUBPARTITION BY ', lp.SUBPARTITION_METHOD, '(', lp.SUBPARTITION_EXPRESSION, ')'), '')),
+                      ' declares ', t.PartitionMethod, '(', COALESCE(t.PartitionExpression, ''), ')',
+                      COALESCE(CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, '(', COALESCE(t.SubpartitionExpression, ''), ')'), ''),
+                      ', deployed ', COALESCE(CONCAT(lp.PARTITION_METHOD, '(', COALESCE(lp.PARTITION_EXPRESSION, ''), ')',
+                                                     COALESCE(CONCAT(' SUBPARTITION BY ', lp.SUBPARTITION_METHOD, '(', COALESCE(lp.SUBPARTITION_EXPRESSION, ''), ')'), '')),
                                               'unpartitioned'))
           FROM _SchemaSmith_Tables t
           LEFT JOIN (SELECT p.TABLE_NAME, p.PARTITION_METHOD, p.PARTITION_EXPRESSION, p.SUBPARTITION_METHOD, p.SUBPARTITION_EXPRESSION
@@ -4429,15 +4429,18 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 SET @ss_online_form := NULL;
                 BEGIN
                     DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                    -- The only index keying an AUTO_INCREMENT column cannot be dropped either (1075).
+                    DECLARE CONTINUE HANDLER FOR 1075 SET @ss_fk_needs_index := 2;
                     IF @ss_online_mode = 'OFF' THEN
                         EXECUTE stmt;
                     ELSE
                         CALL SchemaSmith_ExecuteOnline(@ss_online_sql_alter, @ss_online_mode, 0, 0, p_DatabaseName, @ss_tbl, @ss_online_form);
                     END IF;
                 END;
-                IF @ss_fk_needs_index = 1 THEN
+                IF @ss_fk_needs_index > 0 THEN
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-                    VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_auditname, ': a foreign key needs it'));
+                    VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_auditname,
+                                                    IF(@ss_fk_needs_index = 2, ': the AUTO_INCREMENT column needs it', ': a foreign key needs it')));
                     DELETE FROM _SchemaSmith_IndexesToDrop
                      WHERE CONCAT(TableName, '.', IndexName) = CONVERT(@ss_auditname USING utf8mb4) COLLATE utf8mb4_bin;
                 ELSE

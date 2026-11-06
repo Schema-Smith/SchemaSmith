@@ -1580,7 +1580,8 @@ public sealed class CoherenceCheck : ISchemaCheck
                     $"Table '{table.Name}' partitions by SYSTEM_TIME, which partitions a system-versioned table's history: " +
                     "it needs a MariaDB table with IsSystemVersioned true.");
         }
-        else if (string.IsNullOrWhiteSpace(p.Expression))
+        // KEY () with no columns partitions on the primary key, so only KEY may leave the list empty.
+        else if (string.IsNullOrWhiteSpace(p.Expression) && method is not ("KEY" or "LINEAR KEY"))
             yield return new Finding(Severity.Error, PartitionExpressionMissingCode, Category, tableLocation,
                 $"Table '{table.Name}' partitions by {method} but declares no Expression: every method but SYSTEM_TIME " +
                 "partitions on an expression or a column list.");

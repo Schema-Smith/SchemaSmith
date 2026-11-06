@@ -1200,14 +1200,18 @@ public class CoherenceCheckTests
         Assert.That(RunOnMy(table).Select(f => f.Code), Has.Member("SS-PART-006"));
     }
 
-    [TestCase("", true)]
-    [TestCase("Id", false)]
-    public void APartitioningWithoutAnExpression_IsError(string expression, bool expected)
+    // KEY () names no columns and partitions on the primary key, a documented form the check used to refuse.
+    [TestCase("HASH", "", true)]
+    [TestCase("HASH", "Id", false)]
+    [TestCase("KEY", "", false)]
+    [TestCase("LINEAR KEY", null, false)]
+    [TestCase("RANGE", null, true)]
+    public void APartitioningWithoutAnExpression_IsError(string method, string expression, bool expected)
     {
         var table = new Schema.Domain.MySQL.MySqlTable
         {
             Name = "Spread",
-            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = "HASH", Expression = expression, PartitionCount = 2 },
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = method, Expression = expression, PartitionCount = 2 },
             Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "Id", DataType = "int" } }
         };
         Assert.That(RunOnMy(table).Any(f => f.Code == "SS-PART-007"), Is.EqualTo(expected));

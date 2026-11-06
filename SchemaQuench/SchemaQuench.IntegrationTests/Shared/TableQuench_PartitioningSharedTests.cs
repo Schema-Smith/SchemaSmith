@@ -138,6 +138,39 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // KEY () with no columns partitions on the primary key. The empty list read as NULL and emptied the whole CREATE
+    // TABLE ("Query was empty"); MySQL reports the deployed expression as NULL and MariaDB as '', which must both match.
+    [TestCase("KEY")]
+    [TestCase("LINEAR KEY")]
+    public void TableQuench_KeyPartitioningWithNoColumns_IsCreated_AndRedeploysAsANoOp(string method)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartKeyEmptyProduct_{uid}";
+        var table = $"PartKeyEmptyTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithHashPartitioning(table, 2, method, expression: null), productName: product);
+            Assert.Multiple(() =>
+            {
+                Assert.That(LiveMethod(cmd, table), Is.EqualTo(method));
+                Assert.That(LivePartitionCount(cmd, table), Is.EqualTo(2));
+            });
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithHashPartitioning(table, 2, method, expression: null), productName: product),
+                "an unchanged KEY () table redeploys without a repartitioning refusal");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
     [Test]
     public void TableQuench_RedeployingAPartitionedTable_IsANoOp()
     {
@@ -919,7 +952,7 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
 ]
 """;
 
-    private static string WithHashPartitioning(string table, int count, string method = "HASH") => $$"""
+    private static string WithHashPartitioning(string table, int count, string method = "HASH", string expression = "Id") => $$"""
 [
   {
     "Name": "{{table}}",
@@ -928,7 +961,7 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
       { "Name": "`Val`", "DataType": "varchar(50)", "Nullable": true }
     ],
     "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`" } ],
-    "Partitioning": { "Method": "{{method}}", "Expression": "Id", "PartitionCount": {{count}} }
+    "Partitioning": { "Method": "{{method}}", {{(expression == null ? "" : $"\"Expression\": \"{expression}\", ")}}"PartitionCount": {{count}} }
   }
 ]
 """;

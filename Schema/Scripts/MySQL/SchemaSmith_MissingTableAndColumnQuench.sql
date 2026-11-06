@@ -176,10 +176,11 @@ BEGIN
                                            IF(t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 1, ' AUTO', '')),
                                     CONCAT(CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
                                                 THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
-                                           ' (', t.PartitionExpression, ')',
+                                           -- KEY () is a valid empty list (the primary key); NULL would empty the whole statement.
+                                           ' (', COALESCE(t.PartitionExpression, ''), ')',
                                            -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
                                            CASE WHEN t.SubpartitionMethod IS NOT NULL
-                                                THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
+                                                THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', COALESCE(t.SubpartitionExpression, ''), ')',
                                                             CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
                                                 ELSE '' END)),
                                  -- The named list, in declared order: RANGE and LIST with their boundaries, SYSTEM_TIME as HISTORY or
@@ -715,10 +716,11 @@ BEGIN
                                                  IF(t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 1, ' AUTO', '')),
                                           CONCAT(CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
                                                       THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
-                                                 ' (', t.PartitionExpression, ')',
+                                                 -- KEY () is a valid empty list (the primary key); NULL would empty the whole statement.
+                                           ' (', COALESCE(t.PartitionExpression, ''), ')',
                                                  -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
                                                  CASE WHEN t.SubpartitionMethod IS NOT NULL
-                                                      THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
+                                                      THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', COALESCE(t.SubpartitionExpression, ''), ')',
                                                                   CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
                                                       ELSE '' END)),
                                        -- The named list, in declared order: RANGE and LIST with their boundaries, SYSTEM_TIME as HISTORY or

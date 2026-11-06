@@ -119,6 +119,114 @@ public abstract class TableQuench_PrimaryKeyConvergenceSharedTests : BaseTableQu
         });
     }
 
+    // A new table's CREATE carried only its columns and primary key, so an AUTO_INCREMENT column keyed only by another
+    // declared index failed with 1075, though the same table extracts fine. The declared index now goes in the CREATE;
+    // with DropUnknownIndexes on, the redeploy finds nothing undeclared to drop.
+    [TestCase(null, "UNIQUE", TestName = "AnAutoIncrementKeyedOnlyByAUniqueIndex_IsCreated")]
+    [TestCase("`Tenant`,`Id`", "", TestName = "AnAutoIncrementKeyedBySecondaryIndexBehindTheKey_IsCreated")]
+    public void ANewTableWhoseAutoIncrementIsKeyedByADeclaredIndex_IsCreated_AndRedeploysClean(string primaryKey, string unique)
+    {
+        var table = $"PkAutoNew_{Guid.NewGuid().ToString("N")[..8]}";
+        var json = $$"""
+            [{
+                "Name": "{{table}}",
+                "Columns": [
+                    { "Name": "Id", "DataType": "INT", "Nullable": false, "AutoIncrement": true },
+                    { "Name": "Tenant", "DataType": "INT", "Nullable": false }
+                ],
+                "Indexes": [
+                    {{(primaryKey == null ? "" : $$"""{ "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "{{primaryKey}}" },""")}}
+                    { "Name": "ix_{{table}}_id", "Unique": {{(unique == "UNIQUE" ? "true" : "false")}}, "IndexColumns": "`Id`" }
+                ]
+            }]
+            """;
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            string Indexes()
+            {
+                cmd.CommandText = $@"SELECT GROUP_CONCAT(DISTINCT INDEX_NAME ORDER BY INDEX_NAME) FROM INFORMATION_SCHEMA.STATISTICS
+                                      WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}'";
+                return TransientRetry.Run(() => cmd.ExecuteScalar())?.ToString() ?? "";
+            }
+            var expected = primaryKey == null ? $"ix_{table}_id" : $"ix_{table}_id,PRIMARY";
+
+            RunTableQuenchProc(cmd, json);
+            Assert.That(Indexes(), Is.EqualTo(expected), "the CREATE carries the declared index, not an unnamed key of its own");
+
+            cmd.CommandText = $"CALL SchemaSmith_TableQuench('{_productName}', '{_mainDb}', '{json.Replace("'", "''")}', 0, 1, 0)";
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
+            Assert.That(Indexes(), Is.EqualTo(expected), "and DropUnknownIndexes finds nothing undeclared");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{_mainDb}`.`{table}`";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // An omitted Engine was read as InnoDB, so ALTER TABLE ... ENGINE = InnoDB converted an existing MyISAM, Aria or MEMORY
+    // table nobody asked to convert. Omitted leaves it; a declared engine still converges.
+    [Test]
+    public void AnOmittedEngine_LeavesAnExistingTablesEngine_AndADeclaredOneConverges()
+    {
+        WithTable("EngineKept", "(Id INT NOT NULL, Tenant INT NOT NULL, Val VARCHAR(10), PRIMARY KEY (Id)) ENGINE=MyISAM", (cmd, table) =>
+        {
+            string Engine()
+            {
+                cmd.CommandText = $"SELECT ENGINE FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}'";
+                return cmd.ExecuteScalar()?.ToString() ?? "";
+            }
+            RunTableQuenchProc(cmd, Json(table, "`Id`"));
+            Assert.That(Engine(), Is.EqualTo("MyISAM"), "an omitted Engine leaves the table's own");
+
+            RunTableQuenchProc(cmd, Json(table, "`Id`").Replace($"\"Name\": \"{table}\",", $"\"Name\": \"{table}\", \"Engine\": \"InnoDB\","));
+            Assert.That(Engine(), Is.EqualTo("InnoDB"), "a declared engine is applied");
+        });
+    }
+
+    // B14: a foreign key's columns written with spaces after the commas ("`A`, `B`") never matched the catalog's list,
+    // so the key and its same-named index were dropped and re-created on every deploy.
+    [Test]
+    public void AForeignKeyWrittenWithSpacedColumns_RedeploysAsANoOp()
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var parent = $"FkSpParent_{suffix}";
+        var child = $"FkSpChild_{suffix}";
+        var json = $$"""
+            [{
+                "Name": "{{parent}}",
+                "Columns": [ { "Name": "A", "DataType": "INT", "Nullable": false }, { "Name": "B", "DataType": "INT", "Nullable": false } ],
+                "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`A`,`B`" } ]
+            },
+            {
+                "Name": "{{child}}",
+                "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "A", "DataType": "INT", "Nullable": false }, { "Name": "B", "DataType": "INT", "Nullable": false } ],
+                "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`" } ],
+                "ForeignKeys": [ { "Name": "fk_{{suffix}}", "Columns": "`A`, `B`", "RelatedTable": "{{parent}}", "RelatedColumns": "`A`, `B`" } ]
+            }]
+            """;
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            RunTableQuenchProc(cmd, json);
+            ClearAudit(cmd);
+            RunTableQuenchProc(cmd, json);
+            Assert.That(Audit(cmd, child), Does.Not.Contain("foreignKey"), "the unchanged key is left as it is");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{_mainDb}`.`{child}`; DROP TABLE IF EXISTS `{_mainDb}`.`{parent}`";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void WhatIf_ReportsTheKey_AndChangesNothing()
     {

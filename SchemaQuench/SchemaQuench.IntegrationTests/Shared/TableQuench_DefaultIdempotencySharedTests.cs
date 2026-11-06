@@ -24,6 +24,58 @@ namespace SchemaQuench.IntegrationTests.Shared;
 [Category("Integration")]
 public abstract class TableQuench_DefaultIdempotencySharedTests : BaseTableQuenchTests
 {
+    // "Default": "NULL" (unquoted) was compared as the text NULL against the catalog's SQL NULL, so every deploy ran
+    // MODIFY ... DEFAULT NULL. It means no default.
+    [TestCase("NULL")]
+    [TestCase("null")]
+    public void TableQuench_AnUnquotedNullDefaultIsIdempotent(string declaredDefault)
+    {
+        var tableName = $"DefaultNull_{Guid.NewGuid().ToString("N")[..8]}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        var json = $$"""
+[
+{
+    "Name": "{{tableName}}",
+    "Columns": [
+        { "Name": "Id",   "DataType": "INT",         "Nullable": false },
+        { "Name": "Note", "DataType": "VARCHAR(20)", "Nullable": true, "Default": "{{declaredDefault}}" }
+    ],
+    "Indexes": [
+        { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" }
+    ]
+}
+]
+""";
+
+        try
+        {
+            RunTableQuenchProc(cmd, json);
+
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{_mainDb}', '{json.Replace("'", "''")}')";
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
+            cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ModifiedTableQuench('{_productName}', '{_mainDb}', 0, 0, 1, 1, 1, 1, 0, 0, 0)";
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
+
+            cmd.CommandText = $@"SELECT COUNT(*) FROM SchemaSmith_StatusMessages
+ WHERE SessionId = CONNECTION_ID() AND Message LIKE '%Modify column:%' AND Message LIKE '%{tableName}%'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "a NULL default must not re-modify the column on every deploy");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{_mainDb}`.`{tableName}`";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     [TestCase("'Standard'", TestName = "TableQuench_StringDefaultIsIdempotent")]
     public void TableQuench_StringLiteralDefaultIsIdempotent(string declaredDefault)
     {

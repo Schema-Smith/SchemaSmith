@@ -72,9 +72,7 @@ BEGIN
     -- A statement of its own: MySQL cannot open a temporary table twice in one statement.
     UPDATE _SchemaSmith_PrimaryKeyStmts p
       JOIN _SchemaSmith_Tables t ON t.TableKey = p.TableKey
-       SET p.AutoIncrementColumn = CASE WHEN COALESCE(t.AutoIncrementKeyClause, '') <> ''
-                                        THEN SchemaSmith_StripBacktickWrapping(SUBSTRING_INDEX(SUBSTRING_INDEX(t.AutoIncrementKeyClause, '(', -1), ')', 1))
-                                        END;
+       SET p.AutoIncrementColumn = t.AutoIncrementColumn;
     -- An AUTO_INCREMENT column that is not the key's first part needs an index of its own leading with it; one the
     -- table already has serves. The catalog is read into a snapshot, never joined by set-based DML (#337).
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_LeadingIndexColumns;

@@ -102,6 +102,7 @@ BEGIN
     DECLARE v_ShadowColumnList LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_CopyColumnList LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_LiveCollation VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_LiveEngine VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_Collation VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_Engine VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AutoIncrementKeyClause VARCHAR(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -399,8 +400,8 @@ BEGIN
 
     -- Aggregates, so the read always yields exactly one row and the variables land NULL rather than
     -- keeping a previous value on a miss.
-    SELECT MAX(ist.AUTO_INCREMENT), MAX(ist.TABLE_COLLATION)
-      INTO v_CapturedAutoIncrement, v_LiveCollation
+    SELECT MAX(ist.AUTO_INCREMENT), MAX(ist.TABLE_COLLATION), MAX(ist.ENGINE)
+      INTO v_CapturedAutoIncrement, v_LiveCollation, v_LiveEngine
       FROM INFORMATION_SCHEMA.TABLES ist
      WHERE ist.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ist.TABLE_SCHEMA) = v_DbKey
        AND SchemaSmith_IdentifierKey(ist.TABLE_NAME) = v_TableKey;
@@ -534,7 +535,8 @@ BEGIN
     -- declared" behaviour. ROW_FORMAT, COMMENT and the declared AUTO_INCREMENT seed are deliberately NOT
     -- carried: they are pure attributes owned by the convergence passes, and the declared seed in
     -- particular would fight the captured counter this procedure exists to preserve.
-    SELECT COALESCE(NULLIF(TRIM(MAX(t.Collation)), ''), v_LiveCollation), MAX(t.Engine),
+    -- An omitted Engine keeps the table's own, as the in-place pass does.
+    SELECT COALESCE(NULLIF(TRIM(MAX(t.Collation)), ''), v_LiveCollation), COALESCE(MAX(t.Engine), v_LiveEngine),
            COALESCE(MAX(t.AutoIncrementKeyClause), '')
       INTO v_Collation, v_Engine, v_AutoIncrementKeyClause
       FROM _SchemaSmith_Tables t

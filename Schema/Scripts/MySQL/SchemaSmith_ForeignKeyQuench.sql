@@ -140,10 +140,12 @@ BEGIN
         OR CAST(REPLACE(UPPER(TRIM(e.UpdateRule)), 'RESTRICT', 'NO ACTION') AS BINARY) != CAST(REPLACE(UPPER(TRIM(COALESCE(f.UpdateAction, 'NO ACTION'))), 'RESTRICT', 'NO ACTION') AS BINARY)
         -- Or different columns (aggregate comparison handles composite FKs;
         -- REPLACE strips backticks from comma-separated column lists like `Col1`,`Col2`)
-        -- (column names compare case-insensitively, as the engine does)
-        OR CAST(LOWER(c.FkColumns) AS BINARY) != CAST(LOWER(REPLACE(f.Columns, '`', '')) AS BINARY)
+        -- (column names compare case-insensitively, as the engine does). The spaces around a comma go too: the catalog
+        -- list has none, so a hand-written `a`, `b` dropped and re-created the key every deploy. REPLACE, not
+        -- REGEXP_REPLACE, which MySQL 5.7 lacks.
+        OR CAST(LOWER(c.FkColumns) AS BINARY) != CAST(LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(f.Columns, '`', ''), ', ', ','), ' ,', ','), ', ', ','))) AS BINARY)
         -- Or different referenced columns
-        OR CAST(LOWER(c.RefColumns) AS BINARY) != CAST(LOWER(REPLACE(f.RelatedColumns, '`', '')) AS BINARY)
+        OR CAST(LOWER(c.RefColumns) AS BINARY) != CAST(LOWER(TRIM(REPLACE(REPLACE(REPLACE(REPLACE(f.RelatedColumns, '`', ''), ', ', ','), ' ,', ','), ', ', ','))) AS BINARY)
     );
 
     -- Drop modified FKs
@@ -184,6 +186,11 @@ BEGIN
             AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(m.TableName)
             AND SchemaSmith_NameKeyCI(s.INDEX_NAME) = SchemaSmith_NameKeyCI(m.ConstraintName)
             AND s.SEQ_IN_INDEX = 1
+        -- An index of the key's name that the package declares is the package's: dropped here, after the index pass,
+        -- it was gone until the next deploy put it back.
+        WHERE NOT EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
+                           WHERE i.TableKey = SchemaSmith_IdentifierKey(m.TableName)
+                             AND i.IndexKey = SchemaSmith_NameKeyCI(m.ConstraintName))
         GROUP BY m.TableName;
 
         SET @v_fkmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKModStmts);
@@ -468,6 +475,9 @@ BEGIN
                 AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(d.TableName)
                 AND SchemaSmith_NameKeyCI(s.INDEX_NAME) = SchemaSmith_NameKeyCI(d.ConstraintName)
                 AND s.SEQ_IN_INDEX = 1
+            WHERE NOT EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
+                               WHERE i.TableKey = SchemaSmith_IdentifierKey(d.TableName)
+                                 AND i.IndexKey = SchemaSmith_NameKeyCI(d.ConstraintName))
             GROUP BY d.TableName;
 
             -- Object-change audit (#243 E5): one row per FK about to be dropped. Set-based over the

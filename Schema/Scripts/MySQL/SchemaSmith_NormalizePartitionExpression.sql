@@ -32,8 +32,10 @@ BEGIN
     -- understand precedence. Two genuinely different expressions still compare different, which is the
     -- safe direction -- the cost of a false NON-match is a refusal the user can read and correct, while a
     -- false match would silently accept a layout that is not what the package declares.
+    -- KEY () names no columns (the primary key). MySQL reports that expression as NULL and MariaDB as '', and a
+    -- declaration that omits it is NULL too: all three are the same empty list.
     IF p_Expression IS NULL THEN
-        RETURN NULL;
+        RETURN '';
     END IF;
 
     -- REPLACE handles every whitespace form the catalog can return; a single TRIM would only touch the ends.
