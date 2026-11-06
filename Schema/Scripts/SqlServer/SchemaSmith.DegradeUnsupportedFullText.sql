@@ -57,7 +57,7 @@ BEGIN
                                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     DECLARE @v_Msg NVARCHAR(2048) = 'Full-text STATISTICAL_SEMANTICS requires a registered semantic language statistics database; table(s): ' +
                                     LEFT(@v_List, 1800) + '.'
-    RAISERROR(@v_Msg, 16, 1)
+    RAISERROR('%s', 16, 1, @v_Msg)
     RETURN
   END
 

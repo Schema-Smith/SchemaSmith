@@ -1654,7 +1654,7 @@ SELECT SCHEMA_NAME(p.[schema_id]), p.[name], p.is_enabled, p.is_schema_bound, p.
                 "  BEGIN CATCH\r\n" +
                 "    IF @@TRANCOUNT > 0 ROLLBACK\r\n" +
                 "    DECLARE @v_Error NVARCHAR(2048) = ERROR_MESSAGE()\r\n" +
-                "    RAISERROR(@v_Error, 16, 1)\r\n" +
+                "    RAISERROR('%s', 16, 1, @v_Error)\r\n" +
                 "  END CATCH\r\n" +
                 "  END\r\n" +
                 "END\r\n";

@@ -32,7 +32,7 @@ BEGIN
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'System-versioned temporal (SYSTEM_VERSIONING) requires SQL Server 2016 (detected major ' +
                    CONVERT(NVARCHAR(10), @v_major) + '); table(s): ' + LEFT(@v_list, 1800) + '.'
-      RAISERROR(@v_msg, 16, 1)
+      RAISERROR('%s', 16, 1, @v_msg)
     END
     ELSE
     BEGIN
@@ -57,7 +57,7 @@ BEGIN
                           WHERE ISNULL(t.[Ledger], 'Off') <> 'Off' AND t.IsTemporal = 1
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     SET @v_msg = 'Ledger and IsTemporal cannot both be declared on the same table -- a ledger table manages its own history, and SQL Server reports it as non-temporal; table(s): ' + LEFT(@v_list, 1700) + '.'
-    RAISERROR(@v_msg, 16, 1)
+    RAISERROR('%s', 16, 1, @v_msg)
   END
 
   -- Graph tables (AS NODE / AS EDGE) -- SQL Server 2017 (major 14). Below it the clause is not syntax at
@@ -72,7 +72,7 @@ BEGIN
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'Graph tables (AS NODE / AS EDGE) require SQL Server 2017 (detected major ' +
                    CONVERT(NVARCHAR(10), @v_major) + '); table(s): ' + LEFT(@v_list, 1800) + '.'
-      RAISERROR(@v_msg, 16, 1)
+      RAISERROR('%s', 16, 1, @v_msg)
     END
     ELSE
     BEGIN
@@ -96,7 +96,7 @@ BEGIN
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'Edge constraints require SQL Server 2019 (detected major ' +
                    CONVERT(NVARCHAR(10), @v_major) + '); constraint(s): ' + LEFT(@v_list, 1800) + '.'
-      RAISERROR(@v_msg, 16, 1)
+      RAISERROR('%s', 16, 1, @v_msg)
     END
     ELSE
     BEGIN
@@ -127,7 +127,7 @@ BEGIN
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'XML_COMPRESSION requires SQL Server 2022 (detected major ' +
                    CONVERT(NVARCHAR(10), @v_major) + '); object(s): ' + LEFT(ISNULL(@v_list, '(indexes only)'), 1800) + '.'
-      RAISERROR(@v_msg, 16, 1)
+      RAISERROR('%s', 16, 1, @v_msg)
     END
     ELSE
     BEGIN
@@ -166,7 +166,7 @@ BEGIN
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'Ledger tables require SQL Server 2022 (detected major ' +
                    CONVERT(NVARCHAR(10), @v_major) + '); table(s): ' + LEFT(@v_list, 1800) + '.'
-      RAISERROR(@v_msg, 16, 1)
+      RAISERROR('%s', 16, 1, @v_msg)
     END
     ELSE
     BEGIN
@@ -199,7 +199,7 @@ BEGIN
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'Dynamic data masking (MASKED WITH) requires SQL Server 2016 (detected major ' +
                    CONVERT(NVARCHAR(10), @v_major) + '); column(s): ' + LEFT(@v_list, 1800) + '.'
-      RAISERROR(@v_msg, 16, 1)
+      RAISERROR('%s', 16, 1, @v_msg)
     END
     ELSE
     BEGIN
@@ -223,7 +223,7 @@ BEGIN
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'Always Encrypted (ENCRYPTED WITH) requires SQL Server 2016 (detected major ' +
                    CONVERT(NVARCHAR(10), @v_major) + '); column(s): ' + LEFT(@v_list, 1800) + '.'
-      RAISERROR(@v_msg, 16, 1)
+      RAISERROR('%s', 16, 1, @v_msg)
     END
     ELSE
     BEGIN
@@ -257,7 +257,7 @@ BEGIN
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'Data compression requires Enterprise or Developer edition below SQL Server 2016 SP1; table(s): ' +
                    LEFT(@v_list, 1800) + '.'
-      RAISERROR(@v_msg, 16, 1)
+      RAISERROR('%s', 16, 1, @v_msg)
     END
     ELSE
     BEGIN
@@ -301,7 +301,7 @@ BEGIN
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       SET @v_msg = 'FILESTREAM requires it enabled on the server and a FILESTREAM filegroup on the database, ' +
                    'neither of which SchemaSmith creates for you; column(s): ' + LEFT(@v_list, 1700) + '.'
-      RAISERROR(@v_msg, 16, 1)
+      RAISERROR('%s', 16, 1, @v_msg)
     END
     ELSE
     BEGIN

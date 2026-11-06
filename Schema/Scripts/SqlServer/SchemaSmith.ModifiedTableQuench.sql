@@ -2851,7 +2851,7 @@ BEGIN TRY
   SET NOCOUNT OFF
 END TRY
 BEGIN CATCH
-  DECLARE @v_RethrowMsg NVARCHAR(4000) = ERROR_MESSAGE();
+  DECLARE @v_RethrowMsg NVARCHAR(4000) = CASE WHEN ERROR_NUMBER() = 50000 THEN ERROR_MESSAGE() ELSE N'Msg ' + CAST(ERROR_NUMBER() AS NVARCHAR(10)) + N', Line ' + CAST(ERROR_LINE() AS NVARCHAR(10)) + ISNULL(N', Procedure ' + ERROR_PROCEDURE(), N'') + N': ' + ERROR_MESSAGE() END;
   -- A policy dropped for the column pass may be one the package does not carry, so a failure before it was created
   -- again must not lose it. Best effort: the original error is the one reported.
   IF OBJECT_ID('tempdb..#SbPolicies') IS NOT NULL AND @WhatIf = 0
@@ -2868,5 +2868,5 @@ BEGIN CATCH
       RAISERROR('Could not create again the security policies dropped for the column pass: %s', 10, 100, @v_PolicyNames) WITH NOWAIT
     END CATCH
   END
-  RAISERROR(@v_RethrowMsg, 16, 1);
+  RAISERROR('%s', 16, 1, @v_RethrowMsg);
 END CATCH

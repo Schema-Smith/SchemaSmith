@@ -389,4 +389,21 @@ public class SqlServerScriptGuardTests
             + "once combined. Neither fails a deploy -- the first makes the correlated joins LOB scans "
             + "and the second logs a maximum-key-length warning on every run: " + string.Join(", ", tooWide));
     }
+
+    /// <summary>
+    /// SS-1 (identifier safety): a message held in a variable is passed as RAISERROR's argument, never as its format. As
+    /// the format, every % in the message -- a name holding one, a LIKE pattern an error quotes -- is read as a
+    /// placeholder: the message comes out mangled, or RAISERROR fails on it instead of reporting it.
+    /// </summary>
+    [Test]
+    public void NoRaiseErrorTakesItsFormatFromAVariable()
+    {
+        var offences = SqlServerScripts()
+            .SelectMany(s => WithoutLineComments(s.Sql).Split('\n')
+                .Select((line, i) => (s.Name, Line: i + 1, Text: line.Trim()))
+                .Where(l => Regex.IsMatch(l.Text, @"RAISERROR\s*\(\s*@\w+\s*,", RegexOptions.IgnoreCase)))
+            .Select(l => $"{l.Name}:{l.Line}: {l.Text}  -- use RAISERROR('%s', <severity>, <state>, @variable)")
+            .ToList();
+        Assert.That(offences, Is.Empty, string.Join(Environment.NewLine, offences));
+    }
 }

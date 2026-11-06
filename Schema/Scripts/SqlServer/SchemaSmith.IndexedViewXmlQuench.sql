@@ -89,7 +89,7 @@ BEGIN
             (SELECT TOP 1 ViewSchema + '.' + ViewName FROM @Views GROUP BY ViewSchema, ViewName HAVING COUNT(*) > 1 ORDER BY ViewSchema, ViewName);
         DECLARE @v_IvDupMsg NVARCHAR(2000) = 'Multiple indexed view variants matched on this target for view ' + @v_IvDupView +
             '. SQL Server allows one view per name — ShouldApplyExpressions must be mutually exclusive.';
-        RAISERROR(@v_IvDupMsg, 16, 1); RETURN;
+        RAISERROR('%s', 16, 1, @v_IvDupMsg); RETURN;
     END;
 
     -- Validate ownership: fail if any requested views are owned by a different product

@@ -40,7 +40,7 @@ BEGIN TRY
       'Schema must be populated before reaching IndexOnlyQuench — this is a programmer error. ' +
       'In production the SchemaDefaultResolver fills Schema with the platform default or the {{SchemaName}} token; ' +
       'a blank value here means a caller bypassed Template.Load or substituted the token away.';
-    RAISERROR(@v_Msg, 16, 1);
+    RAISERROR('%s', 16, 1, @v_Msg);
   END
 
   IF OBJECT_ID('tempdb..#TableDefinitions') IS NOT NULL DROP TABLE #TableDefinitions
@@ -340,7 +340,7 @@ BEGIN TRY
       (SELECT TOP 1 [Schema] + '.' + [TableName] FROM #FullTextIndexes WITH (NOLOCK) GROUP BY [Schema], [TableName] HAVING COUNT(*) > 1 ORDER BY [Schema], [TableName]);
     DECLARE @v_FTDupMsg NVARCHAR(2000) = 'Multiple full-text index variants matched on this target for table ' + @v_FTDupTable +
       '. SQL Server allows one full-text index per table — ShouldApplyExpressions must be mutually exclusive.';
-    RAISERROR(@v_FTDupMsg, 16, 1);
+    RAISERROR('%s', 16, 1, @v_FTDupMsg);
   END
 
   IF EXISTS (SELECT 1 FROM #FullTextIndexes WITH (NOLOCK)) EXEC SchemaSmith.DegradeUnsupportedFullText
@@ -483,7 +483,7 @@ BEGIN TRY
         AND SchemaSmith.fn_StripBracketWrapping(i.[FileGroup]) <> ei.[xFileGroup]
     DECLARE @v_IdxMoveMsg NVARCHAR(2000) = 'Index ' + @v_IdxMoveIndex + ' declares filegroup ' + @v_IdxMoveDeclared +
       ', but is currently deployed on filegroup ' + @v_IdxMoveLive + '. SchemaSmith does not move an existing index to a different filegroup (that is a rebuild) -- migrate it manually, or correct the declared filegroup to match.';
-    RAISERROR(@v_IdxMoveMsg, 16, 1);
+    RAISERROR('%s', 16, 1, @v_IdxMoveMsg);
   END
 
   -- Partition placement (#partitioning, K1): the index-level twin of the table check in
@@ -517,7 +517,7 @@ BEGIN TRY
                  AND SchemaSmith.fn_StripBracketWrapping(i.[PartitionColumn]) <> ei.[xPartitionColumn]))
     DECLARE @v_IdxPsMsg NVARCHAR(2000) = 'Index ' + @v_IdxPsIndex + ' declares partition placement ' + @v_IdxPsDeclared +
       ', but is currently deployed on ' + @v_IdxPsLive + '. SchemaSmith does not move an existing index onto or between partition schemes -- that rebuilds the whole index. Migrate it manually, or correct the declaration to match.';
-    RAISERROR(@v_IdxPsMsg, 16, 1);
+    RAISERROR('%s', 16, 1, @v_IdxPsMsg);
   END
 
   RAISERROR('Collect Existing XML Index Definitions', 10, 100) WITH NOWAIT
@@ -1189,7 +1189,7 @@ BEGIN TRY
         AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
     DECLARE @v_IdxFGMsg NVARCHAR(2000) = 'Index ' + @v_IdxFGIndex + ' declares filegroup ' + @v_IdxFGName +
       ', which does not exist on this database. SchemaSmith does not create filegroups -- create it on the target first, or correct the declared name.';
-    RAISERROR(@v_IdxFGMsg, 16, 1);
+    RAISERROR('%s', 16, 1, @v_IdxFGMsg);
   END
 
   -- Partition placement (#partitioning, K1): the scheme must exist, same contract as the filegroup check
@@ -1209,7 +1209,7 @@ BEGIN TRY
         AND NOT EXISTS (SELECT * FROM sys.indexes si WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
     DECLARE @v_IdxPsMissingMsg NVARCHAR(2000) = 'Index ' + @v_IdxPsMissing + ' declares partition scheme ' + @v_IdxPsMissingName +
       ', which does not exist on this database. SchemaSmith does not create partition functions or schemes -- create them on the target first, or correct the declared name.';
-    RAISERROR(@v_IdxPsMissingMsg, 16, 1);
+    RAISERROR('%s', 16, 1, @v_IdxPsMissingMsg);
   END
 
   RAISERROR('Add Missing Indexes', 10, 100) WITH NOWAIT
@@ -1497,6 +1497,6 @@ BEGIN TRY
   SET NOCOUNT OFF
 END TRY
 BEGIN CATCH
-  DECLARE @v_RethrowMsg NVARCHAR(4000) = ERROR_MESSAGE();
-  RAISERROR(@v_RethrowMsg, 16, 1);
+  DECLARE @v_RethrowMsg NVARCHAR(4000) = CASE WHEN ERROR_NUMBER() = 50000 THEN ERROR_MESSAGE() ELSE N'Msg ' + CAST(ERROR_NUMBER() AS NVARCHAR(10)) + N', Line ' + CAST(ERROR_LINE() AS NVARCHAR(10)) + ISNULL(N', Procedure ' + ERROR_PROCEDURE(), N'') + N': ' + ERROR_MESSAGE() END;
+  RAISERROR('%s', 16, 1, @v_RethrowMsg);
 END CATCH

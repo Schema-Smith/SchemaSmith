@@ -1482,7 +1482,7 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {SqlFlag(_d
 END TRY
 BEGIN CATCH
   DECLARE @v_DegradeRefusal NVARCHAR(4000) = ERROR_MESSAGE()
-  RAISERROR(@v_DegradeRefusal, 16, 1)
+  RAISERROR('%s', 16, 1, @v_DegradeRefusal)
   RETURN
 END CATCH";
         ExecuteNonQueryHandlingMessages(tableCommand);
@@ -1495,7 +1495,7 @@ END CATCH";
 END TRY
 BEGIN CATCH
   DECLARE @v_DegradeRefusal NVARCHAR(4000) = ERROR_MESSAGE()
-  RAISERROR(@v_DegradeRefusal, 16, 1)
+  RAISERROR('%s', 16, 1, @v_DegradeRefusal)
   RETURN
 END CATCH";
 

@@ -231,7 +231,7 @@ END TRY
 BEGIN CATCH
   -- A caller's transaction is the caller's to end.
   IF XACT_STATE() <> 0 AND @v_Nested = 0 ROLLBACK TRANSACTION
-  DECLARE @v_RethrowMsg NVARCHAR(4000) = ERROR_MESSAGE();
-  RAISERROR(@v_RethrowMsg, 16, 1);
+  DECLARE @v_RethrowMsg NVARCHAR(4000) = CASE WHEN ERROR_NUMBER() = 50000 THEN ERROR_MESSAGE() ELSE N'Msg ' + CAST(ERROR_NUMBER() AS NVARCHAR(10)) + N', Line ' + CAST(ERROR_LINE() AS NVARCHAR(10)) + ISNULL(N', Procedure ' + ERROR_PROCEDURE(), N'') + N': ' + ERROR_MESSAGE() END;
+  RAISERROR('%s', 16, 1, @v_RethrowMsg);
 END CATCH
 GO
