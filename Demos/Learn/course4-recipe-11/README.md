@@ -21,8 +21,8 @@ starts with `cookbook_r11_t`.
 
 - The [sandbox](../docker) is up (`docker compose up -d`) and verified (all four engines `PASS`).
 - The CLI is on your PATH (`schemaquench --version` reports `SchemaQuench - Version: 2.8.0.0` or later).
-- Running the lab a second time? Restore the starting package first (`git checkout -- .` in this folder): Steps 3
-  and 7 edit it.
+- Running the lab a second time? Restore the starting package first (`git checkout -- .` in this folder, or a fresh
+  copy of the download): Steps 3 and 7 edit it.
 
 ## Step 1: Create two tenants
 
@@ -62,7 +62,7 @@ Both tenants get the table and the index. On SQL Server:
 [localhost,11433].[cookbook_r11_t1] Successfully Quenched
 ```
 
-Check the shape on each tenant. You'll run these same lines after every step:
+`t2` logs the same. Check the shape on each tenant. You'll run these same lines after every step:
 
 ```bash
 # from course4-recipe-11
@@ -359,8 +359,10 @@ show ``Drop modified fulltext index: DROP INDEX `ft_document` ON `cookbook_r11_t
 this list is your remaining work. Hand it to the DBAs and keep shipping the two-variant package until the list comes
 back empty.
 
+<!-- TRAINING-RELEASE-PIN #614: the note below describes a phantom drop in the SQL Server preview. When a release includes the fix: re-run Step 8 on SQL Server and drop the note. -->
 > **Note:** On SQL Server, the 2.8.0 preview also lists a `Dropping index [dbo].[Sale].[IX_Sale_Report]` line after the
-> rebuild. The real run does not drop the index; it rebuilds it in place, as Step 9 shows.
+> rebuild ([#614](https://github.com/Schema-Smith/SchemaSmith/issues/614)). The real run does not drop the index; it
+> rebuilds it in place, as Step 9 shows.
 
 ## Step 9: Deploy the finished package
 
@@ -390,7 +392,7 @@ schemaquench --ConfigFile:rollout.settings.json
 # → Title,Body
 ```
 
-A last deploy is clean on every tenant:
+A last deploy is clean on every tenant: three `Successfully Quenched` lines and no index work.
 
 ```bash
 # from course4-recipe-11/<engine>
