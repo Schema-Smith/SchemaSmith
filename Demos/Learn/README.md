@@ -15,7 +15,7 @@ maps to a course like this:
 | **Course 1 · First deployment** | `module-01` … `module-04` | Install & connect, first package, WhatIf, extract an existing schema |
 | **Course 2 · Going deeper** | `level2-module-01` … `level2-module-06` | Products, template fan-out, conditional deployment, script tokens, data delivery, custom metadata |
 | **Course 3 · Ship it / operate it** | `course3-module-01` … `course3-module-06` | Team workflow, CI/CD gating, rollback, capstone (full dev→prod lifecycle + recyclebin recovery), drift (a hand-made prod hotfix vs the next deploy) |
-| **Course 4 · Recipes** | `course4-recipe-01` … `course4-recipe-10` | A cookbook of recipes where custom properties and script tokens drive the tools |
+| **Course 4 · Recipes** | `course4-recipe-01` … `course4-recipe-11` | A cookbook of recipes where custom properties, script tokens and conditional variants drive the tools |
 | **Course 5 · Switching tools** | `course5-module-01` … `course5-module-05` | Migrating from another migration tool |
 | **Course 6 · Production & least privilege** | `course6-module-01` … `course6-module-07` | Operating in CI under least privilege |
 | **Course 7 · Fleet fan-out** | `course7-module-01` … `course7-module-08` | One schema across a fleet of per-tenant databases |
