@@ -1,6 +1,6 @@
 # Course 8 · Module 2 — Structure-change failures
 
-Two induced incidents on one database (`diag_structure`), read end to end. This is the **structure
+Two induced incidents on one database (`diag_structure`), read end to end, then the rebuilds a policy elects. This is the **structure
 half** of the mechanical engine: how column *adds* (`MissingTableAndColumnQuench`) and column
 *alters* (`ModifiedTableQuench`) fail, and how to read them. Same method as Module 1 — locate the
 phase, read the error, recover.
@@ -236,6 +236,132 @@ Clear the blocking state when you are done:
 > everything this beat teaches is metadata-level, and the guard fires on the CDC configuration, not on
 > captured rows.
 
+## Beat 4 — three column changes, and the policy that decides how they land
+
+Beat 3's rebuild was the only way through. This one is a choice. `beat4-reshape/` is the baseline with three of
+`Product`'s columns changed at once: `Sku` goes Unicode on SQL Server (wider elsewhere), `UnitPrice` goes to four
+decimal places, and `Name` doubles in length. Its `Product` table file carries a policy that counts them:
+
+```json
+{ "RebuildPolicy": { "Mode": "THRESHOLD", "Threshold": 3 } }
+```
+
+Three pending column **modifications** reach the threshold, so the table is rebuilt instead of altered. Column adds,
+drops and index changes don't count, because a rebuild doesn't save that work.
+
+Start clean, deploy the baseline, and give `Product` some rows to carry:
+
+```bash
+# from course8-module-02
+bash setup-databases.sh --reset          # Windows: .\setup-databases.ps1 -Reset
+```
+
+```bash
+# from course8-module-02/<engine>
+schemaquench --ConfigFile:quench.settings.baseline.json
+```
+
+```bash
+# from course8-module-02
+../lab-sql.sh sqlserver diag_structure "INSERT INTO dbo.Product (ProductId, Sku, Name, UnitPrice) VALUES (1,'ANV-01','Anvil',249.00),(2,'TNG-02','Tongs',39.50),(3,'HMR-03','Cross-peen hammer',58.25)"
+../lab-sql.sh postgres diag_structure "INSERT INTO product (productid, sku, name, unitprice) VALUES (1,'ANV-01','Anvil',249.00),(2,'TNG-02','Tongs',39.50),(3,'HMR-03','Cross-peen hammer',58.25)"
+../lab-sql.sh mysql diag_structure "INSERT INTO Product (ProductId, Sku, Name, UnitPrice) VALUES (1,'ANV-01','Anvil',249.00),(2,'TNG-02','Tongs',39.50),(3,'HMR-03','Cross-peen hammer',58.25)"
+../lab-sql.sh mariadb diag_structure "INSERT INTO Product (ProductId, Sku, Name, UnitPrice) VALUES (1,'ANV-01','Anvil',249.00),(2,'TNG-02','Tongs',39.50),(3,'HMR-03','Cross-peen hammer',58.25)"
+```
+
+### Below the threshold: what altering in place looks like
+
+Open the `Product` file in your engine's `beat4-reshape/Templates/Main/Tables/` and raise `Threshold` to `4`. Three
+changes no longer reach it. Preview the deploy; `quench.settings.beat4-preview.json` is the same settings with
+`"WhatIfONLY": true`, so nothing changes:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/beat4-reshape/Templates/Main/Tables/*roduct.json" set RebuildPolicy.Threshold 4 -->
+
+```bash
+# from course8-module-02/<engine>
+schemaquench --ConfigFile:quench.settings.beat4-preview.json --LogPath:"$PWD/logs"
+grep -A1 '"objectName"' "logs/SchemaQuench - Summary.json"
+```
+
+Every engine lists the three columns as `wouldModify`. What it prints to make them differs, and that difference is
+the whole point of the policy. SQL Server alters **one column per statement**:
+
+```text
+ALTER TABLE [dbo].[Product] ALTER COLUMN [Name] NVARCHAR(400) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL;
+ALTER TABLE [dbo].[Product] ALTER COLUMN [Sku] NVARCHAR(64) COLLATE SQL_Latin1_General_CP1_CI_AS NOT NULL;
+ALTER TABLE [dbo].[Product] ALTER COLUMN [UnitPrice] DECIMAL(19, 4) NOT NULL;
+```
+
+A change that touches every row, like `VARCHAR` to `NVARCHAR` or a new decimal scale, is a pass over the table, so
+on a big table that list is several passes. PostgreSQL, MySQL and MariaDB get **one** statement with every change in
+it (`ALTER TABLE … ALTER COLUMN "name" SET DATA TYPE …, ALTER COLUMN "sku" …` on PostgreSQL, `ALTER TABLE … MODIFY
+COLUMN …, MODIFY COLUMN …` on MySQL and MariaDB), and the engine applies it in a single pass.
+
+### At the threshold: one rebuild
+
+Put `Threshold` back to `3` and deploy for real:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/beat4-reshape/Templates/Main/Tables/*roduct.json" set RebuildPolicy.Threshold 3 -->
+
+```bash
+# from course8-module-02/<engine>
+schemaquench --ConfigFile:quench.settings.beat4-reshape.json --LogPath:"$PWD/logs"
+grep -A1 '"objectName"' "logs/SchemaQuench - Summary.json"
+```
+
+The log shows the rebuild (`Elect tables for rebuild` appears on SQL Server and PostgreSQL only):
+
+```text
+      Elect tables for rebuild
+        Rebuilding table [dbo].[Product]
+        Dropping inbound foreign key [dbo].[OrderItem].[FK_OrderItem_Product]
+```
+
+and the summary has one `rebuilt` row where the preview had three `wouldModify` rows. On SQL Server:
+
+```text
+        "objectName": "[dbo].[OrderItem].[FK_OrderItem_Product]",
+        "action": "dropped",
+--
+        "objectName": "[dbo].[Product]",
+        "action": "reapplied",
+--
+        "objectName": "[dbo].[Product]",
+        "action": "rebuilt",
+--
+        "objectName": "[dbo].[Product].[PK_Product]",
+        "action": "created",
+--
+        "objectName": "[dbo].[OrderItem].[FK_OrderItem_Product]",
+        "action": "created",
+```
+
+The rebuild built `Product` fresh in its declared shape and copied the rows across once. It dropped the foreign key
+`OrderItem` holds on it and added it back, and on SQL Server it put the table's permissions and extended properties
+back (`reapplied`). The other engines show the same rows without `reapplied`, and MySQL and MariaDB list no primary
+key row. Check the rows and the new types:
+
+```bash
+# from course8-module-02
+../lab-sql.sh sqlserver diag_structure "SELECT COUNT(*) FROM dbo.Product; SELECT name, TYPE_NAME(user_type_id), max_length, scale FROM sys.columns WHERE object_id = OBJECT_ID('dbo.Product') ORDER BY column_id"
+../lab-sql.sh postgres diag_structure "SELECT COUNT(*) FROM product; SELECT column_name, data_type, character_maximum_length, numeric_scale FROM information_schema.columns WHERE table_name = 'product' ORDER BY ordinal_position"
+../lab-sql.sh mysql diag_structure "SELECT COUNT(*) FROM Product; SELECT COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'diag_structure' AND TABLE_NAME = 'Product' ORDER BY ORDINAL_POSITION"
+../lab-sql.sh mariadb diag_structure "SELECT COUNT(*) FROM Product; SELECT COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'diag_structure' AND TABLE_NAME = 'Product' ORDER BY ORDINAL_POSITION"
+# → 3 rows; Name 400 long, Sku NVARCHAR(64) on SQL Server and varchar(100) elsewhere, UnitPrice with scale 4
+```
+
+**Which engine it pays on.** The rebuild turned three statements into one copy. That's a win on SQL Server, where
+those were three statements. On PostgreSQL, MySQL and MariaDB the in-place path was already one statement, so a
+rebuild there saves nothing, and on MySQL and MariaDB it adds the exposure the
+[RebuildPolicy reference](https://github.com/Schema-Smith/SchemaSmith/blob/main/docs/end-user/reference/configuration.md#rebuildpolicy)
+describes: a row another session writes during the copy can be missed. On those engines, ask for a rebuild to fix
+column order (Beat 3), not for speed.
+
+> **Previewing at the threshold.** Run `quench.settings.beat4-preview.json` with `Threshold` at `3` and SQL Server
+> and PostgreSQL list one `wouldRebuild` row and print the whole rebuild sequence. MySQL and MariaDB print the
+> rebuild sequence too, then also the in-place `ALTER TABLE … MODIFY COLUMN` it replaces, with the three columns as
+> `wouldModify`. The real run makes only the rebuild.
+
 ## What each folder is
 
 | Path | Purpose |
@@ -245,7 +371,9 @@ Clear the blocking state when you are done:
 | `beat1-fixed/` | `beat1-broken` + `Default 'Standard'` — the recovery. |
 | `beat2-broken/` | `beat1-fixed` + `FullName` narrowed to 10 — the `2628`/`22001`/`1406` incident. |
 | `beat3-reorder/` | Baseline with `Customer`'s columns declared in a different order + a table-level `RebuildPolicy` with `OnOrderMismatch` — the rebuild, and the CDC refusal. |
+| `beat4-reshape/` | Baseline with three of `Product`'s columns changed + a table-level `RebuildPolicy` of `THRESHOLD` 3 — the rebuild the policy chooses. |
 | `quench.settings.<state>.json` | One per package, all targeting `diag_structure`, lab-local `artifacts`/`checkpoints`. |
+| `quench.settings.beat4-preview.json` | `beat4-reshape` with `"WhatIfONLY": true`, for the preview. |
 
 Next: **Module 3 — Index, constraint & FK failures**, where the dup-key incident from Module 1 gets
 its full diagnosis. The recovery *toolkit* (`--ResumeQuench`, marking a script done) is **Module 5**.

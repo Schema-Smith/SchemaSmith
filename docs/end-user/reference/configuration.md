@@ -700,8 +700,11 @@ rebuild never gets one.
 
 Two situations make a rebuild the better move:
 
-- **Cost.** A wide table with several pending column-type changes pays one table rewrite per change.
-  A rebuild collapses those into a single copy.
+- **Cost, on SQL Server.** SQL Server alters one column per statement, so a table with several pending
+  column changes that each rewrite every row (a type change such as `INT` to `BIGINT`) pays one pass per
+  column. A rebuild collapses those into a single copy. PostgreSQL, MySQL and MariaDB already receive every
+  column change on a table in one `ALTER TABLE`, so the in-place path is a single statement there and a
+  rebuild does not save passes.
 - **Column order.** SQL Server and PostgreSQL cannot reorder existing columns in place, so a rebuild is the
   only mechanism that can make a deployed table match the order its package declares there. MySQL and
   MariaDB can (`ALTER TABLE … MODIFY … AFTER`), and under [`OnlineApply`](#onlineapply) `Prefer` or `Require`
@@ -777,6 +780,10 @@ guessing:
 > SchemaQuench makes the swap itself atomic and verifies the row count immediately before it, so the
 > ordinary case fails safely with the original intact — but a row written by another session *during*
 > the copy can still be missed. SQL Server and PostgreSQL do not have this exposure.
+
+> **Previewing a rebuild.** Under `WhatIfONLY` the rebuild's whole sequence is printed and the table is recorded
+> as `wouldRebuild`. On MySQL and MariaDB the preview also prints the in-place `ALTER TABLE … MODIFY COLUMN`
+> the rebuild replaces and records those columns as `wouldModify`; the real run makes only the rebuild.
 
 ### When SchemaQuench refuses
 
