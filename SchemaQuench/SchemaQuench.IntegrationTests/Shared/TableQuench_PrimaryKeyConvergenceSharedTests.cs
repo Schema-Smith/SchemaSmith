@@ -227,6 +227,42 @@ public abstract class TableQuench_PrimaryKeyConvergenceSharedTests : BaseTableQu
         }
     }
 
+    // A7: which generated column reads which was a substring test, so `total` reading `tax_amount` was taken to read
+    // `tax`, which reads `total`, and the deploy stopped on a cycle that does not exist.
+    [Test]
+    public void GeneratedColumnsWhoseNamesContainEachOther_AreNotACycle()
+    {
+        var table = $"GenCycle_{Guid.NewGuid().ToString("N")[..8]}";
+        var json = $$"""
+            [{
+                "Name": "{{table}}",
+                "Columns": [
+                    { "Name": "Id", "DataType": "INT", "Nullable": false },
+                    { "Name": "price", "DataType": "DECIMAL(10,2)", "Nullable": true },
+                    { "Name": "tax_amount", "DataType": "DECIMAL(10,2)", "Nullable": true },
+                    { "Name": "total", "DataType": "DECIMAL(10,2)", "Nullable": true, "GenerationExpression": "price + tax_amount", "Generated": "STORED" },
+                    { "Name": "tax", "DataType": "DECIMAL(10,2)", "Nullable": true, "GenerationExpression": "total * 0.2", "Generated": "STORED" }
+                ],
+                "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`" } ]
+            }]
+            """;
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json));
+            cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND COLUMN_NAME IN ('total', 'tax')";
+            Assert.That(Convert.ToInt32(TransientRetry.Run(() => cmd.ExecuteScalar())), Is.EqualTo(2));
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{_mainDb}`.`{table}`";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void WhatIf_ReportsTheKey_AndChangesNothing()
     {

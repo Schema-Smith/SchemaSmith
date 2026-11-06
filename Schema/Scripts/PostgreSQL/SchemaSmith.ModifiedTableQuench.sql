@@ -1295,7 +1295,15 @@ BEGIN
                         AND c."TableName" = ec."TableName"
                         AND ((c."Name" = ec."ColumnName" AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                           OR (c."Name" = ec."ColumnName" AND ec."Virtual" AND c."GenerationExpression" = '')
-                          OR (c."Name" != ec."ColumnName" AND (REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec2."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') OR COALESCE(ec2."Collation", '') != COALESCE(c."Collation", '')) AND ec."GenerationExpression" LIKE '%' || c."Name" || '%')))
+                          OR (c."Name" != ec."ColumnName" AND (REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec2."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') OR COALESCE(ec2."Collation", '') != COALESCE(c."Collation", '')) AND EXISTS (SELECT 1  -- the generated column reads c, by the catalog's own record; a substring matched any name inside another
+                                         FROM pg_attrdef ad
+                                         JOIN pg_attribute ga ON ga.attrelid = ad.adrelid AND ga.attnum = ad.adnum
+                                         JOIN pg_depend dp ON dp.classid = 'pg_attrdef'::regclass AND dp.objid = ad.oid
+                                                          AND dp.refclassid = 'pg_class'::regclass AND dp.refobjid = ad.adrelid
+                                         JOIN pg_attribute ra ON ra.attrelid = dp.refobjid AND ra.attnum = dp.refobjsubid
+                                        WHERE ad.adrelid = to_regclass(QUOTE_IDENT(ec."TableSchema") || '.' || QUOTE_IDENT(ec."TableName"))
+                                          AND ga.attname = ec."ColumnName"
+                                          AND ra.attname = c."Name"))))
          AND EXISTS (SELECT 1
                        FROM information_schema.columns ic
                        WHERE ic.table_schema = ec."TableSchema"

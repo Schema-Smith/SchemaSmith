@@ -1458,7 +1458,7 @@ BEGIN TRY
                                                 AND ic.[index_id] = i.[index_id]
                                                 AND COL_NAME(ic.[object_id], ic.column_id) = SchemaSmith.fn_StripBracketWrapping(cc.ColumnName)
     WHERE ic.column_id IS NOT NULL
-       OR i.filter_definition LIKE '%' + SchemaSmith.fn_StripBracketWrapping(cc.ColumnName) + '%'
+       OR i.filter_definition LIKE '%' + REPLACE(REPLACE(REPLACE(QUOTENAME(SchemaSmith.fn_StripBracketWrapping(cc.ColumnName)), '[', '[[]'), '%', '[%]'), '_', '[_]') + '%'
   
   -- Handle table compression changes
   RAISERROR('Fixup Table Compression', 10, 100) WITH NOWAIT
@@ -2144,7 +2144,7 @@ BEGIN TRY
                                                 AND ic.[stats_id] = i.[stats_id]
                                                 AND COL_NAME(ic.[object_id], ic.column_id) = SchemaSmith.fn_StripBracketWrapping(cc.ColumnName)
     WHERE ic.column_id IS NOT NULL
-       OR i.filter_definition LIKE '%' + SchemaSmith.fn_StripBracketWrapping(cc.ColumnName) + '%'
+       OR i.filter_definition LIKE '%' + REPLACE(REPLACE(REPLACE(QUOTENAME(SchemaSmith.fn_StripBracketWrapping(cc.ColumnName)), '[', '[[]'), '%', '[%]'), '_', '[_]') + '%'
   
   RAISERROR('Drop Statistics Referencing Modified Columns', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping statistic ' + id.[Schema] + '.' + id.[TableName] + '.' + QUOTENAME([StatName]) + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -2212,7 +2212,7 @@ BEGIN TRY
     FROM sys.check_constraints ck
     JOIN #ColumnChanges cc WITH (NOLOCK) ON ck.[parent_object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName]) 
                                         AND ((ck.parent_column_id <> 0 AND COL_NAME(ck.parent_object_id, ck.parent_column_id) = SchemaSmith.fn_StripBracketWrapping(cc.ColumnName))
-                                          OR (ck.parent_column_id = 0 AND ck.[definition] LIKE '%' + SchemaSmith.fn_StripBracketWrapping(cc.ColumnName) + '%'))
+                                          OR (ck.parent_column_id = 0 AND ck.[definition] LIKE '%' + REPLACE(REPLACE(REPLACE(QUOTENAME(SchemaSmith.fn_StripBracketWrapping(cc.ColumnName)), '[', '[[]'), '%', '[%]'), '_', '[_]') + '%'))
                                         AND cc.[DefinitionChanged] = 1  -- #509
                                         AND NOT EXISTS (SELECT 1 FROM #SuppressedColumnDrops s WITH (NOLOCK)
                                                           WHERE s.[Schema] = cc.[Schema] AND s.[TableName] = cc.[TableName] AND s.[ColumnName] = cc.[ColumnName])  -- #358

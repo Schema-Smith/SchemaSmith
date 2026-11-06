@@ -555,7 +555,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_SupportsGeneratedColumnCollation (a generated column's COLLATE, refused by early MariaDB patches).
         // +1 = SchemaSmith_DegradeUnsupportedColumnFeatures (column degrades reported once ShouldApply has settled).
         // +1 = SchemaSmith_TypeChangeKeepsForeignKey (a widening the engine makes under a foreign key keeps the key).
-        Assert.That(mysql.Length, Is.EqualTo(112));
+        // +1 = SchemaSmith_ExpressionReadsColumn (a generated column's reads matched as whole identifiers).
+        Assert.That(mysql.Length, Is.EqualTo(113));
     }
 
     [Test]

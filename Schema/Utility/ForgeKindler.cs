@@ -974,6 +974,8 @@ public static class ForgeKindler
                 // (#partitioning, K3) -- MySQL 5.7 echoes the text the user wrote while every other
                 // supported engine rewrites it, so a literal compare would be engine-specific.
                 new("SchemaSmith_NormalizePartitionExpression.sql"),
+                // Read by ParseTableJson: which generated columns another one reads, for their creation order.
+                new("SchemaSmith_ExpressionReadsColumn.sql"),
                 new("SchemaSmith_UpperDataType.sql"),
                 // Read by ParseTableJson: ENUM/SET members lose trailing spaces at CREATE.
                 new("SchemaSmith_TrimEnumMembers.sql"),

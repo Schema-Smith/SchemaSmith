@@ -856,8 +856,7 @@ BEGIN
               WHERE g2.TableName = g1.TableName
                 AND g2.DependencyLevel = 0
                 AND g2.ColumnName != g1.ColumnName
-                AND (g1.GeneratedExpression LIKE CONCAT('%', g2.ColumnNameStripped, '%')
-                     OR g1.GeneratedExpression LIKE CONCAT('%', g2.ColumnName, '%'))
+                AND SchemaSmith_ExpressionReadsColumn(g1.GeneratedExpression, g2.ColumnNameStripped) = 1
           );
 
         -- Sync the changes back to GenColDeps2
