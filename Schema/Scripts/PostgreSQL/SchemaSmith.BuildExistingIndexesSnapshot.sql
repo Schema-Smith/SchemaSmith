@@ -88,5 +88,8 @@ BEGIN
       JOIN pg_index idx ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(t."Schema") ||  '.' || "SchemaSmith"."QuoteName"(t."Name"))
       JOIN pg_class i ON i.oid = idx.indexrelid
       LEFT JOIN pg_catalog.pg_constraint con ON con.contype IN ('p','u') AND con.conrelid = idx.indrelid AND con.conname = i.relname
+     -- An exclusion constraint's index belongs to the constraint, which ExcludeConstraints manages. Listed here it read
+     -- as an unknown index, and DropUnknownIndexes failed: "constraint ... requires it".
+     WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint x WHERE x.contype = 'x' AND x.conindid = idx.indexrelid)
   $snapshot$, v_nnd_expr, v_wo_expr);
 END $$;

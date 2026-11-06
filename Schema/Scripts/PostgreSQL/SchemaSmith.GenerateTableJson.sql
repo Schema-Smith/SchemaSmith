@@ -282,7 +282,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                   FROM (SELECT pol.policyname AS "Name",
                                pol.permissive AS "Permissive",
                                pol.cmd AS "Command",
-                               ARRAY_TO_STRING(pol.roles, ',') AS "Roles",
+                               -- Quoted where a name needs it, so a mixed-case role deploys as itself rather than folded to lower case.
+                               (SELECT STRING_AGG(QUOTE_IDENT(r), ',' ORDER BY o) FROM UNNEST(pol.roles) WITH ORDINALITY AS u(r, o)) AS "Roles",
                                COALESCE(pol.qual, '') AS "UsingExpression",
                                COALESCE(pol.with_check, '') AS "WithCheckExpression"
                           FROM pg_policies pol

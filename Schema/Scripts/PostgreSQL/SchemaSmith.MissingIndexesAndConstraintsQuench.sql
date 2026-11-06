@@ -397,8 +397,8 @@ BEGIN
     JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
    WHERE UPPER(pol.permissive) = tp."Permissive"
        AND UPPER(pol.cmd) = tp."Command"
-       AND (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
-           = (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+       AND (SELECT CASE WHEN 'public' = ANY(d.a) THEN ARRAY['public'] ELSE d.a END FROM (SELECT ARRAY(SELECT CASE WHEN TRIM(x) LIKE '"%"' THEN REPLACE(SUBSTRING(TRIM(x) FROM 2 FOR LENGTH(TRIM(x)) - 2), '""', '"') ELSE LOWER(TRIM(x)) END FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1) AS a) d)
+           = (SELECT ARRAY(SELECT r::TEXT FROM UNNEST(pol.roles) AS r ORDER BY 1))
        AND (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) = (pol.qual IS NULL)
        AND (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) = (pol.with_check IS NULL)
      AND ((NULLIF(TRIM(tp."UsingExpression"), '') IS NOT NULL AND pol.qual IS NOT NULL
@@ -418,8 +418,8 @@ BEGIN
         JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
        WHERE UPPER(pol.permissive) = tp."Permissive"
        AND UPPER(pol.cmd) = tp."Command"
-       AND (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
-           = (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+       AND (SELECT CASE WHEN 'public' = ANY(d.a) THEN ARRAY['public'] ELSE d.a END FROM (SELECT ARRAY(SELECT CASE WHEN TRIM(x) LIKE '"%"' THEN REPLACE(SUBSTRING(TRIM(x) FROM 2 FOR LENGTH(TRIM(x)) - 2), '""', '"') ELSE LOWER(TRIM(x)) END FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1) AS a) d)
+           = (SELECT ARRAY(SELECT r::TEXT FROM UNNEST(pol.roles) AS r ORDER BY 1))
        AND (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) = (pol.qual IS NULL)
        AND (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) = (pol.with_check IS NULL)
          AND ((NULLIF(TRIM(tp."UsingExpression"), '') IS NOT NULL AND pol.qual IS NOT NULL
@@ -473,7 +473,8 @@ BEGIN
   -- security-relevant changes that previously no-op'd silently. PostgreSQL has no ALTER for them, so it is
   -- DROP + CREATE -- which also reapplies the declared USING / WITH CHECK expressions -- and so is adding or
   -- removing a clause. An expression-only change is the ALTER POLICY pass above. Roles is compared as a
-  -- normalised, order-insensitive, lower-cased set.
+  -- normalised, order-insensitive set of identifiers (quoted keeps its case); a list holding PUBLIC is PUBLIC alone,
+  -- as PostgreSQL stores it.
   RAISE NOTICE 'Re-converge Changed Row Level Security Policies';
   SELECT STRING_AGG('RAISE NOTICE ''  Re-creating policy ' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''';' || CHR(10) ||
                     'DROP POLICY ' || QUOTE_IDENT(tp."Name") || ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") || ';' || CHR(10) ||
@@ -492,8 +493,8 @@ BEGIN
     JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
     WHERE UPPER(pol.permissive) <> tp."Permissive"
        OR UPPER(pol.cmd) <> tp."Command"
-       OR (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
-          <> (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+       OR (SELECT CASE WHEN 'public' = ANY(d.a) THEN ARRAY['public'] ELSE d.a END FROM (SELECT ARRAY(SELECT CASE WHEN TRIM(x) LIKE '"%"' THEN REPLACE(SUBSTRING(TRIM(x) FROM 2 FOR LENGTH(TRIM(x)) - 2), '""', '"') ELSE LOWER(TRIM(x)) END FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1) AS a) d)
+          <> (SELECT ARRAY(SELECT r::TEXT FROM UNNEST(pol.roles) AS r ORDER BY 1))
        -- A clause added or removed: ALTER POLICY can set a clause but never remove one.
        OR (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) <> (pol.qual IS NULL)
        OR (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) <> (pol.with_check IS NULL);
@@ -506,8 +507,8 @@ BEGIN
         JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
         WHERE UPPER(pol.permissive) <> tp."Permissive"
            OR UPPER(pol.cmd) <> tp."Command"
-           OR (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
-              <> (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+           OR (SELECT CASE WHEN 'public' = ANY(d.a) THEN ARRAY['public'] ELSE d.a END FROM (SELECT ARRAY(SELECT CASE WHEN TRIM(x) LIKE '"%"' THEN REPLACE(SUBSTRING(TRIM(x) FROM 2 FOR LENGTH(TRIM(x)) - 2), '""', '"') ELSE LOWER(TRIM(x)) END FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1) AS a) d)
+              <> (SELECT ARRAY(SELECT r::TEXT FROM UNNEST(pol.roles) AS r ORDER BY 1))
            OR (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) <> (pol.qual IS NULL)
            OR (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) <> (pol.with_check IS NULL);
   END IF;

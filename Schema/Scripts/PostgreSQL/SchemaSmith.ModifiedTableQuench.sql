@@ -1482,9 +1482,12 @@ BEGIN
                                 'DROP ' || CASE WHEN dep_view.relkind = 'm' THEN 'MATERIALIZED VIEW' ELSE 'VIEW' END || ' IF EXISTS ' || QUOTE_IDENT(view_ns.nspname) || '.' || QUOTE_IDENT(dep_view.relname) || ';' || CHR(10) ||
                                 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN dep_view.relkind = 'm' THEN 'materializedView' ELSE 'view' END || ''', ''' ||
                                 REPLACE(view_ns.nspname || '.' || dep_view.relname, '''', '''''') || ''', ''dropped'');'
+                           -- A rule is dropped ON its table: DROP RULE takes no schema-qualified rule name.
                            ELSE CASE WHEN dep_rule.rulename != '_RETURN'
-                                     THEN 'RAISE NOTICE ''  Dropping Rule ' || rule_class.relnamespace::regnamespace || '.' || dep_rule.rulename || ''';' || CHR(10) ||
-                                          'DROP RULE IF EXISTS ' || rule_class.relnamespace::regnamespace::text || '.' || "SchemaSmith"."QuoteName"(dep_rule.rulename) || ';'
+                                     THEN 'RAISE NOTICE ''  Dropping Rule ' || REPLACE(rule_class.relnamespace::regnamespace::text || '.' || rule_class.relname || '.' || dep_rule.rulename, '''', '''''') || ''';' || CHR(10) ||
+                                          'DROP RULE IF EXISTS ' || "SchemaSmith"."QuoteName"(dep_rule.rulename) || ' ON ' || rule_class.relnamespace::regnamespace::text || '.' || QUOTE_IDENT(rule_class.relname) || ';' || CHR(10) ||
+                                          'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''rule'', ''' ||
+                                          REPLACE(rule_class.relnamespace::regnamespace::text || '.' || rule_class.relname || '.' || dep_rule.rulename, '''', '''''') || ''', ''dropped'');'
                                      END
                            END, CHR(10))
       INTO sql_script
@@ -1496,7 +1499,9 @@ BEGIN
                                    AND ref_attr.attname = ec."ColumnName"
       JOIN pg_rewrite AS dep_rule ON dep_rule.oid = d.objid
       JOIN pg_class rule_class ON rule_class.oid = dep_rule.ev_class
-      LEFT JOIN pg_class AS dep_view ON dep_view.oid = dep_rule.ev_class
+      -- A view only through its own _RETURN rule. Joined on the rule's class alone, a user rule on a table found the table
+      -- here, read it as a view, and the pass emitted DROP VIEW against the table (42809).
+      LEFT JOIN pg_class AS dep_view ON dep_view.oid = dep_rule.ev_class AND dep_rule.rulename = '_RETURN' AND dep_view.relkind IN ('v', 'm')
       LEFT JOIN pg_namespace AS view_ns ON view_ns.oid = dep_view.relnamespace
       WHERE EXISTS (SELECT 1 -- need to determine if any changes other than type have the need to drop dependent views/rules
                       FROM temp_columns c
