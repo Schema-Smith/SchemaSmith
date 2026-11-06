@@ -653,7 +653,7 @@ Each platform's table definition extends the shared properties with engine-speci
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `Engine` | string | `"InnoDB"` | Storage engine. |
+| `Engine` | string | `"InnoDB"` on create | Storage engine. A new table is created `InnoDB` when it is omitted; an existing table's engine is then left as it is. |
 | `RowFormat` | string | `null` | Row format: `"Dynamic"`, `"Compact"`, `"Compressed"`, `"Redundant"` or `"Fixed"`, in any casing. |
 | `CharacterSet` | string | `null` | Default character set for the table. |
 | `Collation` | string | `null` | Default collation for the table. |
@@ -691,7 +691,7 @@ MariaDB tables carry every MySQL property above, plus the ones below for feature
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `Engine` | string | `"InnoDB"` | Storage engine. |
+| `Engine` | string | `"InnoDB"` on create | Storage engine. A new table is created `InnoDB` when it is omitted; an existing table's engine is then left as it is. |
 | `RowFormat` | string | `null` | Row format: `"Dynamic"`, `"Compact"`, `"Compressed"`, `"Redundant"`, `"Fixed"`, or `"Page"` for an Aria table, in any casing. |
 | `CharacterSet` | string | `null` | Default character set for the table. |
 | `Collation` | string | `null` | Default collation for the table. |
@@ -1269,6 +1269,7 @@ Tables without a `DataDelivery` block are left alone. Tables that declare one ar
 |---|---|---|---|
 | `ContentFile` | string | | Path to the row data, relative to the template root. Typically produced by DataTongs as a `.tabledata` file (raw JSON array). |
 | `ContentEncoding` | string | `Json` | Encoding of `ContentFile`: `Json` (default) or `Xml`. Accepted on every platform. See [Content Encoding](#content-encoding) below. |
+| `Columns` | string | | Optional. The comma-separated columns the `ContentFile` was extracted with. A listed column is delivered even when no row carries it, written NULL, so a column that was NULL in every extracted row still updates the target. DataTongs writes it on SQL Server, whose extraction leaves such a column out. Omitted, the delivered columns are the ones present in the data. |
 | `MergeType` | string | | One of `Insert`, `Insert/Update`, `Insert/Update/Delete`. See [MergeType](#mergetype) below. |
 | `MatchColumns` | string | | Comma-separated column names that identify a row. Prefix a column with `*` for NULL-safe comparison on nullable keys. Matches the `KeyColumns` concept in DataTongs. |
 | `MergeFilter` | string | `""` | Optional SQL `WHERE` clause (without the `WHERE` keyword). Scopes both the rows considered for matching and, when delete is enabled, the rows eligible for deletion. |

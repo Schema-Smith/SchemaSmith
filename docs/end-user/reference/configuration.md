@@ -161,7 +161,7 @@ Or override the entire connection from the command line:
 SchemaQuench --ConnectionString:"Host=prod-server;Database=mydb;Username=deploy;Password=s3cret;"
 ```
 
-The `--ConnectionString` switch bypasses all individual connection settings -- `Server`, `Port`, `User`, `Password`, and `ConnectionProperties` are all ignored when a full connection string is provided.
+The `--ConnectionString` switch bypasses all individual connection settings -- `Server`, `Port`, `User`, `Password`, and `ConnectionProperties` are all ignored when a full connection string is provided. SchemaQuench uses it for the primary server as given, and for each of the `SecondaryServers` with only the server changed, since a secondary shares the primary's credentials and port settings; the database is set per target in both cases.
 
 ### Overriding any setting
 
