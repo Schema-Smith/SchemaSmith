@@ -87,6 +87,14 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **SQL Server and PostgreSQL: a default constraint, or a temporal table's retention, on a table or column whose name holds a quote is recorded.** The deploy's record of the change wrote the name unescaped and failed.
 - **PostgreSQL: a serial column on a table whose schema or name holds a quote deploys.** The sequence default written for it ended its string early.
 - **MariaDB 11.5 and later: a sequence's type is read for a database or sequence whose name holds a backslash.**
+- **SQL Server: a name holding a quote or a percent sign no longer fails the deploy in a progress message — #603.** Every name written into a generated progress line, and into a literal of generated SQL (change records, existence checks, renames, extended properties, CDC calls, the `CustomTableDrop` hook), is escaped for it; a quote ended the generated text early, and a `%` was read as a format placeholder.
+- **SQL Server: an error re-raised from generated SQL keeps its text and says where it came from.** The message was passed to `RAISERROR` as its format, so a `%` in it (a name holding one, or a pattern an engine error quotes) mangled it or failed the re-raise; an engine error now carries its number, line and procedure.
+- **SQL Server: a column whose name holds a comma or a bracket is one column in an index, key or statistic.** Column lists were split at every comma, so such a name became two columns.
+- **SQL Server: a bracketed name holding `]]` and a dot is read as one name.** A foreign key whose `RelatedTable` is `[a]]b.c]` was refused at package load as naming a second schema.
+- **SQL Server: renaming a table, column or index whose name holds a dot or a bracket renames the right object.**
+- **PostgreSQL: a name holding a quote or a percent sign no longer fails the deploy in a progress notice or a change record.** Names reach a generated notice as its arguments and a generated literal with their quotes doubled; a column list split a quoted name holding a comma; a materialized view's tablespace was written unquoted.
+- **PostgreSQL: a column typed by an enum or domain whose name holds a non-ASCII letter is no longer altered on every deploy.**
+- **PostgreSQL: a query token resolves in a database that has a schema whose name holds a double quote.** The cleanup run before every query token failed there (42602).
 
 ## [v2.8.0](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) — 2026-11-01
 
