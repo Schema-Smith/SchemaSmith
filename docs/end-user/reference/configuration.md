@@ -187,7 +187,7 @@ Two things to keep in mind:
 
 - The `=` is required for an override. The named switches (`--LogPath`, `--ConfigFile`, `--ConnectionString`) accept a `:` separator, but nesting into arbitrary settings needs the `__`/`=` form so a value containing a colon (a Windows path, a `host:port`) is never mistaken for a key boundary.
 - `--ConnectionString` still bypasses the individual connection settings. If you pass both `--ConnectionString` and a `--Source__Server=` / `--Target__Server=` override, the full connection string wins for connecting.
-- An override is not range-checked for you. `MaxThreads`, for one, accepts `1` to `20`: a value outside that range, or one that is not a whole number, silently falls back to the default of `10` -- no warning is logged. Check the startup configuration dump when a value looks ignored.
+- Few overrides are range-checked for you. `MaxThreads`, for one, accepts `1` to `20`: a value outside that range, or one that is not a whole number, falls back to the default of `10`, with a warning in the progress log naming the value.
 
 ---
 
