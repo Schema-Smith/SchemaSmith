@@ -1,0 +1,8 @@
+{
+  "$schema": ".json-schemas/products.postgresql.schema",
+  "Name": "CookbookShop",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "Platform": "PostgreSQL"
+}

@@ -1,0 +1,35 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "dbo",
+  "Name": "Sale",
+  "Columns": [
+    {
+      "Name": "SaleId",
+      "DataType": "INT",
+      "Nullable": false
+    },
+    {
+      "Name": "SoldAt",
+      "DataType": "DATETIME2",
+      "Nullable": false
+    },
+    {
+      "Name": "Amount",
+      "DataType": "DECIMAL(12,2)",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PK_Sale",
+      "PrimaryKey": true,
+      "Clustered": true,
+      "IndexColumns": "SaleId"
+    },
+    {
+      "Name": "IX_Sale_Report",
+      "IndexColumns": "SoldAt",
+      "IncludeColumns": "Amount"
+    }
+  ]
+}

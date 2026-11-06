@@ -1,0 +1,8 @@
+{
+  "$schema": ".json-schemas/products.mariadb.schema",
+  "Name": "CookbookShop",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "Platform": "MariaDb"
+}

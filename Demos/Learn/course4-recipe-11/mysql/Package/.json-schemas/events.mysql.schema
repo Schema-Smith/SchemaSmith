@@ -1,0 +1,81 @@
+{
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time."
+    },
+    "Name": {
+      "type": "string",
+      "maxLength": 64
+    },
+    "Definition": {
+      "type": "string"
+    },
+    "ScheduleType": {
+      "type": "string",
+      "pattern": "^(?:EVERY|AT)$"
+    },
+    "Interval": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "For ScheduleType EVERY: the interval as a value and a unit, e.g. \"1 DAY\" or \"30 MINUTE\"."
+    },
+    "ExecuteAt": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "For ScheduleType AT: when the event runs, once, e.g. \"2027-06-01 12:00:00\"."
+    },
+    "Starts": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "Optional start of the recurrence window (ScheduleType EVERY)."
+    },
+    "Ends": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "Optional end of the recurrence window (ScheduleType EVERY)."
+    },
+    "Status": {
+      "type": "string",
+      "pattern": "^(?:ENABLE|DISABLE|DISABLE ON SLAVE)$"
+    },
+    "Preserve": {
+      "type": "boolean"
+    },
+    "Comment": {
+      "type": "string",
+      "maxLength": 2048,
+      "description": "Deprecated alias of Description. Still honoured on deploy; --Validate reports it (SS-DESC-002)."
+    },
+    "Description": {
+      "type": "string",
+      "maxLength": 2048,
+      "description": "Optional. The event's COMMENT. An omitted value clears a comment the server has, as the engine's own DDL does."
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "TimeZone": {
+      "type": "string",
+      "maxLength": 64,
+      "description": "Optional. The time zone the schedule is read in, e.g. \"+05:00\". Omitted: the event takes the deploying session's zone and the server's value is not compared."
+    },
+    "SqlMode": {
+      "type": "string",
+      "maxLength": 1024,
+      "description": "Optional. The sql_mode the event body runs under, written as the engine reports it. Omitted: the event takes the deploying session's mode and the server's value is not compared."
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name",
+    "Definition"
+  ]
+}

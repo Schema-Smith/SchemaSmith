@@ -1,0 +1,8 @@
+{
+  "$schema": ".json-schemas/products.sqlserver.schema",
+  "Name": "CookbookShop",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "Platform": "SqlServer"
+}
