@@ -339,11 +339,23 @@ public static class MergeScriptHelper
     /// Builds a SQL IN clause fragment for filtering columns by JSON data keys.
     /// Returns empty string if jsonKeys is null (include all columns).
     /// </summary>
-    internal static string BuildJsonKeyFilter(HashSet<string> jsonKeys, string columnExpression)
+    internal static string BuildJsonKeyFilter(HashSet<string> jsonKeys, string columnExpression, Platform platform)
     {
         if (jsonKeys == null || jsonKeys.Count == 0) return "";
-        return $" AND LOWER({columnExpression}) IN ({string.Join(",", jsonKeys.Select(k => $"'{k.ToLowerInvariant().Replace("'", "''")}'"))})";
+        // PostgreSQL names carry the C collation, under which LOWER leaves a non-ASCII letter as it is, while the literal
+        // is lowered under the database's: both are lowered under the database's, or a column named with one is not delivered.
+        if (platform.GetBasePlatform() == Platform.PostgreSQL) columnExpression = $"CAST({columnExpression} AS text) COLLATE \"default\"";
+        return $" AND LOWER({columnExpression}) IN ({string.Join(",", jsonKeys.Select(k => $"LOWER({NameLiteral(k, platform)})"))})";
     }
+
+    // A name written as a string literal the platform reads back unchanged: N'' on SQL Server, so a character outside
+    // the code page survives, and backslashes doubled on MySQL and MariaDB, where they are escapes.
+    internal static string NameLiteral(string value, Platform platform) => platform.GetBasePlatform() switch
+    {
+        Platform.SqlServer => $"N'{value.Replace("'", "''")}'",
+        Platform.MySQL => $"'{value.Replace("\\", "\\\\").Replace("'", "''")}'",
+        _ => $"'{value.Replace("'", "''")}'"
+    };
 
     /// <summary>
     /// Binds named parameters on a shared introspection command. Clears any parameters from a
@@ -444,8 +456,8 @@ public static class MergeScriptHelper
 
     private static List<MergeColumnInfo> GetColumnMetadataSqlServer(IDbCommand cmd, string schemaOrDb, string tableName, HashSet<string> jsonKeys)
     {
-        var schema = schemaOrDb.Trim().Trim('[', ']');
-        var table = tableName.Trim().Trim('[', ']');
+        var schema = Identifier.Unwrap(schemaOrDb.Trim(), Platform.SqlServer);
+        var table = Identifier.Unwrap(tableName.Trim(), Platform.SqlServer);
 
         BindIdentifierParameters(cmd, ("@schema", schema), ("@table", table));
         cmd.CommandText = $@"
@@ -459,17 +471,17 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE,
        CAST(CASE WHEN c.DATA_TYPE IN ('binary','varbinary','image') THEN 1 ELSE 0 END AS BIT) AS IsBinary,
        CAST(CASE WHEN c.DATA_TYPE = 'xml' THEN 1 ELSE 0 END AS BIT) AS IsXml
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
   JOIN (SELECT CASE WHEN SCHEMA_NAME(st2.[schema_id]) IN ('sys', 'dbo')
                     THEN '' ELSE SCHEMA_NAME(st2.[schema_id]) + '.' END + st2.[name] AS [name], st2.user_type_id, st2.[schema_id]
           FROM sys.types st2) st ON st.user_type_id = sc.user_type_id
   LEFT JOIN sys.identity_columns ident ON ident.[Name] = c.COLUMN_NAME
-                                                    AND ident.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+                                                    AND ident.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
-    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
+    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.SqlServer)}
   ORDER BY c.COLUMN_NAME
 ";
         var results = new List<MergeColumnInfo>();
@@ -534,8 +546,8 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE,
 
     private static List<MergeColumnInfo> GetColumnMetadataPostgreSql(IDbCommand cmd, string schemaOrDb, string tableName, HashSet<string> jsonKeys)
     {
-        var schema = schemaOrDb.Trim().Trim('"');
-        var table = tableName.Trim().Trim('"');
+        var schema = Identifier.Unwrap(schemaOrDb.Trim(), Platform.PostgreSQL);
+        var table = Identifier.Unwrap(tableName.Trim(), Platform.PostgreSQL);
 
         BindIdentifierParameters(cmd, ("@schema", schema), ("@table", table));
         cmd.CommandText = $@"
@@ -551,7 +563,7 @@ SELECT c.column_name, c.data_type, c.udt_name, c.udt_schema,
   JOIN pg_attribute a ON a.attrelid = cls.oid AND a.attname = c.column_name AND NOT a.attisdropped AND a.attgenerated = ''
   JOIN pg_type pt ON pt.oid = a.atttypid
   JOIN pg_namespace tn ON tn.oid = pt.typnamespace
-  WHERE c.table_schema = @schema AND c.table_name = @table{BuildJsonKeyFilter(jsonKeys, "c.column_name")}
+  WHERE c.table_schema = @schema AND c.table_name = @table{BuildJsonKeyFilter(jsonKeys, "c.column_name", Platform.PostgreSQL)}
   ORDER BY c.column_name
 ";
         var results = new List<MergeColumnInfo>();
@@ -588,8 +600,8 @@ SELECT c.column_name, c.data_type, c.udt_name, c.udt_schema,
 
     private static List<MergeColumnInfo> GetColumnMetadataMySql(IDbCommand cmd, string schemaOrDb, string tableName, HashSet<string> jsonKeys)
     {
-        var db = schemaOrDb.Trim().Trim('`');
-        var table = tableName.Trim().Trim('`');
+        var db = Identifier.Unwrap(schemaOrDb.Trim(), Platform.MySQL);
+        var table = Identifier.Unwrap(tableName.Trim(), Platform.MySQL);
 
         BindIdentifierParameters(cmd, ("@db", db), ("@table", table));
         cmd.CommandText = $@"
@@ -602,7 +614,7 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE,
   FROM INFORMATION_SCHEMA.COLUMNS c
   WHERE {MySqlNameMatch.Folded("c.TABLE_SCHEMA", "@db")}
     AND {MySqlNameMatch.Folded("c.TABLE_NAME", "@table")}
-    AND (c.GENERATION_EXPRESSION IS NULL OR c.GENERATION_EXPRESSION = ''){BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
+    AND (c.GENERATION_EXPRESSION IS NULL OR c.GENERATION_EXPRESSION = ''){BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.MySQL)}
   ORDER BY c.ORDINAL_POSITION
 ";
         var results = new List<MergeColumnInfo>();
@@ -668,12 +680,12 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE,
 
     private static string GetKeyColumnsSqlServer(IDbCommand cmd, string tableSchema, string tableName)
     {
-        tableSchema = tableSchema.Trim().Trim('[', ']');
-        tableName = tableName.Trim().Trim('[', ']');
+        tableSchema = Identifier.Unwrap(tableSchema.Trim(), Platform.SqlServer);
+        tableName = Identifier.Unwrap(tableName.Trim(), Platform.SqlServer);
 
         var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
-        BindIdentifierParameters(cmd, ("@objname", $"{tableSchema}.{tableName}"));
-        const string aggExpr = "CASE WHEN sc.is_nullable = 1 THEN '*' ELSE '' END + '[' + COL_NAME(ic.[object_id], ic.column_id) + ']'";
+        BindIdentifierParameters(cmd, ("@objname", SqlServerObjectName(tableSchema, tableName)));
+        const string aggExpr = "CASE WHEN sc.is_nullable = 1 THEN '*' ELSE '' END + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id))";
         const string fromWhere = @"
   FROM sys.indexes si
   JOIN sys.index_columns ic ON ic.[object_id] = si.[object_id]
@@ -706,12 +718,12 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE, c.COLUMN_TYPE,
 
     private static string GetKeyColumnsPostgreSql(IDbCommand cmd, string tableSchema, string tableName)
     {
-        tableSchema = tableSchema.Trim().Trim('"');
-        tableName = tableName.Trim().Trim('"');
+        tableSchema = Identifier.Unwrap(tableSchema.Trim(), Platform.PostgreSQL);
+        tableName = Identifier.Unwrap(tableName.Trim(), Platform.PostgreSQL);
 
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         cmd.CommandText = $@"
-SELECT STRING_AGG(CASE WHEN c.is_nullable = 'YES' THEN '*' ELSE '' END || '""' || a.attname || '""', ',' ORDER BY ik.ord )
+SELECT STRING_AGG(CASE WHEN c.is_nullable = 'YES' THEN '*' ELSE '' END || '""' || replace(a.attname, '""', '""""') || '""', ',' ORDER BY ik.ord )
   FROM pg_index idx
   JOIN pg_class tbl ON tbl.oid = idx.indrelid
   JOIN pg_namespace ns ON ns.oid = tbl.relnamespace
@@ -746,12 +758,12 @@ SELECT STRING_AGG(CASE WHEN c.is_nullable = 'YES' THEN '*' ELSE '' END || '""' |
 
     private static string GetKeyColumnsMySql(IDbCommand cmd, string databaseName, string tableName)
     {
-        databaseName = databaseName.Trim().Trim('`');
-        tableName = tableName.Trim().Trim('`');
+        databaseName = Identifier.Unwrap(databaseName.Trim(), Platform.MySQL);
+        tableName = Identifier.Unwrap(tableName.Trim(), Platform.MySQL);
 
         BindIdentifierParameters(cmd, ("@db", databaseName), ("@table", tableName));
         cmd.CommandText = $@"
-SELECT GROUP_CONCAT(CONCAT('`', kcu.COLUMN_NAME, '`') ORDER BY kcu.ORDINAL_POSITION SEPARATOR ',')
+SELECT GROUP_CONCAT(CONCAT('`', REPLACE(kcu.COLUMN_NAME, '`', '``'), '`') ORDER BY kcu.ORDINAL_POSITION SEPARATOR ',')
 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 JOIN INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
   ON tc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
@@ -933,15 +945,15 @@ SELECT STRING_AGG('-- Column ""' || c.column_name || '"" skipped: ' || c.udt_nam
         bool disableTriggers, bool tokenizeScripts, string mergeFilter, HashSet<string> jsonKeys,
         string destSchemaOverride = null, bool isXml = false, string contentFileToken = null)
     {
-        tableSchema = tableSchema.Trim().Trim('[', ']');
-        tableName = tableName.Trim().Trim('[', ']');
+        tableSchema = Identifier.Unwrap(tableSchema.Trim(), Platform.SqlServer);
+        tableName = Identifier.Unwrap(tableName.Trim(), Platform.SqlServer);
 
         // destSchema is the identifier used in EMITTED destination refs; tableSchema is used
         // for catalog probes against the source database. They differ only when DataTongs
         // is extracting in schema-template mode (override = "{{SchemaName}}").
         var destSchema = string.IsNullOrEmpty(destSchemaOverride)
             ? tableSchema
-            : destSchemaOverride.Trim().Trim('[', ']');
+            : Identifier.Unwrap(destSchemaOverride.Trim(), Platform.SqlServer);
 
         var unsupportedComments = GetUnsupportedColumnCommentsSqlServer(cmd, tableSchema, tableName);
         var matchColumns = BuildSqlServerMatchColumns(keyColumns);
@@ -995,9 +1007,9 @@ SELECT STRING_AGG('-- Column ""' || c.column_name || '"" skipped: ' || c.udt_nam
         var mergeSQL = (string.IsNullOrEmpty(unsupportedComments) ? "" : unsupportedComments + "\r\n") + $@"
 {declareLine}
 
-{(disableTriggers ? $"ALTER TABLE [{destSchema}].[{tableName}] DISABLE TRIGGER ALL;" : "")}
-{(identityInsert ? $"SET IDENTITY_INSERT [{destSchema}].[{tableName}] ON;" : "")}
-MERGE INTO [{destSchema}].[{tableName}] AS Target
+{(disableTriggers ? $"ALTER TABLE {SqlServerObjectName(destSchema, tableName)} DISABLE TRIGGER ALL;" : "")}
+{(identityInsert ? $"SET IDENTITY_INSERT {SqlServerObjectName(destSchema, tableName)} ON;" : "")}
+MERGE INTO {SqlServerObjectName(destSchema, tableName)} AS Target
 {rowSource}
 ON {matchColumns}
 ";
@@ -1022,7 +1034,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
    INSERT (
  {insertColumns}
    ) VALUES (
- {insertColumns!.Replace("[", "Source.[")}
+ {SourceColumnsSqlServer(insertColumns)}
    )
  ";
 
@@ -1035,7 +1047,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
  ";
         }
 
-        mergeSQL += $";\r\n{(identityInsert ? $"SET IDENTITY_INSERT [{destSchema}].[{tableName}] OFF;\r\n" : "")}{(disableTriggers ? $"ALTER TABLE [{destSchema}].[{tableName}] ENABLE TRIGGER ALL;\r\n" : "")}";
+        mergeSQL += $";\r\n{(identityInsert ? $"SET IDENTITY_INSERT {SqlServerObjectName(destSchema, tableName)} OFF;\r\n" : "")}{(disableTriggers ? $"ALTER TABLE {SqlServerObjectName(destSchema, tableName)} ENABLE TRIGGER ALL;\r\n" : "")}";
         return mergeSQL;
     }
 
@@ -1046,7 +1058,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         static string NullSafeNotEqual(string tExpr, string sExpr) =>
             $"((({tExpr}) IS NULL AND ({sExpr}) IS NOT NULL) OR (({tExpr}) IS NOT NULL AND ({sExpr}) IS NULL) OR ({tExpr}) <> ({sExpr}))";
         return string.Join(" OR ",
-            updateColumns!.Split(',').Select(c => c.StartsWith("G[")
+            Identifier.SplitDelimitedList(updateColumns, Platform.SqlServer).Select(c => c.StartsWith("G[")
                 ? NullSafeNotEqual($"Target.{c.Substring(1)}.ToString()", $"Source.{c.Substring(1)}.ToString()")
                 : c.StartsWith("X[") || c.StartsWith("N[") || c.StartsWith("V[")
                     ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS NVARCHAR(MAX))", $"CAST(Source.{c.Substring(1)} AS NVARCHAR(MAX))")
@@ -1061,8 +1073,8 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
 
     private static string BuildUpdateAssignmentsSqlServer(string updateColumns)
     {
-        static string Plain(string c) => c.Replace("G[", "[").Replace("X[", "[").Replace("N[", "[").Replace("T[", "[").Replace("I[", "[").Replace("D[", "[").Replace("V[", "[");
-        return string.Join(",\r\n", updateColumns.Split(',').Select(c => $"        {Plain(c)} = Source.{Plain(c)}"));
+        static string Plain(string c) => c[0] == '[' ? c : c[1..];
+        return string.Join(",\r\n", Identifier.SplitDelimitedList(updateColumns, Platform.SqlServer).Select(c => $"        {Plain(c)} = Source.{Plain(c)}"));
     }
 
     // SQL Server refuses MERGE outright on a memory-optimized table, and UPDATE and DELETE on an append-only ledger table,
@@ -1073,7 +1085,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         string declareLine, string sourceSelect, string keyColumns, bool mergeUpdate, bool mergeDelete, string mergeFilter,
         HashSet<string> jsonKeys, bool identityInsert, bool disableTriggers, bool memoryOptimized, bool appendOnlyLedger)
     {
-        var target = $"[{destSchema}].[{tableName}]";
+        var target = SqlServerObjectName(destSchema, tableName);
         // #v_ss_Source's column names follow the server's collation, not the database's, so a key named in another case
         // than the table's must be respelled before it is matched against the copy.
         keyColumns = KeyColumnsInTableCaseSqlServer(cmd, tableSchema, tableName, keyColumns);
@@ -1090,10 +1102,10 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         if (mergeUpdate)
         {
             // A memory-optimized table refuses an UPDATE that names a primary key column, even to its own value.
-            var keys = keyColumns.Split(',').Select(k => $"[{k.Trim().TrimStart('*').Trim('[', ']')}]").ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var updateColumns = string.Join(",", (GetUpdateColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys) ?? "")
-                .Split(',', StringSplitOptions.RemoveEmptyEntries)
-                .Where(c => !keys.Contains(c.Substring(c.IndexOf('[')))));
+            var keys = Identifier.SplitDelimitedList(keyColumns, Platform.SqlServer)
+                .Select(k => Identifier.Unwrap(k.TrimStart('*').Trim(), Platform.SqlServer)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var updateColumns = string.Join(",", Identifier.SplitDelimitedList(GetUpdateColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys), Platform.SqlServer)
+                .Where(c => !keys.Contains(Identifier.Unwrap(c[c.IndexOf('[')..], Platform.SqlServer))));
             if (updateColumns.Length > 0)
             {
                 var compare = BuildUpdateCompareSqlServer(updateColumns);
@@ -1105,7 +1117,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         }
 
         var insertColumns = GetInsertColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys);
-        sb.Append($"INSERT INTO {target} (\r\n {insertColumns}\r\n)\r\nSELECT {insertColumns!.Replace("[", "Source.[")}\r\n  FROM #v_ss_Source AS Source\r\n" +
+        sb.Append($"INSERT INTO {target} (\r\n {insertColumns}\r\n)\r\nSELECT {SourceColumnsSqlServer(insertColumns)}\r\n  FROM #v_ss_Source AS Source\r\n" +
                   $" WHERE NOT EXISTS (SELECT 1 FROM {target} AS Target{hint} WHERE {matchColumns});\r\n\r\n");
 
         if (mergeDelete)
@@ -1123,28 +1135,30 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
     // An exact match wins, so a case-sensitive table with both Id and ID keeps the one named.
     private static string KeyColumnsInTableCaseSqlServer(IDbCommand cmd, string tableSchema, string tableName, string keyColumns)
     {
-        BindIdentifierParameters(cmd, ("@objname", $"[{tableSchema.Replace("]", "]]")}].[{tableName.Replace("]", "]]")}]"));
+        BindIdentifierParameters(cmd, ("@objname", SqlServerObjectName(tableSchema, tableName)));
         cmd.CommandText = "SELECT [name] FROM sys.columns WHERE [object_id] = OBJECT_ID(@objname)";
         var columns = ReadStringColumn(cmd);
         cmd.Parameters.Clear();
-        return string.Join(",", keyColumns.Split(',').Select(key =>
+        return string.Join(",", Identifier.SplitDelimitedList(keyColumns, Platform.SqlServer).Select(key =>
         {
-            var trimmed = key.Trim();
-            var nullable = trimmed.StartsWith('*') ? "*" : "";
-            var name = trimmed.TrimStart('*').Trim().Trim('[', ']');
+            var nullable = key.StartsWith('*') ? "*" : "";
+            var name = Identifier.Unwrap(key.TrimStart('*').Trim(), Platform.SqlServer);
             var inTableCase = columns.Contains(name, StringComparer.Ordinal)
                 ? name
                 : columns.Where(c => string.Equals(c, name, StringComparison.OrdinalIgnoreCase)).ToList() is [var only] ? only : name;
-            return $"{nullable}[{inTableCase}]";
+            return $"{nullable}[{Identifier.EscapeDelimited(inTableCase, Platform.SqlServer)}]";
         }));
     }
 
     private static string BuildSqlServerMatchColumns(string keyColumns)
     {
-        return string.Join(" AND ", keyColumns.Split(',')
-            .Select(c => c.Trim().StartsWith("*")
-                ? $"(Source.[{c.Trim().Substring(1).Trim(']', '[')}] = Target.[{c.Trim().Substring(1).Trim(']', '[')}] OR (Source.[{c.Trim().Substring(1).Trim(']', '[')}] IS NULL AND Target.[{c.Trim().Substring(1).Trim(']', '[')}] IS NULL))"
-                : $"Source.[{c.Trim().Trim(']', '[')}] = Target.[{c.Trim().Trim(']', '[')}]"));
+        return string.Join(" AND ", Identifier.SplitDelimitedList(keyColumns, Platform.SqlServer).Select(c =>
+        {
+            var name = $"[{Identifier.EscapeDelimited(Identifier.Unwrap(c.TrimStart('*').Trim(), Platform.SqlServer), Platform.SqlServer)}]";
+            return c.StartsWith('*')
+                ? $"(Source.{name} = Target.{name} OR (Source.{name} IS NULL AND Target.{name} IS NULL))"
+                : $"Source.{name} = Target.{name}";
+        }));
     }
 
     private static string GetJsonSelectColumnsSqlServer(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys)
@@ -1152,18 +1166,18 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         var aggExpr = $@"CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
-                       THEN CASE WHEN c.DATA_TYPE = 'geography' THEN 'geography' ELSE 'geometry' END + '::STGeomFromText([' + c.COLUMN_NAME + '], COALESCE([' + c.COLUMN_NAME + '.STSrid], ' + CASE WHEN c.DATA_TYPE = 'geography' THEN '4326' ELSE '0' END + ')) AS [' + c.COLUMN_NAME + ']'
+                       THEN CASE WHEN c.DATA_TYPE = 'geography' THEN 'geography' ELSE 'geometry' END + '::STGeomFromText(' + QUOTENAME(c.COLUMN_NAME) + ', COALESCE(' + QUOTENAME(c.COLUMN_NAME + '.STSrid') + ', ' + CASE WHEN c.DATA_TYPE = 'geography' THEN '4326' ELSE '0' END + ')) AS ' + QUOTENAME(c.COLUMN_NAME)
                        WHEN c.DATA_TYPE IN {SqlServerCharacterTypeList}
-                       THEN 'COALESCE([' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '{AsJsonSuffix}]) AS [' + c.COLUMN_NAME + ']'
-                       ELSE '[' + c.COLUMN_NAME + ']' END";
+                       THEN 'COALESCE(' + QUOTENAME(c.COLUMN_NAME) + ', ' + QUOTENAME(c.COLUMN_NAME + '{AsJsonSuffix}') + ') AS ' + QUOTENAME(c.COLUMN_NAME)
+                       ELSE QUOTENAME(c.COLUMN_NAME) END";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
-    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
+    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.SqlServer)}
 ";
         if (belowCliff)
         {
@@ -1180,34 +1194,65 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
     // computed/unsupported-type exclusions and data-key filter), so the emitted Source exposes
     // exactly the columns the MERGE's insert/update/match clauses reference. The delivery XML shape is
     // <rows><row><c n="ColName">value</c>…</row></rows>; each column is shredded with
-    // Src.n.value('(c[@n="ColName"]/text())[1]', <type>). NULL = absent <c>.
+    // Src.n.value(N'(c[@n="ColName"]/text())[1]', <type>). NULL = absent <c>.
     private static string BuildXmlShredSelectColumnsSqlServer(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys)
     {
         var columns = GetColumnMetadataSqlServer(cmd, tableSchema, tableName, jsonKeys);
         if (columns.Count == 0) return "*";
 
-        static string Node(string name) => $"(c[@n=\"{name}\"]/text())[1]";
+        static string Node(string name) => $"({XPathNode(name)})[1]";
 
         return string.Join(",", columns.Select(c =>
         {
-            var alias = $"[{c.Name}]";
+            var alias = $"[{Identifier.EscapeDelimited(c.Name, Platform.SqlServer)}]";
             if (c.IsGeometry)
             {
                 var spatialType = c.DataType.Equals("geography", StringComparison.OrdinalIgnoreCase) ? "geography" : "geometry";
                 // WKT + SRID companion (<c n="Col.STSrid">), mirroring the JSON path's [Col]/[Col.STSrid] pair.
-                return $"{spatialType}::STGeomFromText(Src.n.value('{Node(c.Name)}','NVARCHAR(4000)'), COALESCE(Src.n.value('{Node(c.Name + ".STSrid")}','INT'), {DefaultSridSqlServer(spatialType)})) AS {alias}";
+                return $"{spatialType}::STGeomFromText(Src.n.value(N'{Node(c.Name)}','NVARCHAR(4000)'), COALESCE(Src.n.value(N'{Node(c.Name + ".STSrid")}','INT'), {DefaultSridSqlServer(spatialType)})) AS {alias}";
             }
             if (c.IsBinary)
                 // Delivery stores binary as base64 text; xs:base64Binary decodes it in-shred (a straight
                 // CAST to VARBINARY would hex-interpret the text, corrupting the bytes).
-                return $"Src.n.value('xs:base64Binary({Node(c.Name)})','{c.JsonParseType}') AS {alias}";
+                return $"Src.n.value(N'xs:base64Binary({Node(c.Name)})','{c.JsonParseType}') AS {alias}";
             if (c.IsXml)
                 // .value() cannot return the xml type; shred as NVARCHAR(MAX) and let the INSERT implicitly
                 // convert the text into the xml column.
-                return $"Src.n.value('{Node(c.Name)}','NVARCHAR(MAX)') AS {alias}";
-            return $"Src.n.value('{Node(c.Name)}','{c.JsonParseType}') AS {alias}";
+                return $"Src.n.value(N'{Node(c.Name)}','NVARCHAR(MAX)') AS {alias}";
+            return $"Src.n.value(N'{Node(c.Name)}','{c.JsonParseType}') AS {alias}";
         }));
     }
+
+    private static string SqlServerObjectName(string schema, string name) =>
+        $"[{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(name, Platform.SqlServer)}]";
+
+    // The insert list's columns as the source's: each item of the list prefixed, never a bracket inside a name.
+    private static string SourceColumnsSqlServer(string insertColumns) =>
+        string.Join(",\r\n", Identifier.SplitDelimitedList(insertColumns, Platform.SqlServer).Select(c => $"        Source.{c}"));
+
+    internal static string PgQuote(string name) => $"\"{Identifier.EscapeDelimited(name, Platform.PostgreSQL)}\"";
+
+    private static string PgObjectName(string schema, string name) => $"{PgQuote(schema)}.{PgQuote(name)}";
+
+    // The <c n="name"> element's text, as an XPath written inside a SQL string literal. XPath has no escape for the quote
+    // that delimits a string, so a name holding a double quote is a concat() of its pieces; the literal doubles the quote.
+    internal static string XPathNode(string name)
+    {
+        var test = !name.Contains('"') ? $"\"{name}\""
+            : "concat(" + string.Join(",'\"',", name.Split('"').Select(part => $"\"{part}\"")) + ")";
+        return $"c[@n={test}]/text()".Replace("'", "''");
+    }
+
+    internal static string MyQuote(string name) => $"`{Identifier.EscapeDelimited(name, Platform.MySQL)}`";
+
+    private static string MyObjectName(string database, string name) => $"{MyQuote(database)}.{MyQuote(name)}";
+
+    // A key as a JSON path member, written inside a MySQL string literal. A plain name stays bare, as scripts have always
+    // written it; any other is quoted ("key") with its backslash and double quote escaped for the path, and the literal's
+    // backslash and quote then escaped for MySQL.
+    internal static string MyJsonPathMember(string name) =>
+        System.Text.RegularExpressions.Regex.IsMatch(name, "^[A-Za-z_][A-Za-z0-9_]*$") ? name
+            : ("\"" + name.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"").Replace("\\", "\\\\").Replace("'", "''");
 
     private static bool NeedsIdentityInsertSqlServer(IDbCommand cmd, string tableSchema, string tableName)
         => (SqlServerTargetFlags(cmd, tableSchema, tableName) & 1) != 0;
@@ -1217,7 +1262,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
     // because the merge builder's catalog reads are a fixed sequence.
     private static int SqlServerTargetFlags(IDbCommand cmd, string tableSchema, string tableName)
     {
-        BindIdentifierParameters(cmd, ("@objname", $"{tableSchema}.{tableName}"));
+        BindIdentifierParameters(cmd, ("@objname", SqlServerObjectName(tableSchema, tableName)));
         cmd.CommandText = $@"
 DECLARE @v_ss_ledger INT = 0;
 IF CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(50)), 4) AS INT) >= 16
@@ -1239,7 +1284,7 @@ SELECT CASE WHEN EXISTS (SELECT * FROM sys.identity_columns WHERE [object_id] = 
     {
         if (jsonKeys == null || jsonKeys.Count == 0) return false;
         var names = string.Join(",", jsonKeys.Select(k => $"'{k.Replace("'", "''")}'"));
-        BindIdentifierParameters(cmd, ("@objname", $"{tableSchema}.{tableName}"));
+        BindIdentifierParameters(cmd, ("@objname", SqlServerObjectName(tableSchema, tableName)));
         cmd.CommandText = $@"
 SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
                               WHERE c.[object_id] = OBJECT_ID(@objname)
@@ -1270,13 +1315,17 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
     internal static bool IsSqlServerCharacterType(string dataType) =>
         dataType?.ToLowerInvariant() is "char" or "varchar" or "nchar" or "nvarchar" or "text" or "ntext";
 
+    // A column's name as the key in a quoted JSON path ($."key"), inside a T-SQL literal: a backslash and a double quote
+    // escaped for the path, a single quote doubled for the literal.
+    private const string SqlServerJsonPathKey = @"REPLACE(REPLACE(REPLACE(c.COLUMN_NAME, '\', '\\'), '""', '\""'), '''', '''''')";
+
     private static string GetJsonColumnDefinitionsSqlServer(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys)
     {
         var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         // A character column is read twice: plainly, which gives NULL for an object or array value, and AS JSON, which
         // gives NULL for anything else. The select takes whichever is set (#567).
-        var aggExpr = $@"'           [' + c.COLUMN_NAME + '] ' +
+        var aggExpr = $@"'           ' + QUOTENAME(c.COLUMN_NAME) + ' ' +
                   CASE UPPER(USER_TYPE) WHEN 'HIERARCHYID' THEN 'NVARCHAR(4000)' WHEN 'GEOGRAPHY' THEN 'NVARCHAR(4000)'
                                         WHEN 'GEOMETRY' THEN 'NVARCHAR(4000)' WHEN 'DATETIMEOFFSET' THEN 'NVARCHAR(50)'
                                         WHEN 'NTEXT' THEN 'NVARCHAR(MAX)' WHEN 'TEXT' THEN 'VARCHAR(MAX)' WHEN 'IMAGE' THEN 'VARBINARY(MAX)'
@@ -1289,24 +1338,24 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
                                            WHEN UPPER(USER_TYPE) = 'DATETIME2'
                                            THEN '(' + CONVERT(NVARCHAR(20), DATETIME_PRECISION) + ')'
                                            WHEN UPPER(USER_TYPE) = 'XML' AND sc.xml_collection_id <> 0
-                                           THEN '([' + SCHEMA_NAME(xc.[schema_id]) + '].[' + xc.[name] + '])'
+                                           THEN '(' + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) + ')'
                                            ELSE '' END +
-                      CASE WHEN UPPER(USER_TYPE) IN ('GEOGRAPHY', 'GEOMETRY') THEN ', [' + c.COLUMN_NAME + '.STSrid] INT' ELSE '' END +
-                      CASE WHEN c.DATA_TYPE IN {SqlServerCharacterTypeList} THEN ',' + CHAR(13) + CHAR(10) + '           [' + c.COLUMN_NAME + '{AsJsonSuffix}] NVARCHAR(MAX) ''$.""' + REPLACE(REPLACE(REPLACE(c.COLUMN_NAME, '\', '\\'), '""', '\""'), '''', '''''') + '""'' AS JSON' ELSE '' END";
+                      CASE WHEN UPPER(USER_TYPE) IN ('GEOGRAPHY', 'GEOMETRY') THEN ', ' + QUOTENAME(c.COLUMN_NAME + '.STSrid') + ' INT' ELSE '' END +
+                      CASE WHEN c.DATA_TYPE IN {SqlServerCharacterTypeList} THEN ',' + CHAR(13) + CHAR(10) + '           ' + QUOTENAME(c.COLUMN_NAME + '{AsJsonSuffix}') + ' NVARCHAR(MAX) ''$.""' + {SqlServerJsonPathKey} + '""'' AS JSON' ELSE '' END";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
   JOIN (SELECT CASE WHEN SCHEMA_NAME(st.[schema_id]) IN ('sys', 'dbo')
                     THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END + st.[name] AS USER_TYPE, st.user_type_id
           FROM sys.types st) st ON st.user_type_id = sc.user_type_id
   LEFT JOIN sys.xml_schema_collections xc ON xc.xml_collection_id = sc.xml_collection_id
   LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
-                                                    AND ident.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+                                                    AND ident.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
-    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
+    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.SqlServer)}
 ";
         if (belowCliff)
         {
@@ -1322,17 +1371,17 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
     {
         var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
-        var aggExpr = "'        [' + c.COLUMN_NAME + ']'";
+        var aggExpr = "'        ' + QUOTENAME(c.COLUMN_NAME)";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
-                                                    AND ident.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+                                                    AND ident.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND cc.[name] IS NULL
-    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
+    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.SqlServer)}
 ";
         if (belowCliff)
         {
@@ -1356,18 +1405,18 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
                        WHEN c.DATA_TYPE = 'image' THEN 'I'
                        WHEN c.DATA_TYPE = 'vector' THEN 'V'
                        ELSE '' END +
-                  '[' + c.COLUMN_NAME + ']'";
+                  QUOTENAME(c.COLUMN_NAME)";
         var filters = $@"
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
-                                                    AND ident.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+                                                    AND ident.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
+                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
   WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
     AND ident.[Name] IS NULL
     AND cc.[name] IS NULL
-    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME")}
+    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.SqlServer)}
 ";
         if (belowCliff)
         {
@@ -1388,15 +1437,15 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
         bool disableTriggers, bool disableRules, bool tokenizeScripts, string mergeFilter, HashSet<string> jsonKeys,
         string destSchemaOverride = null, int pgServerVersionNum = 0, bool isXml = false, string contentFileToken = null)
     {
-        tableSchema = tableSchema.Trim().Trim('"');
-        tableName = tableName.Trim().Trim('"');
+        tableSchema = Identifier.Unwrap(tableSchema.Trim(), Platform.PostgreSQL);
+        tableName = Identifier.Unwrap(tableName.Trim(), Platform.PostgreSQL);
 
         // destSchema is the identifier used in EMITTED destination refs; tableSchema is used
         // for catalog probes against the source database. They differ only when DataTongs is
         // extracting in schema-template mode (override = "{{SchemaName}}").
         var destSchema = string.IsNullOrEmpty(destSchemaOverride)
             ? tableSchema
-            : destSchemaOverride.Trim().Trim('"');
+            : Identifier.Unwrap(destSchemaOverride.Trim(), Platform.PostgreSQL);
 
         var unsupportedComments = GetUnsupportedColumnCommentsPostgreSql(cmd, tableSchema, tableName);
         var matchColumns = BuildPostgreSqlMatchColumns(keyColumns);
@@ -1459,8 +1508,8 @@ DO {tag}
 DECLARE
 {jsonDeclareLine}  nextval BIGINT;
 BEGIN
-{(disableTriggers ? $"ALTER TABLE {(updateDescendents ? "" : "ONLY ")}\"{destSchema}\".\"{tableName}\" DISABLE TRIGGER ALL;" : "")}
-MERGE INTO {(updateDescendents ? "" : "ONLY ")}""{destSchema}"".""{tableName}"" AS ""Target""
+{(disableTriggers ? $"ALTER TABLE {(updateDescendents ? "" : "ONLY ")}{PgObjectName(destSchema, tableName)} DISABLE TRIGGER ALL;" : "")}
+MERGE INTO {(updateDescendents ? "" : "ONLY ")}{PgObjectName(destSchema, tableName)} AS ""Target""
 USING (
     {rowSource}
 ) AS ""Source""
@@ -1476,9 +1525,9 @@ ON {matchColumns}
             var jsonCols = GetJsonColumnsPostgreSql(cmd, tableSchema, tableName);
             // IS DISTINCT FROM is NULL-safe — treats (NULL, X) and (X, NULL) as different without falling into three-valued-logic NULL results
             var updateCompare = string.Join(" OR ",
-                updateColumns!.Split(',').Select(c =>
+                Identifier.SplitDelimitedList(updateColumns, Platform.PostgreSQL).Select(c =>
                 {
-                    var colName = c.Trim().Trim('"');
+                    var colName = Identifier.Unwrap(c.Trim(), Platform.PostgreSQL);
                     if (textCompareColumns.Contains(colName))
                         return $"\"Target\".{c}::text IS DISTINCT FROM \"Source\".{c}::text";
                     if (jsonCols.TryGetValue(colName, out var jsonType))
@@ -1493,7 +1542,7 @@ ON {matchColumns}
 
 WHEN MATCHED AND ({updateCompare}) THEN
   UPDATE SET
-{string.Join(",\r\n", updateColumns.Split(',').Select(c => $"        {c} = \"Source\".{c}"))}
+{string.Join(",\r\n", Identifier.SplitDelimitedList(updateColumns, Platform.PostgreSQL).Select(c => $"        {c} = \"Source\".{c}"))}
 """;
         }
 
@@ -1505,7 +1554,7 @@ WHEN MATCHED AND ({updateCompare}) THEN
  {insertColumns}
    ) {(!string.IsNullOrEmpty(identAndSeq) ? $"OVERRIDING {identAndSeq.Split("=")[2]} VALUE" : "")}
   VALUES (
- {string.Join(",\n", insertColumns!.Split(',').Select(c => $"        \"Source\".{c.Trim()}"))}
+ {string.Join(",\n", Identifier.SplitDelimitedList(insertColumns, Platform.PostgreSQL).Select(c => $"        \"Source\".{c.Trim()}"))}
    )
  ";
 
@@ -1519,7 +1568,7 @@ WHEN MATCHED AND ({updateCompare}) THEN
         }
 
         mergeSQL += $@";
-{(disableTriggers ? $"ALTER TABLE {(updateDescendents ? "" : "ONLY ")}\"{destSchema}\".\"{tableName}\" ENABLE TRIGGER ALL;" : "")}
+{(disableTriggers ? $"ALTER TABLE {(updateDescendents ? "" : "ONLY ")}{PgObjectName(destSchema, tableName)} ENABLE TRIGGER ALL;" : "")}
 {PostgreSqlSetValStatement(identAndSeq, destSchema, tableName)}
 
 END {tag} LANGUAGE plpgsql;
@@ -1536,11 +1585,11 @@ END {tag} LANGUAGE plpgsql;
             // handling (source of truth — keep in sync). A leading '*' is a user-config NULL-safe
             // marker: strip it and emit the (l = r OR (l IS NULL AND r IS NULL)) form.
             var deleteKeyPredicate = string.Join(" AND ",
-                keyColumns.Split(',').Select(k =>
+                Identifier.SplitDelimitedList(keyColumns, Platform.PostgreSQL).Select(k =>
                 {
                     var raw = k.Trim();
                     var nullSafe = raw.StartsWith("*");
-                    var col = $"\"{raw.Trim('*').Trim('"')}\"";  // normalized quoted ident, * stripped
+                    var col = PgQuote(Identifier.Unwrap(raw.TrimStart('*').Trim(), Platform.PostgreSQL));  // normalized quoted ident, * stripped
                     var l = $"\"DeleteSource\".{col}";
                     var r = $"\"Target\".{col}";
                     return nullSafe
@@ -1559,7 +1608,7 @@ END {tag} LANGUAGE plpgsql;
              FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem) AS ""DeleteSource""";
 
             mergeSQL += $@"
-DELETE FROM {(updateDescendents ? "" : "ONLY ")}""{destSchema}"".""{tableName}"" AS ""Target""
+DELETE FROM {(updateDescendents ? "" : "ONLY ")}{PgObjectName(destSchema, tableName)} AS ""Target""
  WHERE {(string.IsNullOrWhiteSpace(mergeFilter) ? "" : $"({mergeFilter}) AND ")}NOT EXISTS (
    SELECT 1
      FROM {deleteSource}
@@ -1617,7 +1666,7 @@ DELETE FROM {(updateDescendents ? "" : "ONLY ")}""{destSchema}"".""{tableName}""
             var jsonCols = GetJsonColumnsPostgreSql(cmd, tableSchema, tableName);
             string CompareExpr(string c)
             {
-                var colName = c.Trim().Trim('"');
+                var colName = Identifier.Unwrap(c.Trim(), Platform.PostgreSQL);
                 if (textCompareColumns.Contains(colName))
                     return $"\"Target\".{c}::text IS DISTINCT FROM \"Source\".{c}::text";
                 if (jsonCols.TryGetValue(colName, out var jsonType))
@@ -1627,10 +1676,10 @@ DELETE FROM {(updateDescendents ? "" : "ONLY ")}""{destSchema}"".""{tableName}""
                 }
                 return $"\"Target\".{c} IS DISTINCT FROM \"Source\".{c}";
             }
-            var setClause = string.Join(",\n", updateColumns!.Split(',').Select(c => $"    {c} = \"Source\".{c}"));
-            var whereChanged = string.Join(" OR ", updateColumns.Split(',').Select(CompareExpr));
+            var setClause = string.Join(",\n", Identifier.SplitDelimitedList(updateColumns, Platform.PostgreSQL).Select(c => $"    {c} = \"Source\".{c}"));
+            var whereChanged = string.Join(" OR ", Identifier.SplitDelimitedList(updateColumns, Platform.PostgreSQL).Select(CompareExpr));
             updateSql = $@"
-UPDATE {only}""{destSchema}"".""{tableName}"" AS ""Target""
+UPDATE {only}{PgObjectName(destSchema, tableName)} AS ""Target""
    SET
 {setClause}
   FROM {source}
@@ -1640,7 +1689,7 @@ UPDATE {only}""{destSchema}"".""{tableName}"" AS ""Target""
 
         // Computed after the update columns to keep the same catalog-probe order as the MERGE path.
         var insertColumns = GetInsertColumnsPostgreSql(cmd, tableSchema, tableName, jsonKeys);
-        var selectExprs = string.Join(", ", insertColumns!.Split(',').Select(c => $"\"Source\".{c.Trim()}"));
+        var selectExprs = string.Join(", ", Identifier.SplitDelimitedList(insertColumns, Platform.PostgreSQL).Select(c => $"\"Source\".{c.Trim()}"));
         var overriding = string.IsNullOrEmpty(identAndSeq)
             ? ""
             : $"OVERRIDING {identAndSeq.Split("=")[2]} VALUE\n  ";
@@ -1653,14 +1702,14 @@ DO {tag}
 DECLARE
 {jsonDeclareLine}  nextval BIGINT;
 BEGIN
-{(disableTriggers ? $"ALTER TABLE {only}\"{destSchema}\".\"{tableName}\" DISABLE TRIGGER ALL;" : "")}{updateSql}
-INSERT INTO ""{destSchema}"".""{tableName}"" (
+{(disableTriggers ? $"ALTER TABLE {only}{PgObjectName(destSchema, tableName)} DISABLE TRIGGER ALL;" : "")}{updateSql}
+INSERT INTO {PgObjectName(destSchema, tableName)} (
 {insertColumns}
 )
   {overriding}SELECT {selectExprs}
     FROM {source}
-   WHERE NOT EXISTS (SELECT 1 FROM {only}""{destSchema}"".""{tableName}"" AS ""Target"" WHERE {matchColumns});
-{(disableTriggers ? $"ALTER TABLE {only}\"{destSchema}\".\"{tableName}\" ENABLE TRIGGER ALL;" : "")}
+   WHERE NOT EXISTS (SELECT 1 FROM {only}{PgObjectName(destSchema, tableName)} AS ""Target"" WHERE {matchColumns});
+{(disableTriggers ? $"ALTER TABLE {only}{PgObjectName(destSchema, tableName)} ENABLE TRIGGER ALL;" : "")}
 {PostgreSqlSetValStatement(identAndSeq, destSchema, tableName)}
 END {tag} LANGUAGE plpgsql;
 " + (string.IsNullOrEmpty(enableRuleStatements) ? "" : "\n" + enableRuleStatements);
@@ -1689,9 +1738,9 @@ ORDER BY rulename;";
         var emittedSchema = string.IsNullOrEmpty(destSchema) ? tableSchema : destSchema;
         var only = updateDescendents ? "" : "ONLY ";
         var disable = string.Join("\n", ruleNames.Select(r =>
-            $"ALTER TABLE {only}\"{emittedSchema}\".\"{tableName}\" DISABLE RULE \"{r}\";"));
+            $"ALTER TABLE {only}{PgObjectName(emittedSchema, tableName)} DISABLE RULE {PgQuote(r)};"));
         var enable = string.Join("\n", ruleNames.Select(r =>
-            $"ALTER TABLE {only}\"{emittedSchema}\".\"{tableName}\" ENABLE RULE \"{r}\";"));
+            $"ALTER TABLE {only}{PgObjectName(emittedSchema, tableName)} ENABLE RULE {PgQuote(r)};"));
         return (disable, enable);
     }
 
@@ -1700,12 +1749,12 @@ ORDER BY rulename;";
         // Mirrors the PG<17 fallback's deleteKeyPredicate (source of truth — keep in sync).
         // A leading '*' is a user-config NULL-safe marker: strip it from the emitted column and
         // emit the (l = r OR (l IS NULL AND r IS NULL)) form with both aliases properly quoted.
-        return string.Join(" AND ", keyColumns.Split(',')
+        return string.Join(" AND ", Identifier.SplitDelimitedList(keyColumns, Platform.PostgreSQL)
             .Select(k =>
             {
                 var raw = k.Trim();
                 var nullSafe = raw.StartsWith("*");
-                var col = $"\"{raw.TrimStart('*').Trim('"')}\"";  // normalized quoted ident, * stripped
+                var col = PgQuote(Identifier.Unwrap(raw.TrimStart('*').Trim(), Platform.PostgreSQL));  // normalized quoted ident, * stripped
                 var l = $"\"Source\".{col}";
                 var r = $"\"Target\".{col}";
                 return nullSafe
@@ -1724,7 +1773,7 @@ ORDER BY rulename;";
         var column = parts[0];
         var table = $"\"{destSchema.Replace("\"", "\"\"")}\".\"{tableName.Replace("\"", "\"\"")}\"";
         return $"SELECT SETVAL(COALESCE(PG_GET_SERIAL_SEQUENCE('{table.Replace("'", "''")}', '{column.Replace("'", "''")}'), '{parts[1].Replace("'", "''")}'), " +
-               $"(SELECT MAX(\"{column}\") FROM \"{destSchema}\".\"{tableName}\")) INTO nextval;";
+               $"(SELECT MAX({PgQuote(column)}) FROM {table})) INTO nextval;";
     }
 
     private static string GetIdentityColumnAndSequencePostgreSql(IDbCommand cmd, string tableSchema, string tableName)
@@ -1757,18 +1806,18 @@ SELECT c.column_name || '=' || COALESCE(PG_GET_SERIAL_SEQUENCE(QUOTE_IDENT(c.tab
 SELECT STRING_AGG(
     -- PostGIS's function by the schema its type lives in: a delivery script can run under a search_path without it.
     CASE WHEN c.udt_name IN ('geometry','geography')
-         THEN quote_ident(tn.nspname) || '.ST_GeomFromText(elem ->> ''' || c.column_name || ''', COALESCE(NULLIF(elem ->> ''' || c.column_name || '.STSrid'', '''')::int, 0))'
+         THEN quote_ident(tn.nspname) || '.ST_GeomFromText(elem ->> ' || quote_literal(c.column_name) || ', COALESCE(NULLIF(elem ->> ' || quote_literal(c.column_name || '.STSrid') || ', '''')::int, 0))'
          WHEN c.udt_name = 'bytea'
-         THEN 'decode(elem ->> ''' || c.column_name || ''', ''base64'')'
+         THEN 'decode(elem ->> ' || quote_literal(c.column_name) || ', ''base64'')'
          WHEN LEFT(c.udt_name, 1) = '_'
-         THEN 'CASE WHEN LEFT(elem ->> ''' || c.column_name || ''', 1) IN (''{{'', ''['') THEN (elem ->> ''' || c.column_name || ''')::' || {PostgreSqlQualifiedColumnType} ||
-              ' ELSE STRING_TO_ARRAY((elem ->> ''' || c.column_name || '''), ''*,*'', ''*NULL_VALUE_REPRESENTATION*'')::' || {PostgreSqlQualifiedColumnType} || ' END'
+         THEN 'CASE WHEN LEFT(elem ->> ' || quote_literal(c.column_name) || ', 1) IN (''{{'', ''['') THEN (elem ->> ' || quote_literal(c.column_name) || ')::' || {PostgreSqlQualifiedColumnType} ||
+              ' ELSE STRING_TO_ARRAY((elem ->> ' || quote_literal(c.column_name) || '), ''*,*'', ''*NULL_VALUE_REPRESENTATION*'')::' || {PostgreSqlQualifiedColumnType} || ' END'
          WHEN c.udt_name = 'char'
-         THEN 'CASE WHEN (elem ->> ''' || c.column_name || ''') ~ ''^-[0-9]+$'' THEN ((elem ->> ''' || c.column_name || ''')::int)::""char"" ELSE (elem ->> ''' || c.column_name || ''')::""char"" END'
+         THEN 'CASE WHEN (elem ->> ' || quote_literal(c.column_name) || ') ~ ''^-[0-9]+$'' THEN ((elem ->> ' || quote_literal(c.column_name) || ')::int)::""char"" ELSE (elem ->> ' || quote_literal(c.column_name) || ')::""char"" END'
          -- format_type, not a type rebuilt from information_schema: that turned bit(8) into bit (= bit(1)), an
          -- unconstrained numeric into numeric(0, 0), and lost every extension type's modifier.
-         ELSE '(elem ->> ''' || c.column_name || ''')::' || {PostgreSqlQualifiedColumnType}
-    END || ' AS ""' || c.column_name || '""', ',' || CHR(10) || '           ' ORDER BY c.column_name)
+         ELSE '(elem ->> ' || quote_literal(c.column_name) || ')::' || {PostgreSqlQualifiedColumnType}
+    END || ' AS ""' || replace(c.column_name, '""', '""""') || '""', ',' || CHR(10) || '           ' ORDER BY c.column_name)
   FROM information_schema.columns c
   JOIN pg_class cls ON cls.relname = c.table_name
   JOIN pg_namespace ns ON ns.oid = cls.relnamespace AND ns.nspname = c.table_schema
@@ -1779,7 +1828,7 @@ SELECT STRING_AGG(
   JOIN pg_type pt ON pt.oid = a.atttypid
   JOIN pg_namespace tn ON tn.oid = pt.typnamespace
   WHERE c.table_schema = @schema AND c.table_name = @table
-    {PostgreSqlUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.column_name")}
+    {PostgreSqlUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.column_name", Platform.PostgreSQL)}
 ";
         return cmd.ExecuteScalar()?.ToString() ?? "";
     }
@@ -1798,14 +1847,14 @@ SELECT STRING_AGG(
     private static string BuildXmlColumnsPostgreSql(List<MergeColumnInfo> columns) =>
         string.Join(",\n         ", columns.SelectMany(c =>
             !RequiresXmlColumnTransformPostgreSql(c)
-                ? new[] { $"\"{c.Name}\" {c.JsonParseType} PATH 'c[@n=\"{c.Name}\"]/text()'" }
+                ? new[] { $"{PgQuote(c.Name)} {c.JsonParseType} PATH '{XPathNode(c.Name)}'" }
                 : c.IsGeometry
                     ? new[]
                       {
-                          $"\"{c.Name}\" text PATH 'c[@n=\"{c.Name}\"]/text()'",
-                          $"\"{c.Name}.STSrid\" text PATH 'c[@n=\"{c.Name}.STSrid\"]/text()'"
+                          $"{PgQuote(c.Name)} text PATH '{XPathNode(c.Name)}'",
+                          $"{PgQuote(c.Name + ".STSrid")} text PATH '{XPathNode(c.Name + ".STSrid")}'"
                       }
-                    : new[] { $"\"{c.Name}\" text PATH 'c[@n=\"{c.Name}\"]/text()'" }));
+                    : new[] { $"{PgQuote(c.Name)} text PATH '{XPathNode(c.Name)}'" }));
 
     // B1: same udt_name test GetJsonColumnDefinitionsPostgreSql uses for the array case
     // (LEFT(udt_name,1)='_' — PostgreSQL's own array-of-type naming convention), ported to C# rather than
@@ -1833,9 +1882,9 @@ SELECT STRING_AGG(
     // correctly typed by BuildXmlColumnsPostgreSql's direct PATH form and just passes through.
     internal static string BuildXmlColumnExpressionPostgreSql(MergeColumnInfo c, string sourceAlias)
     {
-        var raw = $"\"{sourceAlias}\".\"{c.Name}\"";
+        var raw = $"\"{sourceAlias}\".{PgQuote(c.Name)}";
         if (c.IsGeometry)
-            return $"{TypeSchemaPrefix(c.JsonParseType)}ST_GeomFromText({raw}, COALESCE(NULLIF(\"{sourceAlias}\".\"{c.Name}.STSrid\", '')::int, 0))";
+            return $"{TypeSchemaPrefix(c.JsonParseType)}ST_GeomFromText({raw}, COALESCE(NULLIF(\"{sourceAlias}\".{PgQuote(c.Name + ".STSrid")}, '')::int, 0))";
         if (c.IsBinary) return $"decode({raw}, 'base64')";
         if (c.DataType.StartsWith("_", StringComparison.Ordinal))
             return $"CASE WHEN LEFT({raw}, 1) IN ('{{', '[') THEN {raw}::{c.JsonParseType} " +
@@ -1849,13 +1898,13 @@ SELECT STRING_AGG(
     // BuildXmlColumnExpressionPostgreSql to every column, including the pass-through case, so the FROM-item
     // always projects exactly the column set BuildXmlColumnsPostgreSql declared.
     private static string BuildXmlColumnExpressionsPostgreSql(List<MergeColumnInfo> columns) =>
-        string.Join(",\n         ", columns.Select(c => $"{BuildXmlColumnExpressionPostgreSql(c, "x")} AS \"{c.Name}\""));
+        string.Join(",\n         ", columns.Select(c => $"{BuildXmlColumnExpressionPostgreSql(c, "x")} AS {PgQuote(c.Name)}"));
 
     private static string GetInsertColumnsPostgreSql(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys = null)
     {
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         cmd.CommandText = $@"
-SELECT STRING_AGG('        ""' || c.column_name || '""', ',' || CHR(10) ORDER BY c.column_name)
+SELECT STRING_AGG('        ""' || replace(c.column_name, '""', '""""') || '""', ',' || CHR(10) ORDER BY c.column_name)
   FROM information_schema.columns c
   JOIN pg_class cls ON cls.relname = c.table_name
   JOIN pg_namespace ns ON ns.oid = cls.relnamespace AND ns.nspname = c.table_schema
@@ -1865,7 +1914,7 @@ SELECT STRING_AGG('        ""' || c.column_name || '""', ',' || CHR(10) ORDER BY
                      AND a.attgenerated = ''
   WHERE c.table_schema = @schema
     AND c.table_name = @table
-    {PostgreSqlUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.column_name")}
+    {PostgreSqlUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.column_name", Platform.PostgreSQL)}
 ";
         return cmd.ExecuteScalar()?.ToString() ?? "";
     }
@@ -1874,7 +1923,7 @@ SELECT STRING_AGG('        ""' || c.column_name || '""', ',' || CHR(10) ORDER BY
     {
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         cmd.CommandText = $@"
-SELECT STRING_AGG('""' || c.column_name || '""', ',' ORDER BY c.column_name)
+SELECT STRING_AGG('""' || replace(c.column_name, '""', '""""') || '""', ',' ORDER BY c.column_name)
   FROM information_schema.columns c
   JOIN pg_class cls ON cls.relname = c.table_name
   JOIN pg_namespace ns ON ns.oid = cls.relnamespace AND ns.nspname = c.table_schema
@@ -1882,7 +1931,7 @@ SELECT STRING_AGG('""' || c.column_name || '""', ',' ORDER BY c.column_name)
   WHERE c.table_schema = @schema
     AND c.table_name = @table
     AND NOT (COALESCE(c.column_default, '') LIKE 'nextval(%' OR c.is_identity = 'YES')
-    {PostgreSqlUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.column_name")}
+    {PostgreSqlUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.column_name", Platform.PostgreSQL)}
 ";
         return cmd.ExecuteScalar()?.ToString() ?? "";
     }
@@ -1923,7 +1972,7 @@ SELECT STRING_AGG('""' || c.column_name || '""', ',' ORDER BY c.column_name)
     {
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         cmd.CommandText = $@"
-SELECT STRING_AGG(c.column_name, ',')
+SELECT STRING_AGG(c.column_name, CHR(1))
   FROM information_schema.columns c
   WHERE c.table_schema = @schema
     AND c.table_name = @table
@@ -1931,7 +1980,7 @@ SELECT STRING_AGG(c.column_name, ',')
 ";
         var result = cmd.ExecuteScalar()?.ToString();
         if (string.IsNullOrEmpty(result)) return new HashSet<string>(StringComparer.InvariantCultureIgnoreCase);
-        return new HashSet<string>(result.Split(','), StringComparer.InvariantCultureIgnoreCase);
+        return new HashSet<string>(result.Split('\u0001'), StringComparer.InvariantCultureIgnoreCase);
     }
 
     private static Dictionary<string, string> GetJsonColumnsPostgreSql(IDbCommand cmd, string tableSchema, string tableName)
@@ -1957,43 +2006,46 @@ SELECT c.column_name, c.udt_name
 
     private static string BuildMySqlMatchColumns(string keyColumns)
     {
-        return string.Join(" AND ", keyColumns.Split(',')
-            .Select(c => c.Trim().StartsWith("*")
-                ? $"(`Source`.`{c.Trim().Substring(1).Trim('`')}` = `Target`.`{c.Trim().Substring(1).Trim('`')}` OR (`Source`.`{c.Trim().Substring(1).Trim('`')}` IS NULL AND `Target`.`{c.Trim().Substring(1).Trim('`')}` IS NULL))"
-                : $"`Source`.`{c.Trim().Trim('`')}` = `Target`.`{c.Trim().Trim('`')}`"));
+        return string.Join(" AND ", Identifier.SplitDelimitedList(keyColumns, Platform.MySQL).Select(c =>
+        {
+            var name = MyQuote(Identifier.Unwrap(c.TrimStart('*').Trim(), Platform.MySQL));
+            return c.StartsWith('*')
+                ? $"(`Source`.{name} = `Target`.{name} OR (`Source`.{name} IS NULL AND `Target`.{name} IS NULL))"
+                : $"`Source`.{name} = `Target`.{name}";
+        }));
     }
 
     private static string GetJsonColumnDefinitionsMySql(IDbCommand cmd, string databaseName, string tableName, HashSet<string> jsonKeys)
     {
-        databaseName = databaseName.Trim().Trim('`');
-        tableName = tableName.Trim().Trim('`');
+        databaseName = Identifier.Unwrap(databaseName.Trim(), Platform.MySQL);
+        tableName = Identifier.Unwrap(tableName.Trim(), Platform.MySQL);
         var columns = GetColumnInfoMySql(cmd, databaseName, tableName, excludeAutoIncrement: false, jsonKeys: jsonKeys);
         return BuildJsonTableColumnsMySql(columns);
     }
 
     private static string GetJsonSelectColumnsMySql(IDbCommand cmd, string databaseName, string tableName, HashSet<string> jsonKeys)
     {
-        databaseName = databaseName.Trim().Trim('`');
-        tableName = tableName.Trim().Trim('`');
+        databaseName = Identifier.Unwrap(databaseName.Trim(), Platform.MySQL);
+        tableName = Identifier.Unwrap(tableName.Trim(), Platform.MySQL);
         var columns = GetColumnInfoMySql(cmd, databaseName, tableName, excludeAutoIncrement: false, jsonKeys: jsonKeys);
         return BuildSelectExpressionsMySql(columns);
     }
 
     private static string GetInsertColumnsMySql(IDbCommand cmd, string databaseName, string tableName, HashSet<string> jsonKeys)
     {
-        databaseName = databaseName.Trim().Trim('`');
-        tableName = tableName.Trim().Trim('`');
+        databaseName = Identifier.Unwrap(databaseName.Trim(), Platform.MySQL);
+        tableName = Identifier.Unwrap(tableName.Trim(), Platform.MySQL);
         var columns = GetColumnInfoMySql(cmd, databaseName, tableName, excludeAutoIncrement: false, jsonKeys: jsonKeys);
-        return string.Join(", ", columns.Select(c => $"`{c.Name}`"));
+        return string.Join(", ", columns.Select(c => $"{MyQuote(c.Name)}"));
     }
 
     private static string GetUpdateColumnsMySql(IDbCommand cmd, string databaseName, string tableName, HashSet<string> jsonKeys)
     {
-        databaseName = databaseName.Trim().Trim('`');
-        tableName = tableName.Trim().Trim('`');
+        databaseName = Identifier.Unwrap(databaseName.Trim(), Platform.MySQL);
+        tableName = Identifier.Unwrap(tableName.Trim(), Platform.MySQL);
         var columns = GetColumnInfoMySql(cmd, databaseName, tableName, excludeAutoIncrement: false, jsonKeys: jsonKeys);
         return string.Join(",", columns.Select(c =>
-            c.IsJson ? $"J[`{c.Name}`]" : $"`{c.Name}`"));
+            c.IsJson ? $"J[{MyQuote(c.Name)}]" : $"{MyQuote(c.Name)}"));
     }
 
     // The MySQL builders name the database they read the catalog from. A script written to run elsewhere -- DataTongs',
@@ -2002,9 +2054,10 @@ SELECT c.column_name, c.udt_name
     private static string RequalifyMySql(string script, string databaseName, string tableName, string destOverride)
     {
         if (destOverride == null) return script;
-        var qualified = $"`{databaseName.Trim().Trim('`')}`.`{tableName.Trim().Trim('`')}`";
-        var target = destOverride.Trim().Trim('`');
-        var replacement = target.Length == 0 ? $"`{tableName.Trim().Trim('`')}`" : $"`{target}`.`{tableName.Trim().Trim('`')}`";
+        var table = Identifier.Unwrap(tableName.Trim(), Platform.MySQL);
+        var qualified = MyObjectName(Identifier.Unwrap(databaseName.Trim(), Platform.MySQL), table);
+        var target = Identifier.Unwrap(destOverride.Trim(), Platform.MySQL);
+        var replacement = target.Length == 0 ? MyQuote(table) : MyObjectName(target, table);
         return ReplaceOutsideStringLiterals(script, qualified, replacement);
     }
 
@@ -2045,8 +2098,8 @@ SELECT c.column_name, c.udt_name
         string tableData, string keyColumns, bool mergeUpdate, bool mergeDelete, bool tokenizeScripts, string mergeFilter,
         HashSet<string> jsonKeys, int mySqlServerVersionNum = 0, string contentFileToken = null)
     {
-        databaseName = databaseName.Trim().Trim('`');
-        tableName = tableName.Trim().Trim('`');
+        databaseName = Identifier.Unwrap(databaseName.Trim(), Platform.MySQL);
+        tableName = Identifier.Unwrap(tableName.Trim(), Platform.MySQL);
 
         // Compose from fragment methods — same pattern as SQL Server and PostgreSQL.
         // MySQL allows explicit inserts into AUTO_INCREMENT columns without any special command
@@ -2065,7 +2118,7 @@ SELECT c.column_name, c.udt_name
             mySqlServerVersionNum, columns), mySqlServerVersionNum);
 
         if (string.IsNullOrEmpty(insertColumns))
-            throw new InvalidOperationException($"No columns found for table `{databaseName}`.`{tableName}` (or all columns are auto-increment/generated).");
+            throw new InvalidOperationException($"No columns found for table {MyObjectName(databaseName, tableName)} (or all columns are auto-increment/generated).");
 
         // Map standardized MergeType flags to MySQL strategies:
         // Insert only (no update, no delete) -> INSERT IGNORE
@@ -2106,8 +2159,8 @@ SELECT c.column_name, c.udt_name
 
     internal static List<MySqlColumnInfo> GetColumnInfoMySql(IDbCommand cmd, string databaseName, string tableName, bool excludeAutoIncrement, HashSet<string> jsonKeys = null)
     {
-        databaseName = databaseName.Trim().Trim('`');
-        tableName = tableName.Trim().Trim('`');
+        databaseName = Identifier.Unwrap(databaseName.Trim(), Platform.MySQL);
+        tableName = Identifier.Unwrap(tableName.Trim(), Platform.MySQL);
 
         // jsonKeys and excludeAutoIncrement both change the shape of the result, so they are part of the
         // key rather than ignored -- two callers asking different questions about one table must not
@@ -2259,8 +2312,8 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     // same fix as CHANGELOG #359 for the forge procs. Numeric/date keys carry no collation.
     private static string BuildKeyMatchMySql(string k, HashSet<string> stringKeys, string sourceAlias = "jt") =>
         stringKeys.Contains(k)
-            ? $"CONVERT(Target.`{k}` USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT({sourceAlias}.`{k}` USING utf8mb4) COLLATE utf8mb4_unicode_ci"
-            : $"Target.`{k}` = {sourceAlias}.`{k}`";
+            ? $"CONVERT(Target.{MyQuote(k)} USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT({sourceAlias}.{MyQuote(k)} USING utf8mb4) COLLATE utf8mb4_unicode_ci"
+            : $"Target.{MyQuote(k)} = {sourceAlias}.{MyQuote(k)}";
 
     // ---- MariaDB 10.2-10.5 chunked shred -------------------------------------------------------
     //
@@ -2509,10 +2562,10 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
             var col = columns.FirstOrDefault(c => string.Equals(c.Name, k, StringComparison.OrdinalIgnoreCase));
             if (stringKeys.Contains(k))
                 return col is { CharMaxLength: > 0 and <= 4000 } sized
-                    ? $"`{k}` VARCHAR({sized.CharMaxLength}) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
-                    : $"`{k}` LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci";
+                    ? $"{MyQuote(k)} VARCHAR({sized.CharMaxLength}) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                    : $"{MyQuote(k)} LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci";
             var type = col != null ? GetMySqlTypeForJsonTable(col) : "LONGTEXT";
-            return $"`{k}` {type}";
+            return $"{MyQuote(k)} {type}";
         });
         return $"CREATE TEMPORARY TABLE `{MySqlDeleteKeyTable}` (\n  RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,\n  {string.Join(",\n  ", defs)}\n);";
     }
@@ -2522,7 +2575,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     {
         var keyColNames = ParseKeyColumnsMySql(keyColumns);
         var sb = new StringBuilder();
-        sb.AppendLine($"DELETE Target FROM `{databaseName}`.`{tableName}` Target");
+        sb.AppendLine($"DELETE Target FROM {MyObjectName(databaseName, tableName)} Target");
         sb.AppendLine("WHERE NOT EXISTS (");
         sb.AppendLine($"  SELECT 1 FROM {jsonSource}");
         sb.AppendLine($"  WHERE {string.Join(" AND ", keyColNames.Select(k => BuildKeyMatchMySql(k, stringKeys)))}");
@@ -2538,7 +2591,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         string tableData, string keyColumns, bool tokenizeScripts, string contentFileToken = null)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"INSERT INTO `{databaseName}`.`{tableName}` ({insertColumns})");
+        sb.AppendLine($"INSERT INTO {MyObjectName(databaseName, tableName)} ({insertColumns})");
         sb.AppendLine($"SELECT {selectExpressions}");
         sb.AppendLine($"FROM {jsonSource}");
 
@@ -2554,18 +2607,13 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     private static string BuildUpsertClauseMySql(string databaseName, string tableName,
         string insertColumns, string updateColumns, List<string> keyColNames)
     {
-        var nonKeyColumns = updateColumns.Split(',')
-            .Where(c =>
-            {
-                var colName = c.Trim().Trim('`');
-                if (colName.StartsWith("J[")) colName = colName.Substring(2).TrimEnd(']').Trim('`');
-                return !keyColNames.Contains(colName, StringComparer.OrdinalIgnoreCase);
-            })
+        var nonKeyColumns = Identifier.SplitDelimitedList(updateColumns, Platform.MySQL)
+            .Where(c => !keyColNames.Contains(Identifier.Unwrap(c.StartsWith("J[") ? c[2..^1] : c, Platform.MySQL), StringComparer.OrdinalIgnoreCase))
             .ToList();
 
         if (nonKeyColumns.Count == 0)
         {
-            var firstCol = insertColumns.Split(',')[0].Trim();
+            var firstCol = Identifier.SplitDelimitedList(insertColumns, Platform.MySQL)[0];
             return $"ON DUPLICATE KEY UPDATE {firstCol} = VALUES({firstCol})";
         }
 
@@ -2574,11 +2622,11 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
             var trimmed = c.Trim();
             if (trimmed.StartsWith("J["))
             {
-                var colName = trimmed.Substring(2).TrimEnd(']');
+                var colName = trimmed[2..^1];
                 // JSON_EXTRACT(x,'$') normalizes the document for comparison and is portable across
                 // MySQL and MariaDB. MariaDB rejects CAST(x AS JSON) (JSON is a LONGTEXT alias with
                 // no native cast); MySQL keeps order-insensitive object equality on the extracted value.
-                return $"  {colName} = IF(JSON_EXTRACT(VALUES({colName}), '$') = JSON_EXTRACT(`{databaseName}`.`{tableName}`.{colName}, '$'), `{databaseName}`.`{tableName}`.{colName}, VALUES({colName}))";
+                return $"  {colName} = IF(JSON_EXTRACT(VALUES({colName}), '$') = JSON_EXTRACT({MyObjectName(databaseName, tableName)}.{colName}, '$'), {MyObjectName(databaseName, tableName)}.{colName}, VALUES({colName}))";
             }
             return $"  {trimmed} = VALUES({trimmed})";
         });
@@ -2590,7 +2638,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         string tableData, bool tokenizeScripts, string contentFileToken = null)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"INSERT IGNORE INTO `{databaseName}`.`{tableName}` ({insertColumns})");
+        sb.AppendLine($"INSERT IGNORE INTO {MyObjectName(databaseName, tableName)} ({insertColumns})");
         sb.AppendLine($"SELECT {selectExpressions}");
         sb.AppendLine($"FROM {jsonSource};");
 
@@ -2627,9 +2675,9 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
             sb.AppendLine($"SET @json_data = '{EscapeMySqlPayload(chunk)}';");
 
             if (updateColumns == null)
-                sb.AppendLine($"INSERT IGNORE INTO `{databaseName}`.`{tableName}` ({insertColumns})");
+                sb.AppendLine($"INSERT IGNORE INTO {MyObjectName(databaseName, tableName)} ({insertColumns})");
             else
-                sb.AppendLine($"INSERT INTO `{databaseName}`.`{tableName}` ({insertColumns})");
+                sb.AppendLine($"INSERT INTO {MyObjectName(databaseName, tableName)} ({insertColumns})");
             sb.AppendLine($"SELECT {selectExpressions}");
             sb.Append($"FROM {jsonSource}");
 
@@ -2643,8 +2691,8 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
 
             if (withDelete)
             {
-                sb.AppendLine($"INSERT INTO `{MySqlDeleteKeyTable}` ({string.Join(", ", keyColNames.Select(k => $"`{k}`"))})");
-                sb.AppendLine($"SELECT {string.Join(", ", keyColNames.Select(k => $"jt.`{k}`"))}");
+                sb.AppendLine($"INSERT INTO `{MySqlDeleteKeyTable}` ({string.Join(", ", keyColNames.Select(k => $"{MyQuote(k)}"))})");
+                sb.AppendLine($"SELECT {string.Join(", ", keyColNames.Select(k => $"jt.{MyQuote(k)}"))}");
                 sb.AppendLine($"FROM {jsonSource};");
             }
             sb.AppendLine();
@@ -2652,10 +2700,10 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
 
         if (withDelete)
         {
-            sb.AppendLine($"DELETE Target FROM `{databaseName}`.`{tableName}` Target");
+            sb.AppendLine($"DELETE Target FROM {MyObjectName(databaseName, tableName)} Target");
             sb.AppendLine($"LEFT JOIN `{MySqlDeleteKeyTable}` K");
             sb.AppendLine($"  ON {string.Join(" AND ", keyColNames.Select(k => BuildKeyMatchMySql(k, stringKeys, "K")))}");
-            sb.Append($"WHERE K.`{keyColNames[0]}` IS NULL");
+            sb.Append($"WHERE K.{MyQuote(keyColNames[0])} IS NULL");
             if (!string.IsNullOrWhiteSpace(mergeFilter))
                 sb.Append($"\nAND ({mergeFilter})");
             sb.AppendLine(";");
@@ -2768,13 +2816,10 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     // string 'null') -- the target column type coerces the extracted text on INSERT, matching JSON_TABLE.
     private static IEnumerable<string> BuildCteExtractionsMySql(MySqlColumnInfo col)
     {
-        var pathSuffix = col.Name.Contains(' ') || col.Name.Contains('.') || col.Name.Contains('-')
-            ? $"\"{col.Name}\""
-            : col.Name;
-        var extract = $"JSON_EXTRACT(@json_data, CONCAT('$[', _ss_seq.i, '].{pathSuffix}'))";
+        var extract = $"JSON_EXTRACT(@json_data, CONCAT('$[', _ss_seq.i, '].{MyJsonPathMember(col.Name)}'))";
         yield return col.IsJson
-            ? $"{extract} AS `{col.Name}`"
-            : $"SchemaSmith_JsonScalarStr({extract}) AS `{col.Name}`";
+            ? $"{extract} AS {MyQuote(col.Name)}"
+            : $"SchemaSmith_JsonScalarStr({extract}) AS {MyQuote(col.Name)}";
 
         // Geometry carries a "<col>.STSrid" companion, exactly as the JSON_TABLE path declares it.
         // Without it the SELECT built by BuildSingleSelectExpressionMySql reads a column this row
@@ -2783,8 +2828,8 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         if (!IsGeometryTypeMySql(col.DataType)) yield break;
 
         var sridExtract =
-            $"JSON_EXTRACT(@json_data, CONCAT('$[', _ss_seq.i, '].\"{col.Name}.STSrid\"'))";
-        yield return $"SchemaSmith_JsonScalarStr({sridExtract}) AS `{col.Name}.STSrid`";
+            $"JSON_EXTRACT(@json_data, CONCAT('$[', _ss_seq.i, '].{MyJsonPathMember(col.Name + ".STSrid")}'))";
+        yield return $"SchemaSmith_JsonScalarStr({sridExtract}) AS {MyQuote(col.Name + ".STSrid")}";
     }
 
     private static string BuildJsonTableColumnsMySql(List<MySqlColumnInfo> columns)
@@ -2793,15 +2838,12 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         foreach (var col in columns)
         {
             var mysqlType = GetMySqlTypeForJsonTable(col);
-            // Quote JSON path key with double quotes when it contains spaces or special characters
-            var jsonPath = col.Name.Contains(' ') || col.Name.Contains('.') || col.Name.Contains('-')
-                ? $"$.\"{col.Name}\""
-                : $"$.{col.Name}";
-            definitions.Add($"`{col.Name}` {WithJsonTableCharset(mysqlType)} PATH '{jsonPath}'");
+            var jsonPath = $"$.{MyJsonPathMember(col.Name)}";
+            definitions.Add($"{MyQuote(col.Name)} {WithJsonTableCharset(mysqlType)} PATH '{jsonPath}'");
             // Geometry carries a "<col>.STSrid" companion beside its WKT; declare it so the SELECT can
             // rebuild the value in its own reference system. Absent in pre-companion packages -> NULL.
             if (IsGeometryTypeMySql(col.DataType))
-                definitions.Add($"`{col.Name}.STSrid` INT PATH '$.\"{col.Name}.STSrid\"'");
+                definitions.Add($"{MyQuote(col.Name + ".STSrid")} INT PATH '$.{MyJsonPathMember(col.Name + ".STSrid")}'");
         }
         return string.Join(",\n    ", definitions);
     }
@@ -2895,12 +2937,12 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
 
     private static string BuildSingleSelectExpressionMySql(MySqlColumnInfo c, string qualifier)
     {
-        if (IsGeometryTypeMySql(c.DataType)) return $"ST_GeomFromText({qualifier}`{c.Name}`, COALESCE({qualifier}`{c.Name}.STSrid`, 0))";
-        if (IsBinaryTypeMySql(c.DataType)) return $"FROM_BASE64({qualifier}`{c.Name}`)";
+        if (IsGeometryTypeMySql(c.DataType)) return $"ST_GeomFromText({qualifier}{MyQuote(c.Name)}, COALESCE({qualifier}{MyQuote(c.Name + ".STSrid")}, 0))";
+        if (IsBinaryTypeMySql(c.DataType)) return $"FROM_BASE64({qualifier}{MyQuote(c.Name)})";
         // BIT is delivered as its number; read as text (the shred below MariaDB 10.6), '165' would be stored as
         // its character codes.
-        if (c.DataType.Equals("bit", StringComparison.OrdinalIgnoreCase)) return $"CAST({qualifier}`{c.Name}` AS UNSIGNED)";
-        return $"{qualifier}`{c.Name}`";
+        if (c.DataType.Equals("bit", StringComparison.OrdinalIgnoreCase)) return $"CAST({qualifier}{MyQuote(c.Name)} AS UNSIGNED)";
+        return $"{qualifier}{MyQuote(c.Name)}";
     }
 
     private static readonly HashSet<string> MySqlTextTypes = new(StringComparer.OrdinalIgnoreCase)
@@ -2918,16 +2960,16 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     {
         var keys = ParseKeyColumnsMySql(keyColumns);
         var matches = columns.Where(c => keys.Contains(c.Name, StringComparer.OrdinalIgnoreCase))
-            .Select(c => $"_ss_live.`{c.Name}` <=> {BuildSingleSelectExpressionMySql(c, "jt.")}").ToList();
+            .Select(c => $"_ss_live.{MyQuote(c.Name)} <=> {BuildSingleSelectExpressionMySql(c, "jt.")}").ToList();
         if (matches.Count == 0) return null;
-        return $"WHERE NOT EXISTS (SELECT 1 FROM `{databaseName}`.`{tableName}` _ss_live WHERE {string.Join(" AND ", matches)})";
+        return $"WHERE NOT EXISTS (SELECT 1 FROM {MyObjectName(databaseName, tableName)} _ss_live WHERE {string.Join(" AND ", matches)})";
     }
 
     private static string BuildChangedRowsFilterMySql(string databaseName, string tableName, List<MySqlColumnInfo> columns)
     {
         var matches = columns.Select(c =>
         {
-            var live = $"_ss_live.`{c.Name}`";
+            var live = $"_ss_live.{MyQuote(c.Name)}";
             var delivered = BuildSingleSelectExpressionMySql(c, "jt.");
             if (c.IsJson) return $"JSON_EXTRACT({live}, '$') <=> JSON_EXTRACT({delivered}, '$')";
             if (MySqlTextTypes.Contains(c.DataType))
@@ -2936,7 +2978,7 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
             if (c.DataType.Equals("vector", StringComparison.OrdinalIgnoreCase)) return $"HEX({live}) <=> HEX({delivered})";
             return $"{live} <=> {delivered}";
         });
-        return $"WHERE NOT EXISTS (SELECT 1 FROM `{databaseName}`.`{tableName}` _ss_live\n" +
+        return $"WHERE NOT EXISTS (SELECT 1 FROM {MyObjectName(databaseName, tableName)} _ss_live\n" +
                $"                  WHERE {string.Join("\n                    AND ", matches)})";
     }
 
@@ -2945,8 +2987,8 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         if (string.IsNullOrWhiteSpace(keyColumns))
             return new List<string>();
 
-        return keyColumns.Split(',')
-            .Select(c => c.Trim().Trim('`'))
+        return Identifier.SplitDelimitedList(keyColumns, Platform.MySQL)
+            .Select(c => Identifier.Unwrap(c, Platform.MySQL))
             .Where(c => !string.IsNullOrWhiteSpace(c))
             .ToList();
     }

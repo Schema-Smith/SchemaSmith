@@ -75,6 +75,49 @@ public abstract class MergeScriptHelperSharedTests
         _connection?.Dispose();
     }
 
+    // A table and columns whose names hold every character a name can carry that SQL treats specially: a quote, a percent
+    // sign, the backtick, a dot, a backslash, a comma, a space and non-ASCII letters. The key list the caller names, or
+    // the one the catalog gives.
+    [TestCase(false, false)]
+    [TestCase(true, false)]
+    [TestCase(false, true)]
+    public void AMergeInsertsUpdatesAndDeletes_UnderHostileNames(bool keysFromTheCatalog, bool deferred)
+    {
+        const string h = "a'b%c`d.e\\f,g h \u00e9\u03a9";
+        const string table = "mh" + h, key = "k" + h, value = "v" + h, other = "o" + h;
+        static string B(string name) => "`" + name.Replace("`", "``") + "`";
+        static string J(string name) => name.Replace("\\", "\\\\").Replace("\"", "\\\"");
+        var target = $"{B(_testDb)}.{B(table)}";
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS {target}; CREATE TABLE {target} ({B(key)} INT NOT NULL PRIMARY KEY, {B(value)} VARCHAR(40) NULL, {B(other)} INT NULL) DEFAULT CHARSET=utf8mb4; INSERT INTO {target} VALUES (1, 'one', 1), (2, 'two', 2);";
+            command.ExecuteNonQuery();
+            var data = $"[{{\"{J(key)}\":1,\"{J(value)}\":\"uno\",\"{J(other)}\":10}},{{\"{J(key)}\":3,\"{J(value)}\":\"tres\",\"{J(other)}\":30}}]";
+            var keys = keysFromTheCatalog ? MergeScriptHelper.GetKeyColumns(Platform, command, _testDb, table) : B(key);
+            var script = BuildMergeScript(command, _testDb, table, data, keys,
+                mergeUpdate: true, mergeDelete: true, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+            if (deferred)
+            {
+                command.CommandText = DeferredMergeBuilder.Build(new MergeScriptHelperAdapter(Platform), command, "MySQL", _testDb, table,
+                    data, keys, false, new List<string> { other });
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = script;
+            command.ExecuteNonQuery();
+
+            command.CommandText = $"SELECT GROUP_CONCAT(CONCAT({B(key)}, ':', {B(value)}, ':', {B(other)}) ORDER BY {B(key)} SEPARATOR '|') FROM {target}";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1:uno:10|3:tres:30"),
+                "row 1 updated, row 2 deleted, row 3 inserted");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS {target}";
+            command.ExecuteNonQuery();
+        }
+    }
+
     // B27: a script written for another database renamed its table by replacing the qualified name everywhere in the
     // script, so a value in the data that spelled the qualified name was rewritten too.
     [Test]

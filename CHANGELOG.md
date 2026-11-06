@@ -76,6 +76,9 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **MySQL: a string default holding a backslash no longer reads as changed on every deploy**, and extraction writes it so it deploys back to the same value.
 - **SQL Server: a run-once script whose path or product name holds a character outside the database code page runs once.** The record of completed scripts stored such a character as a look-alike, so the script was never found as done: the next deploy ran it again and then failed on the record's primary key. The record's columns widen to Unicode on the next deploy, keeping the rows already there.
 - **MySQL and MariaDB: a product name holding a backslash is recorded as written** in the record of completed run-once scripts, instead of losing the backslash.
+- **Data delivery reaches a table, schema or column whose name holds a bracket, double quote, backtick, comma, quote or backslash, on every engine.** The merge scripts wrote such names unescaped and split their column lists at every comma, so the delivery failed with a syntax error or wrote to the wrong columns; the deferred first pass a self-referencing table takes did the same.
+- **SQL Server: XML-encoded data delivery reads a column whose name has a character outside the database code page.** The column was read as NULL, and a key column so named failed the delivery.
+- **PostgreSQL: a column whose name has an upper-case non-ASCII letter is delivered.** Matching the delivered keys to the table's columns lowered the column's name under the C collation, which leaves such a letter as it is, so the column was silently left out of the delivery.
 
 ## [v2.8.0](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) — 2026-11-01
 

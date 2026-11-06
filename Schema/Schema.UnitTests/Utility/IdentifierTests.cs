@@ -199,4 +199,17 @@ public class IdentifierTests
         Assert.That(schema, Is.Null);
         Assert.That(name, Is.EqualTo("Orders"));
     }
+
+    [TestCase(Platform.SqlServer, "[a],[b]", new[] { "[a]", "[b]" })]
+    [TestCase(Platform.SqlServer, "[a,b] , [c]]d,e]", new[] { "[a,b]", "[c]]d,e]" })]
+    [TestCase(Platform.SqlServer, "*[k,1],G[g],[x] DESC", new[] { "*[k,1]", "G[g]", "[x] DESC" })]
+    [TestCase(Platform.SqlServer, "CAST([a] AS DECIMAL(10,2)),'x,y',[b]", new[] { "CAST([a] AS DECIMAL(10,2))", "'x,y'", "[b]" })]
+    [TestCase(Platform.PostgreSQL, "\"a,\"\"b\",\"c\"", new[] { "\"a,\"\"b\"", "\"c\"" })]
+    [TestCase(Platform.MySQL, "`a,``b`,`c`", new[] { "`a,``b`", "`c`" })]
+    [TestCase(Platform.SqlServer, "a, b,,", new[] { "a", "b" })]
+    [TestCase(Platform.SqlServer, "", new string[0])]
+    public void SplitDelimitedList_SplitsOnlyAtTheCommasBetweenItems(Platform platform, string list, string[] expected)
+    {
+        Assert.That(Identifier.SplitDelimitedList(list, platform), Is.EqualTo(expected));
+    }
 }
