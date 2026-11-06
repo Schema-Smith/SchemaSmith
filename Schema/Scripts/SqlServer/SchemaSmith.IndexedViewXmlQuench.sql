@@ -189,6 +189,7 @@ BEGIN
         -- Drop view
         SET @sql = 'DROP VIEW ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName);
         IF @WhatIf = 0 EXEC sp_executesql @sql;
+        INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldDrop' ELSE 'dropped' END);
 
         FETCH NEXT FROM remove_cursor INTO @objectId, @ivSchema, @ivName;
     END;
@@ -198,7 +199,7 @@ BEGIN
     -- Process new and changed views
     DECLARE @defn NVARCHAR(MAX), @indexXml XML, @variantName NVARCHAR(128), @description NVARCHAR(MAX);
     DECLARE @existingDef NVARCHAR(MAX), @existingObjectId INT;
-    DECLARE @needsRecreate BIT, @needsIndexUpdate BIT;
+    DECLARE @needsRecreate BIT, @needsIndexUpdate BIT, @ivIndexesChanged BIT;
     -- What DROP VIEW takes with it and the package does not carry: permissions and extended properties, put back
     -- once the view is created again.
     DECLARE @preserveSql NVARCHAR(MAX), @ivQualified NVARCHAR(300);
@@ -212,6 +213,7 @@ BEGIN
     BEGIN
         SET @needsRecreate = 0;
         SET @needsIndexUpdate = 0;
+        SET @ivIndexesChanged = 0;
         SET @preserveSql = NULL;
         SET @ivQualified = QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName);
         SET @existingObjectId = NULL;
@@ -261,6 +263,7 @@ BEGIN
                 EXEC SchemaSmith.CapturePermissions @Schema = @ivSchema, @Name = @ivName, @Script = @preserveSql OUTPUT;
                 SET @sql = 'DROP VIEW ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName);
                 IF @WhatIf = 0 EXEC sp_executesql @sql;
+                INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldDrop' ELSE 'dropped' END);
             END
             ELSE
                 SET @needsIndexUpdate = 1; -- Definition unchanged, check indexes
@@ -271,10 +274,35 @@ BEGIN
         -- Create view if needed
         IF @needsRecreate = 1
         BEGIN
+            -- Only indexed views are read as existing, so an object already holding the name reaches CREATE VIEW. A
+            -- view this product made that lost its index (a deploy failed between the two) is rebuilt; anything else
+            -- is refused by name rather than left to fail as "There is already an object named ...".
+            IF @existingObjectId IS NULL AND OBJECT_ID(@ivQualified) IS NOT NULL
+            BEGIN
+                IF OBJECTPROPERTY(OBJECT_ID(@ivQualified), 'IsView') = 1
+                   AND EXISTS (SELECT 1 FROM sys.extended_properties ep
+                                WHERE ep.class = 1 AND ep.major_id = OBJECT_ID(@ivQualified) AND ep.minor_id = 0
+                                  AND ep.name = 'SchemaSmith_Product' AND CAST(ep.value AS NVARCHAR(200)) = @ProductName)
+                BEGIN
+                    SET @msg = N'Indexed view ' + @ivSchema + N'.' + @ivName + N' has no clustered index — dropping for recreation';
+                    EXEC [SchemaSmith].[PrintWithNoWait] @msg;
+                    EXEC SchemaSmith.CapturePermissions @Schema = @ivSchema, @Name = @ivName, @Script = @preserveSql OUTPUT;
+                    SET @sql = 'DROP VIEW ' + @ivQualified;
+                    IF @WhatIf = 0 EXEC sp_executesql @sql;
+                    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldDrop' ELSE 'dropped' END);
+                END
+                ELSE
+                BEGIN
+                    DECLARE @ivCollisionMsg NVARCHAR(2048) = N'Indexed view ' + @ivSchema + N'.' + @ivName + N' cannot be created: an object of that name already exists and is not owned by product ' + @ProductName + N'. Drop or rename it, or set its SchemaSmith_Product extended property to this product.';
+                    THROW 50001, @ivCollisionMsg, 1;
+                END;
+            END;
+
             SET @sql = 'CREATE VIEW ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName) + ' WITH SCHEMABINDING AS ' + @defn;
             SET @msg = N'Creating indexed view ' + @ivSchema + N'.' + @ivName + CASE WHEN ISNULL(@variantName, N'') <> N'' THEN N' (variant: ' + @variantName + N')' ELSE N'' END;
             EXEC [SchemaSmith].[PrintWithNoWait] @msg;
             IF @WhatIf = 0 EXEC sp_executesql @sql;
+            INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldCreate' ELSE 'created' END);
 
             -- Tag ownership
             IF @WhatIf = 0
@@ -393,6 +421,7 @@ BEGIN
                     -- Clustered index changing — must drop all indexes (nonclustered → clustered)
                     SET @msg = N'Clustered index changed on ' + @ivSchema + N'.' + @ivName + N' — dropping all indexes for recreation';
                     EXEC [SchemaSmith].[PrintWithNoWait] @msg;
+                    SET @ivIndexesChanged = 1;
 
                     SET @ncDropSql = NULL;
                     SELECT @ncDropSql = STUFF((SELECT '; ' + 'DROP INDEX ' + QUOTENAME(i.name) + ' ON ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName)
@@ -427,6 +456,7 @@ BEGIN
                     BEGIN
                         SET @msg = N'Dropping changed nonclustered indexes on ' + @ivSchema + N'.' + @ivName;
                         EXEC [SchemaSmith].[PrintWithNoWait] @msg;
+                        SET @ivIndexesChanged = 1;
                         IF @WhatIf = 0 EXEC sp_executesql @dropSql;
                     END;
 
@@ -441,6 +471,7 @@ BEGIN
                     BEGIN
                         SET @msg = N'Dropping removed nonclustered indexes on ' + @ivSchema + N'.' + @ivName;
                         EXEC [SchemaSmith].[PrintWithNoWait] @msg;
+                        SET @ivIndexesChanged = 1;
                         IF @WhatIf = 0 EXEC sp_executesql @dropSql;
                     END;
                 END;
@@ -491,7 +522,10 @@ BEGIN
             BEGIN
                 EXEC [SchemaSmith].[PrintWithNoWait] @createIdxSql;
                 IF @WhatIf = 0 EXEC sp_executesql @createIdxSql;
+                SET @ivIndexesChanged = 1;
             END;
+            IF @needsIndexUpdate = 1 AND @ivIndexesChanged = 1
+                INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldModify' ELSE 'modified' END);
         END;
 
         -- The declared description, once the view exists. '' removes it; an omitted one leaves whatever is there.

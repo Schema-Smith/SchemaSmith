@@ -651,6 +651,74 @@ WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSum
     /// <summary>
     /// Drops vTestSummary (and any other views) by quenching with an empty array.
     /// </summary>
+    // B6: a view of the declared name that this product does not own reached CREATE VIEW and failed with the raw
+    // "There is already an object named ..." (2714), which names neither the product nor what to do.
+    [Test]
+    public void AnUnownedViewOfTheSameName_IsRefusedByName()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+        try
+        {
+            cmd.CommandText = $"EXEC('CREATE VIEW [{_schema}].[vTestSummary] AS SELECT 1 AS x')";
+            cmd.ExecuteNonQuery();
+
+            var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes()));
+            Assert.That(ex!.Number, Is.Not.EqualTo(2714), ex.Message);
+            Assert.That(ex.Message, Does.Contain("vTestSummary").And.Contain("not owned"), ex.Message);
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP VIEW IF EXISTS [{_schema}].[vTestSummary]";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // B6: a view this product created whose index never made it (an earlier deploy failed between the two) is not an
+    // indexed view, so it was not seen as existing, and the CREATE VIEW failed on it with 2714 on every later deploy.
+    [Test]
+    public void AnOwnedViewLeftWithoutItsIndex_IsRebuilt()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+        cmd.CommandText = $@"EXEC('CREATE VIEW [{_schema}].[vTestSummary] WITH SCHEMABINDING AS SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [{_schema}].SourceTable GROUP BY Id, Name')
+EXEC sp_addextendedproperty 'SchemaSmith_Product', N'{_productName}', 'SCHEMA', N'{_schema}', 'VIEW', N'vTestSummary'";
+        cmd.ExecuteNonQuery();
+
+        Assert.DoesNotThrow(() => RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes()));
+        cmd.CommandText = $"SELECT OBJECTPROPERTY(OBJECT_ID('[{_schema}].[vTestSummary]'), 'IsIndexed')";
+        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the view is indexed");
+    }
+
+    // B6: creating and dropping an indexed view wrote no change-audit row, so the deploy summary never counted them.
+    [Test]
+    public void CreatingAndDroppingAnIndexedView_IsAudited()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+        int Audit(string action)
+        {
+            cmd.CommandText = $"SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND ObjectType = 'indexedView' AND ObjectName = '{_schema}.vTestSummary' AND ActionType = '{action}'";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+        cmd.CommandText = $"DELETE FROM SchemaSmith.ChangeAudit WHERE ObjectName = '{_schema}.vTestSummary'";
+        cmd.ExecuteNonQuery();
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
+        Assert.That(Audit("created"), Is.EqualTo(1), "the create is audited");
+        EnsureViewDropped(cmd);
+        Assert.That(Audit("dropped"), Is.EqualTo(1), "the drop is audited");
+    }
+
     private void EnsureViewDropped(IDbCommand cmd)
     {
         RunIndexedViewQuench(cmd, "[]");

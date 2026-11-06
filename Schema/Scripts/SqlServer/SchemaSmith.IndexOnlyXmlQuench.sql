@@ -574,8 +574,8 @@ BEGIN TRY
                     FROM sys.xml_indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
                       AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
-      AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + i.[KindPrefix] + 
-                                                                  'XML INDEX ' + i.[IndexName] COLLATE DATABASE_DEFAULT + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' + 
+      AND REPLACE(ei.IndexScript, 'XML INDEX ' + QUOTENAME(ei.[xIndexName]) + ' ON ', 'XML INDEX [IndexName] ON ') = 'CREATE ' + i.[KindPrefix] + 
+                                                                  'XML INDEX [IndexName] ON ' COLLATE DATABASE_DEFAULT + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' + 
                                                                   i.[KindSuffix] + CASE WHEN {{XmlCompressionCanRead}} = 1 AND i.[XmlCompression] = 1 THEN ' WITH (XML_COMPRESSION = ON)' ELSE '' END
 
   RAISERROR('Handle Renamed Xml Indexes', 10, 100) WITH NOWAIT
@@ -735,7 +735,7 @@ BEGIN TRY
                     FROM sys.indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName])
                       AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
-      AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + 
+      AND REPLACE(ei.IndexScript, 'INDEX ' + QUOTENAME(ei.[xIndexName]) + ' ON ', 'INDEX [IndexName] ON ') = 'CREATE ' + 
                                                                   CASE WHEN i.[Unique] = 1 OR i.[PrimaryKey] = 1 THEN 'UNIQUE ' ELSE '' END + 
                                                                   CASE WHEN i.[Clustered] = 1 THEN '' ELSE 'NON' END + 'CLUSTERED ' +
                                                                   CASE WHEN i.[ColumnStore] = 1 THEN 'COLUMNSTORE ' ELSE '' END + 
@@ -959,6 +959,33 @@ BEGIN TRY
   
   -- OnlineApply REQUIRE: refused before any index is dropped.
   IF EXISTS (SELECT 1 FROM #OnlineTables WITH (NOLOCK) WHERE [Mode] = 'REQUIRE') EXEC SchemaSmith.RefuseUnmetOnlineRequire
+
+  -- A system-versioned table's primary key cannot be dropped while versioning is on (13557). The full quench suspends it
+  -- for the same two cases, recording the history table on the table so a failed run is resumed by the next one;
+  -- versioning goes back on once the indexes are rebuilt, below. Read dynamically: sys.tables has no temporal_type
+  -- before 2016.
+  RAISERROR('Suspend System Versioning On Temporal Tables Losing Their Primary Key', 10, 100) WITH NOWAIT
+  IF SchemaSmith.fn_ServerMajorVersion() >= 13
+  BEGIN
+    SET @v_SQL = NULL
+    EXEC sp_executesql N'SELECT @out = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
+         ''RAISERROR(''''  Suspending system versioning on '' + t.[Schema] + ''.'' + t.[Name] + '''''', 10, 100) WITH NOWAIT;'' + CHAR(13) + CHAR(10) +
+         ''EXEC sys.sp_addextendedproperty N''''SchemaSmith_SuspendedHistory'''', N'''''' + REPLACE(QUOTENAME(SCHEMA_NAME(h.[schema_id])) + ''.'' + QUOTENAME(h.[name]), '''''''', '''''''''''') +
+         '''''', N''''SCHEMA'''', N'''''' + REPLACE(SCHEMA_NAME(st.[schema_id]), '''''''', '''''''''''') + '''''', N''''TABLE'''', N'''''' + REPLACE(st.[name], '''''''', '''''''''''') + '''''';'' + CHAR(13) + CHAR(10) +
+         ''ALTER TABLE '' + t.[Schema] + ''.'' + t.[Name] + '' SET (SYSTEM_VERSIONING = OFF);'' AS NVARCHAR(MAX))
+    FROM #Tables t WITH (NOLOCK)
+    JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + ''.'' + t.[Name]) AND st.temporal_type = 2
+    JOIN sys.tables h ON h.[object_id] = st.history_table_id
+    WHERE EXISTS (SELECT * FROM #IndexesToDrop di WITH (NOLOCK)
+                    JOIN sys.indexes si ON si.[object_id] = st.[object_id] AND si.[name] = di.[IndexName] COLLATE DATABASE_DEFAULT AND si.is_primary_key = 1
+                   WHERE di.[Schema] = t.[Schema] AND di.[TableName] = t.[Name])
+       OR (EXISTS (SELECT * FROM #Indexes i WITH (NOLOCK)
+                    WHERE i.[Schema] = t.[Schema] AND i.[TableName] = t.[Name] AND i.[Clustered] = 1
+                      AND NOT EXISTS (SELECT * FROM sys.indexes x WHERE x.[object_id] = st.[object_id] AND x.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) COLLATE DATABASE_DEFAULT))
+           AND EXISTS (SELECT * FROM sys.indexes pk WHERE pk.[object_id] = st.[object_id] AND pk.is_primary_key = 1 AND pk.[type] IN (1, 5)))
+    FOR XML PATH(''''), TYPE).value(''.'', ''NVARCHAR(MAX)''), 1, 2, '''')', N'@out NVARCHAR(MAX) OUTPUT', @out = @v_SQL OUTPUT
+    IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  END
 
   RAISERROR('Drop FullText Indexes Referencing Unique Indexes That Will Be Dropped', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping fulltext index on ' + ef.[Schema] + '.' + ef.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -1268,6 +1295,18 @@ BEGIN TRY
               OR EXISTS (SELECT 1 FROM SchemaSmith.ChangeAudit a
                           WHERE a.SessionId = @@SPID AND a.ActionType = 'wouldDrop' AND a.ObjectType IN ('index', 'constraint')
                             AND a.ObjectName = i.[Schema] + '.' + i.[TableName] + '.' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
+
+  RAISERROR('Resume System Versioning Suspended For A Primary Key Rebuild', 10, 100) WITH NOWAIT
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Resuming system versioning on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' + CAST(ep.[value] AS NVARCHAR(600)) + ', DATA_CONSISTENCY_CHECK = ON));' + CHAR(13) + CHAR(10) +
+                                  'EXEC sys.sp_dropextendedproperty N''SchemaSmith_SuspendedHistory'', N''SCHEMA'', N''' + REPLACE(SCHEMA_NAME(o.[schema_id]), '''', '''''') + ''', N''TABLE'', N''' + REPLACE(o.[name], '''', '''''') + ''';' AS NVARCHAR(MAX))
+                           FROM #Tables t WITH (NOLOCK)
+                           JOIN sys.objects o ON o.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
+                           JOIN sys.extended_properties ep ON ep.class = 1 AND ep.major_id = o.[object_id] AND ep.minor_id = 0 AND ep.[name] = N'SchemaSmith_SuspendedHistory'
+                           WHERE OBJECTPROPERTY(o.[object_id], 'TableTemporalType') = 0
+                             AND EXISTS (SELECT * FROM sys.indexes pk WHERE pk.[object_id] = o.[object_id] AND pk.is_primary_key = 1)
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Add missing ProductName extended property to indexes', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +

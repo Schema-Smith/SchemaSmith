@@ -305,7 +305,7 @@ BEGIN TRY
   SELECT xp.[Schema], xp.TableName, xp.IndexName,
          IsConstraint = CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.indexes si
                                                 WHERE si.[object_id] = OBJECT_ID(xp.[Schema] + '.' + xp.TableName)
-                                                  AND si.[name] = xp.IndexName
+                                                  AND si.[name] = xp.IndexName COLLATE DATABASE_DEFAULT
                                                   AND (si.is_primary_key = 1 OR si.is_unique_constraint = 1))
                                   THEN 1 ELSE 0 END AS BIT)
     INTO #IndexesRemovedFromProduct
@@ -1676,7 +1676,7 @@ BEGIN TRY
                     FROM sys.indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName])
                       AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
-      AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + 
+      AND REPLACE(ei.IndexScript, 'INDEX ' + QUOTENAME(ei.[xIndexName]) + ' ON ', 'INDEX [IndexName] ON ') = 'CREATE ' + 
                                                                   CASE WHEN i.[Unique] = 1 OR i.[PrimaryKey] = 1 THEN 'UNIQUE ' ELSE '' END + 
                                                                   CASE WHEN i.[Clustered] = 1 THEN '' ELSE 'NON' END + 'CLUSTERED ' +
                                                                   CASE WHEN i.[ColumnStore] = 1 THEN 'COLUMNSTORE ' ELSE '' END + 
@@ -1780,8 +1780,8 @@ BEGIN TRY
                     FROM sys.xml_indexes si
                     WHERE si.[object_id] = OBJECT_ID(ei.[xSchema] + '.' + ei.[xTableName]) 
                       AND si.[name] COLLATE DATABASE_DEFAULT = ei.[xIndexName])
-      AND REPLACE(ei.IndexScript, ei.[xIndexName], 'IndexName') = 'CREATE ' + i.[KindPrefix] + 
-                                                                  'XML INDEX ' + i.[IndexName] COLLATE DATABASE_DEFAULT + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' + 
+      AND REPLACE(ei.IndexScript, 'XML INDEX ' + QUOTENAME(ei.[xIndexName]) + ' ON ', 'XML INDEX [IndexName] ON ') = 'CREATE ' + i.[KindPrefix] + 
+                                                                  'XML INDEX [IndexName] ON ' COLLATE DATABASE_DEFAULT + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' + 
                                                                   i.[KindSuffix] + CASE WHEN {{XmlCompressionCanRead}} = 1 AND i.[XmlCompression] = 1 THEN ' WITH (XML_COMPRESSION = ON)' ELSE '' END
 
   RAISERROR('Handle Renamed Xml Indexes', 10, 100) WITH NOWAIT
@@ -2283,6 +2283,13 @@ BEGIN TRY
     -- Step 5: Rename temp to original
     SET @v_SQL = 'EXEC sp_rename ''' + SchemaSmith.fn_StripBracketWrapping(@v_SwapSchema) + '.' + SchemaSmith.fn_StripBracketWrapping(@v_SwapTable) + '.' + QUOTENAME(@v_TempColName) + ''', ''' + @v_SwapColumn + ''', ''COLUMN'';'
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+    -- Step 6: the replacement was built from the type alone, so the declared ROWGUIDCOL and mask go back on.
+    SET @v_SQL = ''
+    SELECT @v_SQL = CASE WHEN c.[DataType] LIKE '%ROWGUIDCOL%' THEN 'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' ALTER COLUMN ' + QUOTENAME(@v_SwapColumn) + ' ADD ROWGUIDCOL;' + CHAR(13) + CHAR(10) ELSE '' END +
+                    CASE WHEN ISNULL(c.[DataMaskFunction], '') <> '' THEN 'ALTER TABLE ' + @v_SwapSchema + '.' + @v_SwapTable + ' ALTER COLUMN ' + QUOTENAME(@v_SwapColumn) + ' ADD MASKED WITH (FUNCTION = ''' + c.[DataMaskFunction] + ''');' ELSE '' END
+      FROM #Columns c WITH (NOLOCK)
+      WHERE c.[Schema] = @v_SwapSchema AND c.[TableName] = @v_SwapTable AND SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]) = @v_SwapColumn
+    IF @v_SQL <> '' BEGIN IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL) END
     FETCH NEXT FROM swap_cursor INTO @v_SwapSchema, @v_SwapTable, @v_SwapColumn, @v_SwapColumnScript
   END
   CLOSE swap_cursor
