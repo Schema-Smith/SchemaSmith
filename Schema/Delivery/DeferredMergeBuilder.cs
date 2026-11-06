@@ -64,8 +64,8 @@ internal static class DeferredMergeBuilder
         // self-sufficient regardless of the executing session's setting (verified on SQL Server 2008 R2).
         if (isXml) sb.AppendLine("SET QUOTED_IDENTIFIER ON;").AppendLine();
         sb.AppendLine(isXml
-            ? $"DECLARE @v_xml XML = '{tableData?.Replace("'", "''")}';"
-            : $"DECLARE @v_json NVARCHAR(MAX) = '{tableData?.Replace("'", "''")}';");
+            ? $"DECLARE @v_xml XML = N'{MergeScriptHelper.SqlServerDataLiteralBody(tableData, true)}';"
+            : $"DECLARE @v_json NVARCHAR(MAX) = N'{MergeScriptHelper.SqlServerDataLiteralBody(tableData, false)}';");
         sb.AppendLine();
         if (disableTriggers) sb.AppendLine($"ALTER TABLE [{schema}].[{table}] DISABLE TRIGGER ALL;");
         if (identityInsert) sb.AppendLine($"SET IDENTITY_INSERT [{schema}].[{table}] ON;");

@@ -158,6 +158,47 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         }
     }
 
+    // The chunked delete stages the delivered keys in a temporary table whose string keys were VARCHAR(255): a longer key
+    // was cut short (strict mode: "Data too long"; otherwise two keys sharing their first 255 characters matched each
+    // other, and the row the payload no longer held survived while the wrong comparison decided the rest).
+    [Test]
+    public void BuildMergeScript_ChunkedDelete_ComparesLongStringKeysWhole()
+    {
+        if (UsesJsonTable)
+            Assert.Ignore("Only the recursive-CTE shred (MariaDB 10.2-10.5) delivers in chunks.");
+        using var command = _connection.CreateCommand();
+        var tableName = $"zz_longkey_{Guid.NewGuid():N}";
+        var prefix = new string('k', 300);
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (code VARCHAR(500) NOT NULL PRIMARY KEY, n INT NOT NULL)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO `{_testDb}`.`{tableName}` (code, n) VALUES ('{prefix}-kept', 1), ('{prefix}-gone', 2)";
+            command.ExecuteNonQuery();
+
+            var rows = Enumerable.Range(1, MergeScriptHelper.MariaDbShredChunkRows + 10)
+                .Select(i => "{\"code\":\"filler-" + i + "\",\"n\":" + i + "}")
+                .Prepend("{\"code\":\"" + prefix + "-kept\",\"n\":1}");
+            var script = BuildMergeScript(command, _testDb, tableName, "[" + string.Join(",", rows) + "]", "`code`", true, true, false, false, null!);
+            Assert.That(script, Does.Contain("chunks of up to"), "the test must exercise the chunked path");
+
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT GROUP_CONCAT(RIGHT(code, 5) ORDER BY code) FROM `{_testDb}`.`{tableName}` WHERE code LIKE 'kkk%'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("-kept"), "the key the payload holds stays, the one it does not is deleted");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     // Below MariaDB 10.6 a payload over MariaDbShredChunkRows is delivered in chunks, and the chunks were rebuilt from
     // parsed rows: a DECIMAL beyond double precision lost its tail digits. Each row now goes out as delivered.
     [Test]

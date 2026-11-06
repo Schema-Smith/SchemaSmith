@@ -112,6 +112,19 @@ public static class MergeScriptHelper
     /// Extracts the union of all property names from a JSON array string.
     /// Returns null if the data is empty/null (caller should include all columns).
     /// </summary>
+    // The body of a SQL Server N'' literal holding delivered data. N, because a plain literal is converted to the
+    // database code page and every character outside it arrives as '?'. A leading XML declaration is dropped: an N''
+    // string is UTF-16, and a declaration naming another encoding fails the cast to XML ("unable to switch the encoding").
+    internal static string SqlServerDataLiteralBody(string tableData, bool isXml)
+    {
+        if (tableData == null) return null;
+        if (isXml) tableData = LeadingXmlDeclaration.Replace(tableData, "");
+        return tableData.Replace("'", "''");
+    }
+
+    private static readonly System.Text.RegularExpressions.Regex LeadingXmlDeclaration =
+        new(@"^\uFEFF?\s*<\?xml\s[^?]*\?>", System.Text.RegularExpressions.RegexOptions.Compiled);
+
     internal static HashSet<string> GetJsonDataKeys(string tableData)
     {
         if (string.IsNullOrWhiteSpace(tableData)) return null;
@@ -951,7 +964,7 @@ SELECT STRING_AGG('-- Column ""' || c.column_name || '"" skipped: ' || c.udt_nam
             ?? BuildContentFileToken(tableSchema, tableName, !string.IsNullOrEmpty(destSchemaOverride));
         var contentValue = tokenizeScripts
             ? $"{{{{{contentToken}}}}}"
-            : tableData?.Replace("'", "''");
+            : SqlServerDataLiteralBody(tableData, isXml);
 
         // B1: the row source is the only thing that differs by encoding. XML shreds the payload with
         // .nodes()/.value() (works at every compat level); JSON uses OPENJSON (compat 130+). The MERGE
@@ -959,10 +972,10 @@ SELECT STRING_AGG('-- Column ""' || c.column_name || '"" skipped: ' || c.udt_nam
         var (declareLine, sourceSelect) = isXml
             // XML data type methods (.nodes()/.value()) require QUOTED_IDENTIFIER ON; emit it so the script
             // is self-sufficient regardless of the executing session's setting (verified on SQL Server 2008 R2).
-            ? ($"SET QUOTED_IDENTIFIER ON;\r\n\r\nDECLARE @v_xml XML = '{contentValue}';",
+            ? ($"SET QUOTED_IDENTIFIER ON;\r\n\r\nDECLARE @v_xml XML = N'{contentValue}';",
                $@"  SELECT {selectColumns}
     FROM @v_xml.nodes('/rows/row') AS Src(n)")
-            : ($"DECLARE @v_json NVARCHAR(MAX) = '{contentValue}';",
+            : ($"DECLARE @v_json NVARCHAR(MAX) = N'{contentValue}';",
                $@"  SELECT {selectColumns}
     FROM OPENJSON(@v_json)
     WITH (
@@ -985,9 +998,11 @@ MERGE INTO [{destSchema}].[{tableName}] AS Target
 ON {matchColumns}
 ";
 
-        if (mergeUpdate)
+        // A table whose only columns are identity or computed has nothing to update.
+        var sqlServerUpdateColumns = mergeUpdate ? GetUpdateColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys) : null;
+        if (!string.IsNullOrWhiteSpace(sqlServerUpdateColumns))
         {
-            var updateColumns = GetUpdateColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys);
+            var updateColumns = sqlServerUpdateColumns;
             mergeSQL += $"""
 
 WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
@@ -1072,13 +1087,17 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         {
             // A memory-optimized table refuses an UPDATE that names a primary key column, even to its own value.
             var keys = keyColumns.Split(',').Select(k => $"[{k.Trim().TrimStart('*').Trim('[', ']')}]").ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var updateColumns = string.Join(",", GetUpdateColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys)!.Split(',')
+            var updateColumns = string.Join(",", (GetUpdateColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys) ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries)
                 .Where(c => !keys.Contains(c.Substring(c.IndexOf('[')))));
-            var compare = BuildUpdateCompareSqlServer(updateColumns);
-            sb.Append(appendOnlyLedger
-                ? $"DECLARE @v_ss_Differ INT = (SELECT COUNT(*) FROM #v_ss_Source AS Source JOIN {target} AS Target ON {matchColumns} WHERE ({compare}));\r\n" +
-                  $"IF @v_ss_Differ > 0 RAISERROR('%d delivered rows differ from rows already in the append-only ledger table {target.Replace("'", "''").Replace("%", "%%")}, which cannot be updated; they were left as they are.', 10, 100, @v_ss_Differ) WITH NOWAIT;\r\n\r\n"
-                : $"UPDATE Target SET\r\n{BuildUpdateAssignmentsSqlServer(updateColumns)}\r\n  FROM {target} AS Target{hint}\r\n  JOIN #v_ss_Source AS Source ON {matchColumns}\r\n WHERE ({compare});\r\n\r\n");
+            if (updateColumns.Length > 0)
+            {
+                var compare = BuildUpdateCompareSqlServer(updateColumns);
+                sb.Append(appendOnlyLedger
+                    ? $"DECLARE @v_ss_Differ INT = (SELECT COUNT(*) FROM #v_ss_Source AS Source JOIN {target} AS Target ON {matchColumns} WHERE ({compare}));\r\n" +
+                      $"IF @v_ss_Differ > 0 RAISERROR('%d delivered rows differ from rows already in the append-only ledger table {target.Replace("'", "''").Replace("%", "%%")}, which cannot be updated; they were left as they are.', 10, 100, @v_ss_Differ) WITH NOWAIT;\r\n\r\n"
+                    : $"UPDATE Target SET\r\n{BuildUpdateAssignmentsSqlServer(updateColumns)}\r\n  FROM {target} AS Target{hint}\r\n  JOIN #v_ss_Source AS Source ON {matchColumns}\r\n WHERE ({compare});\r\n\r\n");
+            }
         }
 
         var insertColumns = GetInsertColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys);
@@ -1444,9 +1463,11 @@ USING (
 ON {matchColumns}
 ";
 
-        if (mergeUpdate)
+        // A table whose only columns are identity, serial or generated has nothing to update.
+        var pgUpdateColumns = mergeUpdate ? GetUpdateColumnsPostgreSql(cmd, tableSchema, tableName, jsonKeys) : "";
+        if (!string.IsNullOrWhiteSpace(pgUpdateColumns))
         {
-            var updateColumns = GetUpdateColumnsPostgreSql(cmd, tableSchema, tableName, jsonKeys);
+            var updateColumns = pgUpdateColumns;
             var textCompareColumns = GetTextCompareColumnsPostgreSql(cmd, tableSchema, tableName);
             var jsonCols = GetJsonColumnsPostgreSql(cmd, tableSchema, tableName);
             // IS DISTINCT FROM is NULL-safe — treats (NULL, X) and (X, NULL) as different without falling into three-valued-logic NULL results
@@ -1495,7 +1516,7 @@ WHEN MATCHED AND ({updateCompare}) THEN
 
         mergeSQL += $@";
 {(disableTriggers ? $"ALTER TABLE {(updateDescendents ? "" : "ONLY ")}\"{destSchema}\".\"{tableName}\" ENABLE TRIGGER ALL;" : "")}
-{(!string.IsNullOrEmpty(identAndSeq) ? $"SELECT SETVAL('{identAndSeq.Split("=")[1]}', (SELECT MAX(\"{identAndSeq.Split("=")[0]}\") FROM \"{destSchema}\".\"{tableName}\")) INTO nextval;" : "")}
+{PostgreSqlSetValStatement(identAndSeq, destSchema, tableName)}
 
 END {tag} LANGUAGE plpgsql;
 " + (string.IsNullOrEmpty(enableRuleStatements) ? "" : "\n" + enableRuleStatements);
@@ -1584,9 +1605,10 @@ DELETE FROM {(updateDescendents ? "" : "ONLY ")}""{destSchema}"".""{tableName}""
             FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem) AS ""Source""";
 
         var updateSql = "";
-        if (mergeUpdate)
+        var legacyUpdateColumns = mergeUpdate ? GetUpdateColumnsPostgreSql(cmd, tableSchema, tableName, jsonKeys) : "";
+        if (!string.IsNullOrWhiteSpace(legacyUpdateColumns))
         {
-            var updateColumns = GetUpdateColumnsPostgreSql(cmd, tableSchema, tableName, jsonKeys);
+            var updateColumns = legacyUpdateColumns;
             var textCompareColumns = GetTextCompareColumnsPostgreSql(cmd, tableSchema, tableName);
             var jsonCols = GetJsonColumnsPostgreSql(cmd, tableSchema, tableName);
             string CompareExpr(string c)
@@ -1635,7 +1657,7 @@ INSERT INTO ""{destSchema}"".""{tableName}"" (
     FROM {source}
    WHERE NOT EXISTS (SELECT 1 FROM {only}""{destSchema}"".""{tableName}"" AS ""Target"" WHERE {matchColumns});
 {(disableTriggers ? $"ALTER TABLE {only}\"{destSchema}\".\"{tableName}\" ENABLE TRIGGER ALL;" : "")}
-{(!string.IsNullOrEmpty(identAndSeq) ? $"SELECT SETVAL('{identAndSeq.Split("=")[1]}', (SELECT MAX(\"{identAndSeq.Split("=")[0]}\") FROM \"{destSchema}\".\"{tableName}\")) INTO nextval;" : "")}
+{PostgreSqlSetValStatement(identAndSeq, destSchema, tableName)}
 END {tag} LANGUAGE plpgsql;
 " + (string.IsNullOrEmpty(enableRuleStatements) ? "" : "\n" + enableRuleStatements);
     }
@@ -1688,11 +1710,24 @@ ORDER BY rulename;";
             }));
     }
 
+    // The sequence is looked up on the destination table when the script runs: a schema-template script is built from the
+    // seed schema and deployed into each tenant's, and the name found at build time is the seed's. A sequence the column
+    // does not own (a plain nextval default) has no lookup, so the name found at build time stands.
+    internal static string PostgreSqlSetValStatement(string identAndSeq, string destSchema, string tableName)
+    {
+        if (string.IsNullOrEmpty(identAndSeq)) return "";
+        var parts = identAndSeq.Split("=");
+        var column = parts[0];
+        var table = $"\"{destSchema.Replace("\"", "\"\"")}\".\"{tableName.Replace("\"", "\"\"")}\"";
+        return $"SELECT SETVAL(COALESCE(PG_GET_SERIAL_SEQUENCE('{table.Replace("'", "''")}', '{column.Replace("'", "''")}'), '{parts[1].Replace("'", "''")}'), " +
+               $"(SELECT MAX(\"{column}\") FROM \"{destSchema}\".\"{tableName}\")) INTO nextval;";
+    }
+
     private static string GetIdentityColumnAndSequencePostgreSql(IDbCommand cmd, string tableSchema, string tableName)
     {
         BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
         cmd.CommandText = $@"
-SELECT c.column_name || '=' || COALESCE(PG_GET_SERIAL_SEQUENCE(c.table_schema || '.' || c.table_name, c.column_name),
+SELECT c.column_name || '=' || COALESCE(PG_GET_SERIAL_SEQUENCE(QUOTE_IDENT(c.table_schema) || '.' || QUOTE_IDENT(c.table_name), c.column_name),
                                         CASE WHEN LOWER(c.column_default) LIKE 'nextval(%'
                                              THEN SUBSTRING(c.column_default
                                                             FROM POSITION('''' IN c.column_default) + 1
@@ -1702,6 +1737,8 @@ SELECT c.column_name || '=' || COALESCE(PG_GET_SERIAL_SEQUENCE(c.table_schema ||
   WHERE c.table_schema = @schema
     AND c.table_name = @table
     AND (LOWER(c.column_default) LIKE 'nextval(%' OR c.is_identity = 'YES')
+  -- An identity column first: OVERRIDING SYSTEM VALUE keeps the delivered values of both kinds, USER discards an identity's.
+  ORDER BY CASE WHEN c.is_identity = 'YES' THEN 0 ELSE 1 END, c.ordinal_position
 ";
         return cmd.ExecuteScalar()?.ToString();
     }
@@ -2423,7 +2460,8 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     internal static string EscapeMySqlPayload(string json) =>
         (json ?? "[]").Replace("\\", "\\\\").Replace("'", "''");
 
-    // Key-column DDL for the delete-key temp table. String keys are declared utf8mb4/utf8mb4_unicode_ci
+    // Key-column DDL for the delete-key temp table. String keys take their column's length (a fixed 255 cut a longer
+    // key short, and two keys sharing their first 255 characters then matched each other) and are declared utf8mb4/utf8mb4_unicode_ci
     // so they meet BuildKeyMatchMySql's forced collation without a 1267 mix; other types reuse the same
     // mapping JSON_TABLE uses, so a key compares identically whichever row source produced it.
     private static string BuildDeleteKeyTableDdlMySql(List<string> keyColNames, List<MySqlColumnInfo> columns, HashSet<string> stringKeys)
@@ -2431,7 +2469,10 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         var defs = keyColNames.Select(k =>
         {
             var col = columns.FirstOrDefault(c => string.Equals(c.Name, k, StringComparison.OrdinalIgnoreCase));
-            if (stringKeys.Contains(k)) return $"`{k}` VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci";
+            if (stringKeys.Contains(k))
+                return col is { CharMaxLength: > 0 and <= 4000 } sized
+                    ? $"`{k}` VARCHAR({sized.CharMaxLength}) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci"
+                    : $"`{k}` LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci";
             var type = col != null ? GetMySqlTypeForJsonTable(col) : "LONGTEXT";
             return $"`{k}` {type}";
         });

@@ -37,6 +37,41 @@ public class MergeScriptHelperIntegrationTests
         _connection?.Dispose();
     }
 
+    #region Key-only tables
+
+    // A table whose only column is its identity has nothing to update; MergeUpdate built the update list from a null
+    // column list and failed with a NullReferenceException before any script was written.
+    [Test]
+    public void BuildMergeScript_IdentityOnlyTable_WithMergeUpdate_DeliversItsRows()
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"_test_keyonly_{Guid.NewGuid():N}"[..40];
+        try
+        {
+            command.CommandText = $"CREATE TABLE [dbo].[{tableName}] ([Id] INT IDENTITY(1,1) NOT NULL PRIMARY KEY)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO [dbo].[{tableName}] DEFAULT VALUES";
+            command.ExecuteNonQuery();
+
+            var script = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command,
+                "dbo", tableName, @"[{""Id"":1},{""Id"":2}]", "[Id]",
+                mergeUpdate: true, mergeDelete: true, disableTriggers: false,
+                tokenizeScripts: false, mergeFilter: null);
+            command.CommandText = script;
+            command.ExecuteNonQuery();
+
+            command.CommandText = $"SELECT COUNT(*) FROM [dbo].[{tableName}]";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(2));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [dbo].[{tableName}]";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    #endregion
+
     #region GEOMETRY Tests
 
     [Test]

@@ -172,6 +172,43 @@ public class TableDataDeliveryTests
         Assert.That(reader.GetDecimal(1), Is.EqualTo(5.00m));
     }
 
+    // The data literal was emitted without N, so on a database whose collation is not UTF-8 every character outside its
+    // code page arrived as '?'. The JSON-below-130 test compared the two encodings with each other, and both lost them.
+    [TestCase("Json", false)]
+    [TestCase("Xml", false)]
+    [TestCase("Json", true)]
+    [TestCase("Xml", true)]
+    public void DeliveredText_ArrivesAsWritten_OutsideTheDatabaseCodePage(string encoding, bool deferred)
+    {
+        const string text = "Zoë 名 Привет مرحبا 🙂";
+        var table = $"_test_unicode_{Guid.NewGuid():N}".Substring(0, 30);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"CREATE TABLE [{SchemaName}].[{table}] ([id] INT NOT NULL PRIMARY KEY, [ParentId] INT NULL, [name] NVARCHAR(100) NOT NULL)";
+            command.ExecuteNonQuery();
+            var data = encoding == "Xml"
+                ? $"<rows><row><c n=\"id\">1</c><c n=\"ParentId\">1</c><c n=\"name\">{text}</c></row></rows>"
+                : $"[{{\"id\":1,\"ParentId\":1,\"name\":\"{text}\"}}]";
+            var script = deferred
+                ? DeferredMergeBuilder.Build(new MergeScriptHelperAdapter(Platform.SqlServer), command, "SqlServer", SchemaName, table,
+                    data, "[id]", false, new List<string> { "ParentId" }, contentEncoding: encoding)
+                : MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, SchemaName, table,
+                    data, "[id]", mergeUpdate: true, mergeDelete: false, disableTriggers: false,
+                    tokenizeScripts: false, mergeFilter: null, contentEncoding: encoding);
+            command.CommandText = script;
+            command.ExecuteNonQuery();
+
+            command.CommandText = $"SELECT [name] FROM [{SchemaName}].[{table}] WHERE [id] = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo(text));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [{SchemaName}].[{table}]";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void DeliverTableData_XmlEncoding_InsertsAndUpdatesRows()
     {
@@ -335,7 +372,7 @@ public class TableDataDeliveryTests
             using (var c = _connection.CreateCommand())
             {
                 c.CommandText = $@"SELECT CONCAT_WS(',',
-                        IIF(j.name = x.name, NULL, 'name'), IIF(j.amt = x.amt AND j.amt = {amount}, NULL, 'amt'),
+                        IIF(j.name = x.name AND j.name = N'Zoë 名', NULL, 'name'), IIF(j.amt = x.amt AND j.amt = {amount}, NULL, 'amt'),
                         IIF(j.dt = x.dt, NULL, 'dt'), IIF(CAST(j.dto AS NVARCHAR(40)) = CAST(x.dto AS NVARCHAR(40)), NULL, 'dto'),
                         IIF(j.bin = x.bin, NULL, 'bin'), IIF(j.flag = x.flag, NULL, 'flag'),
                         IIF(j.shape.STEquals(x.shape) = 1 AND j.shape.STSrid = x.shape.STSrid, NULL, 'shape'),
