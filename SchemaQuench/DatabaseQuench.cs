@@ -458,6 +458,14 @@ public partial class DatabaseQuench
     }
 
     internal Platform Platform => _product.Platform;
+
+    /// <summary>The deploy's command and lock timeouts; read from the settings when the caller passes none.</summary>
+    internal SessionTimeouts Timeouts
+    {
+        get => _timeouts ??= SessionTimeouts.Read(FactoryContainer.ResolveOrCreate<IConfigurationRoot>());
+        init => _timeouts = value;
+    }
+    private SessionTimeouts _timeouts;
     internal string ProductName => _product.Name;
 
     /// <summary>
@@ -497,8 +505,7 @@ public partial class DatabaseQuench
         try
         {
             using var connection = GetConnection();
-            using var command = CheckServerErrors(connection.CreateCommand());
-            command.CommandTimeout = 0;
+            using var command = CheckServerErrors(Timeouts.NewCommand(connection));
 
             // SkipIfReadOnly: the target still resolved and counted toward RequireAtLeastOneTarget,
             // so the template validates normally — it just does not apply here. A read-only target
@@ -525,14 +532,11 @@ public partial class DatabaseQuench
             if (_product.Platform.GetBasePlatform() != Platform.MySQL)
             {
                 tableConnection = GetConnection();
-                tableCommand = CheckServerErrors(tableConnection.CreateCommand());
-                tableCommand.CommandTimeout = 0;
+                tableCommand = CheckServerErrors(Timeouts.NewCommand(tableConnection));
                 objectsConnection = GetConnection(fireInfoMessageEventOnUserErrors: false);
-                objectsCommand = objectsConnection.CreateCommand();
-                objectsCommand.CommandTimeout = 0;
+                objectsCommand = Timeouts.NewCommand(objectsConnection);
                 silentConnection = GetConnection(ignoreInfoMessages: true);
-                silentCommand = silentConnection.CreateCommand();
-                silentCommand.CommandTimeout = 0;
+                silentCommand = Timeouts.NewCommand(silentConnection);
             }
 
             try
@@ -566,7 +570,7 @@ public partial class DatabaseQuench
                 // SQL-Server-only. For SQL Server this also enforces the compat floor and selects the model-
                 // ingest encoding (compat >= 130 -> JSON/OPENJSON, below -> XML) and bakes the major version
                 // into SchemaSmith.fn_ServerMajorVersion at kindle time.
-                using (var versionCmd = CheckServerErrors(connection.CreateCommand()))
+                using (var versionCmd = CheckServerErrors(Timeouts.NewCommand(connection)))
                 {
                     var versionInfo = TargetVersionDetector.Detect(versionCmd, _product.Platform, _databaseName);
                     // Captured for every engine (CompatibilityLevel is null => 0 on non-SQL-Server). SQL Server's
@@ -651,6 +655,18 @@ public partial class DatabaseQuench
             // error without classification. Lead with a purpose-built message; the full stack is
             // preserved in the error log. Initial-connect failures are handled earlier by the
             // pre-flight connection test, so at this point a lost connection is a mid-run drop.
+            var timeoutKind = DeadlockClassifier.IsLockTimeout(e) ? "lockTimeout" : DeadlockClassifier.IsCommandTimeout(e) ? "commandTimeout" : null;
+            if (timeoutKind != null)
+            {
+                var stopped = TimeoutFailureMessage(timeoutKind);
+                _errorLog.Error(stopped, e);
+                SafeProgressLogError(stopped);
+                SafeProgressLogError($"  {e.Message}");
+                LastFailure = FailureCtx.ToRecord(stopped, string.IsNullOrWhiteSpace(_debugFileLocation) ? null : _debugFileLocation, timeoutKind);
+                SafeProgressLogError($"*** FAILED [Template:{_template?.Name}] ***");
+                return;
+            }
+
             if (ConnectionLostClassifier.IsConnectionLost(e))
             {
                 var phase = _template?.Name is { } tn ? $"Template:{tn}" : null;
@@ -688,6 +704,18 @@ public partial class DatabaseQuench
             // error content into the progress stream, which exact-count log assertions rely on).
             SafeProgressLogError($"*** FAILED [Template:{_template?.Name}] ***");
         }
+    }
+
+    // H2: a timeout that ends a unit names the setting that set it, the step it stopped, and what to do.
+    private string TimeoutFailureMessage(string kind)
+    {
+        var step = string.IsNullOrEmpty(_currentStep) ? "" : $" in step {_currentStep}";
+        if (kind == "commandTimeout")
+            return $"{LogPrefix} stopped a command that ran longer than {Timeouts.CommandTimeoutSeconds} s (Target:CommandTimeoutSeconds){step}. "
+                   + "Raise the setting (0 = no limit) and re-run with --ResumeQuench.";
+        var after = Timeouts.LockTimeoutSeconds is { } seconds ? $" after {seconds} s (Target:LockTimeoutSeconds)" : "";
+        return $"{LogPrefix} gave up waiting for a lock{after}{step}, after {_lastAttempts} {(_lastAttempts == 1 ? "attempt" : "attempts")}. "
+               + "Another session holds a lock on the object being changed; re-run with --ResumeQuench when it is free.";
     }
 
     #region Per-Iteration Content (Schema Templates)
@@ -2080,6 +2108,9 @@ SET NOCOUNT ON
             throw ConnectFailed(connection, e, config);
         }
 
+        // Before anything else runs on the connection, so it bounds the procedures as well as the scripts (H2).
+        Timeouts.ApplyLockTimeout(connection, _product.Platform);
+
         // PostgreSQL: set the unsupported-feature policy on every convergence connection (built directly to
         // the target database, so no ChangeDatabase resets the session) via a GUC that works on every PG
         // version; version-gated emit sites read it via SchemaSmith.UnsupportedFeaturePolicy() to choose
@@ -2091,14 +2122,14 @@ SET NOCOUNT ON
         if (_product.Platform.GetBasePlatform() == Platform.PostgreSQL)
         {
             var policy = string.Equals(config[SettingsKeys.UnsupportedFeaturePolicy], "fail", StringComparison.OrdinalIgnoreCase) ? "fail" : "warn";
-            using var policyCmd = connection.CreateCommand();
+            using var policyCmd = Timeouts.NewCommand(connection);
             policyCmd.CommandText = $"SET schemasmith.unsupported_policy = '{policy}'";
             policyCmd.ExecuteNonQuery();
         }
         else if (_product.Platform.GetBasePlatform() == Platform.MySQL)
         {
             var policy = string.Equals(config[SettingsKeys.UnsupportedFeaturePolicy], "fail", StringComparison.OrdinalIgnoreCase) ? "fail" : "warn";
-            using var policyCmd = connection.CreateCommand();
+            using var policyCmd = Timeouts.NewCommand(connection);
             policyCmd.CommandText = $"SET @schemasmith_unsupported_policy = '{policy}'";
             policyCmd.ExecuteNonQuery();
         }
@@ -2108,7 +2139,7 @@ SET NOCOUNT ON
         {
             try
             {
-                using var sessionCmd = connection.CreateCommand();
+                using var sessionCmd = Timeouts.NewCommand(connection);
                 sessionCmd.CommandText = "SELECT CONNECTION_ID()";
                 var sessionId = Convert.ToInt64(sessionCmd.ExecuteScalar());
                 _statusMonitor = new StatusMessageMonitor(connectionString, sessionId, msg => LogServerMessage($"    {msg}"),
@@ -2129,7 +2160,13 @@ SET NOCOUNT ON
     // pg_catalog instead of materialising information_schema.columns); retry remains to cover
     // residual cross-iteration contention such as SQL Server IndexedViewQuench. The convergence
     // procs are idempotent (recompute desired-vs-existing every run), so a victim re-converges cleanly.
-    internal int MaxDeadlockAttempts = 20;
+    // How many times a statement that lost a deadlock or timed out waiting for a lock is tried (Target:ContentionRetryAttempts).
+    internal int ContentionRetryAttempts
+    {
+        get => _contentionRetryAttempts ?? Timeouts.ContentionRetryAttempts;
+        set => _contentionRetryAttempts = value;
+    }
+    private int? _contentionRetryAttempts;
     internal int DeadlockRetryBaseMs = 100;
 
     /// <param name="retryOnDeadlock">
@@ -2139,27 +2176,69 @@ SET NOCOUNT ON
     /// </param>
     internal void ExecuteNonQueryHandlingMessages(IDbCommand command, bool retryOnDeadlock = false)
     {
+        if (retryOnDeadlock) RetryOnContention(() => ExecuteNonQueryOnce(command));
+        else
+        {
+            _lastAttempts = 1;
+            ExecuteNonQueryOnce(command);
+        }
+    }
+
+    /// <summary>
+    /// Runs idempotent work again when it lost a deadlock or timed out waiting for another session's lock, up to
+    /// <see cref="ContentionRetryAttempts"/> times with backoff. A statement that had to wait is recorded for the summary.
+    /// </summary>
+    internal void RetryOnContention(Action work)
+    {
         var attempt = 0;
+        var waited = Stopwatch.StartNew();
         while (true)
         {
             attempt++;
+            _lastAttempts = attempt;
             try
             {
-                ExecuteNonQueryOnce(command);
+                work();
+                if (attempt > 1) RecordLockWait(attempt, waited.ElapsedMilliseconds, "succeeded");
                 return;
             }
-            catch (Exception ex) when (retryOnDeadlock
-                                       && attempt < MaxDeadlockAttempts
-                                       && DeadlockClassifier.IsRetryableContention(ex))
+            // Contention arrives as the provider's error, or on SQL Server as an error message on the connection.
+            catch (DbException ex) when (DeadlockClassifier.IsRetryableContention(ex))
             {
-                var delayMs = DeadlockBackoffMs(attempt);
-                SafeProgressLog(
-                    $"    Transient contention from a parallel iteration; retrying " +
-                    $"(attempt {attempt + 1} of {MaxDeadlockAttempts}){(delayMs > 0 ? $" after {delayMs} ms" : "")}");
-                if (delayMs > 0) Thread.Sleep(delayMs);
+                if (!WaitBeforeRetry(attempt, waited)) throw;
+            }
+            catch (SqlServerErrorException ex) when (DeadlockClassifier.IsRetryableContention(ex))
+            {
+                if (!WaitBeforeRetry(attempt, waited)) throw;
             }
         }
     }
+
+    // False when the attempts are spent: the wait is recorded as failed and the caller rethrows.
+    private bool WaitBeforeRetry(int attempt, Stopwatch waited)
+    {
+        if (attempt >= ContentionRetryAttempts)
+        {
+            RecordLockWait(attempt, waited.ElapsedMilliseconds, "failed");
+            return false;
+        }
+        var delayMs = DeadlockBackoffMs(attempt);
+        SafeProgressLog(
+            $"    Waiting on another session (deadlock or lock timeout); retrying " +
+            $"(attempt {attempt + 1} of {ContentionRetryAttempts}){(delayMs > 0 ? $" after {delayMs} ms" : "")}");
+        if (delayMs > 0) Thread.Sleep(delayMs);
+        return true;
+    }
+
+    private void RecordLockWait(int attempts, long waitedMs, string outcome) =>
+        Contention?.Record(new LockWait(LogPrefix, _currentStep ?? "", attempts, waitedMs, outcome));
+
+    /// <summary>The run's record of statements that waited on another session; reported in the summary.</summary>
+    internal ContentionLog Contention { get; init; }
+
+    // The step running now, and how many attempts its last contention-retried statement took: the failure message names both.
+    private string _currentStep;
+    private int _lastAttempts = 1;
 
     // "Full jitter" exponential backoff (sleep uniformly in [0, capped-exponential]). If several
     // iterations do deadlock at once, full jitter de-synchronises them far better than

@@ -63,7 +63,8 @@ public class QuenchStepOrderTests
     internal static Recording Run(Platform platform, Template template, bool whatIf, bool updateTables = true, bool deliverData = false)
         => RunWith(platform, template, whatIf, updateTables, deliverData, checkpointing: null);
 
-    internal static Recording RunWith(Platform platform, Template template, bool whatIf, bool updateTables = true, bool deliverData = false, ICheckpointing checkpointing = null)
+    internal static Recording RunWith(Platform platform, Template template, bool whatIf, bool updateTables = true, bool deliverData = false, ICheckpointing checkpointing = null,
+        Action<IConfigurationRoot> configure = null, Action<IDbCommand> onExecute = null, bool expectSuccess = true, Action<DatabaseQuench> capture = null)
     {
         var recording = new Recording();
         FactoryContainer.Register<IFile>(Substitute.For<IFile>());
@@ -71,6 +72,7 @@ public class QuenchStepOrderTests
         var config = Substitute.For<IConfigurationRoot>();
         config["Target:User"].Returns("u");
         config["Target:Password"].Returns("p");
+        configure?.Invoke(config);
         FactoryContainer.Register<IConfigurationRoot>(config);
 
         var command = Substitute.For<IDbCommand>();
@@ -80,11 +82,12 @@ public class QuenchStepOrderTests
         command.Connection.Returns(connection);
         command.Parameters.Returns(Substitute.For<IDataParameterCollection>());
         command.CreateParameter().Returns(_ => Substitute.For<IDbDataParameter>());
-        command.ExecuteNonQuery().Returns(_ => { recording.Statements.Add(command.CommandText ?? ""); return 0; });
+        command.ExecuteNonQuery().Returns(_ => { recording.Statements.Add(command.CommandText ?? ""); onExecute?.Invoke(command); return 0; });
         command.ExecuteScalar().Returns(_ =>
         {
             var text = command.CommandText ?? "";
             recording.Statements.Add(text);
+            onExecute?.Invoke(command);
             if (text == TargetVersionDetector.GetVersionQuery(platform))
                 return platform switch
                 {
@@ -98,8 +101,8 @@ public class QuenchStepOrderTests
             if (text.Contains("/*baseline*/")) return true;
             return null;
         });
-        command.ExecuteReader().Returns(_ => { recording.Statements.Add(command.CommandText ?? ""); return new DataTable().CreateDataReader(); });
-        command.ExecuteReader(Arg.Any<CommandBehavior>()).Returns(_ => { recording.Statements.Add(command.CommandText ?? ""); return new DataTable().CreateDataReader(); });
+        command.ExecuteReader().Returns(_ => { recording.Statements.Add(command.CommandText ?? ""); onExecute?.Invoke(command); return new DataTable().CreateDataReader(); });
+        command.ExecuteReader(Arg.Any<CommandBehavior>()).Returns(_ => { recording.Statements.Add(command.CommandText ?? ""); onExecute?.Invoke(command); return new DataTable().CreateDataReader(); });
 
         var factory = Substitute.For<IDbConnectionFactory>();
         factory.GetDbConnection(Arg.Any<string>()).Returns(connection);
@@ -113,8 +116,10 @@ public class QuenchStepOrderTests
 
         var product = new Product { Name = "P", Platform = platform };
         var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", SuppressKindling = true, WhatIf = whatIf, UpdateTables = updateTables, DeliverData = deliverData }, checkpointing);
+        capture?.Invoke(quench);
         quench.Execute();
-        Assert.That(quench.QuenchSuccessful, Is.True, $"the recorded run completed: {quench.LastFailure}");
+        if (expectSuccess)
+            Assert.That(quench.QuenchSuccessful, Is.True, $"the recorded run completed: {quench.LastFailure}");
         return recording;
     }
 

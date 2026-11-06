@@ -20,6 +20,13 @@
                                         // last applied AND the server still renders the object as it was left.
                                         // A hand change on the server, an edited script, or an [ALWAYS] name
                                         // runs it again. false re-runs every object script on every deploy.
+        // "CommandTimeoutSeconds": 0, // How long one deploy command may run. 0 (default) = no limit.
+        // "LockTimeoutSeconds": 10, // How long a deploy waits for a lock another session holds before giving up.
+                                     // Blank (default) = the engine's own wait, which on SQL Server and PostgreSQL
+                                     // is forever. Set on every connection, so it bounds the procedures too.
+        // "ContentionRetryAttempts": 20, // How many times a statement that lost a deadlock or timed out waiting
+                                         // for a lock is tried (1 = no retry). Generated changes only, never
+                                         // your scripts or data delivery.
         // "CompatEncoding": "", // Override the model-payload encoding chosen for the target's compatibility
                                  // level (Json | Xml). Blank = choose automatically. Diagnostic escape hatch.
         "ConnectionProperties": {}, // Driver-level properties passed through verbatim, e.g.

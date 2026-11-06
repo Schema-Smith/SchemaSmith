@@ -46,6 +46,8 @@ public class ProductQuench
     private readonly IReadOnlyList<string> _targetSchemas;
     private readonly IReadOnlyDictionary<string, TemplateTarget> _templateTargets;
     private readonly ICheckpointing _checkpointing;
+    private readonly SessionTimeouts _timeouts = SessionTimeouts.Default;
+    private readonly ContentionLog _contention = new();
     private bool _updateFailed;
 
     // Run-level timing collector (#243 Deployment Summary Report, slice 1). Started/stopped around
@@ -150,6 +152,8 @@ public class ProductQuench
         _targetDatabases = ReadFilterArray(SettingsKeys.Target.Databases);
         _targetSchemas = ReadFilterArray(SettingsKeys.Target.Schemas);
         _templateTargets = ReadTemplateTargets(_config);
+        // Read here so a bad value stops the run before anything connects, naming the setting.
+        _timeouts = SessionTimeouts.Read(_config);
         // A preview neither records progress nor reads or discards a failed deploy's resume point (A16).
         _checkpointing = IsWhatIfOnly ? NoCheckpointing.Instance : FileCheckpointManager.GetFromFactory();
 
@@ -570,8 +574,8 @@ public class ProductQuench
         {
             throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User], e.Message), e);
         }
-        var command = connection.CreateCommand();
-        command.CommandTimeout = 0;
+        _timeouts.ApplyLockTimeout(connection, _product.Platform);
+        var command = _timeouts.NewCommand(connection);
 
         return command;
     }
@@ -637,8 +641,8 @@ public class ProductQuench
         {
             throw new RunFailedException(ConnectFailure(_product.Platform, server, $" [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]", _config[SettingsKeys.Target.User], e.Message), e);
         }
-        var command = connection.CreateCommand();
-        command.CommandTimeout = 0;
+        _timeouts.ApplyLockTimeout(connection, _product.Platform);
+        var command = _timeouts.NewCommand(connection);
         return command;
     }
 
@@ -685,8 +689,8 @@ public class ProductQuench
         {
             throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User], e.Message), e);
         }
-        var command = connection.CreateCommand();
-        command.CommandTimeout = 0;
+        _timeouts.ApplyLockTimeout(connection, _product.Platform);
+        var command = _timeouts.NewCommand(connection);
 
         return command;
     }
@@ -1066,7 +1070,7 @@ public class ProductQuench
                 _startedUtc, DateTime.UtcNow, mode, outcome, exitCode, resumed,
                 _targetResults.ToArray(), _runTiming, _migrationScripts.Snapshot(),
                 _whatIf.Snapshot(), _failureRecords.ToArray(), BottleneckThresholdMs(), _changeAudit,
-                protectedModeEnabled: _protectedMode);
+                protectedModeEnabled: _protectedMode, lockWaits: _contention.Snapshot(), settings: _timeouts);
             var (jsonPath, mdPath) = ResolveReportPaths(CommandLineParser.ValueOfSwitch("report", null), ConfigHelper.ResolveLogPath(), "SchemaQuench");
             EnsureReportDirectory(jsonPath);
             var file = FileWrapper.GetFromFactory();
@@ -2037,8 +2041,8 @@ public class ProductQuench
         var factory = DbConnectionFactory.ForPlatform(_product.Platform);
         var connection = factory.GetDbConnection(connectionString);
         connection.Open();
-        var command = connection.CreateCommand();
-        command.CommandTimeout = 0;
+        _timeouts.ApplyLockTimeout(connection, _product.Platform);
+        var command = _timeouts.NewCommand(connection);
         return command;
     }
 
@@ -2224,6 +2228,8 @@ public class ProductQuench
             // TemplateTargets-driven provisioning + skip-missing. Defaults preserve existing
             // behavior for discovery-sourced units.
             SchemaFromOverride = unit.SchemaFromOverride,
+            Timeouts = _timeouts,
+            Contention = _contention,
             ProvisionSchemaIfMissing = unit.ProvisionSchemaIfMissing,
             RunTiming = _runTiming,
             MigrationScripts = _migrationScripts,

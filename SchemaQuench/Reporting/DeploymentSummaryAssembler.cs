@@ -33,7 +33,9 @@ public static class DeploymentSummaryAssembler
         IReadOnlyList<FailureRecord> failures,
         long bottleneckThresholdMs,
         ChangeAuditCapture changeAudit,
-        bool protectedModeEnabled = false)
+        bool protectedModeEnabled = false,
+        IReadOnlyList<LockWait> lockWaits = null,
+        SessionTimeouts settings = null)
     {
         var run = new RunInfo(
             Product: product,
@@ -44,7 +46,8 @@ public static class DeploymentSummaryAssembler
             Mode: mode,
             Outcome: outcome,
             ExitCode: exitCode,
-            ResumedFromCheckpoint: resumedFromCheckpoint);
+            ResumedFromCheckpoint: resumedFromCheckpoint,
+            Settings: settings is null ? null : new RunSettings(settings.CommandTimeoutSeconds, settings.LockTimeoutSeconds, settings.ContentionRetryAttempts));
 
         var mappedTargets = targets
             .Select(tr => new TargetSummary(
@@ -85,7 +88,7 @@ public static class DeploymentSummaryAssembler
         var unsupportedDowngrade = BuildUnsupportedDowngrade(changeAudit);
 
         return new DeploymentSummary(
-            SchemaVersion: "1.2",
+            SchemaVersion: "1.3",
             Tool: "SchemaQuench",
             ToolVersion: toolVersion,
             Run: run,
@@ -96,7 +99,8 @@ public static class DeploymentSummaryAssembler
             WhatIf: whatIf,
             ObjectChanges: objectChanges,
             PreventDrop: preventDrop,
-            UnsupportedDowngrade: unsupportedDowngrade);
+            UnsupportedDowngrade: unsupportedDowngrade,
+            LockWaits: lockWaits ?? []);
     }
 
     /// <summary>

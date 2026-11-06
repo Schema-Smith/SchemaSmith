@@ -53,7 +53,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 
 ```jsonc
 {
-  "schemaVersion": "1.2",           // contract version of this report shape
+  "schemaVersion": "1.3",           // contract version of this report shape
   "tool": "SchemaQuench",
   "toolVersion": "2.2.0.0",
   "run": {
@@ -65,7 +65,8 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     "mode": "Quench",               // Quench | WhatIf
     "outcome": "Success",           // Success | Incomplete | PartialFailure | Aborted
     "exitCode": 0,
-    "resumedFromCheckpoint": false
+    "resumedFromCheckpoint": false,
+    "settings": { "commandTimeoutSeconds": 0, "lockTimeoutSeconds": 10, "contentionRetryAttempts": 20 }
   },
   "targets": [
     {
@@ -107,6 +108,9 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     ]
   },
   "failures": [],                   // one entry per failed scope; empty on a clean run
+  "lockWaits": [                    // statements that waited on another session's lock and were tried again
+    { "target": "[primary].[TenantA]", "step": "ModifiedTables", "attempts": 2, "waitedMs": 10240, "outcome": "succeeded" }
+  ],
   "whatIf": null,                   // populated only for a WhatIf-mode run
   "objectChanges": {
     "instrumented": true,
@@ -135,7 +139,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 
 | Key | Meaning |
 | --- | --- |
-| `schemaVersion` | Contract version of the report shape — currently `"1.2"`. |
+| `schemaVersion` | Contract version of the report shape — currently `"1.3"`. |
 | `tool` | Always `"SchemaQuench"`. |
 | `toolVersion` | The CLI version that wrote the report — the same string `--version` prints. |
 | `run` | Run-level facts: product, platform, timing, mode, outcome. |
@@ -143,6 +147,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `migrationScripts` | One entry per migration script that ran. |
 | `timing` | Aggregate timing plus the bottleneck outliers. |
 | `failures` | One entry per failed scope — the same content as the failure roll-up log. |
+| `lockWaits` | Each statement that had to wait on another session's lock, or lost a deadlock, and was tried again — its own section below. Empty when nothing waited. |
 | `whatIf` | The would-apply / would-skip / would-deliver plan; `null` unless the run was `WhatIf` mode. |
 | `objectChanges` | Verified DDL changes and object-script runs — its own section below. |
 | `preventDrop` | The no-drop protection manifest: what the run would have dropped by absence and withheld — its own section below. `null` unless the environment's `PreventDrop` is on. |
@@ -160,6 +165,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `outcome` | `Success`; `Incomplete` (every target finished, but a feature was downgraded on a target that lacks it -- see `unsupportedDowngrade` -- exit code `1`); `PartialFailure` (some targets failed, others succeeded); or `Aborted`. |
 | `exitCode` | The process exit code the run returned. |
 | `resumedFromCheckpoint` | `true` when the run resumed a prior interrupted deployment. |
+| `settings` | The limits the run used: `commandTimeoutSeconds` (`0` = none), `lockTimeoutSeconds` (`null` = the engine's own wait) and `contentionRetryAttempts`. See [Timeouts and contention](configuration.md#timeouts-and-contention). Schema version 1.3 added it. |
 
 ### `targets[]`
 
@@ -207,6 +213,21 @@ Empty on a clean run. Each entry mirrors the failure triage roll-up exactly — 
 | `error` | The engine's error text for the failure. |
 | `contextTail[]` | The captured tail of log lines leading up to the failure. |
 | `artifactPath` | Path to the resolved-SQL artifact for the failed scope, when one was written. |
+| `kind` | `lockTimeout` (it gave up waiting for another session's lock), `commandTimeout` (a command ran past `Target:CommandTimeoutSeconds`) or `other`. A timeout's `error` names the setting, the step and the attempts. Schema version 1.3 added it. |
+
+### `lockWaits[]`
+
+One entry per statement that waited on another session -- it timed out waiting for a lock, or lost a deadlock -- and was
+tried again. A statement that ran first time is not listed. Only SchemaSmith's own convergence steps and the kindle are
+retried; a script or a data delivery that hits a lock timeout fails at once and appears under `failures[]` instead.
+
+| Key | Meaning |
+| --- | --- |
+| `target` | The target, as `[server].[database]` (and `[schema]` for a schema template). |
+| `step` | The deploy step the statement belonged to, such as `ModifiedTables`. |
+| `attempts` | How many times it ran, the last one included. |
+| `waitedMs` | Milliseconds from its first attempt to its last. |
+| `outcome` | `succeeded`, or `failed` when it ran out of `Target:ContentionRetryAttempts`. |
 
 ### `whatIf`
 

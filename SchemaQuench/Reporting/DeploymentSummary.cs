@@ -26,7 +26,9 @@ public sealed record DeploymentSummary(
     WhatIfSummary WhatIf,
     ObjectChangeSummary ObjectChanges,
     PreventDropSummary PreventDrop = null,
-    UnsupportedDowngradeSummary UnsupportedDowngrade = null);
+    UnsupportedDowngradeSummary UnsupportedDowngrade = null,
+    // 1.3: every statement that waited on another session's lock, retried or not.
+    IReadOnlyList<LockWait> LockWaits = null);
 
 public sealed record RunInfo(
     string Product,
@@ -37,7 +39,11 @@ public sealed record RunInfo(
     RunMode Mode,
     RunOutcome Outcome,
     int ExitCode,
-    bool ResumedFromCheckpoint);
+    bool ResumedFromCheckpoint,
+    // 1.3: the timeouts and retry count the run used.
+    RunSettings Settings = null);
+
+public sealed record RunSettings(int CommandTimeoutSeconds, int? LockTimeoutSeconds, int ContentionRetryAttempts);
 
 /// <summary>
 /// <para><see cref="DatabaseSource"/> and <see cref="SchemaSource"/> are the source-disclosure fields

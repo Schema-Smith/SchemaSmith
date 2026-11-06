@@ -58,7 +58,7 @@ internal static class PostgreSqlOnlineWork
         {
             // Named by the line above as every other line names it, not by the quoted name the cleanup statement uses.
             log("    The build stopped and left the index invalid; dropping it and building once more");
-            DropInvalidIndex(command, item.CleanupIndex);
+            if (!TryDropInvalidIndex(command, item.CleanupIndex, log)) throw;
             try
             {
                 Execute(command, item.Statement);
@@ -66,7 +66,7 @@ internal static class PostgreSqlOnlineWork
             catch (DbException)
             {
                 if (IsInvalidIndex(command, item.CleanupIndex))
-                    DropInvalidIndex(command, item.CleanupIndex);
+                    TryDropInvalidIndex(command, item.CleanupIndex, log);
                 throw;
             }
         }
@@ -84,8 +84,22 @@ internal static class PostgreSqlOnlineWork
         return Convert.ToBoolean(command.ExecuteScalar());
     }
 
-    private static void DropInvalidIndex(IDbCommand command, string index) =>
-        Execute(command, $"DROP INDEX CONCURRENTLY IF EXISTS {index}");
+    // The drop waits for the same sessions the build did, so under a lock timeout it can fail for the same reason. The index
+    // is then left invalid -- unused by queries -- and the next deploy finds it invalid and builds it again; the build's own
+    // failure is what the deploy reports.
+    private static bool TryDropInvalidIndex(IDbCommand command, string index, Action<string> log)
+    {
+        try
+        {
+            Execute(command, $"DROP INDEX CONCURRENTLY IF EXISTS {index}");
+            return true;
+        }
+        catch (DbException e)
+        {
+            log($"    Could not drop the invalid index while another session holds the table ({e.Message.Split('\n')[0].Trim()}); the next deploy builds it again");
+            return false;
+        }
+    }
 
     private static void Execute(IDbCommand command, string sql)
     {

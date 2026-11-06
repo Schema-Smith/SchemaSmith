@@ -11,7 +11,9 @@ public sealed record FailureRecord(
     string ScopeKey,
     string Error,
     IReadOnlyList<string> ContextTail,
-    string ArtifactPath);
+    string ArtifactPath,
+    // lockTimeout | commandTimeout | other
+    string Kind = "other");
 
 /// <summary>
 /// A bounded, per-scope capture buffer owned by each failure-capable unit of work (product,
@@ -44,10 +46,10 @@ public sealed class FailureContext
         }
     }
 
-    public FailureRecord ToRecord(string error, string artifactPath)
+    public FailureRecord ToRecord(string error, string artifactPath, string kind = "other")
     {
         lock (_lock)
-            return new FailureRecord(_phase, _scopeKey, error, new List<string>(_lines), artifactPath);
+            return new FailureRecord(_phase, _scopeKey, error, new List<string>(_lines), artifactPath, kind);
     }
 
     /// <summary>

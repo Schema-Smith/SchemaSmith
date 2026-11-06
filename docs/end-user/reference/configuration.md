@@ -806,6 +806,47 @@ policy cannot be evaluated, so it is an error rather than a setting that quietly
 
 ---
 
+## Timeouts and contention
+
+A deploy changes tables other sessions are using. By default nothing limits how long it waits for them: SQL Server and
+PostgreSQL wait for a lock forever, and MySQL and MariaDB wait up to a year for the lock DDL takes. On PostgreSQL a
+waiting `ALTER TABLE` is worse than slow -- every new query on that table queues behind it. Three settings, all under
+`Target`, bound the wait:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `Target:LockTimeoutSeconds` | _(engine default)_ | How long one statement waits for a lock another session holds, 1--86400. Set on every connection the deploy opens, so it covers SchemaSmith's procedures, your scripts and data delivery alike. |
+| `Target:ContentionRetryAttempts` | `20` | How many times a statement that timed out waiting for a lock, or lost a deadlock, is run, 1--100 (`1` = no retry). |
+| `Target:CommandTimeoutSeconds` | `0` | How long one command may run, `0` for no limit. The client stops a command that runs longer. |
+
+What each engine is told:
+
+| Engine | Statement on each connection |
+|---|---|
+| SQL Server | `SET LOCK_TIMEOUT <seconds x 1000>` |
+| PostgreSQL | `SET lock_timeout = '<seconds>s'` |
+| MySQL, MariaDB | `SET SESSION lock_wait_timeout = <seconds>, SESSION innodb_lock_wait_timeout = <seconds>` (the first bounds the metadata lock DDL waits for, the second a row lock) |
+
+**What is retried.** Only work that is safe to run again: SchemaSmith's own table, index, constraint, foreign-key and
+view steps, and the kindle. Each retry waits a little longer than the last (full jitter, at most 2 s), so the longest a
+statement can spend waiting is about `ContentionRetryAttempts x (LockTimeoutSeconds + 2)` seconds. Your scripts
+(object, migration, setup, product) and data delivery are never retried: they stop at the first timeout, and
+`--ResumeQuench` continues from there once the other session lets go.
+
+**When it gives up.** A target whose lock wait runs out fails like any other failed target -- exit code `2` -- with a
+first line that says what happened: which setting, which step, how many attempts. The [deployment summary](deployment-summary-report.md)
+records the failure with `kind: lockTimeout` (or `commandTimeout`), lists each statement that had to wait in
+`lockWaits[]`, and echoes the three settings in `run.settings`. A command stopped by `CommandTimeoutSeconds` is not
+retried: it would only run as long again.
+
+**SQL Server: a timed-out statement in your own script.** A lock timeout ends a DDL statement's whole batch, but ends
+a data statement (`UPDATE`, `INSERT`, `DELETE`) on its own and lets the batch go on to the next one. SchemaQuench sees
+the timeout either way and fails the script, so the deploy stops there, but statements of the same batch after the one
+that timed out may already have run. Make a script that must apply all or nothing a transaction with `XACT_ABORT ON`.
+
+Unset, `LockTimeoutSeconds` changes nothing about how a deploy waits, so a pipeline that ran before runs the same
+after upgrading. For a deploy into a database that is serving traffic, 5--30 seconds is a sensible start.
+
 ## OnlineApply
 
 Changing an index or a column on a table in use takes locks while the change runs, and on a large table that can be
@@ -896,7 +937,10 @@ its summary rows' `mode` is `notCovered`.
 A changed index is still dropped inside its step and built again after it, so the table is without that index between
 the two. A concurrent build that fails (a unique index over duplicate rows, a lock that timed out) leaves an invalid
 index behind: SchemaQuench drops it and builds once more, and a second failure fails the deploy with the invalid index
-removed. A validation the rows fail fails the deploy as a plain add would, and leaves the constraint `NOT VALID`; the
+removed. The drop waits for the same sessions the build did, so when another session still holds the table it cannot
+run either: the deploy says so and leaves the index invalid -- queries do not use it -- and the next deploy finds it
+invalid and builds it. With `OnlineApply` set, set [`Target:LockTimeoutSeconds`](#timeouts-and-contention) too, so a
+build blocked behind a long transaction gives up instead of holding up the deploy. A validation the rows fail fails the deploy as a plain add would, and leaves the constraint `NOT VALID`; the
 next deploy validates it again. A `Require` refusal rolls back the step it stops. `OnlineApplyMaxDuration` does not
 apply to PostgreSQL.
 

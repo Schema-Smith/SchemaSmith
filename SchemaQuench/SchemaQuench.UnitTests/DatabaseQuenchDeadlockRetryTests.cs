@@ -27,7 +27,7 @@ public class DatabaseQuenchDeadlockRetryTests
         var template = new Template { Name = "T" };
         var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", UpdateTables = false, DeliverData = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, null);
         quench.DeadlockRetryBaseMs = 0;   // no real sleeping in unit tests
-        quench.MaxDeadlockAttempts = 4;
+        quench.ContentionRetryAttempts = 4;
         return quench;
     }
 
@@ -64,7 +64,7 @@ public class DatabaseQuenchDeadlockRetryTests
 
         Assert.Throws<SqlServerErrorException>(
             () => quench.ExecuteNonQueryHandlingMessages(cmd, retryOnDeadlock: true));
-        Assert.That(calls(), Is.EqualTo(4), "should attempt exactly MaxDeadlockAttempts times");
+        Assert.That(calls(), Is.EqualTo(4), "should attempt exactly ContentionRetryAttempts times");
     }
 
     [Test]

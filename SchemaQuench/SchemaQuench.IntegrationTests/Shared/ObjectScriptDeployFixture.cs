@@ -34,7 +34,8 @@ public abstract class ObjectScriptDeployFixture
     protected string PackageDir { get; private set; } = "";
     protected string TemplateDir => Path.Join(PackageDir, "Templates", "Main");
 
-    protected sealed record DeployResult(Dictionary<string, ScriptOutcome> Outcomes, IReadOnlyList<ChangeAuditRow> Audit, List<string> Log)
+    protected sealed record DeployResult(Dictionary<string, ScriptOutcome> Outcomes, IReadOnlyList<ChangeAuditRow> Audit, List<string> Log,
+        FailureRecord Failure = null, IReadOnlyList<LockWait> LockWaits = null)
     {
         public string Describe() => string.Join(", ", Outcomes.Select(kv => $"{kv.Key}={kv.Value}"));
         public string DescribeAudit() => string.Join(", ", Audit.Select(r => $"{r.ObjectType} {r.ObjectName} {r.Action}"));
@@ -105,7 +106,7 @@ public abstract class ObjectScriptDeployFixture
     /// <param name="resume">Adopt the checkpoint a previous deploy left, as --ResumeQuench does.</param>
     protected DeployResult Deploy(bool skipUnchanged = true, bool whatIf = false, bool runTwice = false, bool expectSuccess = true, bool dropSchemaBoundDependents = false,
         bool updateTables = true, (string User, string Password)? login = null, bool dropRemovedTables = false,
-        string checkpointDir = null, bool resume = false)
+        string checkpointDir = null, bool resume = false, IReadOnlyDictionary<string, string> settings = null)
     {
         var ownsCheckpointDir = checkpointDir == null;
         checkpointDir ??= Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
@@ -115,7 +116,7 @@ public abstract class ObjectScriptDeployFixture
             try
             {
                 var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-                var settings = new Dictionary<string, string>
+                var values = new Dictionary<string, string>
                 {
                     ["SchemaPackagePath"] = PackageDir,
                     ["Target:User"] = login?.User ?? config[$"{ConfigPrefix}:User"] ?? config["Target:User"] ?? "TestUser",
@@ -125,8 +126,10 @@ public abstract class ObjectScriptDeployFixture
                     ["Target:SkipUnchangedObjects"] = skipUnchanged ? "true" : "false"
                 };
                 foreach (var prop in ConnectionString.ReadProperties(config, $"{ConfigPrefix}:ConnectionProperties"))
-                    settings[$"Target:ConnectionProperties:{prop.Key}"] = prop.Value;
-                FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(settings!).Build());
+                    values[$"Target:ConnectionProperties:{prop.Key}"] = prop.Value;
+                foreach (var (key, value) in settings ?? new Dictionary<string, string>())
+                    values[key] = value;
+                FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(values!).Build());
 
                 var product = Product.Load();
                 var template = Template.Load("Main", product);
@@ -142,7 +145,8 @@ public abstract class ObjectScriptDeployFixture
                 LogFactory.Register("ProgressLog", progressLog);
                 LogFactory.Register("ErrorLog", errorLog);
                 var audit = new ChangeAuditCapture();
-                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = MainDb, SuppressKindling = login != null, WhatIf = whatIf, RunScriptsTwice = runTwice, UpdateTables = updateTables, DeliverData = false, Drops = new DropPolicy(Tables: dropRemovedTables, Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir, resume)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents };
+                var contention = new ContentionLog();
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = MainDb, SuppressKindling = login != null, WhatIf = whatIf, RunScriptsTwice = runTwice, UpdateTables = updateTables, DeliverData = false, Drops = new DropPolicy(Tables: dropRemovedTables, Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir, resume)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents, Contention = contention };
                 quench.Execute();
                 var scripts = quench.IterationObjectScripts.Concat(quench.IterationAfterTablesObjectScripts).ToList();
                 var errors = scripts.Where(s => s.Error != null).Select(s => $"{Path.GetFileName(s.LogPath)}: {s.Error.Message}");
@@ -155,7 +159,7 @@ public abstract class ObjectScriptDeployFixture
                     var folder = Path.GetFileName(Path.GetDirectoryName(script.LogPath) ?? "");
                     outcomes[folder] = script.Outcome;
                 }
-                return new DeployResult(outcomes, audit.Snapshot(), log);
+                return new DeployResult(outcomes, audit.Snapshot(), log, quench.LastFailure, contention.Snapshot());
             }
             finally
             {

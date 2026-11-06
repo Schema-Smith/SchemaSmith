@@ -96,7 +96,8 @@ public partial class DatabaseQuench
                 // functions at kindle time. Both are no-ops for PostgreSQL and MySQL (PostgreSQL reads a runtime setting).
                 var kindlePolicy = string.Equals(FactoryContainer.ResolveOrCreate<Microsoft.Extensions.Configuration.IConfigurationRoot>()[Schema.Configuration.SettingsKeys.UnsupportedFeaturePolicy],
                     "fail", StringComparison.OrdinalIgnoreCase) ? "fail" : "warn";
-                ForgeKindler.KindleTheForge(silentCmd, _product.Platform, _forceReKindle, _ingestEncoding, _sqlServerMajorVersion, kindlePolicy);
+                // Retried on contention: the stamp compare makes a second kindle a no-op for what the first one finished.
+                RetryOnContention(() => ForgeKindler.KindleTheForge(silentCmd, _product.Platform, _forceReKindle, _ingestEncoding, _sqlServerMajorVersion, kindlePolicy));
             }, StepPreview.SameCall),
 
             // Resolved against per-iteration tokens: the script may reference {{SchemaName}} on a schema template.
@@ -287,6 +288,7 @@ public partial class DatabaseQuench
         foreach (var step in QuenchSteps(lanes))
         {
             if (!step.Applies()) continue;
+            _currentStep = step.Name;
             var sw = Stopwatch.StartNew();
             if (IsWhatIf)
             {
@@ -359,8 +361,7 @@ public partial class DatabaseQuench
         if (_product.Platform.GetBasePlatform() != Platform.MySQL && _template.Tables.Cast<IDeliverableTable>().Any(DataDeliveryHelper.HasDeliverable))
         {
             lanes.DeliveryConnection = GetConnection(fireInfoMessageEventOnUserErrors: false);
-            deliveryCmd = lanes.DeliveryConnection.CreateCommand();
-            deliveryCmd.CommandTimeout = 0;
+            deliveryCmd = Timeouts.NewCommand(lanes.DeliveryConnection);
         }
         RegisterMergeScriptHelper();
 
