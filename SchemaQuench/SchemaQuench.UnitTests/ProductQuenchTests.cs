@@ -668,6 +668,25 @@ public class ProductQuenchTests
         });
     }
 
+    // B19: a NULL or blank name from the identification script became a work unit for database "", which deployed the
+    // template into whatever database the connection defaults to (with --ConnectionString, the override's catalog).
+    [Test]
+    public void EnumerateWorkUnits_BlankNamesFromTheIdentificationScript_AreSkipped()
+    {
+        WithMinimalSqlServerProductQuench(quench =>
+        {
+            quench.IdentifiedDatabases["primary"] = new[] { "AppA", "", "   ", null! };
+            var template = new Template
+            {
+                Name = "Core",
+                Product = quench.LoadedProduct,
+                DatabaseIdentificationScript = "SELECT name FROM sys.databases"
+            };
+            var units = quench.EnumerateWorkUnitsForTemplate(template);
+            Assert.That(units.Select(u => u.DatabaseName), Is.EqualTo(new[] { "AppA" }));
+        });
+    }
+
     [Test]
     public void EnumerateWorkUnits_SchemaTemplate_OnePerSchemaPerDb()
     {
@@ -2076,22 +2095,54 @@ public class ProductQuenchTests
     }
 
     [Test]
-    public void ComposeAdminDbConnectionString_OverrideOnSecondary_DoesNotApplyOverride()
+    public void ComposeAdminDbConnectionString_OverrideOnSecondary_TakesTheOverrideWithTheSecondarysServer()
     {
-        // The override branch is gated on (server == primary). A secondary server must NOT
-        // inherit the override — secondaries get their connection from Target:* config.
+        // B18: a secondary server shares the primary's credentials and port settings, so the override reaches it with
+        // the server substituted. It used to fall back to Target:* settings here, while each database work unit took
+        // the override unchanged and deployed the secondary's databases on the primary.
         var env = Substitute.For<IEnvironment>();
         env.CommandLine.Returns(
             "schemaquench.exe --ConnectionString=\"Server=primary;Database=tenant_a;User Id=sa;Password=secret\"");
         WithMinimalSqlServerProductQuench(quench =>
         {
-            var built = quench.InvokeComposeAdminDbConnectionString("secondary");
-
-            // Secondary did not inherit the override's User Id=sa marker; it came from the configured
-            // path which has no User/Password set in this minimal harness.
-            Assert.That(built, Does.Not.Contain("User Id=sa"),
-                $"Override must not bleed to secondary servers. Got: {built}");
+            var built = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(quench.InvokeComposeAdminDbConnectionString("secondary"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(built.DataSource, Is.EqualTo("secondary"), "the secondary's own server");
+                Assert.That(built.UserID, Is.EqualTo("sa"), "with the override's credentials");
+                Assert.That(built.InitialCatalog, Is.EqualTo("master"), "on the init database");
+            });
         }, secondaryServers: "secondary", environment: env);
+    }
+
+    // B20: --PreviewTargets ran schema discovery against a database CreateIfMissing would create, which does not exist yet,
+    // and reported "Schema discovery FAILED" (exit 2 under RequireAtLeastOneTarget) for a target the deploy would serve.
+    [Test]
+    public void PreviewTargets_ASchemaTemplateDatabaseThatWouldBeCreated_IsPreviewedWithoutDiscovery()
+    {
+        WithMinimalSqlServerProductQuench(quench =>
+        {
+            var template = new Template
+            {
+                Name = "Tenants",
+                Product = quench.LoadedProduct,
+                DatabaseIdentificationScript = "SELECT name FROM sys.databases",
+                SchemaIdentificationScript = "SELECT name FROM sys.schemas"
+            };
+
+            var units = quench.EnumerateWorkUnitsForTemplate(template, previewOnly: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(quench.DiscoverSchemasCallCount, Is.EqualTo(0), "no discovery against a database that does not exist");
+                Assert.That(units, Has.Exactly(1).Matches<WorkUnit>(u => u.DatabaseName == "tenant_new" && u.WouldCreateDatabase));
+                Assert.That(quench.ProgressLogLines, Has.None.Contains("Schema discovery FAILED"));
+            });
+        }, extraConfig: new Dictionary<string, string>
+        {
+            ["Target:TemplateTargets:Tenants:Databases:0"] = "tenant_new",
+            ["Target:TemplateTargets:Tenants:CreateIfMissing"] = "true"
+        });
     }
 
     [Test]

@@ -256,6 +256,41 @@ public class FolderGateIntegrationTests
         }
     }
 
+    // A gate that errors is not a gate that evaluated to false. The template connection reports user errors as messages,
+    // so "Divide by zero" was logged, the scalar came back NULL, the folder was skipped and the run exited 0.
+    [Test]
+    public void FolderGate_AGateThatErrors_FailsTheDeploy_AndSkipsNothingSilently()
+    {
+        var db = $"FGError_{Guid.NewGuid():N}".Substring(0, 24);
+        lock (FactoryContainer.SharedLockObject)
+        {
+            CreateDatabaseAtCompatLevel(db, 130);
+            try
+            {
+                var config = FactoryContainer.Resolve<IConfigurationRoot>();
+                config["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "FolderGateErrorProduct");
+                config["ScriptTokens:TargetDB"] = db;
+
+                FactoryContainer.Register(_environment);
+                _environment.ClearReceivedCalls();
+                Program.Main(System.Array.Empty<string>());
+
+                _environment.Received(1).Exit(2);
+                using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+                conn.Open();
+                conn.ChangeDatabase(db);
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM sys.tables WHERE name = 'GateMarker'";
+                Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "the gated folder did not run");
+            }
+            finally
+            {
+                FactoryContainer.Unregister<IEnvironment>();
+                DropDatabase(db);
+            }
+        }
+    }
+
     private int CreateDatabaseAtMaxCompatLevel(string dbName)
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);

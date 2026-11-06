@@ -377,4 +377,34 @@ public class ConnectionStringTests
         Assert.Throws<System.ArgumentOutOfRangeException>(() =>
             ConnectionString.RetargetDatabase("data source=s;Initial Catalog=db;", "tenant1", (Platform)999));
     }
+
+    // ---- RetargetServer: --ConnectionString on a secondary server (B18) ----------------------------------------------
+
+    [TestCase("Data Source=primary,1440;Initial Catalog=db;User ID=u;Password=p", "secondary", "secondary,1440")]
+    [TestCase("Data Source=primary;Initial Catalog=db;User ID=u;Password=p", "secondary", "secondary")]
+    [TestCase("Data Source=primary,1440;Initial Catalog=db;User ID=u;Password=p", "secondary,2000", "secondary,2000")]
+    public void RetargetServer_SqlServer_ChangesOnlyTheServer(string original, string server, string dataSource)
+    {
+        var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(ConnectionString.RetargetServer(original, server, Platform.SqlServer));
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.DataSource, Is.EqualTo(dataSource));
+            Assert.That(builder.UserID, Is.EqualTo("u"));
+            Assert.That(builder.Password, Is.EqualTo("p"));
+            Assert.That(builder.InitialCatalog, Is.EqualTo("db"));
+        });
+    }
+
+    [Test]
+    public void RetargetServer_PostgreSqlAndMySql_ChangeOnlyTheHost()
+    {
+        var pg = new Npgsql.NpgsqlConnectionStringBuilder(ConnectionString.RetargetServer("Host=primary;Port=5433;Database=db;Username=u;Password=p", "secondary", Platform.PostgreSQL));
+        var my = new MySqlConnector.MySqlConnectionStringBuilder(ConnectionString.RetargetServer("Server=primary;Port=3307;Database=db;Uid=u;Pwd=p;AllowUserVariables=true", "secondary", Platform.MySQL));
+        Assert.Multiple(() =>
+        {
+            Assert.That((pg.Host, pg.Port, pg.Username), Is.EqualTo(("secondary", 5433, "u")));
+            Assert.That((my.Server, my.Port, my.UserID, my.AllowUserVariables), Is.EqualTo(("secondary", 3307u, "u", true)));
+            Assert.That(ConnectionString.RetargetServer("", "secondary", Platform.MySQL), Is.EqualTo(""));
+        });
+    }
 }

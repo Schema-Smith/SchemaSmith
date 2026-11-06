@@ -46,6 +46,32 @@ public static class ConnectionString
     }
 
     /// <summary>
+    /// Rebuilds <paramref name="connectionString"/> to reach <paramref name="server"/>, keeping its credentials, port and
+    /// every other option. A secondary server is a name sharing the primary's credentials and port settings, so a
+    /// --ConnectionString override reaches a secondary with only the server changed. On SQL Server the override's own
+    /// ",port" carries over unless the secondary names one.
+    /// </summary>
+    public static string RetargetServer(string connectionString, string server, Platform platform)
+    {
+        if (string.IsNullOrEmpty(connectionString) || string.IsNullOrEmpty(server)) return connectionString;
+
+        switch (platform.GetBasePlatform())
+        {
+            case Platform.SqlServer:
+                var builder = new SqlConnectionStringBuilder(connectionString);
+                var port = builder.DataSource?.IndexOf(',') is int comma and >= 0 ? builder.DataSource[comma..] : "";
+                builder.DataSource = server.Contains(',') ? server : server + port;
+                return builder.ToString();
+            case Platform.PostgreSQL:
+                return new NpgsqlConnectionStringBuilder(connectionString) { Host = server }.ToString();
+            case Platform.MySQL:
+                return new MySqlConnectionStringBuilder(connectionString) { Server = server }.ToString();
+            default:
+                throw new ArgumentOutOfRangeException(nameof(platform), platform, $"Unsupported platform: {platform}");
+        }
+    }
+
+    /// <summary>
     /// Reads ConnectionProperties from an IConfigurationRoot section.
     /// Returns an empty dictionary if the section doesn't exist.
     /// </summary>

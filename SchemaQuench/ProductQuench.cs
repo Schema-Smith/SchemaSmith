@@ -523,12 +523,21 @@ public class ProductQuench
         $"Unable to connect to {platform.ToDisplayName()} at {server}{detail}{(string.IsNullOrWhiteSpace(user) ? "" : $" with user {user}")}" +
         (string.IsNullOrWhiteSpace(reason) ? "" : $": {reason}");
 
+    // --ConnectionString reaches every server: as given on the primary, and with the server substituted on a secondary,
+    // which shares the primary's credentials and port settings.
+    private string ConnectionStringOverrideFor(string server)
+    {
+        var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
+        if (string.IsNullOrEmpty(connectionStringOverride) || server == _primaryServer) return connectionStringOverride;
+        return ConnectionString.RetargetServer(connectionStringOverride, server, _product.Platform);
+    }
+
     internal virtual IDbCommand GetCommand(string server)
     {
         var initDb = GetInitDatabase(_product.Platform);
-        var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
+        var connectionStringOverride = ConnectionStringOverrideFor(server);
         string connectionString;
-        if (!string.IsNullOrEmpty(connectionStringOverride) && server == _primaryServer)
+        if (!string.IsNullOrEmpty(connectionStringOverride))
         {
             if (_product.Platform.GetBasePlatform() == Platform.MySQL &&
                 !connectionStringOverride.Contains("AllowUserVariables", StringComparison.OrdinalIgnoreCase))
@@ -643,8 +652,8 @@ public class ProductQuench
     internal virtual string ComposeIdentificationConnectionString(string server, Template template)
     {
         var identificationDb = ResolveIdentificationDatabase(template);
-        var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
-        if (!string.IsNullOrEmpty(connectionStringOverride) && server == _primaryServer)
+        var connectionStringOverride = ConnectionStringOverrideFor(server);
+        if (!string.IsNullOrEmpty(connectionStringOverride))
             return ConnectionString.RetargetDatabase(connectionStringOverride, identificationDb, _product.Platform);
 
         return TargetConnectionString.Build(_product.Platform, server, identificationDb, _config);
@@ -690,8 +699,8 @@ public class ProductQuench
     internal virtual string ComposeAdminDbConnectionString(string server)
     {
         var initDb = GetInitDatabase(_product.Platform);
-        var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
-        if (!string.IsNullOrEmpty(connectionStringOverride) && server == _primaryServer)
+        var connectionStringOverride = ConnectionStringOverrideFor(server);
+        if (!string.IsNullOrEmpty(connectionStringOverride))
         {
             if (_product.Platform.GetBasePlatform() == Platform.MySQL &&
                 !connectionStringOverride.Contains("AllowUserVariables", StringComparison.OrdinalIgnoreCase))
@@ -1662,8 +1671,16 @@ public class ProductQuench
                     command.CommandText = template.DatabaseIdentificationScript;
                     databases = new List<string>();
                     using var reader = command.ExecuteReader();
+                    var blank = 0;
                     while (reader.Read())
-                        databases.Add($"{reader[0]}");
+                    {
+                        var name = reader[0] is DBNull ? null : reader[0]?.ToString();
+                        // A blank name would deploy into whatever database the connection lands in.
+                        if (string.IsNullOrWhiteSpace(name)) { blank++; continue; }
+                        databases.Add(name);
+                    }
+                    if (blank > 0)
+                        _progressLog.Warn($"DatabaseIdentificationScript for template '{template.Name}' on {server} returned {blank} blank database name{(blank == 1 ? "" : "s")}; skipped.");
                 }
                 finally
                 {
@@ -1709,9 +1726,10 @@ public class ProductQuench
                 wouldCreateThisDb = gate.WouldCreate;
             }
 
-            if (template.IsSchemaTemplate && wouldCreateThisDb && !schemasOverride && !previewOnly)
+            // A preview too: the database does not exist yet, so there is nothing to discover schemas in.
+            if (template.IsSchemaTemplate && wouldCreateThisDb && !schemasOverride)
             {
-                _progressLog.Info($"[{server}].[{db}] [WhatIf] Schemas are discovered once the database exists; template '{template.Name}' would deploy to each.");
+                _progressLog.Info($"[{server}].[{db}] {(previewOnly ? "" : "[WhatIf] ")}Schemas are discovered once the database exists; template '{template.Name}' would deploy to each.");
                 workUnits.Add(new WorkUnit(server, db, template.Name, "")
                 {
                     DatabaseSource = databaseSource,
@@ -2000,9 +2018,9 @@ public class ProductQuench
     /// </summary>
     internal virtual IDbCommand GetCommandForDatabase(string server, string databaseName)
     {
-        var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
+        var connectionStringOverride = ConnectionStringOverrideFor(server);
         string connectionString;
-        if (!string.IsNullOrEmpty(connectionStringOverride) && server == _primaryServer)
+        if (!string.IsNullOrEmpty(connectionStringOverride))
         {
             connectionString = ConnectionString.RetargetDatabase(connectionStringOverride, databaseName, _product.Platform);
         }

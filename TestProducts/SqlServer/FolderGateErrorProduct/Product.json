@@ -1,0 +1,10 @@
+{
+  "Name": "FolderGateErrorProduct",
+  "ValidationScript": "SELECT 1",
+  "TemplateOrder": [ "Main" ],
+  "ScriptTokens": {
+    "TargetDB": "SetByTest"
+  },
+  "ScriptFolders": [],
+  "Platform": "SqlServer"
+}

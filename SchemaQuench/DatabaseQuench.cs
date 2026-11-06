@@ -553,7 +553,7 @@ public class DatabaseQuench
         try
         {
             using var connection = GetConnection();
-            using var command = connection.CreateCommand();
+            using var command = CheckServerErrors(connection.CreateCommand());
             command.CommandTimeout = 0;
 
             // SkipIfReadOnly: the target still resolved and counted toward RequireAtLeastOneTarget,
@@ -581,7 +581,7 @@ public class DatabaseQuench
             if (_product.Platform.GetBasePlatform() != Platform.MySQL)
             {
                 tableConnection = GetConnection();
-                tableCommand = tableConnection.CreateCommand();
+                tableCommand = CheckServerErrors(tableConnection.CreateCommand());
                 tableCommand.CommandTimeout = 0;
                 objectsConnection = GetConnection(fireInfoMessageEventOnUserErrors: false);
                 objectsCommand = objectsConnection.CreateCommand();
@@ -622,7 +622,7 @@ public class DatabaseQuench
                 // SQL-Server-only. For SQL Server this also enforces the compat floor and selects the model-
                 // ingest encoding (compat >= 130 -> JSON/OPENJSON, below -> XML) and bakes the major version
                 // into SchemaSmith.fn_ServerMajorVersion at kindle time.
-                using (var versionCmd = connection.CreateCommand())
+                using (var versionCmd = CheckServerErrors(connection.CreateCommand()))
                 {
                     var versionInfo = TargetVersionDetector.Detect(versionCmd, _product.Platform, _databaseName);
                     // Captured for every engine (CompatibilityLevel is null => 0 on non-SQL-Server). SQL Server's
@@ -2510,10 +2510,26 @@ SET NOCOUNT ON
         return new RunFailedException(ConnectFailure(_product.Platform, _server, _databaseName, config[SettingsKeys.Target.User], e.Message));
     }
 
+    // Commands on a connection that reports SQL Server user errors as messages: an error must still fail the statement.
+    private IDbCommand CheckServerErrors(IDbCommand command) =>
+        _product.Platform.GetBasePlatform() == Platform.SqlServer ? new ServerErrorCheckingCommand(command, TakeCapturedServerError) : command;
+
+    private Exception TakeCapturedServerError()
+    {
+        var error = _infoMessageException;
+        _infoMessageException = null;
+        return error;
+    }
+
     private IDbConnection GetConnection(bool fireInfoMessageEventOnUserErrors = true, bool ignoreInfoMessages = false)
     {
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
         var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
+        // A secondary server takes the override with its own server name (B18): as given, it deployed the secondary's
+        // databases on the primary.
+        if (!string.IsNullOrEmpty(connectionStringOverride)
+            && !string.Equals(_server, config[SettingsKeys.Target.Server], StringComparison.OrdinalIgnoreCase))
+            connectionStringOverride = ConnectionString.RetargetServer(connectionStringOverride, _server, _product.Platform);
         var connectionString = string.IsNullOrEmpty(connectionStringOverride)
             ? TargetConnectionString.Build(_product.Platform, _server, _databaseName, config)
             : ConnectionString.RetargetDatabase(connectionStringOverride, _databaseName, _product.Platform);
