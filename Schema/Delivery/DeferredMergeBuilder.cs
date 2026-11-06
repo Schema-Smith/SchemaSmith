@@ -284,11 +284,20 @@ internal static class DeferredMergeBuilder
         {
             if (deferredSet.Contains(c.Name))
                 return $"CAST(NULL AS {c.JsonParseType}) AS \"{c.Name}\"";
+            // The main path's transforms, on the JSON value: the geometry with its SRID companion and through the schema
+            // PostGIS lives in, the array and "char" forms. This path had drifted to a bare ST_GeomFromText (SRID 0,
+            // and "function does not exist" off the search_path) and no array or "char" handling.
+            var raw = $"(elem ->> '{c.Name}')";
             if (c.IsGeometry)
-                return $"ST_GeomFromText(elem ->> '{c.Name}') AS \"{c.Name}\"";
+                return $"{MergeScriptHelper.TypeSchemaPrefix(c.JsonParseType)}ST_GeomFromText({raw}, COALESCE(NULLIF(elem ->> '{c.Name}.STSrid', '')::int, 0)) AS \"{c.Name}\"";
             if (c.IsBinary)
-                return $"decode(elem ->> '{c.Name}', 'base64') AS \"{c.Name}\"";
-            return $"(elem ->> '{c.Name}')::{c.JsonParseType} AS \"{c.Name}\"";
+                return $"decode({raw}, 'base64') AS \"{c.Name}\"";
+            if (c.DataType.StartsWith("_", StringComparison.Ordinal))
+                return $"CASE WHEN LEFT({raw}, 1) IN ('{{', '[') THEN {raw}::{c.JsonParseType} " +
+                       $"ELSE STRING_TO_ARRAY({raw}, '*,*', '*NULL_VALUE_REPRESENTATION*')::{c.JsonParseType} END AS \"{c.Name}\"";
+            if (c.DataType == "char")
+                return $"CASE WHEN {raw} ~ '^-[0-9]+$' THEN ({raw}::int)::\"char\" ELSE {raw}::\"char\" END AS \"{c.Name}\"";
+            return $"{raw}::{c.JsonParseType} AS \"{c.Name}\"";
         }));
     }
 

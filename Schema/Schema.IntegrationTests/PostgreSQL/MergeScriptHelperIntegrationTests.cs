@@ -1,9 +1,11 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
 using NUnit.Framework;
 using Schema.DataAccess;
+using Schema.Delivery;
 using Schema.Domain;
 using Schema.Utility;
 
@@ -48,6 +50,39 @@ public class MergeScriptHelperIntegrationTests
         _connection?.Close();
         _connection?.Dispose();
     }
+
+    #region Deferred (FK-cycle) delivery
+
+    // B24: the deferred path built a geometry with a bare ST_GeomFromText, so an untyped geometry column kept SRID 0
+    // (a typed one takes its own SRID, which hid it) and the call failed where PostGIS is not on the search_path.
+    [Test]
+    public void DeferredDelivery_AGeometryArrivesWithItsSrid()
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"_test_defgeo_{Guid.NewGuid():N}"[..40];
+        try
+        {
+            command.CommandText = $@"CREATE EXTENSION IF NOT EXISTS postgis;
+                CREATE TABLE ""public"".""{tableName}"" (""id"" INT PRIMARY KEY, ""parent"" INT NULL REFERENCES ""public"".""{tableName}"" (""id""), ""shape"" geometry);";
+            command.ExecuteNonQuery();
+
+            var script = DeferredMergeBuilder.Build(new MergeScriptHelperAdapter(Platform.PostgreSQL), command, "PostgreSQL", "public", tableName,
+                @"[{""id"":1,""parent"":1,""shape"":""POINT (1 2)"",""shape.STSrid"":4326}]", @"""id""", false,
+                new List<string> { "parent" }, pgServerVersionNum: 16);
+            command.CommandText = script;
+            command.ExecuteNonQuery();
+
+            command.CommandText = $@"SELECT ST_SRID(""shape"")::text || ' ' || ST_AsText(""shape"") FROM ""public"".""{tableName}"" WHERE ""id"" = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("4326 POINT(1 2)"));
+        }
+        finally
+        {
+            command.CommandText = $@"DROP TABLE IF EXISTS ""public"".""{tableName}""";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    #endregion
 
     #region Key-only tables
 
