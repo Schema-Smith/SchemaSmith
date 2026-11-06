@@ -15,8 +15,8 @@ BEGIN TRY
   SET NOCOUNT ON
 
   RAISERROR('Add Missing Foreign Keys', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding foreign key ' + f.[Schema] + '.' + f.[TableName] + '.' + f.[KeyName] + CASE WHEN RTRIM(ISNULL(f.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(f.[VariantName]), '''', '''''') + ')' ELSE '' END +
-                                  CASE WHEN EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) WHERE t.[Schema] = f.[Schema] AND t.[Name] = f.[TableName] AND t.[NewTable] = 0 AND COALESCE(t.[OnlineApply], @OnlineApply) <> 'OFF') THEN ' (not covered by OnlineApply)' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding foreign key ' + REPLACE(REPLACE(f.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(f.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(f.[KeyName], '''', ''''''), '%', '%%') + REPLACE(CASE WHEN RTRIM(ISNULL(f.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(f.[VariantName]), '''', '''''') + ')' ELSE '' END, '%', '%%') +
+                                  REPLACE(REPLACE(CASE WHEN EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) WHERE t.[Schema] = f.[Schema] AND t.[Name] = f.[TableName] AND t.[NewTable] = 0 AND COALESCE(t.[OnlineApply], @OnlineApply) <> 'OFF') THEN ' (not covered by OnlineApply)' ELSE '' END, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   -- WITH NOCHECK leaves the existing rows unchecked (Validated false); NOT FOR REPLICATION
                                   -- is part of the definition. Enforced is converged afterwards by ConstraintStateQuench.
                                   'ALTER TABLE ' + f.[Schema] + '.' + f.[TableName] + CASE WHEN ISNULL(f.[Validated], 1) = 0 THEN ' WITH NOCHECK' ELSE '' END + ' ADD CONSTRAINT ' + f.[KeyName] + ' FOREIGN KEY ' +
@@ -24,7 +24,7 @@ BEGIN TRY
                                   ' ON DELETE ' + [DeleteAction] +
                                   ' ON UPDATE ' + [UpdateAction] +
                                   CASE WHEN ISNULL(f.[NotForReplication], 0) = 1 THEN ' NOT FOR REPLICATION' ELSE '' END + ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''foreignKey'', ''' + f.[Schema] + '.' + f.[TableName] + '.' + f.[KeyName] + ''', ''created'', ' +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''foreignKey'', N''' + REPLACE((f.[Schema] + '.' + f.[TableName] + '.' + f.[KeyName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''created'', ' +
                                   CASE WHEN EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) WHERE t.[Schema] = f.[Schema] AND t.[Name] = f.[TableName] AND t.[NewTable] = 0 AND COALESCE(t.[OnlineApply], @OnlineApply) <> 'OFF') THEN '''notCovered''' ELSE 'NULL' END + ');' AS NVARCHAR(MAX))
                            FROM #ForeignKeys f WITH (NOLOCK)
                            WHERE NOT EXISTS (SELECT *

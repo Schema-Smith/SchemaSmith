@@ -67,7 +67,7 @@ BEGIN
          + CASE WHEN c.[name] IS NULL THEN '0' ELSE 'ISNULL(COLUMNPROPERTY(OBJECT_ID(' + @v_QualifiedLiteral + '), N''' + REPLACE(c.[name], '''', '''''') + ''', ''ColumnId''), -1)' END
          + ' AND [name] = N''' + REPLACE(ep.[name], '''', '''''') + ''')' + @v_CrLf
          + '  EXEC sp_addextendedproperty N''' + REPLACE(ep.[name], '''', '''''') + ''', N''' + REPLACE(CONVERT(NVARCHAR(MAX), ep.[value]), '''', '''''') + ''''
-         + ', ''SCHEMA'', N''' + REPLACE(@Schema, '''', '''''') + ''', ''' + @v_Level1Type + ''', N''' + REPLACE(@Name, '''', '''''') + ''''
+         + ', ''SCHEMA'', N''' + REPLACE(@Schema, '''', '''''') + ''', N''' + REPLACE(@v_Level1Type, '''', '''''') + ''', N''' + REPLACE(@Name, '''', '''''') + ''''
          + ISNULL(', ''COLUMN'', N''' + REPLACE(c.[name], '''', '''''') + '''', '') + ';' + @v_CrLf
       FROM sys.extended_properties ep
       LEFT JOIN sys.columns c ON c.[object_id] = ep.major_id AND c.column_id = ep.minor_id

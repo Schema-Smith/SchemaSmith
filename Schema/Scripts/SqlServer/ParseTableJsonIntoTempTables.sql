@@ -739,9 +739,9 @@
                    -- time, so this is the one place the create-path emit is suppressed below the floor;
                    -- DegradeUnsupportedFeatures reports the downgrade and neutralizes the source columns for the
                    -- ALTER/detection passes. Kept gate-consistent with that proc's < 13 check.
-                   CASE WHEN RTRIM(ISNULL([DataMaskFunction], '')) <> '' AND SchemaSmith.fn_ServerMajorVersion() >= 13 THEN ' MASKED WITH (FUNCTION = ''' + [DataMaskFunction] + ''')' ELSE '' END +
+                   CASE WHEN RTRIM(ISNULL([DataMaskFunction], '')) <> '' AND SchemaSmith.fn_ServerMajorVersion() >= 13 THEN ' MASKED WITH (FUNCTION = N''' + REPLACE([DataMaskFunction], '''', '''''') + ''')' ELSE '' END +
                    CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE' AND SchemaSmith.fn_ServerMajorVersion() >= 13
-                        THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = ''' + [EncryptionAlgorithm] + ''')'
+                        THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = N''' + REPLACE([EncryptionAlgorithm], '''', '''''') + ''')'
                         ELSE '' END +
                    -- A ledger table's generated column (2022): the role, and HIDDEN when declared. Only ever in a CREATE TABLE.
                    ISNULL(CASE UPPER([GeneratedAlways]) WHEN 'TRANSACTIONIDSTART' THEN ' GENERATED ALWAYS AS TRANSACTION_ID START'
@@ -969,17 +969,17 @@
                                                            THEN SchemaSmith.fn_SafeBracketWrap(SUBSTRING(RTRIM([value]), 1, LEN(RTRIM([value])) - 5)) + ' DESC'
                                                            ELSE SchemaSmith.fn_SafeBracketWrap([value])
                                                            END AS NVARCHAR(MAX)), ',')
-                                 FROM STRING_SPLIT([IndexColumns], ',')
+                                 FROM SchemaSmith.fn_SplitList([IndexColumns], ',')
                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [IncludeColumns]   = (SELECT STRING_AGG(SchemaSmith.fn_SafeBracketWrap([value]), ',') WITHIN GROUP (ORDER BY SchemaSmith.fn_SafeBracketWrap([value]))
-                                 FROM STRING_SPLIT([IncludeColumns], ',')
+                                 FROM SchemaSmith.fn_SplitList([IncludeColumns], ',')
                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [IgnoreDuplicateKey] = ISNULL([IgnoreDuplicateKey], 0),
          [PadIndex]         = ISNULL([PadIndex], 0),
          [Disabled]         = ISNULL([Disabled], 0),
          -- The ordered-columnstore column list, in declared order (it is the sort order).
          [Order]            = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
-                                 FROM STRING_SPLIT([Order], ',')
+                                 FROM SchemaSmith.fn_SplitList([Order], ',')
                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '');
 
   -- A nonclustered columnstore index has no key: its columns are included columns, which is how they are read back. Declared
@@ -1132,10 +1132,10 @@
          [RelatedTableSchema] = SchemaSmith.fn_SafeBracketWrap([RelatedTableSchema]),
          [RelatedTable]      = SchemaSmith.fn_SafeBracketWrap([RelatedTable]),
          [Columns]           = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
-                                  FROM STRING_SPLIT([Columns], ',')
+                                  FROM SchemaSmith.fn_SplitList([Columns], ',')
                                  WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [RelatedColumns]    = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
-                                  FROM STRING_SPLIT([RelatedColumns], ',')
+                                  FROM SchemaSmith.fn_SplitList([RelatedColumns], ',')
                                  WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [DeleteAction]      = ISNULL(NULLIF(RTRIM([DeleteAction]), ''), 'NO ACTION'),
          [UpdateAction]      = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION');
@@ -1260,7 +1260,7 @@
      SET [StatisticName] = SchemaSmith.fn_SafeBracketWrap([StatisticName]),
          [SampleSize]    = ISNULL([SampleSize], 0),
          [Columns]       = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
-                              FROM STRING_SPLIT([Columns], ',')
+                              FROM SchemaSmith.fn_SplitList([Columns], ',')
                              WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '');
 
   -- Identify Statistics to skip based on ShouldApply expression (scoped by [_RowId])
@@ -1318,7 +1318,7 @@
                                                              ' STATISTICAL_SEMANTICS'
                                                    ELSE SchemaSmith.fn_SafeBracketWrapFullTextColumn([value])
                                                    END AS NVARCHAR(MAX)), ',')
-                                FROM STRING_SPLIT([Columns], ',')
+                                FROM SchemaSmith.fn_SplitList([Columns], ',')
                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '');
 
   -- Identify FullTextIndexes to skip based on ShouldApply expression (scoped by [_RowId])

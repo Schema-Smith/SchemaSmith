@@ -378,10 +378,10 @@ BEGIN
                                                  THEN SchemaSmith.fn_SafeBracketWrap(SUBSTRING(RTRIM(LTRIM([value])), 1, LEN(RTRIM(LTRIM([value]))) - 5)) + ' DESC'
                                                  ELSE SchemaSmith.fn_SafeBracketWrap(LTRIM(RTRIM([value])))
                                                  END AS NVARCHAR(MAX)), ',')
-                       FROM STRING_SPLIT(JSON_VALUE(idx.value, '$.IndexColumns'), ',')
+                       FROM SchemaSmith.fn_SplitList(JSON_VALUE(idx.value, '$.IndexColumns'), ',')
                       WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
                     ISNULL((SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap(LTRIM(RTRIM([value]))) AS NVARCHAR(MAX)), ',')
-                              FROM STRING_SPLIT(JSON_VALUE(idx.value, '$.IncludeColumns'), ',')
+                              FROM SchemaSmith.fn_SplitList(JSON_VALUE(idx.value, '$.IncludeColumns'), ',')
                              WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''), ''),
                     ISNULL(JSON_VALUE(idx.value, '$.CompressionType'), 'NONE'),
                     CAST(ISNULL(JSON_VALUE(idx.value, '$.FillFactor'), '0') AS INT),

@@ -148,9 +148,9 @@
                    -- time, so this is the one place the create-path emit is suppressed below the floor;
                    -- DegradeUnsupportedFeatures reports the downgrade and neutralizes the source columns for the
                    -- ALTER/detection passes. Kept gate-consistent with that proc's < 13 check.
-                   CASE WHEN RTRIM(ISNULL([DataMaskFunction], '')) <> '' AND SchemaSmith.fn_ServerMajorVersion() >= 13 THEN ' MASKED WITH (FUNCTION = ''' + [DataMaskFunction] + ''')' ELSE '' END +
+                   CASE WHEN RTRIM(ISNULL([DataMaskFunction], '')) <> '' AND SchemaSmith.fn_ServerMajorVersion() >= 13 THEN ' MASKED WITH (FUNCTION = N''' + REPLACE([DataMaskFunction], '''', '''''') + ''')' ELSE '' END +
                    CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE' AND SchemaSmith.fn_ServerMajorVersion() >= 13
-                        THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = ''' + [EncryptionAlgorithm] + ''')'
+                        THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = N''' + REPLACE([EncryptionAlgorithm], '''', '''''') + ''')'
                         ELSE '' END +
                    -- A ledger table's generated column (2022): the role, and HIDDEN when declared. Only ever in a CREATE TABLE.
                    ISNULL(CASE UPPER(c.[GeneratedAlways]) WHEN 'TRANSACTIONIDSTART' THEN ' GENERATED ALWAYS AS TRANSACTION_ID START'

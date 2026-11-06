@@ -14,8 +14,9 @@ AS
 BEGIN
   SET NOCOUNT ON
   DECLARE @v_Marker NVARCHAR(200) = N'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType'
-  DECLARE @v_Plain NVARCHAR(200) = N') VALUES (@@SPID, '''
-  DECLARE @v_WithMode NVARCHAR(200) = N', Mode) VALUES (@@SPID, '''
+  -- The type's literal may carry the N prefix, as the name's does.
+  DECLARE @v_Plain NVARCHAR(200) = N') VALUES (@@SPID, '
+  DECLARE @v_WithMode NVARCHAR(200) = N', Mode) VALUES (@@SPID, '
   DECLARE @v_Pos INT = CHARINDEX(@v_Marker, ISNULL(@Script, N''))
   DECLARE @v_Start INT, @v_Quote INT, @v_Field INT, @v_HasMode BIT, @v_ModeEnd INT
   DECLARE @v_Type NVARCHAR(4000), @v_Name NVARCHAR(4000), @v_Action NVARCHAR(4000), @v_Value NVARCHAR(4000), @v_Mode NVARCHAR(4000)
@@ -23,13 +24,21 @@ BEGIN
   WHILE @v_Pos > 0
   BEGIN
     SET @v_Start = @v_Pos + LEN(@v_Marker)
-    SET @v_HasMode = CASE WHEN SUBSTRING(@Script, @v_Start, LEN(@v_WithMode)) = @v_WithMode THEN 1 ELSE 0 END
-    IF @v_HasMode = 0 AND SUBSTRING(@Script, @v_Start, LEN(@v_Plain)) <> @v_Plain
+    SET @v_HasMode = CASE WHEN SUBSTRING(@Script, @v_Start, DATALENGTH(@v_WithMode) / 2) = @v_WithMode THEN 1 ELSE 0 END
+    IF @v_HasMode = 0 AND SUBSTRING(@Script, @v_Start, DATALENGTH(@v_Plain) / 2) <> @v_Plain
     BEGIN
       SET @v_Pos = CHARINDEX(@v_Marker, @Script, @v_Start)
       CONTINUE
     END
-    SET @v_Start = @v_Start + CASE WHEN @v_HasMode = 1 THEN LEN(@v_WithMode) ELSE LEN(@v_Plain) END
+    -- DATALENGTH: LEN ignores the trailing space these markers end with.
+    SET @v_Start = @v_Start + CASE WHEN @v_HasMode = 1 THEN DATALENGTH(@v_WithMode) / 2 ELSE DATALENGTH(@v_Plain) / 2 END
+    IF SUBSTRING(@Script, @v_Start, 1) = N'N' SET @v_Start = @v_Start + 1
+    IF SUBSTRING(@Script, @v_Start, 1) <> N''''
+    BEGIN
+      SET @v_Pos = CHARINDEX(@v_Marker, @Script, @v_Start)
+      CONTINUE
+    END
+    SET @v_Start = @v_Start + 1
     SET @v_Mode = NULL
     SET @v_Field = 1
     WHILE @v_Field <= 3

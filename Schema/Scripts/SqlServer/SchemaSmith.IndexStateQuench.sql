@@ -17,9 +17,9 @@ BEGIN
 
   RAISERROR('Converge index disabled state', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-      'RAISERROR(''  ' + x.[Verb] + ' index ' + REPLACE(REPLACE(x.[QualifiedName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT' + CHAR(13) + CHAR(10) +
+      'RAISERROR(''  ' + REPLACE(REPLACE(x.[Verb], '''', ''''''), '%', '%%') + ' index ' + REPLACE(REPLACE(x.[QualifiedName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT' + CHAR(13) + CHAR(10) +
       'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' ' + x.[Clause] + CHAR(13) + CHAR(10) +
-      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + CASE WHEN i.[PrimaryKey] = 1 OR i.[UniqueConstraint] = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + REPLACE(x.[QualifiedName], '''', '''''') + ''', ''modified'')'
+      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, N''' + REPLACE(CASE WHEN i.[PrimaryKey] = 1 OR i.[UniqueConstraint] = 1 THEN 'constraint' ELSE 'index' END, '''', '''''') + ''', ''' + REPLACE(x.[QualifiedName], '''', '''''') + ''', ''modified'')'
       AS NVARCHAR(MAX))
     FROM #Indexes i WITH (NOLOCK)
     JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])

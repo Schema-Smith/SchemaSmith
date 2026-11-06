@@ -70,7 +70,7 @@ BEGIN TRY
   -- round is not available -- once a table has a filestream data space the ALTER fails 1726 -- which is
   -- also why a CHANGED declaration is refused in ModifiedTableQuench rather than applied.
   DECLARE @v_FsOn NVARCHAR(MAX) =
-    (SELECT 'RAISERROR(''  Binding ' + t.[Schema] + '.' + t.[Name] + ' to FILESTREAM filegroup ' + t.[FileStreamFileGroup] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+    (SELECT 'RAISERROR(''  Binding ' + REPLACE(REPLACE(t.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(t.[Name], '''', ''''''), '%', '%%') + ' to FILESTREAM filegroup ' + REPLACE(REPLACE(t.[FileStreamFileGroup], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
             'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (FILESTREAM_ON = ' + t.[FileStreamFileGroup] + ');' + CHAR(13) + CHAR(10)
        FROM #Tables t WITH (NOLOCK)
        JOIN sys.tables st ON st.[object_id] = OBJECT_ID(t.[Schema] + '.' + t.[Name])
@@ -83,9 +83,9 @@ BEGIN TRY
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_FsOn ELSE EXEC(@v_FsOn)
 
   SELECT @v_SQL = @v_SQL +
-    'RAISERROR(''  Adding FILESTREAM column ' + c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+    'RAISERROR(''  Adding FILESTREAM column ' + REPLACE(REPLACE(c.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[ColumnName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
     'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ADD ' + CAST(c.[ColumnScript] AS NVARCHAR(MAX)) + ';' + CHAR(13) + CHAR(10) +
-    'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''column'', ''' + REPLACE(c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName], '''', '''''') + ''', ''created'');' + CHAR(13) + CHAR(10)
+    'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''column'', ''' + REPLACE((c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''created'');' + CHAR(13) + CHAR(10)
     FROM #Columns c WITH (NOLOCK)
    WHERE c.[FileStream] = 1
      AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName]), SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'ColumnId') IS NULL

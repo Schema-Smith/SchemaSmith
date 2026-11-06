@@ -15,9 +15,9 @@ BEGIN
   DECLARE @v_SQL NVARCHAR(MAX) = ''
 
   RAISERROR('Add missing ProductName extended property to tables', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +
-                                                              '@level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ' +
-                                                              '@level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''';' AS NVARCHAR(MAX))
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = N''' + REPLACE(@ProductName, '''', '''''') + ''', ' +
+                                                              '@level0type = N''Schema'', @level0name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', ' +
+                                                              '@level1type = N''Table'', @level1name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + ''';' AS NVARCHAR(MAX))
                            FROM #Tables t WITH (NOLOCK)
                            WHERE NOT EXISTS (SELECT * FROM #TableProperties tp WITH (NOLOCK) WHERE t.[Schema] = tp.[Schema] AND t.[Name] = QUOTENAME(tp.TableName) AND tp.PropertyName = 'ProductName')
                              AND OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NOT NULL  -- and the table physically exists
@@ -44,9 +44,9 @@ BEGIN
 
   RAISERROR('Stamp/refresh PreventDrop protection marker', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-    'IF EXISTS (SELECT 1 FROM fn_listextendedproperty(N''PreventDrop'', N''Schema'', ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', N''Table'', ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', default, default)) ' +
-    'EXEC sp_updateextendedproperty @name = N''PreventDrop'', @value = ''' + CASE WHEN t.[PreventDrop] = 1 THEN 'true' ELSE 'false' END + ''', @level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + '''; ' +
-    'ELSE EXEC sp_addextendedproperty @name = N''PreventDrop'', @value = ''' + CASE WHEN t.[PreventDrop] = 1 THEN 'true' ELSE 'false' END + ''', @level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''';' AS NVARCHAR(MAX))
+    'IF EXISTS (SELECT 1 FROM fn_listextendedproperty(N''PreventDrop'', N''Schema'', N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', N''Table'', N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + ''', default, default)) ' +
+    'EXEC sp_updateextendedproperty @name = N''PreventDrop'', @value = N''' + REPLACE(CASE WHEN t.[PreventDrop] = 1 THEN 'true' ELSE 'false' END, '''', '''''') + ''', @level0type = N''Schema'', @level0name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', @level1type = N''Table'', @level1name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + '''; ' +
+    'ELSE EXEC sp_addextendedproperty @name = N''PreventDrop'', @value = N''' + REPLACE(CASE WHEN t.[PreventDrop] = 1 THEN 'true' ELSE 'false' END, '''', '''''') + ''', @level0type = N''Schema'', @level0name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', @level1type = N''Table'', @level1name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + ''';' AS NVARCHAR(MAX))
     FROM #Tables t WITH (NOLOCK)
     WHERE OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NOT NULL  -- table physically exists
       AND t.[MemoryOptimized] = 0  -- memory-optimized tables reject extended properties; PreventDrop is tracked in SchemaSmith.ProductOwnership below

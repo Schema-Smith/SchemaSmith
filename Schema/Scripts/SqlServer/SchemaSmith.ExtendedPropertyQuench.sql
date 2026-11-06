@@ -191,16 +191,16 @@ BEGIN
 
   RAISERROR('Converge extended properties', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-      'RAISERROR(''  ' + CASE WHEN d.[Declared] IS NULL THEN 'Removing' ELSE 'Setting' END +
+      'RAISERROR(''  ' + REPLACE(REPLACE(CASE WHEN d.[Declared] IS NULL THEN 'Removing' ELSE 'Setting' END, '''', ''''''), '%', '%%') +
           CASE WHEN d.[Name] = N'MS_Description' THEN ' the description of '
                ELSE ' extended property ' + REPLACE(REPLACE(d.[Name], '''', ''''''), '%', '%%') + CASE WHEN d.[Declared] IS NULL THEN ' from ' ELSE ' on ' END END +
-          x.[Kind] + ' ' + REPLACE(REPLACE(x.[QualifiedName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT' + CHAR(13) + CHAR(10) +
+          REPLACE(REPLACE(x.[Kind], '''', ''''''), '%', '%%') + ' ' + REPLACE(REPLACE(x.[QualifiedName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT' + CHAR(13) + CHAR(10) +
       CASE WHEN d.[Declared] IS NULL THEN 'EXEC sp_dropextendedproperty @name = N''' + REPLACE(d.[Name], '''', '''''') + ''', '
            WHEN d.[ExistingFound] = 1 THEN 'EXEC sp_updateextendedproperty @name = N''' + REPLACE(d.[Name], '''', '''''') + ''', @value = N''' + REPLACE(d.[Declared], '''', '''''') + ''', '
            ELSE 'EXEC sp_addextendedproperty @name = N''' + REPLACE(d.[Name], '''', '''''') + ''', @value = N''' + REPLACE(d.[Declared], '''', '''''') + ''', ' END +
       '@level0type = N''SCHEMA'', @level0name = N''' + REPLACE(d.[Schema], '''', '''''') + ''', @level1type = N''TABLE'', @level1name = N''' + REPLACE(d.[Table], '''', '''''') + '''' +
-      CASE WHEN d.[Level2Type] IS NULL THEN '' ELSE ', @level2type = N''' + d.[Level2Type] + ''', @level2name = N''' + REPLACE(d.[Level2Name], '''', '''''') + '''' END + CHAR(13) + CHAR(10) +
-      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + d.[ObjectType] + ''', ''' + REPLACE(x.[QualifiedName], '''', '''''') + ''', ''modified'')'
+      CASE WHEN d.[Level2Type] IS NULL THEN '' ELSE ', @level2type = N''' + REPLACE(d.[Level2Type], '''', '''''') + ''', @level2name = N''' + REPLACE(d.[Level2Name], '''', '''''') + '''' END + CHAR(13) + CHAR(10) +
+      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, N''' + REPLACE(d.[ObjectType], '''', '''''') + ''', ''' + REPLACE(x.[QualifiedName], '''', '''''') + ''', ''modified'')'
       AS NVARCHAR(MAX))
     FROM #DeclaredProperties d
     CROSS APPLY (SELECT d.[Schema] + '.' + d.[Table] + ISNULL('.' + d.[Level2Name], '') AS [QualifiedName],

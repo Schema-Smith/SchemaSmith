@@ -24,13 +24,13 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM #PausedBuilds p JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = p.[Schema] AND t.[Name] = p.[TableName]) RETURN
 
   RAISERROR('Resolve Paused Resumable Index Builds', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + CASE WHEN i.[IndexName] IS NULL THEN 'Abandoning' ELSE 'Resuming' END + ' the paused build of ' +
-                                  REPLACE(p.[Schema] + '.' + p.[TableName] + '.' + QUOTENAME(p.[IndexName]), '''', '''''') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + REPLACE(REPLACE(CASE WHEN i.[IndexName] IS NULL THEN 'Abandoning' ELSE 'Resuming' END, '''', ''''''), '%', '%%') + ' the paused build of ' +
+                                  REPLACE(REPLACE((p.[Schema] + '.' + p.[TableName] + '.' + QUOTENAME(p.[IndexName])) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER INDEX ' + QUOTENAME(p.[IndexName]) + ' ON ' + p.[Schema] + '.' + p.[TableName] +
                                   CASE WHEN i.[IndexName] IS NULL THEN ' ABORT;'
                                        ELSE ' RESUME' + ISNULL(' WITH (MAX_DURATION = ' + CONVERT(VARCHAR(10), @OnlineApplyMaxDuration) + ' MINUTES)', '') + ';' + CHAR(13) + CHAR(10) +
                                             'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''index'', ''' +
-                                            REPLACE(p.[Schema] + '.' + p.[TableName] + '.' + QUOTENAME(p.[IndexName]), '''', '''''') + ''', ''created'', ''resumable'');'
+                                            REPLACE((p.[Schema] + '.' + p.[TableName] + '.' + QUOTENAME(p.[IndexName])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''created'', ''resumable'');'
                                        END AS NVARCHAR(MAX))
                            FROM #PausedBuilds p
                            JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = p.[Schema] AND t.[Name] = p.[TableName]

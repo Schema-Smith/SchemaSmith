@@ -368,7 +368,7 @@ BEGIN TRY
   RAISERROR('Fixup Index Compression', 10, 100) WITH NOWAIT
   -- A columnstore index reports COLUMNSTORE (or COLUMNSTORE_ARCHIVE); a declaration that names neither means COLUMNSTORE.
   -- Compared raw, the declared default NONE differed on every run and the rebuild to NONE was refused by the engine.
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering index compression for ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ' TO ' + CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering index compression for ' + REPLACE(REPLACE(i.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(i.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(i.[IndexName], '''', ''''''), '%', '%%') + ' TO ' + REPLACE(REPLACE(CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD PARTITION=ALL WITH (DATA_COMPRESSION=' + CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END +
                                   CASE WHEN ol.[Form] IN ('online', 'resumable') THEN ', ONLINE = ON' ELSE '' END + ');' AS NVARCHAR(MAX))
                            FROM #Indexes i WITH (NOLOCK)
@@ -579,10 +579,10 @@ BEGIN TRY
                                                                   i.[KindSuffix] + CASE WHEN {{XmlCompressionCanRead}} = 1 AND i.[XmlCompression] = 1 THEN ' WITH (XML_COMPRESSION = ON)' ELSE '' END
 
   RAISERROR('Handle Renamed Xml Indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Renaming ' + [OldName] + ' to ' + [NewName] + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Renaming ' + REPLACE(REPLACE([OldName], '''', ''''''), '%', '%%') + ' to ' + REPLACE(REPLACE([NewName], '''', ''''''), '%', '%%') + ' ON ' + REPLACE(REPLACE(ir.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(ir.[TableName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN INDEXPROPERTY(OBJECT_ID(ir.[Schema] + '.' + ir.[TableName]), SchemaSmith.fn_StripBracketWrapping(ir.[NewName]), 'IndexID') IS NULL
-                                       THEN 'EXEC sp_rename N''' + SchemaSmith.fn_StripBracketWrapping(ir.[Schema]) + '.' + SchemaSmith.fn_StripBracketWrapping(ir.[TableName]) + '.' + ir.[OldName] + ''', N''' + SchemaSmith.fn_StripBracketWrapping(ir.[NewName]) + ''', N''INDEX'';'
-                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + ir.[Schema] + '.' + ir.[TableName] + '''), ''' + ir.[OldName] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(ir.[OldName]) + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ';'
+                                       THEN 'EXEC sp_rename N''' + REPLACE((ir.[Schema] + '.' + ir.[TableName] + '.' + QUOTENAME(ir.[OldName])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(ir.[NewName]), '''', '''''') + ''', N''INDEX'';'
+                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(N''' + REPLACE((ir.[Schema] + '.' + ir.[TableName]) COLLATE DATABASE_DEFAULT, '''', '''''') + '''), N''' + REPLACE(ir.[OldName], '''', '''''') + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(ir.[OldName]) + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ';'
                                        END AS NVARCHAR(MAX))
                            FROM #XmlIndexRenames ir WITH (NOLOCK)
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -806,15 +806,15 @@ BEGIN TRY
     EXEC SchemaSmith.CdcIndexGuard @DropIndexesRemovedFromProduct = @DropIndexesRemovedFromProduct, @DropUnknownIndexes = @DropUnknownIndexes
 
   RAISERROR('Handle Renamed Indexes And Unique Constraints', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Renaming ' + [OldName] + ' to ' + [NewName] + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Renaming ' + REPLACE(REPLACE([OldName], '''', ''''''), '%', '%%') + ' to ' + REPLACE(REPLACE([NewName], '''', ''''''), '%', '%%') + ' ON ' + REPLACE(REPLACE(ir.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(ir.[TableName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN IsConstraint = 1
                                        THEN CASE WHEN OBJECT_ID(ir.[Schema] + '.' + ir.[NewName]) IS NULL
-                                                 THEN 'EXEC sp_rename N''' + SchemaSmith.fn_StripBracketWrapping(ir.[Schema]) + '.' + ir.[OldName] + ''', N''' + SchemaSmith.fn_StripBracketWrapping(ir.[NewName]) + ''', N''OBJECT'';'
-                                                 ELSE 'IF OBJECT_ID(''' + ir.[Schema] + '.' + QUOTENAME(ir.[OldName]) + ''') IS NOT NULL ALTER TABLE ' + ir.[Schema] + '.' + ir.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(ir.[OldName]) + ';'
+                                                 THEN 'EXEC sp_rename N''' + REPLACE((ir.[Schema] + '.' + QUOTENAME(ir.[OldName])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(ir.[NewName]), '''', '''''') + ''', N''OBJECT'';'
+                                                 ELSE 'IF OBJECT_ID(N''' + REPLACE((ir.[Schema] + '.' + QUOTENAME(ir.[OldName])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''') IS NOT NULL ALTER TABLE ' + ir.[Schema] + '.' + ir.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(ir.[OldName]) + ';'
                                                  END
                                        ELSE CASE WHEN INDEXPROPERTY(OBJECT_ID(ir.[Schema] + '.' + ir.[TableName]), SchemaSmith.fn_StripBracketWrapping(ir.[NewName]), 'IndexID') IS NULL
-                                                 THEN 'EXEC sp_rename N''' + SchemaSmith.fn_StripBracketWrapping(ir.[Schema]) + '.' + SchemaSmith.fn_StripBracketWrapping(ir.[TableName]) + '.' + ir.[OldName] + ''', N''' + SchemaSmith.fn_StripBracketWrapping(ir.[NewName]) + ''', N''INDEX'';'
-                                                 ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + ir.[Schema] + '.' + ir.[TableName] + '''), ''' + ir.[OldName] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(ir.[OldName]) + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ';'
+                                                 THEN 'EXEC sp_rename N''' + REPLACE((ir.[Schema] + '.' + ir.[TableName] + '.' + QUOTENAME(ir.[OldName])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(ir.[NewName]), '''', '''''') + ''', N''INDEX'';'
+                                                 ELSE 'IF INDEXPROPERTY(OBJECT_ID(N''' + REPLACE((ir.[Schema] + '.' + ir.[TableName]) COLLATE DATABASE_DEFAULT, '''', '''''') + '''), N''' + REPLACE(ir.[OldName], '''', '''''') + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(ir.[OldName]) + ' ON ' + ir.[Schema] + '.' + ir.[TableName] + ';'
                                                  END
                                        END AS NVARCHAR(MAX))
                            FROM #IndexRenames ir WITH (NOLOCK)
@@ -928,7 +928,7 @@ BEGIN TRY
     JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(di.[Schema] + '.' + di.[TableName]) AND si.[name] = di.[IndexName] COLLATE DATABASE_DEFAULT
     JOIN sys.foreign_keys fk ON fk.referenced_object_id = si.[object_id] AND fk.key_index_id = si.index_id
     WHERE 1 = 1
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  WARNING: Kept ' + REPLACE(REPLACE(k.[Schema] + '.' + k.[TableName] + '.' + k.[IndexName], '''', ''''''), '%', '%%') +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  WARNING: Kept ' + REPLACE(REPLACE((k.[Schema] + '.' + k.[TableName] + '.' + k.[IndexName]) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') +
                                   ' as it is: foreign key ' + REPLACE(REPLACE(k.[KeyName], '''', ''''''), '%', '%%') + ' references it'', 10, 100) WITH NOWAIT;'
                            FROM #IndexesKeptForForeignKeys k WITH (NOLOCK)
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -988,9 +988,9 @@ BEGIN TRY
   END
 
   RAISERROR('Drop FullText Indexes Referencing Unique Indexes That Will Be Dropped', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping fulltext index on ' + ef.[Schema] + '.' + ef.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping fulltext index on ' + REPLACE(REPLACE(ef.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(ef.[TableName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'DROP FULLTEXT INDEX ON ' + ef.[Schema] + '.' + ef.[TableName] + ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''fullTextIndex'', ''' + ef.[Schema] + '.' + ef.[TableName] + ''', ''dropped'');' AS NVARCHAR(MAX))
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''fullTextIndex'', N''' + REPLACE((ef.[Schema] + '.' + ef.[TableName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''dropped'');' AS NVARCHAR(MAX))
                            FROM #IndexesToDrop id WITH (NOLOCK)
                            JOIN #ExistingFullTextIndexes ef WITH (NOLOCK) ON id.[Schema] = ef.[Schema]
                                                                          AND id.[TableName] = ef.[TableName]
@@ -1021,7 +1021,7 @@ BEGIN TRY
   BEGIN
     RAISERROR('Capture indexes suppressed by PreventDrop (would drop by absence)', 10, 100) WITH NOWAIT
     SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + w.[ObjectType] + ''', ''' + w.[Schema] + '.' + w.[TableName] + '.' + QUOTENAME(w.[IndexName]) + ''', ''dropSuppressed'');' AS NVARCHAR(MAX))
+      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, N''' + REPLACE(w.[ObjectType], '''', '''''') + ''', N''' + REPLACE((w.[Schema] + '.' + w.[TableName] + '.' + QUOTENAME(w.[IndexName])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''dropSuppressed'');' AS NVARCHAR(MAX))
       FROM (
         -- Indexes removed from the product (minus the @DropIndexesRemovedFromProduct gate; per-table opt-out kept)
         SELECT [Schema] = CAST(ir.[Schema] AS NVARCHAR(500)), [TableName] = CAST(ir.[TableName] AS NVARCHAR(500)),
@@ -1063,12 +1063,12 @@ BEGIN TRY
   END
 
   RAISERROR('Drop Unknown and Modified Indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Dropping ' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + di.[Schema] + '.' + di.[TableName] + '.' + QUOTENAME(di.[IndexName]) + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Dropping ' + REPLACE(REPLACE(CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END, '''', ''''''), '%', '%%') + ' ' + REPLACE(REPLACE(di.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(di.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(QUOTENAME(di.[IndexName]), '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN IsConstraint = 1
-                                       THEN 'IF OBJECT_ID(''' + di.[Schema] + '.' + QUOTENAME(di.[IndexName]) + ''') IS NOT NULL ALTER TABLE ' + di.[Schema] + '.' + di.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(di.[IndexName]) + od.[With] + ';'
-                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + di.[Schema] + '.' + di.[TableName] + '''), ''' + di.[IndexName] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(di.[IndexName]) + ' ON ' + di.[Schema] + '.' + di.[TableName] + od.[With] + ';'
+                                       THEN 'IF OBJECT_ID(N''' + REPLACE((di.[Schema] + '.' + QUOTENAME(di.[IndexName])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''') IS NOT NULL ALTER TABLE ' + di.[Schema] + '.' + di.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(di.[IndexName]) + od.[With] + ';'
+                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(N''' + REPLACE((di.[Schema] + '.' + di.[TableName]) COLLATE DATABASE_DEFAULT, '''', '''''') + '''), N''' + REPLACE(di.[IndexName], '''', '''''') + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(di.[IndexName]) + ' ON ' + di.[Schema] + '.' + di.[TableName] + od.[With] + ';'
                                        END + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + REPLACE(di.[Schema] + '.' + di.[TableName] + '.' + QUOTENAME(di.[IndexName]), '''', '''''') + ''', ''dropped'', ' + CASE WHEN od.[With] <> '' THEN '''online''' ELSE 'NULL' END + ');'
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, N''' + REPLACE(CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END, '''', '''''') + ''', ''' + REPLACE((di.[Schema] + '.' + di.[TableName] + '.' + QUOTENAME(di.[IndexName])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''dropped'', ' + CASE WHEN od.[With] <> '' THEN '''online''' ELSE 'NULL' END + ');'
     FROM #IndexesToDrop di WITH (NOLOCK)
     -- Only a clustered index can be dropped online (3745); its heap is then built without blocking.
     CROSS APPLY (SELECT [With] = CASE WHEN di.[IsClustered] = 1 AND SchemaSmith.fn_OnlineOperationsAvailable() = 1
@@ -1088,7 +1088,7 @@ BEGIN TRY
                                           THEN ' WITH (ONLINE = ON)' ELSE '' END) od
 
   RAISERROR('Fixup Modified Fillfactors', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Fixup ' + CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END + ' fillfactor in ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + ''', 10, 100) WITH NOWAIT; ' +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Fixup ' + REPLACE(REPLACE(CASE WHEN IsConstraint = 1 THEN 'constraint' ELSE 'index' END, '''', ''''''), '%', '%%') + ' fillfactor in ' + REPLACE(REPLACE(i.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(i.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(i.[IndexName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT; ' +
                                   'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD WITH (FILLFACTOR = ' + CONVERT(NVARCHAR(5), i.[FillFactor]) + ', SORT_IN_TEMPDB = ON' +
                                   CASE WHEN ol.[Form] IN ('online', 'resumable') THEN ', ONLINE = ON' ELSE '' END + ');' AS NVARCHAR(MAX))
                            FROM #ExistingIndexes ei WITH (NOLOCK)
@@ -1136,7 +1136,7 @@ BEGIN TRY
                                 CASE WHEN RTRIM(ISNULL(s.[FilterExpression], '')) <> '' THEN ' WHERE ' + SchemaSmith.fn_ExpressionMapEffective(s.[Schema], s.[TableName], 'STATISTIC', s.[StatisticName], 'filter', s.[FilterExpression], SchemaSmith.fn_StripParenWrapping((SELECT st2.filter_definition FROM sys.stats st2 WHERE st2.[object_id] = OBJECT_ID(s.[Schema] + '.' + s.[TableName]) AND st2.[name] = SchemaSmith.fn_StripBracketWrapping(s.[StatisticName])))) ELSE '' END
   
   RAISERROR('Drop Modified Statistics', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping statistics ' + sc.[Schema] + '.' + sc.[TableName] + '.' + sc.[StatisticName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping statistics ' + REPLACE(REPLACE(sc.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(sc.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(sc.[StatisticName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'DROP STATISTICS ' + sc.[Schema] + '.' + sc.[TableName] + '.' + sc.[StatisticName] + ';' AS NVARCHAR(MAX))
                            FROM #StatsChanges sc WITH (NOLOCK)
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -1159,10 +1159,10 @@ BEGIN TRY
                           AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
 
   RAISERROR('Drop Conflicting Clustered Index', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping ' + CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + mct.[Schema] + '.' + mct.[TableName] + '.' + QUOTENAME(si.[Name]) + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping ' + REPLACE(REPLACE(CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1 THEN 'constraint' ELSE 'index' END, '''', ''''''), '%', '%%') + ' ' + REPLACE(REPLACE(mct.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(mct.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(QUOTENAME(si.[Name]), '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1
-                                       THEN 'IF OBJECT_ID(''' + mct.[Schema] + '.' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ''') IS NOT NULL ALTER TABLE ' + mct.[Schema] + '.' + mct.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ';'
-                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(''' + mct.[Schema] + '.' + mct.[TableName] + '''), ''' + si.[Name] + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ' ON ' + mct.[Schema] + '.' + mct.[TableName] + ';'
+                                       THEN 'IF OBJECT_ID(N''' + REPLACE(mct.[Schema] + '.' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT), '''', '''''') + ''') IS NOT NULL ALTER TABLE ' + mct.[Schema] + '.' + mct.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ';'
+                                       ELSE 'IF INDEXPROPERTY(OBJECT_ID(N''' + REPLACE((mct.[Schema] + '.' + mct.[TableName]) COLLATE DATABASE_DEFAULT, '''', '''''') + '''), N''' + REPLACE(si.[Name], '''', '''''') + ''', ''IndexID'') IS NOT NULL DROP INDEX ' + QUOTENAME(si.[Name] COLLATE DATABASE_DEFAULT) + ' ON ' + mct.[Schema] + '.' + mct.[TableName] + ';'
                                        END AS NVARCHAR(MAX))
                            FROM #MissingClusteredIndexTables mct WITH (NOLOCK)
                            JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(mct.[Schema] + '.' + mct.[TableName])
@@ -1213,7 +1213,7 @@ BEGIN TRY
   END
 
   RAISERROR('Add Missing Indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Creating ' + CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END + ' ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + CASE WHEN RTRIM(ISNULL(i.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(i.[VariantName]), '''', '''''') + ')' ELSE '' END + CASE WHEN ol.[Form] = 'online' THEN ' (online)' WHEN ol.[Form] = 'resumable' THEN ' (online, resumable)' WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Creating ' + REPLACE(REPLACE(CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END, '''', ''''''), '%', '%%') + ' ' + REPLACE(REPLACE(i.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(i.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(i.[IndexName], '''', ''''''), '%', '%%') + REPLACE(CASE WHEN RTRIM(ISNULL(i.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(i.[VariantName]), '''', '''''') + ')' ELSE '' END, '%', '%%') + REPLACE(REPLACE((CASE WHEN ol.[Form] = 'online' THEN ' (online)' WHEN ol.[Form] = 'resumable' THEN ' (online, resumable)' WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1
                                        THEN 'ALTER TABLE ' + i.[Schema] + '.' + i.[TableName] + ' ADD CONSTRAINT ' + i.[IndexName] +
                                             CASE WHEN i.PrimaryKey = 1 THEN ' PRIMARY KEY ' WHEN i.UniqueConstraint = 1 THEN ' UNIQUE ' END +
@@ -1272,7 +1272,7 @@ BEGIN TRY
                                             CASE WHEN i.[PartitionScheme] IS NOT NULL THEN ' ON ' + i.[PartitionScheme] + '(' + i.[PartitionColumn] + ')'
                                                  WHEN i.[FileGroup] IS NOT NULL THEN ' ON ' + i.[FileGroup] ELSE '' END
                                        END + ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END + ''', ''' + REPLACE(i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], '''', '''''') + ''', ''created'', ' + CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');'
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, N''' + REPLACE(CASE WHEN i.PrimaryKey = 1 OR i.UniqueConstraint = 1 THEN 'constraint' ELSE 'index' END, '''', '''''') + ''', ''' + REPLACE((i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''created'', ' + CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');'
     FROM #Indexes i WITH (NOLOCK)
     LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'index' AND ol.[Schema] = i.[Schema] AND ol.[TableName] = i.[TableName]
                                            AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
@@ -1297,7 +1297,7 @@ BEGIN TRY
                             AND a.ObjectName = i.[Schema] + '.' + i.[TableName] + '.' + QUOTENAME(SchemaSmith.fn_StripBracketWrapping(i.[IndexName])))
 
   RAISERROR('Resume System Versioning Suspended For A Primary Key Rebuild', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Resuming system versioning on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Resuming system versioning on ' + REPLACE(REPLACE(t.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(t.[Name], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = ' + CAST(ep.[value] AS NVARCHAR(600)) + ', DATA_CONSISTENCY_CHECK = ON));' + CHAR(13) + CHAR(10) +
                                   'EXEC sys.sp_dropextendedproperty N''SchemaSmith_SuspendedHistory'', N''SCHEMA'', N''' + REPLACE(SCHEMA_NAME(o.[schema_id]), '''', '''''') + ''', N''TABLE'', N''' + REPLACE(o.[name], '''', '''''') + ''';' AS NVARCHAR(MAX))
                            FROM #Tables t WITH (NOLOCK)
@@ -1309,10 +1309,10 @@ BEGIN TRY
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Add missing ProductName extended property to indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +
-                                  '@level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ' +
-                                  '@level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', ' +
-                                  '@level2type = N''Index'', @level2name = ''' + SchemaSmith.fn_StripBracketWrapping(i.IndexName) + ''';' AS NVARCHAR(MAX))
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = N''' + REPLACE(@ProductName, '''', '''''') + ''', ' +
+                                  '@level0type = N''Schema'', @level0name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', ' +
+                                  '@level1type = N''Table'', @level1name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + ''', ' +
+                                  '@level2type = N''Index'', @level2name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(i.IndexName), '''', '''''') + ''';' AS NVARCHAR(MAX))
                            FROM #Indexes i WITH (NOLOCK)
                            JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = i.[Schema] AND t.[Name] = i.[TableName]
                            WHERE INDEXPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name]), SchemaSmith.fn_StripBracketWrapping(i.IndexName), 'IndexID') IS NOT NULL
@@ -1321,11 +1321,11 @@ BEGIN TRY
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Add Missing Xml Indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Creating index ' + i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName] + CASE WHEN RTRIM(ISNULL(i.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(i.[VariantName]), '''', '''''') + ')' ELSE '' END + CASE WHEN ol.[Form] = 'online' THEN ' (online)' WHEN ol.[Form] = 'resumable' THEN ' (online, resumable)' WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'RAISERROR(''  Creating index ' + REPLACE(REPLACE(i.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(i.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(i.[IndexName], '''', ''''''), '%', '%%') + REPLACE(CASE WHEN RTRIM(ISNULL(i.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(i.[VariantName]), '''', '''''') + ')' ELSE '' END, '%', '%%') + REPLACE(REPLACE((CASE WHEN ol.[Form] = 'online' THEN ' (online)' WHEN ol.[Form] = 'resumable' THEN ' (online, resumable)' WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'CREATE ' + i.[KindPrefix] +
                                   'XML INDEX ' + i.[IndexName] COLLATE DATABASE_DEFAULT + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' (' + i.[Column] + ')' +
                                   i.[KindSuffix] + CASE WHEN i.[XmlCompression] = 1 AND SchemaSmith.fn_ServerMajorVersion() >= 16 THEN ' WITH (XML_COMPRESSION = ON)' ELSE '' END + ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''xmlIndex'', ''' + REPLACE(i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName], '''', '''''') + ''', ''created'', ' + CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');'
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''xmlIndex'', ''' + REPLACE((i.[Schema] + '.' + i.[TableName] + '.' + i.[IndexName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''created'', ' + CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');'
     FROM #XmlIndexes i WITH (NOLOCK)
     LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'xmlIndex' AND ol.[Schema] = i.[Schema] AND ol.[TableName] = i.[TableName]
                                            AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
@@ -1346,10 +1346,10 @@ BEGIN TRY
                               AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
 
   RAISERROR('Add missing ProductName extended property to xml indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +
-                                  '@level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ' +
-                                  '@level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', ' +
-                                  '@level2type = N''Index'', @level2name = ''' + SchemaSmith.fn_StripBracketWrapping(i.IndexName) + ''';' AS NVARCHAR(MAX))
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = N''' + REPLACE(@ProductName, '''', '''''') + ''', ' +
+                                  '@level0type = N''Schema'', @level0name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', ' +
+                                  '@level1type = N''Table'', @level1name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + ''', ' +
+                                  '@level2type = N''Index'', @level2name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(i.IndexName), '''', '''''') + ''';' AS NVARCHAR(MAX))
                            FROM #XmlIndexes i WITH (NOLOCK)
                            JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = i.[Schema] AND t.[Name] = i.[TableName]
                            WHERE INDEXPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name]), SchemaSmith.fn_StripBracketWrapping(i.IndexName), 'IndexID') IS NOT NULL
@@ -1361,12 +1361,12 @@ BEGIN TRY
   -- One CREATE SPATIAL INDEX per declared index the table does not have (a changed one was dropped by
   -- the drop pass above). Every option is written only when declared, so the engine's default stands otherwise.
   -- Doubles go through STR so a bounding box is written exactly, whatever the session's float formatting.
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Creating spatial index ' + s.[Schema] + '.' + s.[TableName] + '.' + s.[IndexName] +
-                                  CASE WHEN RTRIM(ISNULL(s.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(s.[VariantName]), '''', '''''') + ')' ELSE '' END + CASE WHEN ol.[Form] = 'online' THEN ' (online)' WHEN ol.[Form] = 'resumable' THEN ' (online, resumable)' WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Creating spatial index ' + REPLACE(REPLACE(s.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(s.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(s.[IndexName], '''', ''''''), '%', '%%') +
+                                  REPLACE(CASE WHEN RTRIM(ISNULL(s.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(s.[VariantName]), '''', '''''') + ')' ELSE '' END, '%', '%%') + REPLACE(REPLACE((CASE WHEN ol.[Form] = 'online' THEN ' (online)' WHEN ol.[Form] = 'resumable' THEN ' (online, resumable)' WHEN ol.[Form] = 'unavailable' THEN ' (offline: ' + ol.[Reason] + ')' ELSE '' END) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'CREATE SPATIAL INDEX ' + s.[IndexName] + ' ON ' + s.[Schema] + '.' + s.[TableName] + ' (' + s.[Column] + ')' +
                                   CASE WHEN s.[Tessellation] IS NOT NULL THEN ' USING ' + s.[Tessellation] ELSE '' END +
                                   CASE WHEN o.[Options] <> '' THEN ' WITH (' + STUFF(o.[Options], 1, 2, '') + ')' ELSE '' END + ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''index'', ''' + REPLACE(s.[Schema] + '.' + s.[TableName] + '.' + s.[IndexName], '''', '''''') + ''', ''created'', ' + CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');' AS NVARCHAR(MAX))
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''index'', ''' + REPLACE((s.[Schema] + '.' + s.[TableName] + '.' + s.[IndexName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''created'', ' + CASE WHEN ol.[Form] IS NULL THEN 'NULL' ELSE '''' + ol.[Form] + '''' END + ');' AS NVARCHAR(MAX))
     FROM #SpatialIndexes s WITH (NOLOCK)
     LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'spatialIndex' AND ol.[Schema] = s.[Schema] AND ol.[TableName] = s.[TableName]
                                            AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(s.[IndexName])
@@ -1386,10 +1386,10 @@ BEGIN TRY
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Add missing ProductName extended property to spatial indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +
-                                                              '@level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ' +
-                                                              '@level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', ' +
-                                                              '@level2type = N''Index'', @level2name = ''' + SchemaSmith.fn_StripBracketWrapping(i.IndexName) + ''';' AS NVARCHAR(MAX))
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = N''' + REPLACE(@ProductName, '''', '''''') + ''', ' +
+                                                              '@level0type = N''Schema'', @level0name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', ' +
+                                                              '@level1type = N''Table'', @level1name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + ''', ' +
+                                                              '@level2type = N''Index'', @level2name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(i.IndexName), '''', '''''') + ''';' AS NVARCHAR(MAX))
                            FROM #SpatialIndexes i WITH (NOLOCK)
                            JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = i.[Schema] AND t.[Name] = i.[TableName]
                            WHERE INDEXPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name]), SchemaSmith.fn_StripBracketWrapping(i.IndexName), 'IndexID') IS NOT NULL
@@ -1402,10 +1402,10 @@ BEGIN TRY
 {{CreateMissingJsonIndexes}}  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Add missing ProductName extended property to JSON indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = ''' + @ProductName + ''', ' +
-                                                              '@level0type = N''Schema'', @level0name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ' +
-                                                              '@level1type = N''Table'', @level1name = ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', ' +
-                                                              '@level2type = N''Index'', @level2name = ''' + SchemaSmith.fn_StripBracketWrapping(i.IndexName) + ''';' AS NVARCHAR(MAX))
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC sp_addextendedproperty @name = N''ProductName'', @value = N''' + REPLACE(@ProductName, '''', '''''') + ''', ' +
+                                                              '@level0type = N''Schema'', @level0name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', ' +
+                                                              '@level1type = N''Table'', @level1name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + ''', ' +
+                                                              '@level2type = N''Index'', @level2name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(i.IndexName), '''', '''''') + ''';' AS NVARCHAR(MAX))
                            FROM #JsonIndexes i WITH (NOLOCK)
                            JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = i.[Schema] AND t.[Name] = i.[TableName]
                            WHERE INDEXPROPERTY(OBJECT_ID(t.[Schema] + '.' + t.[Name]), SchemaSmith.fn_StripBracketWrapping(i.IndexName), 'IndexID') IS NOT NULL
@@ -1416,7 +1416,7 @@ BEGIN TRY
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Add Missing Statistics', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Creating statistics ' + s.[Schema] + '.' + s.[TableName] + '.' + s.[StatisticName] + CASE WHEN RTRIM(ISNULL(s.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(s.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Creating statistics ' + REPLACE(REPLACE(s.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(s.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(s.[StatisticName], '''', ''''''), '%', '%%') + REPLACE(CASE WHEN RTRIM(ISNULL(s.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(s.[VariantName]), '''', '''''') + ')' ELSE '' END, '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'CREATE STATISTICS ' + s.[StatisticName] + ' ON ' + s.[Schema] + '.' + s.[TableName] + ' (' + s.[Columns] + ')' +
                                   CASE WHEN RTRIM(ISNULL(s.[FilterExpression], '')) <> '' THEN ' WHERE ' + s.[FilterExpression] ELSE '' END +
                                   CASE WHEN ISNULL(s.[SampleSize], 0) > 0 THEN ' WITH SAMPLE ' + CAST(s.[SampleSize] AS NVARCHAR(20)) + ' PERCENT' ELSE '' END + ';' AS NVARCHAR(MAX))
@@ -1430,9 +1430,9 @@ BEGIN TRY
 
   -- A full-text index's columns are a set: the order they are declared in is not a change.
   RAISERROR('Drop Modified or Removed FullText Indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping fulltext index on ' + ei.[Schema] + '.' + ei.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping fulltext index on ' + REPLACE(REPLACE(ei.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(ei.[TableName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'DROP FULLTEXT INDEX ON ' + ei.[Schema] + '.' + ei.[TableName] + ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''fullTextIndex'', ''' + ei.[Schema] + '.' + ei.[TableName] + ''', ''dropped'');' AS NVARCHAR(MAX))
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''fullTextIndex'', N''' + REPLACE((ei.[Schema] + '.' + ei.[TableName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''dropped'');' AS NVARCHAR(MAX))
                            FROM #ExistingFullTextIndexes ei WITH (NOLOCK)
                            LEFT JOIN #FullTextIndexes fi WITH (NOLOCK) ON fi.[Schema] = ei.[Schema]
                                                                       AND fi.[TableName] = ei.[TableName]
@@ -1462,11 +1462,11 @@ BEGIN TRY
            OR fi.[TableName] IS NULL
 
   RAISERROR('Add Missing FullText Indexes', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding fulltext index on ' + fi.[Schema] + '.' + fi.[TableName] + CASE WHEN RTRIM(ISNULL(fi.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(fi.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding fulltext index on ' + REPLACE(REPLACE(fi.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(fi.[TableName], '''', ''''''), '%', '%%') + REPLACE(CASE WHEN RTRIM(ISNULL(fi.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(fi.[VariantName]), '''', '''''') + ')' ELSE '' END, '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'CREATE FULLTEXT INDEX ON ' + fi.[Schema] + '.' + fi.[TableName] + ' (' + [Columns] + ') KEY INDEX ' + [KeyIndex] + ' ON ' + [FullTextCatalog] +
                                   ' WITH CHANGE_TRACKING = ' + [ChangeTracking] +
                                   CASE WHEN RTRIM(ISNULL(fi.[StopList], '')) <> '' THEN ', STOPLIST = ' + [StopList] ELSE '' END + ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''fullTextIndex'', ''' + fi.[Schema] + '.' + fi.[TableName] + ''', ''created'');' AS NVARCHAR(MAX))
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''fullTextIndex'', N''' + REPLACE((fi.[Schema] + '.' + fi.[TableName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #FullTextIndexes fi WITH (NOLOCK)
                            WHERE NOT EXISTS (SELECT * FROM sys.fulltext_indexes ft WHERE ft.[object_id] = OBJECT_ID(fi.[Schema] + '.' + fi.[TableName]))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')

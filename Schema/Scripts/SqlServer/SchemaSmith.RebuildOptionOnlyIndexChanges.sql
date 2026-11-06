@@ -31,13 +31,13 @@ BEGIN
   DELETE ic FROM #IndexChanges ic
    WHERE EXISTS (SELECT 1 FROM #IndexOptionRebuilds r WITH (NOLOCK) WHERE r.[Schema] = ic.[Schema] AND r.[TableName] = ic.[TableName] AND r.[IndexName] = ic.[IndexName])
 
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Rebuilding ' + CASE WHEN r.[IsConstraint] = 1 THEN 'constraint' ELSE 'index' END + ' ' + r.[Schema] + '.' + r.[TableName] + '.' + r.[IndexName] + ' with its declared options' +
-                                  CASE WHEN ol.[Form] IN ('online', 'resumable') THEN ' (online)' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Rebuilding ' + REPLACE(REPLACE(CASE WHEN r.[IsConstraint] = 1 THEN 'constraint' ELSE 'index' END, '''', ''''''), '%', '%%') + ' ' + REPLACE(REPLACE(r.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(r.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(r.[IndexName], '''', ''''''), '%', '%%') + ' with its declared options' +
+                                  REPLACE(REPLACE(CASE WHEN ol.[Form] IN ('online', 'resumable') THEN ' (online)' ELSE '' END, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER INDEX ' + r.[IndexName] + ' ON ' + r.[Schema] + '.' + r.[TableName] + ' REBUILD WITH (PAD_INDEX = ' + CASE WHEN r.[PadIndex] = 1 THEN 'ON' ELSE 'OFF' END +
                                   CASE WHEN r.[IsConstraint] = 0 THEN ', IGNORE_DUP_KEY = ' + CASE WHEN r.[IgnoreDuplicateKey] = 1 THEN 'ON' ELSE 'OFF' END ELSE '' END +
                                   CASE WHEN ol.[Form] IN ('online', 'resumable') THEN ', ONLINE = ON' ELSE '' END + ');' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''' + CASE WHEN r.[IsConstraint] = 1 THEN 'constraint' ELSE 'index' END + ''', ''' +
-                                  REPLACE(r.[Schema] + '.' + r.[TableName] + '.' + r.[IndexName], '''', '''''') + ''', ''modified'', ' +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, N''' + REPLACE(CASE WHEN r.[IsConstraint] = 1 THEN 'constraint' ELSE 'index' END, '''', '''''') + ''', ''' +
+                                  REPLACE((r.[Schema] + '.' + r.[TableName] + '.' + r.[IndexName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''modified'', ' +
                                   CASE WHEN ol.[Form] IS NULL THEN 'NULL' WHEN ol.[Form] = 'resumable' THEN '''online''' ELSE '''' + ol.[Form] + '''' END + ');' AS NVARCHAR(MAX))
                            FROM #IndexOptionRebuilds r WITH (NOLOCK)
                            LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'index' AND ol.[Schema] = r.[Schema] AND ol.[TableName] = r.[TableName]

@@ -61,7 +61,7 @@ BEGIN
           JOIN sys.tables mt ON mt.[object_id] = OBJECT_ID(t.[Schema] + ''.['' + t.[TableName] + '']'') AND mt.temporal_type = 2
           JOIN sys.tables h ON h.[object_id] = mt.history_table_id
           JOIN sys.schemas hs ON hs.[schema_id] = h.[schema_id]'
-    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Turn OFF system versioning for ' + t.[Schema] + '.' + t.[TableName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Turn OFF system versioning for ' + REPLACE(REPLACE(t.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(t.[TableName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                     'ALTER TABLE ' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) + ' SET (SYSTEM_VERSIONING = OFF);' AS NVARCHAR(MAX))
                              FROM #TablesRemovedFromProduct t WITH (NOLOCK)
                              WHERE OBJECTPROPERTY(OBJECT_ID(t.[Schema] + '.' + QUOTENAME(t.[TableName]) + ''), 'TableTemporalType') = 2
@@ -69,9 +69,9 @@ BEGIN
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
     RAISERROR('Drop inbound foreign keys referencing tables removed from the product', 10, 100) WITH NOWAIT
-    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping inbound foreign key ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                    'IF OBJECT_ID(''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''') IS NOT NULL ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + ' DROP CONSTRAINT ' + QUOTENAME(fk.[name]) + ';' + CHAR(13) + CHAR(10) +
-                                    'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''', ''dropped'');' AS NVARCHAR(MAX))
+    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping inbound foreign key ' + REPLACE(REPLACE(QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)), '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(QUOTENAME(OBJECT_NAME(fk.parent_object_id)), '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(QUOTENAME(fk.[name]), '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                    'IF OBJECT_ID(N''' + REPLACE((QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''') IS NOT NULL ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + ' DROP CONSTRAINT ' + QUOTENAME(fk.[name]) + ';' + CHAR(13) + CHAR(10) +
+                                    'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', N''' + REPLACE((QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''dropped'');' AS NVARCHAR(MAX))
                              FROM #TablesRemovedFromProduct t WITH (NOLOCK)
                              JOIN sys.foreign_keys fk ON fk.referenced_object_id = OBJECT_ID(t.[Schema] + '.' + QUOTENAME(t.[TableName]) + '')
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
@@ -96,12 +96,12 @@ BEGIN
       WHERE OBJECT_ID('SchemaSmith.CustomTableDrop') IS NOT NULL
 
     RAISERROR('Drop tables removed from the product', 10, 100) WITH NOWAIT
-    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + CASE WHEN OBJECT_ID('SchemaSmith.CustomTableDrop') IS NOT NULL THEN 'Handing table ' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) + ' to SchemaSmith.CustomTableDrop (no longer in product)' ELSE 'Dropping table ' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + REPLACE(REPLACE((CASE WHEN OBJECT_ID('SchemaSmith.CustomTableDrop') IS NOT NULL THEN 'Handing table ' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) + ' to SchemaSmith.CustomTableDrop (no longer in product)' ELSE 'Dropping table ' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) END) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                     CASE WHEN OBJECT_ID('SchemaSmith.CustomTableDrop') IS NOT NULL
-                                         THEN 'EXEC SchemaSmith.CustomTableDrop ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ''' + t.[TableName] + ''';'
-                                         ELSE 'IF OBJECT_ID(''' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) + ''') IS NOT NULL DROP TABLE ' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) + ';'
+                                         THEN 'EXEC SchemaSmith.CustomTableDrop N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', N''' + REPLACE(t.[TableName], '''', '''''') + ''';'
+                                         ELSE 'IF OBJECT_ID(N''' + REPLACE((t.[Schema] + '.' + QUOTENAME(t.[TableName])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''') IS NOT NULL DROP TABLE ' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) + ';'
                                          END + CHAR(13) + CHAR(10) +
-                                    'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''table'', ''' + t.[Schema] + '.' + QUOTENAME(t.[TableName]) + ''', ''dropped'');' AS NVARCHAR(MAX))
+                                    'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''table'', N''' + REPLACE((t.[Schema] + '.' + QUOTENAME(t.[TableName])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''dropped'');' AS NVARCHAR(MAX))
                              FROM #TablesRemovedFromProduct t WITH (NOLOCK)
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
@@ -132,8 +132,8 @@ BEGIN
     IF OBJECT_ID('SchemaSmith.CustomTableDrop') IS NULL
     BEGIN
       RAISERROR('Drop history tables of temporal tables removed from the product', 10, 100) WITH NOWAIT
-      SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping history table ' + h.HistSchema + '.' + h.HistName + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                      'IF OBJECT_ID(''' + QUOTENAME(h.HistSchema) + '.' + QUOTENAME(h.HistName) + ''') IS NOT NULL DROP TABLE ' + QUOTENAME(h.HistSchema) + '.' + QUOTENAME(h.HistName) + ';' AS NVARCHAR(MAX))
+      SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping history table ' + REPLACE(REPLACE(h.HistSchema, '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(h.HistName, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                      'IF OBJECT_ID(N''' + REPLACE((QUOTENAME(h.HistSchema) + '.' + QUOTENAME(h.HistName)) COLLATE DATABASE_DEFAULT, '''', '''''') + ''') IS NOT NULL DROP TABLE ' + QUOTENAME(h.HistSchema) + '.' + QUOTENAME(h.HistName) + ';' AS NVARCHAR(MAX))
                                FROM #RemovedTemporalHistory h WITH (NOLOCK)
                                FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
       IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)

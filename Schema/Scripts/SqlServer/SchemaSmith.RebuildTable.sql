@@ -260,9 +260,9 @@ BEGIN
   -- this procedure would mean maintaining FK construction against a second source of truth.
   DECLARE @v_DropInboundFkSql NVARCHAR(MAX)
   SELECT @v_DropInboundFkSql = STUFF((SELECT @v_CrLf + CAST(
-             'RAISERROR(''  Dropping inbound foreign key ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''', 10, 100) WITH NOWAIT;' + @v_CrLf +
+             'RAISERROR(''  Dropping inbound foreign key ' + REPLACE(REPLACE(QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)), '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(QUOTENAME(OBJECT_NAME(fk.parent_object_id)), '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(QUOTENAME(fk.[name]), '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + @v_CrLf +
              'ALTER TABLE ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + ' DROP CONSTRAINT ' + QUOTENAME(fk.[name]) + ';' + @v_CrLf +
-             'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', ''' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ''', ''dropped'');'
+             'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''foreignKey'', N''' + REPLACE((QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''dropped'');'
              AS NVARCHAR(MAX))
            FROM sys.foreign_keys fk
            WHERE fk.referenced_object_id = @v_ObjectId

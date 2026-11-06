@@ -39,9 +39,9 @@ BEGIN
 
   RAISERROR('Converge constraint enforcement and validation', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-      'RAISERROR(''  ' + x.[Verb] + ' ' + x.[Kind] + ' ' + REPLACE(REPLACE(x.[QualifiedName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT' + CHAR(13) + CHAR(10) +
+      'RAISERROR(''  ' + REPLACE(REPLACE(x.[Verb], '''', ''''''), '%', '%%') + ' ' + REPLACE(REPLACE(x.[Kind], '''', ''''''), '%', '%%') + ' ' + REPLACE(REPLACE(x.[QualifiedName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT' + CHAR(13) + CHAR(10) +
       'ALTER TABLE ' + QUOTENAME(s.[Schema]) + '.' + QUOTENAME(s.[Table]) + ' ' + x.[Clause] + ' CONSTRAINT ' + QUOTENAME(s.[Name]) + CHAR(13) + CHAR(10) +
-      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + s.[ObjectType] + ''', ''' + REPLACE(x.[QualifiedName], '''', '''''') + ''', ''modified'')'
+      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, N''' + REPLACE(s.[ObjectType], '''', '''''') + ''', ''' + REPLACE(x.[QualifiedName], '''', '''''') + ''', ''modified'')'
       AS NVARCHAR(MAX))
     FROM #ConstraintStates s
     CROSS APPLY (SELECT s.[Schema] + '.' + s.[Table] + '.' + s.[Name] AS [QualifiedName],

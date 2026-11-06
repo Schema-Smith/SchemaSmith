@@ -171,8 +171,8 @@ BEGIN TRY
   END
 
   RAISERROR('Handle Table Renames', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Rename ' + t.[Schema] + '.' + t.[OldName] + ' to ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'EXEC sp_rename ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + '.' + SchemaSmith.fn_StripBracketWrapping(t.[OldName]) + ''', ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''';' + CHAR(13) + CHAR(10) AS NVARCHAR(MAX))
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Rename ' + REPLACE(REPLACE(t.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(t.[OldName], '''', ''''''), '%', '%%') + ' to ' + REPLACE(REPLACE(t.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(t.[Name], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'EXEC sp_rename N''' + REPLACE((t.[Schema] + '.' + t.[OldName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + ''';' + CHAR(13) + CHAR(10) AS NVARCHAR(MAX))
                            FROM #Tables t WITH (NOLOCK)
                            WHERE OBJECT_ID(t.[Schema] + '.' + t.[OldName]) IS NOT NULL
                              AND OBJECT_ID(t.[Schema] + '.' + t.[Name]) IS NULL
@@ -180,8 +180,8 @@ BEGIN TRY
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   RAISERROR('Handle Column Renames', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Rename ' + c.[Schema] + '.' + c.[TableName] + '.' + c.[OldName] + ' to ' + c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'EXEC sp_rename ''' + SchemaSmith.fn_StripBracketWrapping(c.[Schema]) + '.' + SchemaSmith.fn_StripBracketWrapping(c.[TableName]) + '.' + SchemaSmith.fn_StripBracketWrapping(c.[OldName]) + ''', ''' + SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]) + ''', ''COLUMN'';' + CHAR(13) + CHAR(10) AS NVARCHAR(MAX))
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Rename ' + REPLACE(REPLACE(c.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[OldName], '''', ''''''), '%', '%%') + ' to ' + REPLACE(REPLACE(c.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[ColumnName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'EXEC sp_rename N''' + REPLACE((c.[Schema] + '.' + c.[TableName] + '.' + c.[OldName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), '''', '''''') + ''', ''COLUMN'';' + CHAR(13) + CHAR(10) AS NVARCHAR(MAX))
                            FROM #Columns c WITH (NOLOCK)
                            WHERE COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName]), SchemaSmith.fn_StripBracketWrapping(c.[OldName]), 'AllowsNull') IS NOT NULL
                              AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName]), SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'AllowsNull') IS NULL
@@ -191,13 +191,13 @@ BEGIN TRY
   IF OBJECT_ID('SchemaSmith.CustomTableRestore') IS NOT NULL
   BEGIN
     RAISERROR('Attempt custom table restore for tables being added in case they were custom dropped previously', 10, 100) WITH NOWAIT
-    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC SchemaSmith.CustomTableRestore ''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', ''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''';' AS NVARCHAR(MAX))
+    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('EXEC SchemaSmith.CustomTableRestore N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + ''';' AS NVARCHAR(MAX))
                              FROM #Tables t WITH (NOLOCK)
                              WHERE NewTable = 1
                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
-    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + t.[Schema] + '.' + t.[Name] + ' Restored'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
+    SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  ' + REPLACE(REPLACE(t.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(t.[Name], '''', ''''''), '%', '%%') + ' Restored'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
                              FROM #Tables t WITH (NOLOCK)
                              WHERE NewTable = 1
                                AND OBJECT_ID([Schema] + '.' + [Name], 'U') IS NOT NULL
@@ -329,10 +329,11 @@ BEGIN TRY
   CREATE CLUSTERED INDEX [ix_AddTableColumns] ON #AddTableColumns ([KeySchema], [KeyTableName], [_RowId]);
 
   RAISERROR('Add New Tables', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding new table ' + t.[Schema] + '.' + t.[Name] +
-                                  CASE WHEN RTRIM(ISNULL(t.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(t.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'EXEC(''' + CASE WHEN t.[HasPaddingOff] = 1 THEN 'SET ANSI_PADDING OFF; ' ELSE '' END +
-                                  'CREATE TABLE ' + t.[Schema] + '.' + t.[Name] + ' (' + REPLACE(ScriptColumns, '''', '''''') + REPLACE(InlineIndexes, '''', '''''') + ')' +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding new table ' + REPLACE(REPLACE(t.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(t.[Name], '''', ''''''), '%', '%%') +
+                                  REPLACE(CASE WHEN RTRIM(ISNULL(t.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(t.[VariantName]), '''', '''''') + ')' ELSE '' END, '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  -- The statement runs inside EXEC(N'...'), so every quote in it -- a name's, a default's -- is doubled, once.
+                                  'EXEC(N''' + REPLACE((CASE WHEN t.[HasPaddingOff] = 1 THEN 'SET ANSI_PADDING OFF; ' ELSE '' END +
+                                  'CREATE TABLE ' + t.[Schema] + '.' + t.[Name] + ' (' + ScriptColumns + InlineIndexes + ')' +
                                   -- Filegroup placement (#filegroups): ON comes right after the column list,
                                   -- BEFORE the WITH clause, per CREATE TABLE's own grammar. Existence was
                                   -- already validated above, so this can emit unconditionally.
@@ -362,10 +363,10 @@ BEGIN TRY
                                   -- so each part contributes ', <option>' and the leading comma is
                                   -- stripped once. An empty list emits no WITH at all, which is what
                                   -- keeps a table with neither exactly as it was before ledger existed.
-                                  CASE WHEN t.[WithOptions] <> '' THEN ' WITH (' + STUFF(t.[WithOptions], 1, 2, '') + ')' ELSE '' END + ''');' + CHAR(13) + CHAR(10) +
+                                  CASE WHEN t.[WithOptions] <> '' THEN ' WITH (' + STUFF(t.[WithOptions], 1, 2, '') + ')' ELSE '' END) COLLATE DATABASE_DEFAULT, '''', '''''') + ''');' + CHAR(13) + CHAR(10) +
                                   CASE WHEN t.[HasPaddingOff] = 1 AND t.[RepadScripts] IS NOT NULL
-                                       THEN 'EXEC(''SET ANSI_PADDING ON; ' + REPLACE(t.[RepadScripts], '''', '''''') + ';'');' + CHAR(13) + CHAR(10) ELSE '' END +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''table'', ''' + t.[Schema] + '.' + t.[Name] + ''', ''created'');' AS NVARCHAR(MAX))
+                                       THEN 'EXEC(N''SET ANSI_PADDING ON; ' + REPLACE(t.[RepadScripts], '''', '''''') + ';'');' + CHAR(13) + CHAR(10) ELSE '' END +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''table'', N''' + REPLACE((t.[Schema] + '.' + t.[Name]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM (SELECT t.[Schema], t.[Name],
                                         HasPaddingOff = CASE WHEN t.[MemoryOptimized] = 0
                                                               AND EXISTS (SELECT 1 FROM #AddTableColumns C2 WITH (NOLOCK)
@@ -459,8 +460,8 @@ BEGIN TRY
         FROM #Tables t WITH (NOLOCK) WHERE NewTable = 1
 
   RAISERROR('Add New Physical Columns', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding ' + CAST(ColumnCount AS NVARCHAR(100)) + ' new columns to ' + t.[Schema] + '.' + t.[Name] +
-                                  CASE WHEN RTRIM(ISNULL(VariantList, '')) <> '' THEN ' (variant: ' + VariantList + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding ' + REPLACE(REPLACE(CAST(ColumnCount AS NVARCHAR(100)), '''', ''''''), '%', '%%') + ' new columns to ' + REPLACE(REPLACE(t.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(t.[Name], '''', ''''''), '%', '%%') +
+                                  REPLACE(REPLACE((CASE WHEN RTRIM(ISNULL(VariantList, '')) <> '' THEN ' (variant: ' + VariantList + ')' ELSE '' END) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN t.[HasPaddingOff] = 1 THEN 'SET ANSI_PADDING OFF;' + CHAR(13) + CHAR(10) ELSE '' END +
                                   'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' ADD ' + ColumnScripts + ';' +
                                   CASE WHEN t.[HasPaddingOff] = 1
