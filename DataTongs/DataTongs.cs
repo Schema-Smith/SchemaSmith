@@ -628,15 +628,17 @@ public class DataTongs
 
     internal (string Schema, string Name) ParseTableName(string fullName, string databaseName = null)
     {
-        var parts = fullName.Split('.').Select(p => p.Trim()).ToArray();
+        // Split at the dot between the parts only: a delimited name ([Sales.Q1], "a.b", `a.b`) keeps its own.
+        var (schema, name) = Identifier.SplitQualifiedName(fullName.Trim(), _platform);
+        name = name.Trim();
 
         // MySQL has no schema concept — database.table is the only dotted form.
         // Strip the database prefix if present; we use the connection's database context instead.
         if (_platform.GetBasePlatform() == Platform.MySQL)
-            return ("", parts.Length == 2 ? parts[1] : parts[0]);
+            return ("", name);
 
-        if (parts.Length == 2)
-            return (parts[0], parts[1]);
+        if (schema != null)
+            return (schema.Trim(), name);
 
         var defaultSchema = _platform.GetBasePlatform() switch
         {
@@ -645,7 +647,7 @@ public class DataTongs
             _ => ""
         };
 
-        return (defaultSchema, parts[0]);
+        return (defaultSchema, name);
     }
 
     /// <summary>
@@ -660,16 +662,17 @@ public class DataTongs
 
     internal string FormatOrderColumns(string keyColumns)
     {
-        return _platform.GetBasePlatform() switch
+        var (open, close) = _platform.GetBasePlatform() switch
         {
-            Platform.SqlServer => string.Join(",", keyColumns.Split(',')
-                .Select(c => $"[{c.Trim().Trim(']', '[', '*')}]")),
-            Platform.PostgreSQL => string.Join(",", keyColumns.Split(',')
-                .Select(c => $"\"{c.Trim().Trim('\"', '*')}\"")),
-            Platform.MySQL => string.Join(",", keyColumns.Split(',')
-                .Select(c => $"`{c.Trim().Trim('`', '*')}`")),
-            _ => keyColumns
+            Platform.SqlServer => ("[", "]"),
+            Platform.PostgreSQL => ("\"", "\""),
+            Platform.MySQL => ("`", "`"),
+            _ => (null, null)
         };
+        if (open == null) return keyColumns;
+        // Each key of the list, its nullable marker dropped and its delimiters put back with the name's own escaped.
+        return string.Join(",", Identifier.SplitDelimitedList(keyColumns, _platform)
+            .Select(c => open + Identifier.EscapeDelimited(Identifier.Unwrap(c.TrimStart('*').Trim(), _platform), _platform) + close));
     }
 
     internal static bool IsValidKeyColumns(string keyColumns)
@@ -694,7 +697,7 @@ public class DataTongs
     private (bool Exists, bool IsGraphEdge) SourceTableState(IDbCommand cmd, string schemaOrDb, string tableName)
     {
         if (_platform.GetBasePlatform() != Platform.SqlServer) return (TableExists(cmd, schemaOrDb, tableName), false);
-        var id = $"OBJECT_ID('{schemaOrDb.Replace("'", "''")}.{tableName.Replace("'", "''")}')";
+        var id = SqlServerObjectId(schemaOrDb, tableName);
         cmd.CommandText = $"SELECT CASE WHEN {id} IS NULL THEN 0 WHEN {MergeScriptHelper.SqlServerIsGraphTable(id)} " +
                           $"AND EXISTS (SELECT 1 FROM sys.columns e WHERE e.[object_id] = {id} AND e.[name] LIKE '$edge[_]id[_]%') THEN 2 ELSE 1 END";
         var state = Convert.ToInt32(cmd.ExecuteScalar() ?? 0);
@@ -712,9 +715,14 @@ public class DataTongs
         };
     }
 
+    // The table's id from its quoted two-part name, as a Unicode literal: unquoted, a name holding a dot or a bracket
+    // named another object or none, and a character outside the code page was lost.
+    private static string SqlServerObjectId(string schema, string table) =>
+        $"OBJECT_ID(N'{$"[{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(table, Platform.SqlServer)}]".Replace("'", "''")}')";
+
     private static bool TableExistsSqlServer(IDbCommand cmd, string tableSchema, string tableName)
     {
-        cmd.CommandText = $"SELECT CAST(CASE WHEN OBJECT_ID('{tableSchema.Replace("'", "''")}.{tableName.Replace("'", "''")}') IS NOT NULL THEN 1 ELSE 0 END AS BIT)";
+        cmd.CommandText = $"SELECT CAST(CASE WHEN {SqlServerObjectId(tableSchema, tableName)} IS NOT NULL THEN 1 ELSE 0 END AS BIT)";
         return cmd.ExecuteScalar() as bool? ?? false;
     }
 
@@ -773,18 +781,18 @@ SELECT EXISTS (
     {
         cmd.CommandText = $@"
 SELECT STUFF((SELECT ',' + CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
-                       THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + '], [' + c.COLUMN_NAME + '].STSrid AS [' + c.COLUMN_NAME + '.STSrid]'
+                       THEN QUOTENAME(c.COLUMN_NAME) + '.ToString() AS ' + QUOTENAME(c.COLUMN_NAME) + ', ' + QUOTENAME(c.COLUMN_NAME) + '.STSrid AS ' + QUOTENAME(c.COLUMN_NAME + '.STSrid')
                        WHEN c.DATA_TYPE = 'hierarchyid'
-                       THEN '[' + c.COLUMN_NAME + '].ToString() AS [' + c.COLUMN_NAME + ']'
+                       THEN QUOTENAME(c.COLUMN_NAME) + '.ToString() AS ' + QUOTENAME(c.COLUMN_NAME)
                        -- A vector as its text, which SQL Server writes exactly; FOR JSON would write an array delivery cannot read.
                        WHEN c.DATA_TYPE = 'vector'
-                       THEN 'CAST([' + c.COLUMN_NAME + '] AS NVARCHAR(MAX)) AS [' + c.COLUMN_NAME + ']'
-                       ELSE '[' + c.COLUMN_NAME + ']' END
+                       THEN 'CAST(' + QUOTENAME(c.COLUMN_NAME) + ' AS NVARCHAR(MAX)) AS ' + QUOTENAME(c.COLUMN_NAME)
+                       ELSE QUOTENAME(c.COLUMN_NAME) END
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
-  WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
+                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
+  WHERE c.TABLE_SCHEMA = N'{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = N'{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
     {MergeScriptHelper.SqlServerGraphColumnFilter}AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
   ORDER BY c.COLUMN_NAME
@@ -798,18 +806,18 @@ SELECT STUFF((SELECT ',' + CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
         cmd.CommandText = $@"
 SELECT STRING_AGG(
     CASE WHEN c.udt_name IN ('geometry','geography')
-         THEN 'ST_AsText(""' || c.column_name || '"") AS ""' || c.column_name || '"", ST_SRID(""' || c.column_name || '"") AS ""' || c.column_name || '.STSrid""'
+         THEN 'ST_AsText(""' || replace(c.column_name, '""', '""""') || '"") AS ""' || replace(c.column_name, '""', '""""') || '"", ST_SRID(""' || replace(c.column_name, '""', '""""') || '"") AS ""' || replace(c.column_name, '""', '""""') || '.STSrid""'
          WHEN c.udt_name = 'bytea'
-         THEN 'encode(""' || c.column_name || '"", ''base64'') AS ""' || c.column_name || '""'
+         THEN 'encode(""' || replace(c.column_name, '""', '""""') || '"", ''base64'') AS ""' || replace(c.column_name, '""', '""""') || '""'
          -- An array as PostgreSQL's own literal, which keeps its dimensions, bounds and quoting; joining it on '*,*'
          -- flattened a two-dimensional array, lost non-default lower bounds, and split any element containing the delimiter.
          WHEN LEFT(c.udt_name, 1) = '_'
-         THEN '""' || c.column_name || '""::text AS ""' || c.column_name || '""'
+         THEN '""' || replace(c.column_name, '""', '""""') || '""::text AS ""' || replace(c.column_name, '""', '""""') || '""'
          -- The single-byte char type; a non-ASCII byte is written as its signed number (always '-' and digits, which no
          -- char text can be), since its text form is an escape that PostgreSQL before 15 cannot read back.
          WHEN c.udt_name = 'char'
-         THEN 'CASE WHEN ""' || c.column_name || '""::int < 0 THEN (""' || c.column_name || '""::int)::text ELSE ""' || c.column_name || '""::text END AS ""' || c.column_name || '""'
-         ELSE '""' || c.column_name || '""' END, ',' ORDER BY c.column_name)
+         THEN 'CASE WHEN ""' || replace(c.column_name, '""', '""""') || '""::int < 0 THEN (""' || replace(c.column_name, '""', '""""') || '""::int)::text ELSE ""' || replace(c.column_name, '""', '""""') || '""::text END AS ""' || replace(c.column_name, '""', '""""') || '""'
+         ELSE '""' || replace(c.column_name, '""', '""""') || '""' END, ',' ORDER BY c.column_name)
   FROM information_schema.columns c
   JOIN pg_class cls ON cls.relname = c.table_name
   JOIN pg_namespace ns ON ns.oid = cls.relnamespace AND ns.nspname = c.table_schema
@@ -1009,32 +1017,32 @@ SELECT CAST((
             case "geometry":
             case "geography":
                 // AsTextZM, not STAsText: the latter drops Z and M, so POINT (1 2 3 4) arrived as POINT (1 2).
-                return $"('{nameLiteral}', t.{ident}.AsTextZM())," +
-                       $"('{nameLiteral}.STSrid', CONVERT(NVARCHAR(MAX), t.{ident}.STSrid))";
+                return $"(N'{nameLiteral}', t.{ident}.AsTextZM())," +
+                       $"(N'{nameLiteral}.STSrid', CONVERT(NVARCHAR(MAX), t.{ident}.STSrid))";
             case "hierarchyid":
-                return $"('{nameLiteral}', t.{ident}.ToString())";
+                return $"(N'{nameLiteral}', t.{ident}.ToString())";
             // CONVERT's default style keeps 6 significant digits of a float and 2 decimals of money.
             // Through float, which holds a real exactly, and into VARCHAR(30): style 3 into NVARCHAR overflows (Msg 8115) on
             // any negative value and on a real, probed on SQL Server 2022. The longest value is 24 characters.
             case "float":
             case "real":
-                return $"('{nameLiteral}', CONVERT(VARCHAR(30), CAST(t.{ident} AS FLOAT), {floatStyle}))";
+                return $"(N'{nameLiteral}', CONVERT(VARCHAR(30), CAST(t.{ident} AS FLOAT), {floatStyle}))";
             case "money":
             case "smallmoney":
-                return $"('{nameLiteral}', CONVERT(NVARCHAR(MAX), t.{ident}, 2))";
+                return $"(N'{nameLiteral}', CONVERT(NVARCHAR(MAX), t.{ident}, 2))";
             case "binary":
             case "varbinary":
             case "image":
-                return $"('{nameLiteral}', CAST('' AS XML).value('xs:base64Binary(sql:column(\"t.{ident}\"))','NVARCHAR(MAX)'))";
+                return $"(N'{nameLiteral}', CAST('' AS XML).value('xs:base64Binary(sql:column(\"t.{ident.Replace("'", "''")}\"))','NVARCHAR(MAX)'))";
             case "date":
             case "time":
             case "datetime":
             case "datetime2":
             case "datetimeoffset":
             case "smalldatetime":
-                return $"('{nameLiteral}', CONVERT(NVARCHAR(MAX), t.{ident}, 126))";
+                return $"(N'{nameLiteral}', CONVERT(NVARCHAR(MAX), t.{ident}, 126))";
             default:
-                return $"('{nameLiteral}', CONVERT(NVARCHAR(MAX), t.{ident}))";
+                return $"(N'{nameLiteral}', CONVERT(NVARCHAR(MAX), t.{ident}))";
         }
     }
 
@@ -1045,10 +1053,10 @@ SELECT CAST((
         cmd.CommandText = $@"
 SELECT c.COLUMN_NAME, c.DATA_TYPE
   FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME) AND sc.[name] = c.COLUMN_NAME
+  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
   LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(c.TABLE_SCHEMA + '.' + c.TABLE_NAME)
-  WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
+                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
+  WHERE c.TABLE_SCHEMA = N'{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = N'{tableName.Replace("'", "''")}'
     AND cc.[name] IS NULL
     {MergeScriptHelper.SqlServerGraphColumnFilter}AND c.DATA_TYPE NOT IN ('sql_variant', 'rowversion', 'timestamp')
   ORDER BY c.COLUMN_NAME";
@@ -1196,7 +1204,7 @@ ORDER BY c.ORDINAL_POSITION;";
         cmd.CommandText = $@"
 SELECT c.COLUMN_NAME, c.DATA_TYPE
   FROM INFORMATION_SCHEMA.COLUMNS c
-  WHERE c.TABLE_SCHEMA = '{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = '{tableName.Replace("'", "''")}'
+  WHERE c.TABLE_SCHEMA = N'{tableSchema.Replace("'", "''")}' AND c.TABLE_NAME = N'{tableName.Replace("'", "''")}'
     AND c.DATA_TYPE IN ('sql_variant', 'rowversion', 'timestamp')
 ";
         using var reader = cmd.ExecuteReader();

@@ -1705,13 +1705,13 @@ public class DataTongsTests
     [Test]
     public void XmlFragment_NormalColumn_ConvertsToText()
     {
-        Assert.That(Fragment("Amount", "decimal"), Is.EqualTo("('Amount', CONVERT(NVARCHAR(MAX), t.[Amount]))"));
+        Assert.That(Fragment("Amount", "decimal"), Is.EqualTo("(N'Amount', CONVERT(NVARCHAR(MAX), t.[Amount]))"));
     }
 
     [Test]
     public void XmlFragment_Datetime_UsesIso8601Style126()
     {
-        Assert.That(Fragment("When", "datetime2"), Is.EqualTo("('When', CONVERT(NVARCHAR(MAX), t.[When], 126))"));
+        Assert.That(Fragment("When", "datetime2"), Is.EqualTo("(N'When', CONVERT(NVARCHAR(MAX), t.[When], 126))"));
     }
 
     [Test]
@@ -1725,8 +1725,8 @@ public class DataTongsTests
     public void XmlFragment_Geometry_EmitsWktPlusSridCompanion()
     {
         var frag = Fragment("Shape", "geometry");
-        Assert.That(frag, Does.Contain("('Shape', t.[Shape].AsTextZM())"));
-        Assert.That(frag, Does.Contain("('Shape.STSrid', CONVERT(NVARCHAR(MAX), t.[Shape].STSrid))"));
+        Assert.That(frag, Does.Contain("(N'Shape', t.[Shape].AsTextZM())"));
+        Assert.That(frag, Does.Contain("(N'Shape.STSrid', CONVERT(NVARCHAR(MAX), t.[Shape].STSrid))"));
     }
 
     [Test]
@@ -1734,7 +1734,7 @@ public class DataTongsTests
     {
         // A quote in the name is doubled for the SQL string literal; a bracket is doubled for the identifier.
         Assert.That(Fragment("O'Brien]col", "int"),
-            Is.EqualTo("('O''Brien]col', CONVERT(NVARCHAR(MAX), t.[O'Brien]]col]))"));
+            Is.EqualTo("(N'O''Brien]col', CONVERT(NVARCHAR(MAX), t.[O'Brien]]col]))"));
     }
 
     [Test]

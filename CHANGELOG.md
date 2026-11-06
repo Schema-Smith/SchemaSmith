@@ -79,6 +79,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **Data delivery reaches a table, schema or column whose name holds a bracket, double quote, backtick, comma, quote or backslash, on every engine.** The merge scripts wrote such names unescaped and split their column lists at every comma, so the delivery failed with a syntax error or wrote to the wrong columns; the deferred first pass a self-referencing table takes did the same.
 - **SQL Server: XML-encoded data delivery reads a column whose name has a character outside the database code page.** The column was read as NULL, and a key column so named failed the delivery.
 - **PostgreSQL: a column whose name has an upper-case non-ASCII letter is delivered.** Matching the delivered keys to the table's columns lowered the column's name under the C collation, which leaves such a letter as it is, so the column was silently left out of the delivery.
+- **DataTongs extracts a table whose schema, name or columns hold a dot, bracket, double quote, backtick, comma, quote or a character outside the code page.** The table's name in `Tables` was split at every dot, a SQL Server table was looked up by an unquoted name, and the extraction query and its ordering wrote the names unescaped, so such a table was skipped as missing or failed; on SQL Server, a non-ASCII character was lost from a column's name in XML-encoded content.
 
 ## [v2.8.0](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) — 2026-11-01
 
