@@ -88,6 +88,8 @@ public static class Identifier
             if (open != '\0')
             {
                 if (!inWrap && c == open) { inWrap = true; continue; }
+                // ]] inside a bracketed name is a ], not the end of it.
+                if (inWrap && c == close && i + 1 < value.Length && value[i + 1] == close && open != close) { i++; continue; }
                 if (inWrap && c == close) { inWrap = false; continue; }
             }
             if (!inWrap && c == '.')

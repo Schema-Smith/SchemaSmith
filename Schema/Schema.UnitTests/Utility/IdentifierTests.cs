@@ -1,3 +1,4 @@
+using System;
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using NUnit.Framework;
@@ -126,6 +127,22 @@ public class IdentifierTests
     }
 
     // ---- SplitQualifiedName (#272: delimiter-aware schema/object split) ----
+
+    // A doubled closing delimiter is the delimiter inside the name, not its end: the dot after it is still in the name.
+    [TestCase("[a]]b.c]", "SqlServer", null, "a]b.c")]
+    [TestCase("[s]]x].[a]]b.c]", "SqlServer", "s]x", "a]b.c")]
+    [TestCase("\"a\"\"b.c\"", "PostgreSQL", null, "a\"b.c")]
+    [TestCase("`a``b.c`", "MySQL", null, "a`b.c")]
+    public void SplitQualifiedName_ADoubledDelimiterStaysInTheName(string value, string platform, string schema, string name)
+    {
+        var split = Identifier.SplitQualifiedName(value, Enum.Parse<Platform>(platform));
+        Assert.Multiple(() =>
+        {
+            Assert.That(split.Schema, Is.EqualTo(schema));
+            Assert.That(split.Name, Is.EqualTo(name));
+        });
+    }
+
 
     [Test]
     public void Split_SqlServer_FullyBracketed()
