@@ -18,20 +18,6 @@ internal class DatabaseCheckpoint
     public List<string> CompletedSteps { get; set; } = [];
     public Dictionary<DatabaseScriptSlot, List<string>> CompletedScripts { get; set; } = new();
 
-    public static class Steps
-    {
-        public const string KindleForge = "KindleForge";
-        public const string ValidateBaseline = "ValidateBaseline";
-        public const string MissingTablesAndColumns = "MissingTablesAndColumns";
-        public const string ModifiedTables = "ModifiedTables";
-        public const string IndexesAndConstraints = "IndexesAndConstraints";
-        public const string TableDataDelivery = "TableDataDelivery";
-        public const string ForeignKeys = "ForeignKeys";
-        public const string MaterializedViewQuench = "MaterializedViewQuench";
-        public const string IndexedViewQuench = "IndexedViewQuench";
-        public const string VersionStamp = "VersionStamp";
-    }
-
     public void AddStep(string stepName)
     {
         if (!CompletedSteps.Any(s => s.Equals(stepName, StringComparison.OrdinalIgnoreCase)))

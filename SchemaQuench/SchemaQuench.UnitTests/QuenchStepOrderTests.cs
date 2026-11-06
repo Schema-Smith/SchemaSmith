@@ -61,6 +61,9 @@ public class QuenchStepOrderTests
     }
 
     internal static Recording Run(Platform platform, Template template, bool whatIf, bool updateTables = true, bool deliverData = false)
+        => RunWith(platform, template, whatIf, updateTables, deliverData, checkpointing: null);
+
+    internal static Recording RunWith(Platform platform, Template template, bool whatIf, bool updateTables = true, bool deliverData = false, ICheckpointing checkpointing = null)
     {
         var recording = new Recording();
         FactoryContainer.Register<IFile>(Substitute.For<IFile>());
@@ -102,18 +105,14 @@ public class QuenchStepOrderTests
         factory.GetDbConnection(Arg.Any<string>()).Returns(connection);
         FactoryContainer.Register<IDbConnectionFactory>(factory);
 
-        var checkpointing = Substitute.For<ICheckpointing>();
-        checkpointing.GetDatabaseCheckpointSummary(Arg.Any<TrackingScope>()).Returns(DatabaseCheckpointSummary.Empty);
-        checkpointing.When(c => c.Track(Arg.Any<TrackingScope>(), Arg.Any<string>(), Arg.Any<Action>()))
+        var recorder = Substitute.For<ICheckpointing>();
+        recorder.GetDatabaseCheckpointSummary(Arg.Any<TrackingScope>()).Returns(DatabaseCheckpointSummary.Empty);
+        recorder.When(c => c.Track(Arg.Any<TrackingScope>(), Arg.Any<string>(), Arg.Any<Action>()))
             .Do(ci => { recording.CheckpointedSteps.Add(ci.ArgAt<string>(1)); ci.ArgAt<Action>(2)(); });
+        checkpointing ??= recorder;
 
         var product = new Product { Name = "P", Platform = platform };
-        var flag = platform == Platform.PostgreSQL ? (whatIf ? "true" : "false") : (whatIf ? "1" : "0");
-        var off = platform == Platform.PostgreSQL ? "false" : "0";
-        var quench = new DatabaseQuench("srv", product, template, "db", suppressKindling: true, whatIfOnly: flag, runScriptsTwice: false,
-            dropRemovedTables: off, dropRemovedColumns: off, dropRemovedForeignKeys: off, dropRemovedCheckConstraints: off,
-            dropRemovedExcludeConstraints: off, dropRemovedStatistics: off, dropRemovedIndexes: off, dropUnknownIndexes: off,
-            updateTables: updateTables, deliverData: deliverData, checkpointing: checkpointing);
+        var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", SuppressKindling = true, WhatIf = whatIf, UpdateTables = updateTables, DeliverData = deliverData }, checkpointing);
         quench.Execute();
         Assert.That(quench.QuenchSuccessful, Is.True, $"the recorded run completed: {quench.LastFailure}");
         return recording;
@@ -285,5 +284,56 @@ public class QuenchStepOrderTests
             Assert.That(string.Join(",", Procedures(recording.Statements)), Is.EqualTo(Golden[key].Procedures), $"{key}: procedure order");
             Assert.That(string.Join(",", recording.CheckpointedSteps), Is.EqualTo(Golden[key].Checkpointed), $"{key}: checkpointed steps");
         });
+    }
+
+    // The step names checkpoint files written by earlier versions carry. A resume reads them back, so none may be renamed,
+    // dropped or given to another step.
+    private static readonly string[] FrozenCheckpointNames =
+    [
+        "ValidateBaseline", "DomainTypeQuench", "EnumTypeQuench", "SequenceQuench", "ModifiedTables", "IndexesAndConstraints",
+        "TableFeatures", "TableDataDelivery", "ForeignKeys", "MaterializedViewQuench", "EventQuench", "IndexedViewQuench", "VersionStamp",
+    ];
+
+    private static List<QuenchStep> Steps(Platform platform)
+    {
+        var product = new Product { Name = "P", Platform = platform };
+        var quench = new DatabaseQuench(product, TemplateWithATable(platform), new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", SuppressKindling = true }, null);
+        var cmd = Substitute.For<IDbCommand>();
+        return quench.QuenchSteps(new QuenchLanes(cmd, cmd, cmd, cmd));
+    }
+
+    [Test]
+    public void TheStepTableCheckpointsExactlyTheNamesEarlierVersionsWrote()
+    {
+        var names = Steps(Platform.SqlServer).Where(s => s.CheckpointName != null).Select(s => s.CheckpointName).ToList();
+        Assert.Multiple(() =>
+        {
+            Assert.That(names, Is.EqualTo(FrozenCheckpointNames), "in the order a deploy runs them");
+            Assert.That(CheckpointNames.All, Is.EqualTo(FrozenCheckpointNames));
+        });
+    }
+
+    [Test]
+    public void EveryStepSaysWhatAPreviewDoesWithIt()
+    {
+        var steps = Steps(Platform.SqlServer);
+        Assert.Multiple(() =>
+        {
+            Assert.That(steps.Select(s => s.Name), Is.Unique, "step names identify the step in logs and timings");
+            Assert.That(steps.Where(s => s.Preview == StepPreview.Log && s.PreviewAction == null).Select(s => s.Name), Is.Empty,
+                "a step whose preview is a log must say what it logs");
+        });
+    }
+
+    [Test]
+    public void APreviewNeverTouchesTheCheckpointer()
+    {
+        var throwing = Substitute.For<ICheckpointing>();
+        throwing.When(c => c.Track(Arg.Any<TrackingScope>(), Arg.Any<string>(), Arg.Any<Action>())).Do(_ => throw new InvalidOperationException("a preview tracked a step"));
+        throwing.When(c => c.HasCompleted(Arg.Any<TrackingScope>(), Arg.Any<string>())).Do(_ => throw new InvalidOperationException("a preview read a checkpoint"));
+        throwing.GetDatabaseCheckpointSummary(Arg.Any<TrackingScope>()).Returns(_ => throw new InvalidOperationException("a preview read the summary"));
+
+        var recording = RunWith(Platform.SqlServer, RichTemplate(Platform.SqlServer), whatIf: true, checkpointing: throwing);
+        Assert.That(Procedures(recording.Statements), Does.Contain("ModifiedTableQuench"), "the preview ran its steps");
     }
 }

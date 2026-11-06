@@ -29,9 +29,8 @@ public class DatabaseQuenchSchemaTemplatePayloadTests
     public void TearDown() => FactoryContainer.Clear();
 
     private static DatabaseQuench SchemaTemplateQuench(Template template, string schemaName = "tenant_a") =>
-        new("srv", new Product { Name = "P", Platform = Platform.PostgreSQL }, template, "db",
-            schemaName, false, "false", false, "false", "false", "false", "false", "false", "false",
-            "false", "false", true, false, null);
+        new(new Product { Name = "P", Platform = Platform.PostgreSQL }, template,
+            new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", SchemaName = schemaName, DeliverData = false }, null);
 
     private static Template SchemaTemplateWithDeclarativeTypes()
     {

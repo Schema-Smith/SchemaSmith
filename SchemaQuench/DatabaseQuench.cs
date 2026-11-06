@@ -32,7 +32,7 @@ namespace SchemaQuench;
 /// Quenches a single database for a template. Platform-aware: dispatches connection setup,
 /// identifier quoting, and SQL commands based on Product.Platform.
 /// </summary>
-public class DatabaseQuench
+public partial class DatabaseQuench
 {
     public bool QuenchSuccessful { get; private set; }
 
@@ -214,7 +214,7 @@ public class DatabaseQuench
         CascadedRebuildPolicy?.Threshold?.ToString(CultureInfo.InvariantCulture) ?? "NULL";
 
     private string RebuildPolicyOnOrderMismatch =>
-        FormatBooleanFlag(CascadedRebuildPolicy?.OnOrderMismatch == true);
+        SqlFlag(CascadedRebuildPolicy?.OnOrderMismatch == true);
 
     private readonly ILog _progressLog = LogFactory.GetLogger("ProgressLog");
     private readonly ILog _errorLog = LogFactory.GetLogger("ErrorLog");
@@ -234,15 +234,15 @@ public class DatabaseQuench
     // Baked into SchemaSmith.fn_ServerMajorVersion at kindle time so the version-gated helpers work on a
     // genuine pre-2016 binary where SESSION_CONTEXT (the former transport) does not exist.
     private int _sqlServerMajorVersion;
-    private readonly string _whatIfOnly;
+    private readonly bool _whatIfOnly;
     private readonly bool _runScriptsTwice;
-    private readonly string _dropRemovedTables;
-    private readonly string _dropRemovedColumns;
-    private readonly string _dropRemovedForeignKeys;
-    private readonly string _dropRemovedCheckConstraints;
-    private readonly string _dropRemovedExcludeConstraints;
-    private readonly string _dropRemovedStatistics;
-    private readonly string _dropRemovedIndexes;
+    private readonly bool _dropRemovedTables;
+    private readonly bool _dropRemovedColumns;
+    private readonly bool _dropRemovedForeignKeys;
+    private readonly bool _dropRemovedCheckConstraints;
+    private readonly bool _dropRemovedExcludeConstraints;
+    private readonly bool _dropRemovedStatistics;
+    private readonly bool _dropRemovedIndexes;
     private readonly bool _updateTables;
 
     /// <summary>
@@ -255,7 +255,7 @@ public class DatabaseQuench
     private bool AuditIsRead => ReadsChangeAudit ?? _updateTables;
     private readonly bool _deliverData;
     private readonly ICheckpointing _checkpointing;
-    private readonly string _dropUnknownIndexes;
+    private readonly bool _dropUnknownIndexes;
     private readonly bool _trackRunOnceMigrations;
     private readonly bool _pruneObsoleteMigrationTracking;
     private readonly bool _forceReKindle;
@@ -430,87 +430,31 @@ public class DatabaseQuench
     private string IterationIndexedViewXml =>
         ModelXmlSerializer.ToIngestXml(string.IsNullOrWhiteSpace(IterationIndexedViewSchema) ? "[]" : IterationIndexedViewSchema, "IndexedViews", "IndexedView");
 
-    public DatabaseQuench(string server, Product product, Template template, string databaseName,
-        string schemaName, bool suppressKindling, string whatIfOnly, bool runScriptsTwice, string dropRemovedTables,
-        string dropRemovedColumns, string dropRemovedForeignKeys, string dropRemovedCheckConstraints, string dropRemovedExcludeConstraints, string dropRemovedStatistics, string dropRemovedIndexes, bool dropUnknownIndexes, bool updateTables, bool deliverData, ICheckpointing checkpointing,
-        bool trackRunOnceMigrations = true, bool pruneObsoleteMigrationTracking = true, bool forceReKindle = false)
+    public DatabaseQuench(Product product, Template template, DatabaseQuenchOptions options, ICheckpointing checkpointing)
     {
-        _server = server;
+        _server = options.Server;
         _product = product;
         _template = template;
-        _databaseName = databaseName;
-        _schemaName = schemaName ?? "";
-        _suppressKindling = suppressKindling;
-        _whatIfOnly = whatIfOnly;
-        _runScriptsTwice = runScriptsTwice;
-        _dropRemovedTables = dropRemovedTables;
-        _dropRemovedColumns = dropRemovedColumns;
-        _dropRemovedForeignKeys = dropRemovedForeignKeys;
-        _dropRemovedCheckConstraints = dropRemovedCheckConstraints;
-        _dropRemovedExcludeConstraints = dropRemovedExcludeConstraints;
-        _dropRemovedStatistics = dropRemovedStatistics;
-        _dropRemovedIndexes = dropRemovedIndexes;
-        _updateTables = updateTables;
-        _deliverData = deliverData;
-        _checkpointing = IsWhatIf ? NoCheckpointing.Instance : checkpointing;
-        _dropUnknownIndexes = FormatBooleanFlag(dropUnknownIndexes);
-        _trackRunOnceMigrations = trackRunOnceMigrations;
-        _pruneObsoleteMigrationTracking = pruneObsoleteMigrationTracking;
-        _forceReKindle = forceReKindle;
-    }
-
-    // Convenience overload matching the pre-schema-templates positional signature so existing
-    // callers (mostly tests) that have no schema concept compile without modification. Forwards
-    // to the canonical constructor with empty schemaName.
-    public DatabaseQuench(string server, Product product, Template template, string databaseName,
-        bool suppressKindling, string whatIfOnly, bool runScriptsTwice, string dropRemovedTables,
-        string dropRemovedColumns, string dropRemovedForeignKeys, string dropRemovedCheckConstraints, string dropRemovedExcludeConstraints, string dropRemovedStatistics, string dropRemovedIndexes, bool dropUnknownIndexes, bool updateTables, bool deliverData, ICheckpointing checkpointing,
-        bool trackRunOnceMigrations = true, bool pruneObsoleteMigrationTracking = true, bool forceReKindle = false)
-        : this(server, product, template, databaseName, "", suppressKindling, whatIfOnly, runScriptsTwice,
-            dropRemovedTables, dropRemovedColumns, dropRemovedForeignKeys, dropRemovedCheckConstraints, dropRemovedExcludeConstraints, dropRemovedStatistics, dropRemovedIndexes, dropUnknownIndexes, updateTables, deliverData, checkpointing,
-            trackRunOnceMigrations, pruneObsoleteMigrationTracking, forceReKindle)
-    {
-    }
-
-    // Internal constructor for testing — allows direct injection of all parameters
-    internal DatabaseQuench(string server, Product product, Template template, string databaseName,
-        string schemaName, bool suppressKindling, string whatIfOnly, bool runScriptsTwice, string dropRemovedTables,
-        string dropRemovedColumns, string dropRemovedForeignKeys, string dropRemovedCheckConstraints, string dropRemovedExcludeConstraints, string dropRemovedStatistics, string dropRemovedIndexes, string dropUnknownIndexes, bool updateTables, bool deliverData, ICheckpointing checkpointing,
-        bool trackRunOnceMigrations = true, bool pruneObsoleteMigrationTracking = true, bool forceReKindle = false)
-    {
-        _server = server;
-        _product = product;
-        _template = template;
-        _databaseName = databaseName;
-        _schemaName = schemaName ?? "";
-        _suppressKindling = suppressKindling;
-        _whatIfOnly = whatIfOnly;
-        _runScriptsTwice = runScriptsTwice;
-        _dropRemovedTables = dropRemovedTables;
-        _dropRemovedColumns = dropRemovedColumns;
-        _dropRemovedForeignKeys = dropRemovedForeignKeys;
-        _dropRemovedCheckConstraints = dropRemovedCheckConstraints;
-        _dropRemovedExcludeConstraints = dropRemovedExcludeConstraints;
-        _dropRemovedStatistics = dropRemovedStatistics;
-        _dropRemovedIndexes = dropRemovedIndexes;
-        _dropUnknownIndexes = dropUnknownIndexes;
-        _updateTables = updateTables;
-        _deliverData = deliverData;
-        _checkpointing = IsWhatIf ? NoCheckpointing.Instance : checkpointing;
-        _trackRunOnceMigrations = trackRunOnceMigrations;
-        _pruneObsoleteMigrationTracking = pruneObsoleteMigrationTracking;
-        _forceReKindle = forceReKindle;
-    }
-
-    // Convenience overload for tests pre-dating the schemaName parameter.
-    internal DatabaseQuench(string server, Product product, Template template, string databaseName,
-        bool suppressKindling, string whatIfOnly, bool runScriptsTwice, string dropRemovedTables,
-        string dropRemovedColumns, string dropRemovedForeignKeys, string dropRemovedCheckConstraints, string dropRemovedExcludeConstraints, string dropRemovedStatistics, string dropRemovedIndexes, string dropUnknownIndexes, bool updateTables, bool deliverData, ICheckpointing checkpointing,
-        bool trackRunOnceMigrations = true, bool pruneObsoleteMigrationTracking = true, bool forceReKindle = false)
-        : this(server, product, template, databaseName, "", suppressKindling, whatIfOnly, runScriptsTwice,
-            dropRemovedTables, dropRemovedColumns, dropRemovedForeignKeys, dropRemovedCheckConstraints, dropRemovedExcludeConstraints, dropRemovedStatistics, dropRemovedIndexes, dropUnknownIndexes, updateTables, deliverData, checkpointing,
-            trackRunOnceMigrations, pruneObsoleteMigrationTracking, forceReKindle)
-    {
+        _databaseName = options.DatabaseName;
+        _schemaName = options.SchemaName ?? "";
+        _suppressKindling = options.SuppressKindling;
+        _whatIfOnly = options.WhatIf;
+        _runScriptsTwice = options.RunScriptsTwice;
+        _dropRemovedTables = options.Drops.Tables;
+        _dropRemovedColumns = options.Drops.Columns;
+        _dropRemovedForeignKeys = options.Drops.ForeignKeys;
+        _dropRemovedCheckConstraints = options.Drops.CheckConstraints;
+        _dropRemovedExcludeConstraints = options.Drops.ExcludeConstraints;
+        _dropRemovedStatistics = options.Drops.Statistics;
+        _dropRemovedIndexes = options.Drops.Indexes;
+        _dropUnknownIndexes = options.Drops.UnknownIndexes;
+        _updateTables = options.UpdateTables;
+        _deliverData = options.DeliverData;
+        // A preview never reads, writes or deletes a checkpoint (A16).
+        _checkpointing = options.WhatIf ? NoCheckpointing.Instance : checkpointing;
+        _trackRunOnceMigrations = options.TrackRunOnceMigrations;
+        _pruneObsoleteMigrationTracking = options.PruneObsoleteMigrationTracking;
+        _forceReKindle = options.ForceReKindle;
     }
 
     internal Platform Platform => _product.Platform;
@@ -576,7 +520,7 @@ public class DatabaseQuench
             IDbCommand objectsCommand = null;
             IDbConnection silentConnection = null;
             IDbCommand silentCommand = null;
-            IDbConnection deliveryConnection = null;
+            QuenchLanes lanes = null;
 
             if (_product.Platform.GetBasePlatform() != Platform.MySQL)
             {
@@ -672,437 +616,8 @@ public class DatabaseQuench
                 ApplyFolderGates(command);
                 ApplyVersionScriptTokens();
 
-                // Step: Kindle the forge
-                // Intentionally NOT wrapped in `_checkpointing.Track` — mirrors the
-                // MissingTablesAndColumns un-wrap below. KindleForge is cheap and
-                // self-verifying (ForgeKindler compares the in-DB KindleStamp and no-ops when
-                // current), so it must always run. A checkpoint-skip here would mean a target
-                // database reset out-of-band (helpers/stamp dropped) but resumed against a
-                // stale checkpoint never gets its helpers reinstalled, surfacing later as
-                // "SchemaSmith_ParseTableJson does not exist" instead of a clear kindle.
-                if (!_suppressKindling)
-                {
-                    SafeProgressLog("  Kindling the forge");
-                    // SQL Server bakes the detected server version + resolved unsupported-feature policy into the
-                    // helper functions at kindle time (dropping the 2016+ SESSION_CONTEXT transport). Both are
-                    // no-ops for PostgreSQL/MySQL (their scripts carry neither token; PG uses a runtime GUC).
-                    var kindlePolicy = string.Equals(FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.UnsupportedFeaturePolicy],
-                        "fail", StringComparison.OrdinalIgnoreCase) ? "fail" : "warn";
-                    ForgeKindler.KindleTheForge(effectiveSilentCmd, _product.Platform, _forceReKindle, _ingestEncoding,
-                        _sqlServerMajorVersion, kindlePolicy);
-                }
-
-                // Step: Validate baseline. Resolved against per-iteration tokens (BaselineValidationScript
-                // may reference {{SchemaName}} for schema templates).
-                if (!string.IsNullOrWhiteSpace(_iteration.BaselineValidationScript))
-                {
-                    var validateBaselineSw = Stopwatch.StartNew();
-                    _checkpointing.Track(DbScope, "ValidateBaseline", () =>
-                    {
-                        SafeProgressLog("  Validate Baseline");
-                        command.CommandText = _iteration.BaselineValidationScript;
-                        try
-                        {
-                            // On SQL Server the script's own error arrives as a message, leaving a null that read as "no".
-                            _infoMessageException = null;
-                            var isValid = Convert.ToBoolean(command.ExecuteScalar());
-                            if (_infoMessageException != null) throw _infoMessageException;
-                            if (!isValid)
-                                throw new Exception("Invalid baseline for this release");
-                        }
-                        catch (Exception ex)
-                        {
-                            WriteValidationFailureArtifact(command, "BaselineValidation", ex);
-                            throw;
-                        }
-                    });
-                    validateBaselineSw.Stop();
-                    RunTiming?.Record(LogPrefix, _databaseName, "ValidateBaseline", validateBaselineSw.ElapsedMilliseconds, 0);
-                }
-
-                // Step: Setup (D13). Database settings and the like that the objects and later scripts rely on: after the
-                // helpers and the baseline check, before the first object. Every deploy, one pass, in order; the first error
-                // fails the deploy, since nothing ahead of these scripts can be missing.
-                if (_iteration.SetupScripts.Count > 0)
-                {
-                    if (!IsWhatIf)
-                    {
-                        SafeProgressLog("  Quenching Setup scripts");
-                        QuenchSetupScripts(command, _iteration.SetupScripts);
-                    }
-                    else
-                    {
-                        SafeProgressLog("  [WhatIf] Setup scripts:");
-                        WhatIfLogSetupScripts(_iteration.SetupScripts);
-                    }
-                }
-
-                // Step: Object scripts without unresolved tokens
-                var nonTokenScripts = _iteration.ObjectScripts.Where(s => s.Batches.All(b => !b.Contains("{{") && !b.Contains("}}"))).ToList();
-                if (!IsWhatIf)
-                {
-                    SafeProgressLog("  Quenching object scripts without unresolved tokens");
-                    QuenchDatabaseObjectsWithCheckpoint(effectiveObjectsCmd, nonTokenScripts, false, DatabaseScriptSlot.Object);
-                }
-                else
-                {
-                    SafeProgressLog("  [WhatIf] Object scripts without unresolved tokens:");
-                    WhatIfLogScripts(nonTokenScripts, DatabaseScriptSlot.Object, effectiveObjectsCmd);
-                }
-
-                // Step: Domain types (PostgreSQL only). Before tables for the same reason enum types are:
-                // a column can be OF a domain, so the domain has to exist before the table that uses it.
-                if (_product.Platform == Platform.PostgreSQL && _template.DomainTypes.Count > 0)
-                {
-                    var domainTypeSw = Stopwatch.StartNew();
-                    _checkpointing.Track(DbScope, "DomainTypeQuench", () => QuenchDomainTypes(effectiveTableCmd));
-                    domainTypeSw.Stop();
-                    RunTiming?.Record(LogPrefix, _databaseName, "DomainTypeQuench", domainTypeSw.ElapsedMilliseconds, 0);
-                }
-
-                // Step: Enum types (PostgreSQL only). BEFORE tables, deliberately: a column can be OF an
-                // enum type, so the type has to exist before the table that uses it -- and a value the
-                // package adds has to be present before a default or check constraint can reference it.
-                if (_product.Platform == Platform.PostgreSQL && _template.EnumTypes.Count > 0)
-                {
-                    var enumTypeSw = Stopwatch.StartNew();
-                    _checkpointing.Track(DbScope, "EnumTypeQuench", () => QuenchEnumTypes(effectiveTableCmd));
-                    enumTypeSw.Stop();
-                    RunTiming?.Record(LogPrefix, _databaseName, "EnumTypeQuench", enumTypeSw.ElapsedMilliseconds, 0);
-                }
-
-                // Step: Sequences (PostgreSQL only). Also before tables -- a column DEFAULT can call
-                // nextval() on one.
-                if ((_product.Platform == Platform.PostgreSQL && _template.Sequences.Count > 0) || (_product.Platform == Platform.MariaDb && _template.MariaDbSequences.Count > 0))
-                {
-                    var sequenceSw = Stopwatch.StartNew();
-                    _checkpointing.Track(DbScope, "SequenceQuench", () => QuenchSequences(effectiveTableCmd));
-                    sequenceSw.Stop();
-                    RunTiming?.Record(LogPrefix, _databaseName, "SequenceQuench", sequenceSw.ElapsedMilliseconds, 0);
-                }
-
-                // Step: Missing tables and columns
-                // Intentionally NOT wrapped in `_checkpointing.Track` — this step parses the
-                // table JSON into session-scoped temp tables (`#Tables` on SQL Server,
-                // `temp_tables` on PG, `_SchemaSmith_Tables` on MySQL) before delegating to
-                // `MissingTableAndColumnQuench`. The temp tables are consumed by the next two
-                // tracked steps (`ModifiedTables`, `IndexesAndConstraints`); they DON'T survive
-                // across connections, so on resume the next session has no temp state.
-                // The action itself is database-idempotent (the engine procs add missing
-                // tables/columns and no-op when they already exist), so always-running it on
-                // resume is safe and cheap. Skip-on-resume would fire `Invalid object name
-                // '#Tables'` (SQL Server) / `relation "temp_tables" does not exist` (PG) on
-                // the next tracked step. MySQL's `QuenchModifiedTables` and
-                // `QuenchIndexesAndConstraints` already defend against the missing-temp-tables
-                // case via `MySqlTempTablesExist` + `ParseMySqlTableJson` re-parse; lifting the
-                // Track wrapper here is the equivalent defense for SQL Server / PG.
-                if (!_template.IndexOnlyTableQuenches && _updateTables)
-                {
-                    // Said before the change, so a column whose existing NULLs refuse it fails with its reason in view.
-                    foreach (var notice in _template.LoadNotices)
-                        lock (_lockObject) _progressLog.Warn($"{LogPrefix} {notice.Message}");
-                    QuenchMissingTablesAndColumns(effectiveTableCmd);
-                }
-
-                if (!IsWhatIf)
-                {
-                    SafeProgressLog("  Quenching object scripts without query tokens");
-                    QuenchDatabaseObjectsWithCheckpoint(effectiveObjectsCmd,
-                        _iteration.ObjectScripts.Where(s => s.Batches.All(b => !b.Contains("{{") && !b.Contains("}}"))).ToList(),
-                        false, DatabaseScriptSlot.Object);
-
-                    ResolveAndApplyQueryTokens(effectiveSilentCmd);
-
-                    SafeProgressLog("  Quenching before database scripts");
-                    QuenchTemplateScriptsWithCheckpoint(command, "Before", _iteration.BeforeScripts, DatabaseScriptSlot.Before);
-                }
-                else
-                {
-                    SafeProgressLog("  [WhatIf] Object scripts without query tokens:");
-                    WhatIfLogScripts(_iteration.ObjectScripts.Where(s => s.Batches.All(b => !b.Contains("{{") && !b.Contains("}}"))).ToList(), DatabaseScriptSlot.Object, effectiveObjectsCmd);
-
-                    if (_template.QueryTokens.Count > 0)
-                        SafeProgressLog("  [WhatIf] Would resolve template query tokens");
-
-                    SafeProgressLog("  [WhatIf] Before database scripts:");
-                    WhatIfLogTemplateScripts(command, "Before", _iteration.BeforeScripts, DatabaseScriptSlot.Before);
-                }
-
-                if (_product.Platform.GetBasePlatform() == Platform.SqlServer && DeferDatabaseToggles
-                    && !_template.IndexOnlyTableQuenches && _updateTables)
-                {
-                    QuenchDeferredDatabaseToggles(effectiveTableCmd);
-                }
-
-                // Step: Modified tables
-                if (!_template.IndexOnlyTableQuenches && _updateTables)
-                {
-                    var modifiedTablesSw = Stopwatch.StartNew();
-                    StageDeclaredModules(effectiveTableCmd);
-                    _checkpointing.Track(DbScope, "ModifiedTables", () => QuenchModifiedTables(effectiveTableCmd));
-                    modifiedTablesSw.Stop();
-                    RunTiming?.Record(LogPrefix, _databaseName, "ModifiedTables", modifiedTablesSw.ElapsedMilliseconds, 0);
-                    if (!IsWhatIf) RequeueModulesTheTableQuenchDropped(effectiveTableCmd);
-                }
-
-                if (!IsWhatIf)
-                {
-                    SafeProgressLog("  Quenching object scripts");
-                    QuenchDatabaseObjectsWithCheckpoint(effectiveObjectsCmd, _iteration.AfterTablesObjectScripts, false, DatabaseScriptSlot.AfterTablesObject);
-
-                    SafeProgressLog("  Quenching between table and keys scripts");
-                    QuenchTemplateScriptsWithCheckpoint(command, "Between Table And Keys", _iteration.BetweenTablesAndKeysScripts, DatabaseScriptSlot.BetweenTablesAndKeys);
-                }
-                else
-                {
-                    SafeProgressLog("  [WhatIf] Object scripts (after tables):");
-                    WhatIfLogScripts(_iteration.AfterTablesObjectScripts, DatabaseScriptSlot.AfterTablesObject, effectiveObjectsCmd);
-
-                    SafeProgressLog("  [WhatIf] Between table and keys scripts:");
-                    WhatIfLogTemplateScripts(command, "Between Table And Keys", _iteration.BetweenTablesAndKeysScripts, DatabaseScriptSlot.BetweenTablesAndKeys);
-                }
-
-                // Step: MariaDB VECTOR indexes whose M or DISTANCE changed. MariaDB has no ALTER for either, and the options are
-                // only in SHOW CREATE TABLE, which a procedure cannot read: the index is dropped here, and the indexes step
-                // builds it again as declared.
-                if (_product.Platform == Platform.MariaDb && _updateTables && _mySqlServerVersionNum >= 1107)
-                    RebuildChangedVectorIndexes(effectiveTableCmd);
-
-                // Step: Indexes and constraints
-                if (_updateTables)
-                {
-                    var indexesAndConstraintsSw = Stopwatch.StartNew();
-                    _checkpointing.Track(DbScope, "IndexesAndConstraints", () => QuenchIndexesAndConstraints(effectiveTableCmd));
-                    indexesAndConstraintsSw.Stop();
-                    RunTiming?.Record(LogPrefix, _databaseName, "IndexesAndConstraints", indexesAndConstraintsSw.ElapsedMilliseconds, 0);
-                }
-
-                // Step: SQL Server table features. Not in index-only mode: those templates do not own the tables.
-                if (_product.Platform.GetBasePlatform() == Platform.SqlServer && !_template.IndexOnlyTableQuenches && _updateTables)
-                    _checkpointing.Track(DbScope, "TableFeatures", () => QuenchSqlServerTableFeatures(effectiveTableCmd));
-
-                // #242: record what each expression-bearing object was applied with, AFTER the create passes
-                // above, so an object created on this run is recorded on this run rather than churning once more.
-                // Under WhatIf it records nothing and puts back what the #508 scratch-copy check verified for the preview.
-                if (_updateTables) RecordExpressionMap(effectiveTableCmd);
-
-                if (!IsWhatIf)
-                {
-                    SafeProgressLog("  Quenching after table scripts");
-                    QuenchTemplateScriptsWithCheckpoint(command, "After Table", _iteration.AfterTableScripts, DatabaseScriptSlot.AfterTable);
-
-                    if (_iteration.ObjectScripts.Union(_iteration.AfterTablesObjectScripts).Any(s => !s.HasBeenQuenched))
-                    {
-                        SafeProgressLog("  Quenching object scripts");
-                        QuenchDatabaseObjectsWithCheckpoint(effectiveObjectsCmd, _iteration.AfterTablesObjectScripts.ToList(), true, DatabaseScriptSlot.AfterTablesObject);
-                    }
-
-                    if (_deliverData)
-                    {
-                        var tableDataDeliverySw = Stopwatch.StartNew();
-                        _checkpointing.Track(DbScope, "TableDataDelivery", () =>
-                        {
-                            // Not the silent connection: the merge counts what an append-only ledger table kept in state-100 messages.
-                            // Opened only when a table delivers.
-                            IDbCommand deliveryCmd = command;
-                            if (_product.Platform.GetBasePlatform() != Platform.MySQL && _template.Tables.Cast<IDeliverableTable>().Any(DataDeliveryHelper.HasDeliverable))
-                            {
-                                deliveryConnection = GetConnection(fireInfoMessageEventOnUserErrors: false);
-                                deliveryCmd = deliveryConnection.CreateCommand();
-                                deliveryCmd.CommandTimeout = 0;
-                            }
-                            // Register platform-specific script helper if not already registered
-                            if (FactoryContainer.Resolve<IMergeScriptHelper>() is not MergeScriptHelperAdapter adapter || adapter.Platform != _product.Platform)
-                                FactoryContainer.Register<IMergeScriptHelper>(new MergeScriptHelperAdapter(_product.Platform));
-
-                            DataDeliveryProcessor.GetFromFactory().DeliverTables(new DataDeliveryContext
-                            {
-                                Tables = _template.Tables.Cast<IDeliverableTable>().ToList(),
-                                Command = deliveryCmd,
-                                // MariaDb is delivered as its MySQL base — the delivery subsystem dispatches on
-                                // this platform string and has no MariaDb-specific behavior (the enum-typed
-                                // ScriptHelper still carries the true platform for SQL generation).
-                                Platform = _product.Platform.GetBasePlatform().ToString(),
-                                DatabaseName = _databaseName,
-                                SchemaName = _schemaName,
-                                // N2: same vocabulary as the folder gate's ResolveFolderGateExpression, so a
-                                // DataDelivery.ShouldApplyExpression can gate on {{CompatibilityLevel}} /
-                                // {{ServerMajorVersion}} instead of only {{SchemaName}}.
-                                VersionTokens = _versionScriptTokens,
-                                TemplateRootPath = Path.GetDirectoryName(_template.FilePath) ?? "",
-                                ScriptHelper = FactoryContainer.Resolve<IMergeScriptHelper>(),
-                                ReadFileContent = path => ProductFileWrapper.GetFromFactory().ReadAllText(path),
-                                ExecuteScript = (name, script) => { deliveryCmd.CommandText = script; deliveryCmd.ExecuteNonQuery(); },
-                                ProgressLog = SafeProgressLog,
-                                ProgressLogError = SafeProgressLogError,
-                                RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded", target: AuditTarget),
-                                RecordDelivery = RecordDataDelivery,
-                                WhatIf = IsWhatIf,
-                                PostgreSqlServerVersionNum = _postgreSqlServerVersionNum,
-                                MySqlServerVersionNum = _mySqlServerVersionNum,
-                                SqlServerCompatibilityLevel = _sqlServerCompatibilityLevel,
-                                UnsupportedFeaturePolicy = _unsupportedFeaturePolicy,
-                                WriteResolvedSqlArtifact = (label, sql) =>
-                                {
-                                    if (!DebugSql.Enabled)
-                                    {
-                                        SafeProgressLogError($"    {DebugSql.HowToGetIt(ResolveArtifactDirectory())}");
-                                        _debugSqlHintLogged = true;
-                                        return;
-                                    }
-                                    try
-                                    {
-                                        var path = ResolvedSqlArtifactWriter.WriteFailureArtifact(
-                                            ResolveArtifactDirectory(), DebugSqlOwner,
-                                            $"Failed data delivery: {_server}.{_databaseName}" +
-                                            $"{(string.IsNullOrEmpty(_schemaName) ? "" : $" [Schema: {_schemaName}]")} [{label}]",
-                                            new List<string> { sql }, failingBatchIndex: 0, label,
-                                            safeLabel => GetDebugFileName($"Failed DataDelivery {safeLabel}"));
-                                        SafeProgressLogError($"    Resolved SQL written to: {path}");
-                                        _dataDeliveryArtifact ??= path;
-                                    }
-                                    catch (Exception artifactEx)
-                                    {
-                                        SafeProgressLog($"    Could not write resolved-SQL artifact for data delivery '{label}': {artifactEx.Message}");
-                                    }
-                                }
-                            });
-                        });
-                        tableDataDeliverySw.Stop();
-                        RunTiming?.Record(LogPrefix, _databaseName, "TableDataDelivery", tableDataDeliverySw.ElapsedMilliseconds, 0);
-
-                        if (_iteration.ObjectScripts.Union(_iteration.TableDataScripts).Any(s => !s.HasBeenQuenched))
-                        {
-                            SafeProgressLog("  Quenching table data scripts");
-                            QuenchDatabaseObjectsWithCheckpoint(effectiveObjectsCmd, _iteration.TableDataScripts.ToList(), true, DatabaseScriptSlot.TableData);
-                        }
-                    }
-
-                    // Foreign keys after data delivery (all platforms)
-                    if (!_template.IndexOnlyTableQuenches && _updateTables)
-                    {
-                        var foreignKeysSw = Stopwatch.StartNew();
-                        _checkpointing.Track(DbScope, "ForeignKeys", () => QuenchForeignKeys(effectiveTableCmd));
-                        foreignKeysSw.Stop();
-                        RunTiming?.Record(LogPrefix, _databaseName, "ForeignKeys", foreignKeysSw.ElapsedMilliseconds, 0);
-                    }
-
-                    // Step: Materialized views (PostgreSQL only)
-                    if (_product.Platform == Platform.PostgreSQL && _template.MaterializedViews.Count > 0)
-                    {
-                        var materializedViewQuenchSw = Stopwatch.StartNew();
-                        _checkpointing.Track(DbScope, "MaterializedViewQuench", () => QuenchMaterializedViews(effectiveTableCmd));
-                        materializedViewQuenchSw.Stop();
-                        RunTiming?.Record(LogPrefix, _databaseName, "MaterializedViewQuench", materializedViewQuenchSw.ElapsedMilliseconds, 0);
-                    }
-
-                    // Step: Scheduled events (MySQL/MariaDB only). Runs after tables so an event whose
-                    // body references a table the same deploy creates does not fail on first run.
-                    if (ShouldQuenchEvents(_product.Platform, _template.Events.Count, DropRemovedEvents))
-                    {
-                        var eventQuenchSw = Stopwatch.StartNew();
-                        _checkpointing.Track(DbScope, "EventQuench", () => QuenchEvents(effectiveTableCmd));
-                        eventQuenchSw.Stop();
-                        RunTiming?.Record(LogPrefix, _databaseName, "EventQuench", eventQuenchSw.ElapsedMilliseconds, 0);
-                    }
-
-                    // Step: Indexed views (SQL Server only)
-                    if (_product.Platform == Platform.SqlServer && _template.IndexedViews.Count > 0)
-                    {
-                        var indexedViewQuenchSw = Stopwatch.StartNew();
-                        _checkpointing.Track(DbScope, "IndexedViewQuench", () => QuenchIndexedViews(effectiveTableCmd));
-                        ReapplyStashedIndexedViewPermissions(effectiveTableCmd);
-                        indexedViewQuenchSw.Stop();
-                        RunTiming?.Record(LogPrefix, _databaseName, "IndexedViewQuench", indexedViewQuenchSw.ElapsedMilliseconds, 0);
-                    }
-
-                    ReapplyPreservedModulePermissions(effectiveTableCmd);
-
-                    SafeProgressLog("  Quenching after database scripts");
-                    QuenchTemplateScriptsWithCheckpoint(command, "After", _iteration.AfterScripts, DatabaseScriptSlot.After);
-
-                    if (!string.IsNullOrWhiteSpace(_iteration.VersionStampScript))
-                    {
-                        var versionStampSw = Stopwatch.StartNew();
-                        _checkpointing.Track(DbScope, "VersionStamp", () =>
-                        {
-                            SafeProgressLog("  Stamp version");
-                            command.CommandText = _iteration.VersionStampScript;
-                            try
-                            {
-                                ExecuteNonQueryHandlingMessages(command);
-                            }
-                            catch (Exception ex)
-                            {
-                                WriteValidationFailureArtifact(command, "VersionStamp", ex);
-                                throw;
-                            }
-                        });
-                        versionStampSw.Stop();
-                        RunTiming?.Record(LogPrefix, _databaseName, "VersionStamp", versionStampSw.ElapsedMilliseconds, 0);
-                    }
-                }
-                else
-                {
-                    SafeProgressLog("  [WhatIf] After table scripts:");
-                    WhatIfLogTemplateScripts(command, "After Table", _iteration.AfterTableScripts, DatabaseScriptSlot.AfterTable);
-
-                    SafeProgressLog("  [WhatIf] Object scripts (final pass):");
-                    WhatIfLogScripts(_iteration.AfterTablesObjectScripts.ToList(), DatabaseScriptSlot.AfterTablesObject, effectiveObjectsCmd);
-
-                    if (_deliverData)
-                    {
-                        SafeProgressLog("  [WhatIf] Table data delivery:");
-                        WhatIfLogTableDataScripts(_iteration.TableDataScripts.ToList());
-
-                        if (FactoryContainer.Resolve<IMergeScriptHelper>() is not MergeScriptHelperAdapter whatIfAdapter || whatIfAdapter.Platform != _product.Platform)
-                            FactoryContainer.Register<IMergeScriptHelper>(new MergeScriptHelperAdapter(_product.Platform));
-
-                        DataDeliveryProcessor.GetFromFactory().DeliverTables(new DataDeliveryContext
-                        {
-                            Tables = _template.Tables.Cast<IDeliverableTable>().ToList(),
-                            Command = command,
-                            Platform = _product.Platform.GetBasePlatform().ToString(),
-                            DatabaseName = _databaseName,
-                            SchemaName = _schemaName,
-                            VersionTokens = _versionScriptTokens,
-                            PostgreSqlServerVersionNum = _postgreSqlServerVersionNum,
-                            MySqlServerVersionNum = _mySqlServerVersionNum,
-                            SqlServerCompatibilityLevel = _sqlServerCompatibilityLevel,
-                            UnsupportedFeaturePolicy = _unsupportedFeaturePolicy,
-                            TemplateRootPath = Path.GetDirectoryName(_template.FilePath) ?? "",
-                            ScriptHelper = FactoryContainer.Resolve<IMergeScriptHelper>(),
-                            ReadFileContent = path => ProductFileWrapper.GetFromFactory().ReadAllText(path),
-                            ExecuteScript = (_, _) => { },
-                            ProgressLog = SafeProgressLog,
-                            ProgressLogError = SafeProgressLogError,
-                            RecordDowngrade = (type, name) => ChangeAudit?.Record(type, name, "downgraded", target: AuditTarget),
-                            RecordDelivery = RecordDataDelivery,
-                            WhatIf = true
-                        });
-                    }
-
-                    // The same steps as the real run, in the same order. Each procedure takes the WhatIf flag and
-                    // records what it would do instead of doing it; skipping the call left those changes out of the
-                    // preview entirely.
-                    if (!_template.IndexOnlyTableQuenches && _updateTables)
-                        QuenchForeignKeys(effectiveTableCmd);
-
-                    if (_product.Platform == Platform.PostgreSQL && _template.MaterializedViews.Count > 0)
-                        QuenchMaterializedViews(effectiveTableCmd);
-
-                    if (ShouldQuenchEvents(_product.Platform, _template.Events.Count, DropRemovedEvents))
-                        QuenchEvents(effectiveTableCmd);
-
-                    if (_product.Platform == Platform.SqlServer && _template.IndexedViews.Count > 0)
-                        QuenchIndexedViews(effectiveTableCmd);
-
-                    SafeProgressLog("  [WhatIf] After database scripts:");
-                    WhatIfLogTemplateScripts(command, "After", _iteration.AfterScripts, DatabaseScriptSlot.After);
-
-                    if (!string.IsNullOrWhiteSpace(_iteration.VersionStampScript))
-                        SafeProgressLog("  [WhatIf] Would stamp version");
-                }
+                lanes = new QuenchLanes(command, effectiveTableCmd, effectiveObjectsCmd, effectiveSilentCmd);
+                RunQuenchSteps(lanes);
             }
             finally
             {
@@ -1123,7 +638,7 @@ public class DatabaseQuench
                 tableConnection?.Close();
                 objectsConnection?.Close();
                 silentConnection?.Close();
-                deliveryConnection?.Close();
+                lanes?.DeliveryConnection?.Close();
             }
 
             SafeProgressLog("Successfully Quenched");
@@ -1587,14 +1102,12 @@ public class DatabaseQuench
     /// Returns true if the current run is WhatIf-only.
     /// SqlServer/MySQL use "1"; PostgreSQL uses "true".
     /// </summary>
-    internal bool IsWhatIf => _product.Platform == Platform.PostgreSQL
-        ? _whatIfOnly == "true"
-        : _whatIfOnly == "1";
+    internal bool IsWhatIf => _whatIfOnly;
 
     /// <summary>
     /// Formats a boolean value for platform-specific SQL parameters.
     /// </summary>
-    internal string FormatBooleanFlag(bool value) => _product.Platform switch
+    internal string SqlFlag(bool value) => _product.Platform switch
     {
         Platform.PostgreSQL => value ? "true" : "false",
         _ => value ? "1" : "0"
@@ -1704,7 +1217,7 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
 {SqlServerCdcRotateTable}
 {SqlServerExpressionMapAdoptUndoTable}
 {SqlServerPreflight}
-{SqlServerExpressionMapAdopt}EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {_whatIfOnly}";
+{SqlServerExpressionMapAdopt}EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {SqlFlag(_whatIfOnly)}";
                     break;
                 }
 
@@ -1723,15 +1236,15 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
 
                 // Ownership first, so a refusal leaves another product's table as it was. #508: adoption before any table
                 // or column is created, so only what already exists is checked on a scratch copy.
-                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ValidateTableOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
-CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {_whatIfOnly}); CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {_whatIfOnly})";
+                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ValidateTableOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {SqlFlag(_whatIfOnly)}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
+CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {SqlFlag(_whatIfOnly)}); CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)})";
                 break;
             }
             case Platform.MySQL:
             {
                 ParseMySqlTableJson(tableCommand);
                 SetMySqlOnlineApply(tableCommand);
-                var whatIf = _whatIfOnly == "1" ? 1 : 0;
+                var whatIf = _whatIfOnly ? 1 : 0;
                 // Ownership first, so a refusal leaves another product's table as it was. #508: adoption before any table or
                 // column is created (skipped under WhatIf inside the procedure: its copy is a real table).
                 tableCommand.CommandText = $"CALL SchemaSmith_ValidateTableOwnership('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(_databaseName)}'); CALL SchemaSmith_ExpressionMapAdopt('{EscapeSqlLiteral(_databaseName)}', {whatIf}); CALL SchemaSmith_MissingTableAndColumnQuench('{EscapeSqlLiteral(_databaseName)}', {whatIf})";
@@ -1765,11 +1278,11 @@ CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {_whatIfOnly}); CALL ""S
         switch (_product.Platform.GetBasePlatform())
         {
             case Platform.SqlServer:
-                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @WhatIf = {_whatIfOnly}, @DropTablesRemovedFromProduct = {_dropRemovedTables}, @DropColumnsRemovedFromProduct = {_dropRemovedColumns}, @DropForeignKeysRemovedFromProduct = {_dropRemovedForeignKeys}, @DropCheckConstraintsRemovedFromProduct = {_dropRemovedCheckConstraints}, @DropExcludeConstraintsRemovedFromProduct = {_dropRemovedExcludeConstraints}, @DropStatisticsRemovedFromProduct = {_dropRemovedStatistics}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}, @OnlineApply = '{OnlineApply}', @OnlineApplyMaxDuration = {OnlineApplyMaxDuration}";
+                tableCommand.CommandText = $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ModifiedTableQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @DropUnknownIndexes = {SqlFlag(_dropUnknownIndexes)}, @WhatIf = {SqlFlag(_whatIfOnly)}, @DropTablesRemovedFromProduct = {SqlFlag(_dropRemovedTables)}, @DropColumnsRemovedFromProduct = {SqlFlag(_dropRemovedColumns)}, @DropForeignKeysRemovedFromProduct = {SqlFlag(_dropRemovedForeignKeys)}, @DropCheckConstraintsRemovedFromProduct = {SqlFlag(_dropRemovedCheckConstraints)}, @DropExcludeConstraintsRemovedFromProduct = {SqlFlag(_dropRemovedExcludeConstraints)}, @DropStatisticsRemovedFromProduct = {SqlFlag(_dropRemovedStatistics)}, @DropIndexesRemovedFromProduct = {SqlFlag(_dropRemovedIndexes)}, @CaptureWouldDrop = {SqlFlag(CaptureWouldDrop)}, @RebuildPolicyMode = '{RebuildPolicyMode}', @RebuildPolicyThreshold = {RebuildPolicyThreshold}, @RebuildPolicyOnOrderMismatch = {RebuildPolicyOnOrderMismatch}, @DropSchemaBoundDependents = {(DropSchemaBoundDependents ? 1 : 0)}, @OnlineApply = '{OnlineApply}', @OnlineApplyMaxDuration = {OnlineApplyMaxDuration}";
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"
-CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnknownIndexes}, p_WhatIf := {_whatIfOnly}, p_DropTablesRemovedFromProduct := {_dropRemovedTables}, p_DropColumnsRemovedFromProduct := {_dropRemovedColumns}, p_DropForeignKeysRemovedFromProduct := {_dropRemovedForeignKeys}, p_DropCheckConstraintsRemovedFromProduct := {_dropRemovedCheckConstraints}, p_DropExcludeConstraintsRemovedFromProduct := {_dropRemovedExcludeConstraints}, p_DropStatisticsRemovedFromProduct := {_dropRemovedStatistics}, p_DropIndexesRemovedFromProduct := {_dropRemovedIndexes}, p_CaptureWouldDrop := {FormatBooleanFlag(CaptureWouldDrop)}, p_RebuildPolicyMode := '{RebuildPolicyMode}', p_RebuildPolicyThreshold := {RebuildPolicyThreshold}, p_RebuildPolicyOnOrderMismatch := {RebuildPolicyOnOrderMismatch}, p_OnlineApply := '{OnlineApply}');";
+CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {SqlFlag(_dropUnknownIndexes)}, p_WhatIf := {SqlFlag(_whatIfOnly)}, p_DropTablesRemovedFromProduct := {SqlFlag(_dropRemovedTables)}, p_DropColumnsRemovedFromProduct := {SqlFlag(_dropRemovedColumns)}, p_DropForeignKeysRemovedFromProduct := {SqlFlag(_dropRemovedForeignKeys)}, p_DropCheckConstraintsRemovedFromProduct := {SqlFlag(_dropRemovedCheckConstraints)}, p_DropExcludeConstraintsRemovedFromProduct := {SqlFlag(_dropRemovedExcludeConstraints)}, p_DropStatisticsRemovedFromProduct := {SqlFlag(_dropRemovedStatistics)}, p_DropIndexesRemovedFromProduct := {SqlFlag(_dropRemovedIndexes)}, p_CaptureWouldDrop := {SqlFlag(CaptureWouldDrop)}, p_RebuildPolicyMode := '{RebuildPolicyMode}', p_RebuildPolicyThreshold := {RebuildPolicyThreshold}, p_RebuildPolicyOnOrderMismatch := {RebuildPolicyOnOrderMismatch}, p_OnlineApply := '{OnlineApply}');";
                 break;
             case Platform.MySQL:
             {
@@ -1784,15 +1297,15 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
                 // because SetMySqlCaptureFlag reuses the same command.
                 SetMySqlCaptureFlag(tableCommand);
                 SetMySqlOnlineApply(tableCommand);
-                var whatIf = _whatIfOnly == "1" ? 1 : 0;
-                var dropRemoved = _dropRemovedTables == "1" ? 1 : 0;
-                var dropRemovedCols = _dropRemovedColumns == "1" ? 1 : 0;
-                var dropRemovedChecks = _dropRemovedCheckConstraints == "1" ? 1 : 0;
-                var dropRemovedExcludes = _dropRemovedExcludeConstraints == "1" ? 1 : 0;
-                var dropRemovedStats = _dropRemovedStatistics == "1" ? 1 : 0;
+                var whatIf = _whatIfOnly ? 1 : 0;
+                var dropRemoved = _dropRemovedTables ? 1 : 0;
+                var dropRemovedCols = _dropRemovedColumns ? 1 : 0;
+                var dropRemovedChecks = _dropRemovedCheckConstraints ? 1 : 0;
+                var dropRemovedExcludes = _dropRemovedExcludeConstraints ? 1 : 0;
+                var dropRemovedStats = _dropRemovedStatistics ? 1 : 0;
                 var captureWouldDrop = CaptureWouldDrop ? 1 : 0;
-                var dropUnknown = _dropUnknownIndexes == "1" ? 1 : 0;
-                var dropRemovedIndexes = _dropRemovedIndexes == "1" ? 1 : 0;
+                var dropUnknown = _dropUnknownIndexes ? 1 : 0;
+                var dropRemovedIndexes = _dropRemovedIndexes ? 1 : 0;
                 SetMySqlRebuildPolicy(tableCommand);
                 tableCommand.CommandText = $"CALL SchemaSmith_ModifiedTableQuench('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(_databaseName)}', {whatIf}, {dropRemoved}, {dropRemovedCols}, {dropRemovedChecks}, {dropRemovedExcludes}, {dropRemovedStats}, {captureWouldDrop}, {dropUnknown}, {dropRemovedIndexes})";
                 break;
@@ -1823,7 +1336,7 @@ CALL ""SchemaSmith"".""ModifiedTableQuench""(p_DropUnknownIndexes := {_dropUnkno
         "PlatformName VARCHAR(20) COLLATE DATABASE_DEFAULT NULL, EngineVersion VARCHAR(200) COLLATE DATABASE_DEFAULT NULL, CompatLevel INT NULL, UpdatedUtc DATETIME2(3) NULL)\n";
 
     // #508: before any table or column is created, so only what already exists is checked on a scratch copy.
-    private string SqlServerExpressionMapAdopt => $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExpressionMapAdopt @WhatIf = {_whatIfOnly}\n";
+    private string SqlServerExpressionMapAdopt => $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExpressionMapAdopt @WhatIf = {SqlFlag(_whatIfOnly)}\n";
 
     // Runs before anything is created, on every run including a resumed one: neutralizes (or, under 'fail', refuses) what
     // the detected version cannot support (#425), then resolves the template's CDC defaults and refuses a change the
@@ -1849,7 +1362,7 @@ END CATCH";
     }
 
     internal string SqlServerPreflight => $@"BEGIN TRY
-  EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ValidateTableOwnership @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}
+  EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ValidateTableOwnership @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {SqlFlag(_whatIfOnly)}
   EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.DegradeUnsupportedFeatures @DeferDatabaseToggles = {(DeferDatabaseToggles ? 1 : 0)}
   EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.CdcPreflight @CdcFilegroup = {TemplateCdcFilegroup}, @CdcSupportsNetChanges = {TemplateCdcSupportsNetChanges}
 END TRY
@@ -1870,7 +1383,7 @@ END CATCH";
     private string SqlServerIndexStateStep(string db) => $"""
         IF EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Disabled] = 1)
              OR EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK) JOIN [{db}].sys.indexes si ON si.[object_id] = OBJECT_ID(N'[{db}].' + i.[Schema] + N'.' + i.[TableName]) WHERE si.is_disabled = 1)
-          EXEC [{db}].SchemaSmith.IndexStateQuench @WhatIf = {_whatIfOnly}
+          EXEC [{db}].SchemaSmith.IndexStateQuench @WhatIf = {SqlFlag(_whatIfOnly)}
         ELSE RAISERROR('Skipping index disabled state: no index is declared disabled and none is disabled', 10, 100) WITH NOWAIT
         """;
 
@@ -1878,17 +1391,17 @@ END CATCH";
         IF [{db}].SchemaSmith.fn_ServerMajorVersion() >= 15
           IF EXISTS (SELECT 1 FROM #EdgeConstraints WITH (NOLOCK))
                OR EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) JOIN [{db}].sys.objects o ON o.parent_object_id = OBJECT_ID(N'[{db}].' + t.[Schema] + N'.' + t.[Name]) WHERE o.[type] = 'EC')
-            EXEC [{db}].SchemaSmith.EdgeConstraintQuench @WhatIf = {_whatIfOnly}
+            EXEC [{db}].SchemaSmith.EdgeConstraintQuench @WhatIf = {SqlFlag(_whatIfOnly)}
           ELSE RAISERROR('Skipping edge constraints: none declared and none on a declared table', 10, 100) WITH NOWAIT
         IF EXISTS (SELECT 1 FROM #ForeignKeys WITH (NOLOCK) WHERE [Enforced] IS NOT NULL OR [Validated] IS NOT NULL)
              OR EXISTS (SELECT 1 FROM #CheckConstraints WITH (NOLOCK) WHERE [Enforced] IS NOT NULL OR [Validated] IS NOT NULL)
-          EXEC [{db}].SchemaSmith.ConstraintStateQuench @WhatIf = {_whatIfOnly}
+          EXEC [{db}].SchemaSmith.ConstraintStateQuench @WhatIf = {SqlFlag(_whatIfOnly)}
         ELSE RAISERROR('Skipping constraint enforcement and validation: no foreign key or check constraint declares it', 10, 100) WITH NOWAIT
         IF EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE [Description] IS NOT NULL)
              OR EXISTS (SELECT 1 FROM #Columns WITH (NOLOCK) WHERE [Description] IS NOT NULL)
              OR EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
              OR EXISTS (SELECT 1 FROM #ExtendedProperties WITH (NOLOCK))
-          EXEC [{db}].SchemaSmith.ExtendedPropertyQuench @WhatIf = {_whatIfOnly}
+          EXEC [{db}].SchemaSmith.ExtendedPropertyQuench @WhatIf = {SqlFlag(_whatIfOnly)}
         ELSE RAISERROR('Skipping extended properties: none declared', 10, 100) WITH NOWAIT
         """;
 
@@ -1897,9 +1410,9 @@ END CATCH";
         SafeProgressLog("  Quenching index state, FILESTREAM columns, CDC and Change Tracking");
         var db = Identifier.EscapeDelimited(_databaseName, _product.Platform);
         tableCommand.CommandText = $@"{SqlServerIndexStateStep(db)}
-EXEC [{db}].SchemaSmith.FileStreamColumnQuench @WhatIf = {_whatIfOnly}
-EXEC [{db}].SchemaSmith.CdcQuench @WhatIf = {_whatIfOnly}
-EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
+EXEC [{db}].SchemaSmith.FileStreamColumnQuench @WhatIf = {SqlFlag(_whatIfOnly)}
+EXEC [{db}].SchemaSmith.CdcQuench @WhatIf = {SqlFlag(_whatIfOnly)}
+EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {SqlFlag(_whatIfOnly)}";
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Table Features"), ReadsTheParsedTables(tableCommand.CommandText));
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
@@ -1910,11 +1423,10 @@ EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
         try
         {
             tableCommand.CommandText = _product.Platform.GetBasePlatform() == Platform.MySQL
-                ? $"CALL SchemaSmith_ExpressionMapRecord('{EscapeSqlLiteral(_databaseName)}', {_whatIfOnly})"
+                ? $"CALL SchemaSmith_ExpressionMapRecord('{EscapeSqlLiteral(_databaseName)}', {SqlFlag(_whatIfOnly)})"
                 : _product.Platform == Platform.PostgreSQL
-                // _whatIfOnly is already rendered per engine (true/false on PostgreSQL, 1/0 elsewhere).
-                ? $"CALL \"SchemaSmith\".\"ExpressionMapRecord\"(p_WhatIf := {_whatIfOnly})"
-                : $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExpressionMapRecord @WhatIf = {_whatIfOnly}";
+                ? $"CALL \"SchemaSmith\".\"ExpressionMapRecord\"(p_WhatIf := {SqlFlag(_whatIfOnly)})"
+                : $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ExpressionMapRecord @WhatIf = {SqlFlag(_whatIfOnly)}";
             tableCommand.ExecuteNonQuery();
         }
         catch (DbException e)
@@ -2005,23 +1517,23 @@ EXEC [{db}].SchemaSmith.ChangeTrackingQuench @WhatIf = {_whatIfOnly}";
                 var updateFillFactor = _template.UpdateFillFactor ? "1" : "0";
                 var indexOnlyTableDefs = _ingestEncoding == IngestEncoding.Xml ? IterationTableXml : IterationTableSchema;
                 tableCommand.CommandText = _template.IndexOnlyTableQuenches
-                    ? $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.IndexOnlyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @TableDefinitions = '{EscapeSqlLiteral(indexOnlyTableDefs)}', @DropUnknownIndexes = {_dropUnknownIndexes}, @DropIndexesRemovedFromProduct = {_dropRemovedIndexes}, @UpdateFillFactor = {updateFillFactor}, @WhatIf = {_whatIfOnly}, @CaptureWouldDrop = {FormatBooleanFlag(CaptureWouldDrop)}, @OnlineApply = '{OnlineApply}', @OnlineApplyMaxDuration = {OnlineApplyMaxDuration}"
-                    : $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}, @OnlineApply = '{OnlineApply}', @OnlineApplyMaxDuration = {OnlineApplyMaxDuration}";
+                    ? $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.IndexOnlyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @TableDefinitions = '{EscapeSqlLiteral(indexOnlyTableDefs)}', @DropUnknownIndexes = {SqlFlag(_dropUnknownIndexes)}, @DropIndexesRemovedFromProduct = {SqlFlag(_dropRemovedIndexes)}, @UpdateFillFactor = {updateFillFactor}, @WhatIf = {SqlFlag(_whatIfOnly)}, @CaptureWouldDrop = {SqlFlag(CaptureWouldDrop)}, @OnlineApply = '{OnlineApply}', @OnlineApplyMaxDuration = {OnlineApplyMaxDuration}"
+                    : $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingIndexesAndConstraintsQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {SqlFlag(_whatIfOnly)}, @OnlineApply = '{OnlineApply}', @OnlineApplyMaxDuration = {OnlineApplyMaxDuration}";
                 break;
             }
             case Platform.PostgreSQL:
                 tableCommand.CommandText = _template.IndexOnlyTableQuenches
                     ? $@"
-CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_TableDefinitions := '{EscapeSqlLiteral(IterationTableSchema)}', p_DropUnknownIndexes := {_dropUnknownIndexes}, p_DropIndexesRemovedFromProduct := {_dropRemovedIndexes}, p_WhatIf := {_whatIfOnly}, p_UpdateFillFactor := {_template.UpdateFillFactor.ToString().ToLower()}, p_CaptureWouldDrop := {FormatBooleanFlag(CaptureWouldDrop)}, p_OnlineApply := '{OnlineApply}');
-CALL ""SchemaSmith"".""ReplicaIdentityQuench""(p_WhatIf := {_whatIfOnly});
-CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
+CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_TableDefinitions := '{EscapeSqlLiteral(IterationTableSchema)}', p_DropUnknownIndexes := {SqlFlag(_dropUnknownIndexes)}, p_DropIndexesRemovedFromProduct := {SqlFlag(_dropRemovedIndexes)}, p_WhatIf := {SqlFlag(_whatIfOnly)}, p_UpdateFillFactor := {_template.UpdateFillFactor.ToString().ToLower()}, p_CaptureWouldDrop := {SqlFlag(CaptureWouldDrop)}, p_OnlineApply := '{OnlineApply}');
+CALL ""SchemaSmith"".""ReplicaIdentityQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)});
+CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {SqlFlag(_whatIfOnly)}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
 "
                     : $@"
-CALL ""SchemaSmith"".""MissingIndexesAndConstraintsQuench""(p_WhatIf := {_whatIfOnly}, p_OnlineApply := '{OnlineApply}');
-CALL ""SchemaSmith"".""DescriptionQuench""(p_WhatIf := {_whatIfOnly});
-CALL ""SchemaSmith"".""ReplicaIdentityQuench""(p_WhatIf := {_whatIfOnly});
-CALL ""SchemaSmith"".""FixupTableOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
-CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {_whatIfOnly}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
+CALL ""SchemaSmith"".""MissingIndexesAndConstraintsQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)}, p_OnlineApply := '{OnlineApply}');
+CALL ""SchemaSmith"".""DescriptionQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)});
+CALL ""SchemaSmith"".""ReplicaIdentityQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)});
+CALL ""SchemaSmith"".""FixupTableOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {SqlFlag(_whatIfOnly)}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
+CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {SqlFlag(_whatIfOnly)}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
 ";
                 break;
             case Platform.MySQL:
@@ -2030,14 +1542,14 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
                     ParseMySqlTableJson(tableCommand);
                 SetMySqlCaptureFlag(tableCommand);
                 SetMySqlOnlineApply(tableCommand);
-                var whatIf = _whatIfOnly == "1" ? 1 : 0;
-                var dropUnknown = _dropUnknownIndexes == "1" ? 1 : 0;
-                var dropRemovedChecks = _dropRemovedCheckConstraints == "1" ? 1 : 0;
+                var whatIf = _whatIfOnly ? 1 : 0;
+                var dropUnknown = _dropUnknownIndexes ? 1 : 0;
+                var dropRemovedChecks = _dropRemovedCheckConstraints ? 1 : 0;
                 // On MySQL/MariaDB the index REMOVAL happens inside ModifiedTableQuench, matching SQL
                 // Server and PostgreSQL; MissingIndexesAndConstraintsQuench is add-only for indexes and
                 // no longer takes the two index-drop flags. IndexOnlyQuench still owns both of them --
                 // do not infer from a signature that an engine cannot do the thing.
-                var dropRemovedIndexes = _dropRemovedIndexes == "1" ? 1 : 0;
+                var dropRemovedIndexes = _dropRemovedIndexes ? 1 : 0;
                 tableCommand.CommandText = _template.IndexOnlyTableQuenches
                     ? $"CALL SchemaSmith_IndexOnlyQuench('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(_databaseName)}', {whatIf}, {dropUnknown}, {dropRemovedIndexes})"
                     : $"CALL SchemaSmith_MissingIndexesAndConstraintsQuench('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(_databaseName)}', {whatIf}, {dropRemovedChecks})";
@@ -2096,20 +1608,20 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
         {
             case Platform.SqlServer:
                 // One batch, which a severity-16 error does not end: the TRY stops it at a key that fails, as PostgreSQL does.
-                tableCommand.CommandText = $"BEGIN TRY\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ForeignKeyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {_whatIfOnly}, @OnlineApply = '{OnlineApply}'\n{SqlServerConstraintFollowUps(Identifier.EscapeDelimited(_databaseName, _product.Platform))}\nEND TRY\nBEGIN CATCH\nDECLARE @v_Error NVARCHAR(2047) = ERROR_MESSAGE()\nRAISERROR('%s', 16, 1, @v_Error)\nEND CATCH";
+                tableCommand.CommandText = $"BEGIN TRY\nEXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.ForeignKeyQuench @ProductName = '{EscapeSqlLiteral(_product.Name)}', @WhatIf = {SqlFlag(_whatIfOnly)}, @OnlineApply = '{OnlineApply}'\n{SqlServerConstraintFollowUps(Identifier.EscapeDelimited(_databaseName, _product.Platform))}\nEND TRY\nBEGIN CATCH\nDECLARE @v_Error NVARCHAR(2047) = ERROR_MESSAGE()\nRAISERROR('%s', 16, 1, @v_Error)\nEND CATCH";
                 break;
             case Platform.PostgreSQL:
-                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ForeignKeyQuench""(p_WhatIf := {_whatIfOnly}, p_OnlineApply := '{OnlineApply}');
-CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_OnlineApply := '{OnlineApply}');";
+                tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ForeignKeyQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)}, p_OnlineApply := '{OnlineApply}');
+CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)}, p_OnlineApply := '{OnlineApply}');";
                 break;
             case Platform.MySQL:
             {
                 if (!MySqlTempTablesExist(tableCommand))
                     ParseMySqlTableJson(tableCommand);
                 SetMySqlCaptureFlag(tableCommand);
-                var whatIf = _whatIfOnly == "1" ? 1 : 0;
-                var dropUnknown = _dropUnknownIndexes == "1" ? 1 : 0;
-                var dropRemovedFks = _dropRemovedForeignKeys == "1" ? 1 : 0;
+                var whatIf = _whatIfOnly ? 1 : 0;
+                var dropUnknown = _dropUnknownIndexes ? 1 : 0;
+                var dropRemovedFks = _dropRemovedForeignKeys ? 1 : 0;
                 tableCommand.CommandText = $"CALL SchemaSmith_ForeignKeyQuench('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(_databaseName)}', {whatIf}, {dropUnknown}, {dropRemovedFks})";
                 break;
             }
@@ -2125,7 +1637,7 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
     // when neither the environment nor any table asks for it, so an Off deploy sends exactly what it always did.
     private void RunDeferredOnlineWork(IDbCommand tableCommand)
     {
-        if (_product.Platform.GetBasePlatform() != Platform.PostgreSQL || _whatIfOnly == FormatBooleanFlag(true) ||
+        if (_product.Platform.GetBasePlatform() != Platform.PostgreSQL || _whatIfOnly ||
             (OnlineApply == "OFF" && !_template.Tables.Exists(t => !string.IsNullOrWhiteSpace(t.OnlineApply) &&
                                                                    !t.OnlineApply.Trim().Equals("Off", StringComparison.OrdinalIgnoreCase))))
             return;
@@ -2154,7 +1666,7 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
         SafeProgressLog("  Quenching materialized views");
 
         var updateFillFactor = _template.UpdateFillFactor.ToString().ToLower();
-        tableCommand.CommandText = $@"CALL ""SchemaSmith"".""MaterializedViewQuench""('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(IterationMaterializedViewSchema)}', {_whatIfOnly}, {updateFillFactor}, '{EscapeSqlLiteral(_template.Name)}', '{EscapeSqlLiteral(_schemaName)}');";
+        tableCommand.CommandText = $@"CALL ""SchemaSmith"".""MaterializedViewQuench""('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(IterationMaterializedViewSchema)}', {SqlFlag(_whatIfOnly)}, {updateFillFactor}, '{EscapeSqlLiteral(_template.Name)}', '{EscapeSqlLiteral(_schemaName)}');";
 
         lock (MaterializedViewPhaseLock())
         {
@@ -2208,7 +1720,7 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
         }
 
         SafeProgressLog("  Quenching scheduled events");
-        var whatIf = _whatIfOnly == "1" ? 1 : 0;
+        var whatIf = _whatIfOnly ? 1 : 0;
         var dropRemoved = DropRemovedEvents ? 1 : 0;
         tableCommand.CommandText =
             $"CALL SchemaSmith_EventQuench('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(_databaseName)}', "
@@ -2246,7 +1758,7 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
 
         SafeProgressLog("  Quenching domain types");
         tableCommand.CommandText =
-            $@"CALL ""SchemaSmith"".""DomainTypeQuench""('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(types)}', {_whatIfOnly});";
+            $@"CALL ""SchemaSmith"".""DomainTypeQuench""('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(types)}', {SqlFlag(_whatIfOnly)});";
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Domain Types"), tableCommand.CommandText);
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
@@ -2265,7 +1777,7 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
 
         SafeProgressLog("  Quenching enum types");
         tableCommand.CommandText =
-            $@"CALL ""SchemaSmith"".""EnumTypeQuench""('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(types)}', {_whatIfOnly});";
+            $@"CALL ""SchemaSmith"".""EnumTypeQuench""('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(types)}', {SqlFlag(_whatIfOnly)});";
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Enum Types"), tableCommand.CommandText);
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
@@ -2284,14 +1796,14 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
         SafeProgressLog("  Quenching sequences");
         if (_product.Platform == Platform.MariaDb)
         {
-            tableCommand.CommandText = $"CALL SchemaSmith_SequenceQuench('{EscapeMySqlLiteral(_databaseName)}', '{EscapeMySqlLiteral(sequences)}', {_whatIfOnly})";
+            tableCommand.CommandText = $"CALL SchemaSmith_SequenceQuench('{EscapeMySqlLiteral(_databaseName)}', '{EscapeMySqlLiteral(sequences)}', {SqlFlag(_whatIfOnly)})";
             _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Sequences"), tableCommand.CommandText);
             ExecuteNonQueryHandlingMessages(tableCommand);
             _debugFileLocation = "";
             return;
         }
         tableCommand.CommandText =
-            $@"CALL ""SchemaSmith"".""SequenceQuench""('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(sequences)}', {_whatIfOnly});";
+            $@"CALL ""SchemaSmith"".""SequenceQuench""('{EscapeSqlLiteral(_product.Name)}', '{EscapeSqlLiteral(sequences)}', {SqlFlag(_whatIfOnly)});";
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Sequences"), tableCommand.CommandText);
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
         _debugFileLocation = "";
@@ -2324,7 +1836,7 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
         // B5 fix: thread @TemplateName + @SchemaName so the existing-views lookup in the proc
         // is scoped to the iteration's schema. Regular templates pass @SchemaName = '' and the
         // proc falls through to today's all-schemas behavior.
-        tableCommand.CommandText = $@"EXEC [SchemaSmith].[IndexedViewQuench] @ProductName = '{EscapeSqlLiteral(_product.Name)}', @IndexedViewSchema = '{EscapeSqlLiteral(viewSchema)}', @WhatIf = {_whatIfOnly}, @UpdateFillFactor = {updateFillFactor}, @TemplateName = N'{EscapeSqlLiteral(_template.Name)}', @SchemaName = N'{EscapeSqlLiteral(_schemaName)}';";
+        tableCommand.CommandText = $@"EXEC [SchemaSmith].[IndexedViewQuench] @ProductName = '{EscapeSqlLiteral(_product.Name)}', @IndexedViewSchema = '{EscapeSqlLiteral(viewSchema)}', @WhatIf = {SqlFlag(_whatIfOnly)}, @UpdateFillFactor = {updateFillFactor}, @TemplateName = N'{EscapeSqlLiteral(_template.Name)}', @SchemaName = N'{EscapeSqlLiteral(_schemaName)}';";
 
         _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Indexed Views"), tableCommand.CommandText);
         ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
@@ -2352,7 +1864,7 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {_whatIfOnly}, p_Onli
     {
         var (createTables, fillTables) = ForgeKindler.GetParseTableJsonPhases(Platform.SqlServer);
         var tableJson = IterationTableSchema;
-        var quench = SqlServerExpressionMapAdopt + $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {_whatIfOnly}";
+        var quench = SqlServerExpressionMapAdopt + $"EXEC [{Identifier.EscapeDelimited(_databaseName, _product.Platform)}].SchemaSmith.MissingTableAndColumnQuench @WhatIf = {SqlFlag(_whatIfOnly)}";
 
         // The debug artifact stays replayable, which means it stays whole: the undivided script with the
         // payload inlined, exactly the text this path used to execute. Splitting the execution should not

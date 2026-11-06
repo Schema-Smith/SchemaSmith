@@ -111,10 +111,7 @@ public abstract class TriggerOrderDeploySharedTests
 
                 var product = Product.Load();
                 var template = Template.Load("Main", product);
-                var quench = new DatabaseQuench("127.0.0.1", product, template, MainDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: true,
-                    deliverData: false, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = MainDb, SuppressKindling = true, DeliverData = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
                 return quench.QuenchSuccessful;
             }

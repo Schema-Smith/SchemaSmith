@@ -86,10 +86,8 @@ public class DatabaseQuenchIndexOnlyCallTests
         RegisterMockFileWrapper();
         var product = new Product { Name = productName, Platform = platform };
         var template = new Template { Name = "T", IndexOnlyTableQuenches = true };
-        var flag = platform == Platform.PostgreSQL ? "false" : "0";
 
-        var quench = new DatabaseQuench("srv", product, template, "db",
-            false, flag, false, flag, flag, flag, flag, flag, flag, flag, flag, false, false, null);
+        var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", UpdateTables = false, DeliverData = false }, null);
 
         var mockCmd = Substitute.For<IDbCommand>();
         var mockConnection = Substitute.For<IDbConnection>();

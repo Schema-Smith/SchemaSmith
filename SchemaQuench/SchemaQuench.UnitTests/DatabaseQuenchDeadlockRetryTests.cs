@@ -25,8 +25,7 @@ public class DatabaseQuenchDeadlockRetryTests
     {
         var product = new Product { Name = "P", Platform = Platform.SqlServer };
         var template = new Template { Name = "T" };
-        var quench = new DatabaseQuench("srv", product, template, "db",
-            false, "0", false, "0", "1", "1", "1", "1", "1", "1", false, false, false, null);
+        var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", UpdateTables = false, DeliverData = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, null);
         quench.DeadlockRetryBaseMs = 0;   // no real sleeping in unit tests
         quench.MaxDeadlockAttempts = 4;
         return quench;

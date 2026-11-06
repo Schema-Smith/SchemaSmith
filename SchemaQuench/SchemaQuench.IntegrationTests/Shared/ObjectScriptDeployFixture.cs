@@ -141,14 +141,8 @@ public abstract class ObjectScriptDeployFixture
                 errorLog.When(l => l.Error(Arg.Any<object>(), Arg.Any<Exception>())).Do(ci => log.Add("ERROR " + ci.ArgAt<object>(0) + " " + ci.ArgAt<Exception>(1)?.Message));
                 LogFactory.Register("ProgressLog", progressLog);
                 LogFactory.Register("ErrorLog", errorLog);
-                // The PostgreSQL quench renders these as booleans, the others as 0/1.
-                var no = Platform == Platform.PostgreSQL ? "false" : "0";
-                var yes = Platform == Platform.PostgreSQL ? "true" : "1";
                 var audit = new ChangeAuditCapture();
-                var quench = new DatabaseQuench("127.0.0.1", product, template, MainDb,
-                    suppressKindling: login != null, whatIfOnly: whatIf ? yes : no, runScriptsTwice: runTwice,
-                    dropRemovedTables: dropRemovedTables ? yes : no, dropRemovedColumns: yes, dropRemovedForeignKeys: yes, dropRemovedCheckConstraints: yes, dropRemovedExcludeConstraints: yes, dropRemovedStatistics: yes, dropRemovedIndexes: yes, dropUnknownIndexes: false, updateTables: updateTables,
-                    deliverData: false, checkpointing: new FileCheckpointManager(checkpointDir, resume)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents };
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = MainDb, SuppressKindling = login != null, WhatIf = whatIf, RunScriptsTwice = runTwice, UpdateTables = updateTables, DeliverData = false, Drops = new DropPolicy(Tables: dropRemovedTables, Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir, resume)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents };
                 quench.Execute();
                 var scripts = quench.IterationObjectScripts.Concat(quench.IterationAfterTablesObjectScripts).ToList();
                 var errors = scripts.Where(s => s.Error != null).Select(s => $"{Path.GetFileName(s.LogPath)}: {s.Error.Message}");

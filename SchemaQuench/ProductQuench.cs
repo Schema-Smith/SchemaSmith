@@ -2155,27 +2155,27 @@ public class ProductQuench
             return;
         }
 
-        var dropRemovedTables = FormatBooleanFlag(ResolveCascadedFlag(
+        var dropRemovedTables = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropTablesRemovedFromProduct), _product.DropTablesRemovedFromProduct,
-            template.DropTablesRemovedFromProduct, defaultValue: true));
-        var dropRemovedColumns = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropTablesRemovedFromProduct, defaultValue: true);
+        var dropRemovedColumns = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropColumnsRemovedFromProduct), _product.DropColumnsRemovedFromProduct,
-            template.DropColumnsRemovedFromProduct, defaultValue: true));
-        var dropRemovedForeignKeys = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropColumnsRemovedFromProduct, defaultValue: true);
+        var dropRemovedForeignKeys = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropForeignKeysRemovedFromProduct), _product.DropForeignKeysRemovedFromProduct,
-            template.DropForeignKeysRemovedFromProduct, defaultValue: true));
-        var dropRemovedCheckConstraints = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropForeignKeysRemovedFromProduct, defaultValue: true);
+        var dropRemovedCheckConstraints = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropCheckConstraintsRemovedFromProduct), _product.DropCheckConstraintsRemovedFromProduct,
-            template.DropCheckConstraintsRemovedFromProduct, defaultValue: true));
-        var dropRemovedExcludeConstraints = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropCheckConstraintsRemovedFromProduct, defaultValue: true);
+        var dropRemovedExcludeConstraints = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropExcludeConstraintsRemovedFromProduct), _product.DropExcludeConstraintsRemovedFromProduct,
-            template.DropExcludeConstraintsRemovedFromProduct, defaultValue: true));
-        var dropRemovedStatistics = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropExcludeConstraintsRemovedFromProduct, defaultValue: true);
+        var dropRemovedStatistics = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropStatisticsRemovedFromProduct), _product.DropStatisticsRemovedFromProduct,
-            template.DropStatisticsRemovedFromProduct, defaultValue: true));
-        var dropRemovedIndexes = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropStatisticsRemovedFromProduct, defaultValue: true);
+        var dropRemovedIndexes = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropIndexesRemovedFromProduct), _product.DropIndexesRemovedFromProduct,
-            template.DropIndexesRemovedFromProduct, defaultValue: true));
+            template.DropIndexesRemovedFromProduct, defaultValue: true);
         // Environment tier only. The table tier lives on MariaDbTable and is resolved inside the proc,
         // because putting it on the shared Table type would publish a MariaDB-only setting into the
         // SQL Server, PostgreSQL and MySQL schemas -- the exact leak MariaDbTable exists to prevent.
@@ -2192,13 +2192,8 @@ public class ProductQuench
         // is unaffected (verified across all three engines).
         if (_protectedMode)
         {
-            dropRemovedTables = FormatBooleanFlag(false);
-            dropRemovedColumns = FormatBooleanFlag(false);
-            dropRemovedForeignKeys = FormatBooleanFlag(false);
-            dropRemovedCheckConstraints = FormatBooleanFlag(false);
-            dropRemovedExcludeConstraints = FormatBooleanFlag(false);
-            dropRemovedStatistics = FormatBooleanFlag(false);
-            dropRemovedIndexes = FormatBooleanFlag(false);
+            dropRemovedTables = dropRemovedColumns = dropRemovedForeignKeys = dropRemovedCheckConstraints = false;
+            dropRemovedExcludeConstraints = dropRemovedStatistics = dropRemovedIndexes = false;
             dropUnknownIndexes = false;
             dropRemovedPeriods = false;
         }
@@ -2208,11 +2203,22 @@ public class ProductQuench
         // the table's own — whole, never field by field.
         var rebuildPolicy = ResolveCascadedPolicy(
             ReadEnvRebuildPolicy(_config), _product.RebuildPolicy, template.RebuildPolicy, table: null);
-        var quench = new DatabaseQuench(unit.Server, _product, template, unit.DatabaseName, unit.SchemaName,
-            suppressKindling, _whatIfOnly, _runScriptsTwice, dropRemovedTables,
-            dropRemovedColumns, dropRemovedForeignKeys, dropRemovedCheckConstraints, dropRemovedExcludeConstraints, dropRemovedStatistics, dropRemovedIndexes, dropUnknownIndexes,
-            _updateTables && template.Tables.Count > 0, _deliverData, _checkpointing,
-            _trackRunOnceMigrations, _pruneObsoleteMigrationTracking, _forceReKindle)
+        var quench = new DatabaseQuench(_product, template, new DatabaseQuenchOptions
+        {
+            Server = unit.Server,
+            DatabaseName = unit.DatabaseName,
+            SchemaName = unit.SchemaName,
+            SuppressKindling = suppressKindling,
+            WhatIf = IsWhatIfOnly,
+            RunScriptsTwice = _runScriptsTwice,
+            UpdateTables = _updateTables && template.Tables.Count > 0,
+            DeliverData = _deliverData,
+            TrackRunOnceMigrations = _trackRunOnceMigrations,
+            PruneObsoleteMigrationTracking = _pruneObsoleteMigrationTracking,
+            ForceReKindle = _forceReKindle,
+            Drops = new DropPolicy(dropRemovedTables, dropRemovedColumns, dropRemovedForeignKeys, dropRemovedCheckConstraints,
+                dropRemovedExcludeConstraints, dropRemovedStatistics, dropRemovedIndexes, dropUnknownIndexes),
+        }, _checkpointing)
         {
             // Carry the override-origin signals through so EnsureSchemaExists can branch on
             // TemplateTargets-driven provisioning + skip-missing. Defaults preserve existing
