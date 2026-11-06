@@ -247,6 +247,8 @@ public static class SettingsKeys
     public const string ContentionRetryAttempts = "Target:ContentionRetryAttempts";
     public const string DestructiveChangePolicy = "Target:DestructiveChangePolicy";
     public const string AcceptDestructive = "Target:AcceptDestructive";
+    /// <summary>MySQL and MariaDB: the database a --Drift check kindles its helpers into, so the target is left untouched.</summary>
+    public const string DriftHelperDatabase = "Target:DriftHelperDatabase";
     public const string CompatEncoding = "Target:CompatEncoding";
     public const string SourceCompatEncoding = "Source:CompatEncoding";
     public const string ArtifactPath = "ArtifactPath";

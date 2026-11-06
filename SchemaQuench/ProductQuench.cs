@@ -75,6 +75,16 @@ public class ProductQuench
     // object-script "ran" rows are recorded C#-side. Assembled into the report's objectChanges.
     private readonly ChangeAuditCapture _changeAudit = new();
 
+    // H1: a drift check -- a preview whose answer is whether the deploy would change anything.
+    private readonly bool _drift;
+    private readonly DriftFailOn _driftFailOn;
+    private readonly DriftCapture _driftCapture = new();
+    private readonly int _driftTier = -1;
+    internal bool IsDrift => _drift;
+    internal int DriftTier => _driftTier;
+    internal DriftReport DriftReport { get; private set; }
+    private static readonly ConcurrentDictionary<string, object> DriftDatabaseLocks = new();
+
     // Thread-safe collection of every scope failure (tenant work units today; product/server
     // phases as their capture is added), rendered once into the end-of-run roll-up.
     private readonly ConcurrentBag<FailureRecord> _failureRecords = new();
@@ -138,9 +148,20 @@ public class ProductQuench
         var whatIfSwitch = CommandLineParser.ContainsSwitch("WhatIf")
                            && !string.Equals(CommandLineParser.ValueOfSwitch("WhatIf"), "false", StringComparison.OrdinalIgnoreCase);
         _whatIfOnly = FormatWhatIfOnly(whatIfSwitch || _config[SettingsKeys.WhatIfOnly]?.ToLower() == "true");
+        _drift = CommandLineParser.ContainsSwitch("Drift")
+                 && !string.Equals(CommandLineParser.ValueOfSwitch("Drift"), "false", StringComparison.OrdinalIgnoreCase);
+        if (_drift)
+        {
+            if (IsWhatIfOnly)
+                throw new RunFailedException("--Drift and --WhatIf (or WhatIfONLY) ask different questions: --Drift answers whether each target "
+                                             + "matches the package, --WhatIf lists what a deploy would do. Use one.");
+            _driftFailOn = DriftFailOn.Parse(CommandLineParser.ValueOfSwitch("DriftFailOn"));
+            _whatIfOnly = FormatWhatIfOnly(true);
+        }
         _runScriptsTwice = _config[SettingsKeys.RunScriptsTwice]?.ToLower() == "true";
         _primaryServer = _config[SettingsKeys.Target.Server] ?? "localhost";
         _skipKindling = _config[SettingsKeys.KindleTheForge]?.ToLower() == "false";
+        if (_drift) _driftTier = DriftTiers.Choose(_product.Platform, _skipKindling, _config[SettingsKeys.DriftHelperDatabase]);
         // CLI-overridable (unlike the other kindling flags): ForceReKindle is an ad-hoc operational
         // gesture run on demand, not a sticky pipeline default, so a command-line switch is the natural UX.
         _forceReKindle = CommandLineParser.ContainsSwitch("ForceReKindle") || _config[SettingsKeys.ForceReKindle]?.ToLower() == "true";
@@ -156,6 +177,8 @@ public class ProductQuench
         // Read here so a bad value stops the run before anything connects, naming the setting.
         _timeouts = SessionTimeouts.Read(_config);
         _destructive = DestructivePolicy.Read(_config);
+        // A tier-1 drift check holds its kindle's locks until it rolls back; another session must wait a bounded time, not forever.
+        if (_drift && _driftTier == 1 && _timeouts.LockTimeoutSeconds == null) _timeouts = _timeouts with { LockTimeoutSeconds = 10 };
         // A preview neither records progress nor reads or discards a failed deploy's resume point (A16).
         _checkpointing = IsWhatIfOnly ? NoCheckpointing.Instance : FileCheckpointManager.GetFromFactory();
 
@@ -889,11 +912,27 @@ public class ProductQuench
         }
         _runTiming.Stop();
 
+        if (_drift) DecideDrift();
+
         // Normal Success / continue-mode PartialFailure. (Hard-abort sites inside Core already wrote
         // their Aborted summary and Exit()ed before control could return here.)
         WriteDeploymentSummary(
             Failed ? RunOutcome.PartialFailure : Incomplete ? RunOutcome.Incomplete : RunOutcome.Success,
-            Failed ? 2 : Incomplete ? 1 : 0);
+            ExitCode);
+    }
+
+    /// <summary>2 a target failed; under --Drift 5 when a target drifted; 1 finished with something left unapplied; 0.</summary>
+    public int ExitCode => _drift ? DriftVerdict.ExitCode(Failed, DriftReport?.Drifted == true, Incomplete) : Failed ? 2 : Incomplete ? 1 : 0;
+
+    private void DecideDrift()
+    {
+        var units = _targetResults
+            .Select(t => new DriftUnit(t.Server, t.Database, t.Schema, t.Template, t.Outcome == TargetOutcome.Failed, t.Outcome == TargetOutcome.Skipped))
+            .OrderBy(u => u.Display, StringComparer.Ordinal)
+            .ToList();
+        DriftReport = DriftVerdict.Decide(units, _changeAudit.Snapshot(), _driftCapture, _driftFailOn);
+        foreach (var line in DriftVerdict.ConsoleLines(DriftReport))
+            _progressLog.Info(line);
     }
 
     private void QuenchProductCore(bool suppressKindlingForTesting)
@@ -906,6 +945,7 @@ public class ProductQuench
             _progressLog.Warn($"PreventDrop value '{_config[SettingsKeys.PreventDrop]}' is not a recognized boolean (true/false) — the no-drop protection tier is NOT enabled.");
 
         LogProductInfo();
+        if (_drift) _progressLog.Info(DriftTiers.Explain(_driftTier));
 
         ValidateOnlineApply();
 
@@ -1065,7 +1105,7 @@ public class ProductQuench
         _summaryWritten = true;
         try
         {
-            var mode = IsWhatIfOnly ? RunMode.WhatIf : RunMode.Quench;
+            var mode = _drift ? RunMode.Drift : IsWhatIfOnly ? RunMode.WhatIf : RunMode.Quench;
             var resumed = _checkpointing.ResumedAny;
             var summary = DeploymentSummaryAssembler.Assemble(
                 _product.Name, _product.Platform.ToString(), ToolVersion(),
@@ -1073,7 +1113,7 @@ public class ProductQuench
                 _targetResults.ToArray(), _runTiming, _migrationScripts.Snapshot(),
                 _whatIf.Snapshot(), _failureRecords.ToArray(), BottleneckThresholdMs(), _changeAudit,
                 protectedModeEnabled: _protectedMode, lockWaits: _contention.Snapshot(), settings: _timeouts,
-                destructivePolicy: _destructive.Policy);
+                destructivePolicy: _destructive.Policy, drift: DriftReport, driftTier: _drift ? _driftTier : null);
             var (jsonPath, mdPath) = ResolveReportPaths(CommandLineParser.ValueOfSwitch("report", null), ConfigHelper.ResolveLogPath(), "SchemaQuench");
             EnsureReportDirectory(jsonPath);
             var file = FileWrapper.GetFromFactory();
@@ -2217,6 +2257,9 @@ public class ProductQuench
             SchemaName = unit.SchemaName,
             SuppressKindling = suppressKindling,
             WhatIf = IsWhatIfOnly,
+            Drift = _drift,
+            DriftInTransaction = _drift && _driftTier == 1,
+            DriftHelperDatabase = _drift && _driftTier == 2 ? _config[SettingsKeys.DriftHelperDatabase] : null,
             RunScriptsTwice = _runScriptsTwice,
             UpdateTables = _updateTables && template.Tables.Count > 0,
             DeliverData = _deliverData,
@@ -2238,6 +2281,7 @@ public class ProductQuench
             RunTiming = _runTiming,
             MigrationScripts = _migrationScripts,
             WhatIf = _whatIf,
+            DriftCapture = _drift ? _driftCapture : null,
             ChangeAudit = _changeAudit,
             ReadsChangeAudit = _updateTables,
             CaptureWouldDrop = _protectedMode,
@@ -2253,7 +2297,16 @@ public class ProductQuench
             DropRemovedEvents = !_protectedMode && (ConfigBool(_config, SettingsKeys.DropEventsRemovedFromProduct) ?? false)
         };
         var workUnitStopwatch = Stopwatch.StartNew();
-        quench.Execute();
+        // A tier-1 drift check's uncommitted kindle holds locks on the helpers every other unit of the database needs.
+        // A tier-2 check replaces the helper database's state with each target's, so units sharing it take turns.
+        if (_drift && _driftTier is 1 or 2)
+        {
+            var lockDatabase = _driftTier == 1 ? unit.DatabaseName : _config[SettingsKeys.DriftHelperDatabase];
+            lock (DriftDatabaseLocks.GetOrAdd($"{unit.Server}\u0001{lockDatabase}".ToLowerInvariant(), _ => new object()))
+                quench.Execute();
+        }
+        else
+            quench.Execute();
         workUnitStopwatch.Stop();
         _targetResults.Add(new TargetResult(
             quench.LogPrefix, unit.Server, unit.DatabaseName, unit.SchemaName ?? "", unit.TemplateName,

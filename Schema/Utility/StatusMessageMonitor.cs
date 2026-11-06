@@ -40,9 +40,13 @@ public class StatusMessageMonitor : IDisposable
     /// <param name="pollIntervalMs">Polling interval in milliseconds (default 200ms).</param>
     /// <param name="sessionConnection">The writing session's own open connection, read on each flush.</param>
     /// <param name="warn">Told once when live progress is lost.</param>
+    // Where the routines write their messages: the target's own table, or a drift check's helper database (H1, tier 2).
+    private readonly string _table;
+
     public StatusMessageMonitor(string connectionString, long sessionId, Action<string> callback, int pollIntervalMs = 200,
-                                IDbConnection sessionConnection = null, Action<string> warn = null)
+                                IDbConnection sessionConnection = null, Action<string> warn = null, string table = "SchemaSmith_StatusMessages")
     {
+        _table = table;
         _connectionString = connectionString;
         _sessionId = sessionId;
         _callback = callback;
@@ -111,7 +115,7 @@ public class StatusMessageMonitor : IDisposable
     {
         if (connection == null) return;
         using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, Message FROM SchemaSmith_StatusMessages WHERE SessionId = @sid AND Id > @lastId ORDER BY Id";
+        command.CommandText = $"SELECT Id, Message FROM {_table} WHERE SessionId = @sid AND Id > @lastId ORDER BY Id";
 
         var sidParam = command.CreateParameter();
         sidParam.ParameterName = "@sid";
@@ -194,7 +198,7 @@ public class StatusMessageMonitor : IDisposable
         try
         {
             using var command = ReadConnection.CreateCommand();
-            command.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = @sid";
+            command.CommandText = $"DELETE FROM {_table} WHERE SessionId = @sid";
 
             var sidParam = command.CreateParameter();
             sidParam.ParameterName = "@sid";

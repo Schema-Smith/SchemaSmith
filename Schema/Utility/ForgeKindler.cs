@@ -72,13 +72,8 @@ public static class ForgeKindler
             // i.e. the prior behaviour, so this can only ever improve correctness, never regress it. The
             // detected value flows into ComputeKindleStamp below and KindleScripts, keeping the stamp and
             // the resolved helpers consistent (a disagreement between them was the original 2025 defect).
-            if (platform == Platform.SqlServer && serverMajorVersion == 0)
-                serverMajorVersion = TargetVersionDetector.TryDetect(command, Platform.SqlServer)?.ServerComparable ?? 0;
-
-            bool? xmlCompressionReadable = platform == Platform.SqlServer ? ReportsXmlCompression(command) : null;
-            bool? checkConstraintsReadable = platform == Platform.MariaDb ? ReportsCheckConstraints(command) : null;
-            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode, xmlCompressionReadable,
-                checkConstraintsReadable);
+            var (expected, xmlCompressionReadable, checkConstraintsReadable) =
+                ExpectedStamp(command, platform, encoding, ref serverMajorVersion, policy, sqlMode?.Mode);
             var current = ReadStamp(command, platform);
             if (!forceReKindle && string.Equals(current, expected, StringComparison.Ordinal))
             {
@@ -114,6 +109,50 @@ public static class ForgeKindler
             ReleaseKindleLock(command, platform);
         }
     }
+
+    private static (string Stamp, bool? XmlCompressionReadable, bool? CheckConstraintsReadable) ExpectedStamp(IDbCommand command,
+        Platform platform, IngestEncoding encoding, ref int serverMajorVersion, string policy, string sqlMode)
+    {
+        if (platform == Platform.SqlServer && serverMajorVersion == 0)
+            serverMajorVersion = TargetVersionDetector.TryDetect(command, Platform.SqlServer)?.ServerComparable ?? 0;
+        bool? xmlCompressionReadable = platform == Platform.SqlServer ? ReportsXmlCompression(command) : null;
+        bool? checkConstraintsReadable = platform == Platform.MariaDb ? ReportsCheckConstraints(command) : null;
+        return (ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode, xmlCompressionReadable, checkConstraintsReadable),
+            xmlCompressionReadable, checkConstraintsReadable);
+    }
+
+    /// <summary>
+    /// H1 drift without kindling: the helpers already on the target answer the question, so they must be the ones this build
+    /// would kindle. Missing or out of date stops the target -- the C# passes parameters older procedures may not declare, and
+    /// a drift answer from mismatched helpers is worse than none. Present but unverifiable is a warning.
+    /// </summary>
+    public static void VerifyForDrift(IDbCommand command, Platform platform, IngestEncoding encoding = IngestEncoding.Json,
+        int serverMajorVersion = 0, string policy = "warn")
+    {
+        using var sqlMode = platform.GetBasePlatform() == Platform.MySQL ? MySqlSessionSettings.UseParseNeutralSqlMode(command) : null;
+        var (expected, _, _) = ExpectedStamp(command, platform, encoding, ref serverMajorVersion, policy, sqlMode?.Mode);
+        var exists = KindleStampStoreExists(command, platform);
+        var current = exists ? ReadStamp(command, platform) : null;
+        var state = ClassifyReadOnlyKindle(exists, () => current, expected);
+        var line = DriftKindleCheck(state, current, expected);
+        if (state == ReadOnlyKindleState.Unverifiable) Log.Warn(line);
+        else Log.Info(line);
+    }
+
+    /// <summary>The line a drift check logs for the helpers' state; throws for missing or out of date.</summary>
+    internal static string DriftKindleCheck(ReadOnlyKindleState state, string currentStamp, string expectedStamp) => state switch
+    {
+        ReadOnlyKindleState.NotKindled => throw new RunFailedException(
+            "Drift with KindleTheForge false reads the SchemaSmith helpers already on the target, and there are none here. Deploy "
+            + "once (or run a drift check with kindling on, on SQL Server and PostgreSQL) so the helpers are in place."),
+        ReadOnlyKindleState.Stale => throw new RunFailedException(
+            $"Drift with KindleTheForge false needs the SchemaSmith helpers this build kindles, and the ones here are out of date "
+            + $"(found {Abbreviate(currentStamp)}, this build expects {Abbreviate(expectedStamp)}): an answer from them could be wrong. "
+            + "Deploy with this version to bring them up to date, then check again."),
+        ReadOnlyKindleState.Unverifiable => "  Drift: the SchemaSmith helpers are present but their version cannot be read; the answer "
+                                            + "assumes they are the ones this build kindles.",
+        _ => $"  Drift: SchemaSmith helpers are current ({Abbreviate(expectedStamp)})",
+    };
 
     private static void KindleScripts(IDbCommand command, Platform platform, IngestEncoding encoding,
         int serverMajorVersion, string policy, bool? xmlCompressionReadable, bool? checkConstraintsReadable)

@@ -30,7 +30,9 @@ public sealed record DeploymentSummary(
     // 1.3: every statement that waited on another session's lock, retried or not.
     IReadOnlyList<LockWait> LockWaits = null,
     // 1.3: the changes that removed data, and what the policy did with each; null when there were none.
-    DestructiveSummary Destructive = null);
+    DestructiveSummary Destructive = null,
+    // 1.3: a drift check's verdict (H1); null for any other run.
+    DriftReport Drift = null);
 
 public sealed record DestructiveSummary(string Policy, IReadOnlyList<DestructiveChange> Changes);
 
@@ -49,7 +51,10 @@ public sealed record RunInfo(
     int ExitCode,
     bool ResumedFromCheckpoint,
     // 1.3: the timeouts and retry count the run used.
-    RunSettings Settings = null);
+    RunSettings Settings = null,
+    // 1.3: how a drift check read the targets -- 0 against helpers already there, 1 in a rolled-back transaction, 2 through a
+    // helper database; null for any other run.
+    int? DriftTier = null);
 
 public sealed record RunSettings(int CommandTimeoutSeconds, int? LockTimeoutSeconds, int ContentionRetryAttempts);
 
@@ -169,7 +174,8 @@ public enum RunMode
 {
     Quench,
     WhatIf,
-    Validate
+    Validate,
+    Drift
 }
 
 public enum RunOutcome

@@ -22,9 +22,13 @@
                                         // runs it again. false re-runs every object script on every deploy.
         // "DestructiveChangePolicy": "warn", // allow | warn (default) | fail -- what to do about a change that removes
                                             // data: a table or column dropped because the package no longer declares
-                                            // it. fail refuses the step before anything in it is dropped.
+                                            // it, a type change that rounds or cuts values, a column dropped and added
+                                            // again. fail refuses the step before anything in it is changed.
         // "AcceptDestructive": "sales.Orders.Region; sales.LegacyOrders", // Changes that are intended, by schema.table
                                             // or schema.table.column; they go ahead under fail. Set per run.
+        // "DriftHelperDatabase": "schemasmith_drift", // MySQL and MariaDB: where --Drift kindles its helpers when
+                                            // KindleTheForge is on, so the target is left untouched. An existing
+                                            // database the drift account owns; SchemaQuench does not create it.
         // "CommandTimeoutSeconds": 0, // How long one deploy command may run. 0 (default) = no limit.
         // "LockTimeoutSeconds": 10, // How long a deploy waits for a lock another session holds before giving up.
                                      // Blank (default) = the engine's own wait, which on SQL Server and PostgreSQL

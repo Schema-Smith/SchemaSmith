@@ -42,6 +42,7 @@
       "Target:ContentionRetryAttempts",
       "Target:Databases",
       "Target:DestructiveChangePolicy",
+      "Target:DriftHelperDatabase",
       "Target:IntegratedSecurity",
       "Target:LockTimeoutSeconds",
       "Target:Password",

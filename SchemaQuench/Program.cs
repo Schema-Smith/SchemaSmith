@@ -123,6 +123,11 @@ public static class Program
         {
             // A preview took up no checkpoint, so a failed deploy's resume point is still the real run's to use.
             if (!productQuench.IsWhatIfOnly) CleanupCheckpoints();
+            if (productQuench.IsDrift)
+            {
+                LogBackup.BackupLogsAndExit("SchemaQuench", productQuench.ExitCode);
+                return;
+            }
             // #576: a clean run leaves none of its debug files behind.
             ResolvedSqlArtifactWriter.DeleteOwned(DebugSql.ArtifactDirectory, o => o.Run == ResolvedSqlArtifactWriter.RunId);
             // 1 when a feature was downgraded on a target that lacks it: the deploy finished, but not everything the
@@ -171,7 +176,7 @@ public static class Program
 
     private static readonly string[] KnownArguments =
     {
-        "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle", "WhatIf", "WriteDebugSql"
+        "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle", "WhatIf", "WriteDebugSql", "Drift"
     };
 
     private static void ToolSpecificSwitches()
@@ -184,6 +189,8 @@ public static class Program
         Console.WriteLine("  --ForceReKindle                  Re-deploy the SchemaSmith helper procedures this run even if the in-database kindle stamp is current.");
         Console.WriteLine("  --WhatIf                         Dry run: report what would change and change nothing of yours (same as the WhatIfONLY setting).");
         Console.WriteLine("  --WhatIfDetail:<mode>            WhatIf console verbosity: concise | normal (default) | verbose. Concise collapses each section's per-script lines into per-category counts. Does not affect the WhatIf summary file.");
+        Console.WriteLine("  --Drift                          Read-only: does each target match the package? Exit 0 no drift, 5 drift, 2 a target could not be checked.");
+        Console.WriteLine("  --DriftFailOn:<list>             What --Drift counts: create, modify, drop and/or object types (table, column, index, ..., modules, migrations). Default: create,modify,drop,modules.");
         Console.WriteLine("  --report:<basepath>              Write the deployment summary to <basepath>.json and <basepath>.md instead of the log directory. Give the path without an extension.");
         Console.WriteLine("  --WriteDebugSql                  Write the resolved SQL of each step to ArtifactPath (same as the WriteDebugSql setting). Holds real values; local debugging only.");
     }

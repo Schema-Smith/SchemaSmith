@@ -62,7 +62,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     "startedUtc": "2026-07-09T14:03:11.204Z",
     "finishedUtc": "2026-07-09T14:03:47.881Z",
     "durationMs": 36677,            // run wall-clock
-    "mode": "Quench",               // Quench | WhatIf
+    "mode": "Quench",               // Quench | WhatIf | Drift
     "outcome": "Success",           // Success | Incomplete | PartialFailure | Aborted
     "exitCode": 0,
     "resumedFromCheckpoint": false,
@@ -162,10 +162,11 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `platform` | `SqlServer`, `PostgreSQL`, `MySQL`, or `MariaDb`. |
 | `startedUtc` / `finishedUtc` | Run start and end, UTC. |
 | `durationMs` | Wall-clock milliseconds for the whole run. |
-| `mode` | `Quench` (a real deploy) or `WhatIf` (a dry run). A `--Validate` run writes no report: it exits with its findings before a deployment starts. |
+| `mode` | `Quench` (a real deploy), `WhatIf` (a dry run) or `Drift` (a [drift check](schemaquench.md#drift-checks)). A `--Validate` run writes no report: it exits with its findings before a deployment starts. |
 | `outcome` | `Success`; `Incomplete` (every target finished, but a feature was downgraded on a target that lacks it -- see `unsupportedDowngrade` -- exit code `1`); `PartialFailure` (some targets failed, others succeeded); or `Aborted`. |
 | `exitCode` | The process exit code the run returned. |
 | `resumedFromCheckpoint` | `true` when the run resumed a prior interrupted deployment. |
+| `driftTier` | On a `Drift` run, how it read the targets: `0` against the helpers already there, `1` in a rolled-back transaction, `2` through a helper database. `null` otherwise. Schema version 1.3 added it. |
 | `settings` | The limits the run used: `commandTimeoutSeconds` (`0` = none), `lockTimeoutSeconds` (`null` = the engine's own wait) and `contentionRetryAttempts`. See [Timeouts and contention](configuration.md#timeouts-and-contention). Schema version 1.3 added it. |
 
 ### `targets[]`
@@ -248,6 +249,23 @@ did about it. `policy` is the run's policy; `changes[]` has one entry per change
 
 A destructive change is not counted again in `objectChanges`: the drop itself is there as it always was, and this
 section says that it removed data.
+
+### `drift`
+
+`null` except on a `Drift` run, where it holds the verdict. `drifted` is the answer -- the exit code is `5` when it is
+`true` and nothing failed -- and `failOn` is what counted (`--DriftFailOn`, or the default `create`, `modify`, `drop`,
+`modules`). Schema version 1.3 added it.
+
+| Key | Meaning |
+| --- | --- |
+| `targets[]` | One per target: `server`, `database`, `schema`, `template`, `status` (`drifted`, `clean`, `unverifiable` -- nothing counted but an object script that cannot be compared -- or `failed`), `counted`, `plan` and `changes[]`, each counted change with its `objectType`, `objectName` and `action` (`create`, `modify` or `drop`). |
+| `planGroups[]` | Targets of one template that need the same changes, schema name set aside: `template`, `plan`, `targets` (how many) and `sample` (one of them). |
+| `pendingMigrations[]` | Run-once scripts the target has not run: reported, and counted only under `--DriftFailOn:migrations`. |
+| `unverifiable[]` | Object scripts never stamped, so whether they changed cannot be said. Never counted. |
+| `extra[]` | Drops `PreventDrop` kept: a deploy would not make them, so they are not drift. |
+
+The changes themselves are in `objectChanges` too, with their `would*` actions, as on a `WhatIf` run; `whatIf` lists the
+scripts.
 
 ### `whatIf`
 

@@ -36,7 +36,9 @@ public static class DeploymentSummaryAssembler
         bool protectedModeEnabled = false,
         IReadOnlyList<LockWait> lockWaits = null,
         SessionTimeouts settings = null,
-        string destructivePolicy = null)
+        string destructivePolicy = null,
+        DriftReport drift = null,
+        int? driftTier = null)
     {
         var run = new RunInfo(
             Product: product,
@@ -48,7 +50,8 @@ public static class DeploymentSummaryAssembler
             Outcome: outcome,
             ExitCode: exitCode,
             ResumedFromCheckpoint: resumedFromCheckpoint,
-            Settings: settings is null ? null : new RunSettings(settings.CommandTimeoutSeconds, settings.LockTimeoutSeconds, settings.ContentionRetryAttempts));
+            Settings: settings is null ? null : new RunSettings(settings.CommandTimeoutSeconds, settings.LockTimeoutSeconds, settings.ContentionRetryAttempts),
+            DriftTier: mode == RunMode.Drift ? driftTier : null);
 
         var mappedTargets = targets
             .Select(tr => new TargetSummary(
@@ -80,7 +83,7 @@ public static class DeploymentSummaryAssembler
             ByDatabase: timing.ByDatabase(),
             Bottlenecks: timing.Bottlenecks(bottleneckThresholdMs));
 
-        var whatIf = mode == RunMode.WhatIf ? BuildWhatIfSummary(whatIfEntries) : null;
+        var whatIf = mode is RunMode.WhatIf or RunMode.Drift ? BuildWhatIfSummary(whatIfEntries) : null;
 
         var objectChanges = BuildObjectChanges(changeAudit);
 
@@ -102,7 +105,8 @@ public static class DeploymentSummaryAssembler
             PreventDrop: preventDrop,
             UnsupportedDowngrade: unsupportedDowngrade,
             LockWaits: lockWaits ?? [],
-            Destructive: BuildDestructive(changeAudit, destructivePolicy, mode));
+            Destructive: BuildDestructive(changeAudit, destructivePolicy, mode),
+            Drift: mode == RunMode.Drift ? drift : null);
     }
 
     /// <summary>
@@ -155,7 +159,7 @@ public static class DeploymentSummaryAssembler
                 {
                     "refused" => "refused",
                     "wouldRefuse" => "wouldRefuse",
-                    _ => mode == RunMode.WhatIf ? "wouldApply" : "applied",
+                    _ => mode is RunMode.WhatIf or RunMode.Drift ? "wouldApply" : "applied",
                 }))
             .ToList();
         return changes.Count == 0 ? null : new DestructiveSummary(policy ?? DestructivePolicy.Warn, changes);

@@ -75,7 +75,7 @@ Reach for it when:
 
 - **A new migration.** A rename, a table split, a backfill -- read the SQL once before it runs against real data.
 - **An unfamiliar target.** First deploy to a server you did not set up, or of a package you inherited.
-- **Something looks off.** WhatIf shows the delta between the package and the live database, which is the fastest way to see drift.
+- **Something looks off.** WhatIf shows the delta between the package and the live database. To ask only whether there is one, `--Drift` changes nothing and exits `5` when a target has drifted -- see [Drift Checks](../reference/schemaquench.md#drift-checks).
 
 Once you trust the package and the pipeline, direct quenches are the normal mode; a WhatIf pass on every production run adds a second run and a log review without adding safety that CI, staging and a rollback package do not already give you. WhatIf shows the top level of changes, not every ripple that depends on an earlier change having landed -- it is a confidence check, not a guarantee. For the full details on WhatIf behavior and its known gaps, see [SchemaQuench Reference -- WhatIf Mode](../reference/schemaquench.md#whatif-mode).
 

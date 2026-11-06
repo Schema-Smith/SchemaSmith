@@ -305,6 +305,21 @@ WhatIf runs the full deployment logic — validation, token replacement, DDL gen
 
 The [WhatIf-in-PR pattern](#the-whatif-in-pr-pattern) above shows a complete pipeline for this. Once you trust the package and the pipeline, direct deploys are the normal mode — WhatIf earns its keep during complex migrations and when you're working with an unfamiliar target, not as a standing gate on every production run.
 
+### Drift check
+
+Did someone change production by hand since the last release? `--Drift` runs the deploy's decisions as a preview and
+changes nothing; it exits `0` when every target matches the package and `5` when one has drifted, so a scheduled job can
+alert on it.
+
+```bash
+SchemaQuench --Drift
+```
+
+`--DriftFailOn:drop` narrows the gate to removals, and `--DriftFailOn:migrations` fails a target whose release is not
+deployed yet. On MySQL and MariaDB, either set `KindleTheForge: false` against targets that have been deployed, or point
+`Target:DriftHelperDatabase` at a database of its own so the target is not touched. See
+[Drift Checks](../reference/schemaquench.md#drift-checks).
+
 ### Idempotency CI check
 
 Runs every object script and `[ALWAYS]` script twice in sequence and requires both passes to succeed. A strong guarantee that your scripts are truly stateless and can be re-applied after a partial failure.

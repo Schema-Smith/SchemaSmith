@@ -97,7 +97,24 @@ public partial class DatabaseQuench
                 var kindlePolicy = string.Equals(FactoryContainer.ResolveOrCreate<Microsoft.Extensions.Configuration.IConfigurationRoot>()[Schema.Configuration.SettingsKeys.UnsupportedFeaturePolicy],
                     "fail", StringComparison.OrdinalIgnoreCase) ? "fail" : "warn";
                 // Retried on contention: the stamp compare makes a second kindle a no-op for what the first one finished.
-                RetryOnContention(() => ForgeKindler.KindleTheForge(silentCmd, _product.Platform, _forceReKindle, _ingestEncoding, _sqlServerMajorVersion, kindlePolicy));
+                // A tier-2 drift check kindles into its helper database, not the target (H1).
+                var kindleCmd = _driftKindleCommand ?? silentCmd;
+                RetryOnContention(() => ForgeKindler.KindleTheForge(kindleCmd, _product.Platform, _forceReKindle, _ingestEncoding, _sqlServerMajorVersion, kindlePolicy));
+            }, StepPreview.SameCall),
+
+            // H1, tier 2: what the deploy reads back from the target -- ownership, stamps, migrations run, the expression map.
+            new("DriftCopyState", null, () => _driftHelperDatabase != null, () =>
+            {
+                SafeProgressLog($"  Drift: reading this database's SchemaSmith state into {_driftHelperDatabase}");
+                DriftHelperDatabase.CopyState(_driftKindleCommand, _databaseName, _driftHelperDatabase);
+            }, StepPreview.SameCall),
+
+            // H1, tier 0: a drift check without kindling reads the helpers already there, so they must be this build's.
+            new("VerifyForge", null, () => _suppressKindling && IsDrift, () =>
+            {
+                var policy = string.Equals(FactoryContainer.ResolveOrCreate<Microsoft.Extensions.Configuration.IConfigurationRoot>()[Schema.Configuration.SettingsKeys.UnsupportedFeaturePolicy],
+                    "fail", StringComparison.OrdinalIgnoreCase) ? "fail" : "warn";
+                ForgeKindler.VerifyForDrift(silentCmd, _product.Platform, _ingestEncoding, _sqlServerMajorVersion, policy);
             }, StepPreview.SameCall),
 
             // Resolved against per-iteration tokens: the script may reference {{SchemaName}} on a schema template.
@@ -283,11 +300,20 @@ public partial class DatabaseQuench
         ];
     }
 
+    /// <summary>
+    /// Steps a drift check leaves out (H1): Setup scripts, data delivery and the version stamp act on every deploy by design,
+    /// so they say nothing about the target's state.
+    /// </summary>
+    internal static readonly IReadOnlySet<string> DriftExcludedSteps = new HashSet<string>
+    {
+        "SetupScripts", CheckpointNames.TableDataDelivery, "TableDataScripts", CheckpointNames.VersionStamp,
+    };
+
     private void RunQuenchSteps(QuenchLanes lanes)
     {
         foreach (var step in QuenchSteps(lanes))
         {
-            if (!step.Applies()) continue;
+            if (!step.Applies() || (IsDrift && DriftExcludedSteps.Contains(step.Name))) continue;
             _currentStep = step.Name;
             var sw = Stopwatch.StartNew();
             if (IsWhatIf)

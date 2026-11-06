@@ -124,6 +124,34 @@ IF DB_ID('{ProbeDb}') IS NOT NULL
         }
     }
 
+    // H1: skipping would read as "no drift", so a drift check fails the target instead.
+    [Test]
+    public void ReadOnlyTarget_UnderDrift_FailsRatherThanSkips()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetupSharedMocks();
+            SetProbeReadOnly(true);
+            _environment.CommandLine.Returns("SchemaQuench.exe --Drift");
+
+            FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] =
+                TestHelper.GetTestProductPath("SqlServer", ProductName);
+
+            try
+            {
+                RunSchemaQuench();
+
+                _environment.Received().Exit(2);
+                _progressLog.Received().Error(Arg.Is<object>(o => o.ToString().Contains("drift cannot be checked on a read-only target")));
+            }
+            finally
+            {
+                _environment.CommandLine.Returns("");
+                FactoryContainer.Resolve<IConfigurationRoot>()["SchemaPackagePath"] = null;
+            }
+        }
+    }
+
     private void SetupSharedMocks()
     {
         _progressLog.ClearReceivedCalls();

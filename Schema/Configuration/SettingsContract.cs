@@ -73,7 +73,7 @@ public static class SettingsContract
             SettingsKeys.OnlineApply, SettingsKeys.OnlineApplyMaxDuration,
             SettingsKeys.PreventDrop, SettingsKeys.UpdateTables, SettingsKeys.SkipUnchangedObjects,
             SettingsKeys.CommandTimeoutSeconds, SettingsKeys.LockTimeoutSeconds, SettingsKeys.ContentionRetryAttempts,
-            SettingsKeys.DestructiveChangePolicy, SettingsKeys.AcceptDestructive,
+            SettingsKeys.DestructiveChangePolicy, SettingsKeys.AcceptDestructive, SettingsKeys.DriftHelperDatabase,
             SettingsKeys.KindleTheForge, SettingsKeys.ForceReKindle, SettingsKeys.CheckpointDirectory,
             SettingsKeys.DeliverData, SettingsKeys.VerboseLogging, SettingsKeys.FailureContextLines,
             SettingsKeys.BottleneckThresholdMs, SettingsKeys.TrackRunOnceMigrations,

@@ -760,9 +760,89 @@ With `WriteDebugSql` on (or the `--WriteDebugSql` switch), SchemaQuench writes t
 
 ### When to use WhatIf
 
-Reach for WhatIf while you're debugging a tricky deployment or while you're still building confidence with the tooling. Inspect the generated SQL, confirm the changes match intent, then run for real. Once you trust the package and the pipeline, direct quenches are the normal mode -- WhatIf isn't a required gate on every deployment.
+Reach for WhatIf while you're debugging a tricky deployment or while you're still building confidence with the tooling. Inspect the generated SQL, confirm the changes match intent, then run for real. Once you trust the package and the pipeline, direct quenches are the normal mode -- WhatIf isn't a required gate on every deployment. To ask only whether a target still matches its package, with an exit code a pipeline can act on, use a [drift check](#drift-checks).
 
 ---
+
+## Drift Checks
+
+Does each target still match its package? `--Drift` answers that and changes nothing: it runs the deploy's own
+decisions as a preview and reports whether the plan is empty.
+
+```bash
+SchemaQuench --Drift
+```
+
+| Exit code | Meaning |
+|---|---|
+| `0` | No drift: a deploy with these settings would change nothing on any target. |
+| `5` | Drift: a deploy would change something on at least one target. |
+| `2` | A target failed or could not be checked, which wins over `5`. |
+
+`1` still means a target lacks a feature the package declares, and `--ExitNonZeroOnWarning` still turns only a `0` into
+a `1`, so a pipeline can tell drift from a warning. `--Drift` with `--WhatIf` (or `WhatIfONLY`) is refused: they ask
+different questions.
+
+### What counts as drift
+
+Drift is a change the deploy would make with the same settings -- not every way the database differs from the package.
+A table the package dropped, under `DropTablesRemovedFromProduct: false`, is not drift, because a deploy would leave it.
+
+- **Counted:** every table, column, index, constraint, key, sequence, type, CDC, change-tracking and temporal change
+  the preview would make (`wouldCreate`, `wouldModify`, `wouldRebuild`, `wouldDrop`), and every object script whose
+  [stamp](#unchanged-object-scripts) says it changed, or whose object is missing.
+- **Reported, not counted:** a run-once migration not yet run (`pendingMigrations`) -- this release is not deployed
+  yet; an object script never stamped, so whether it changed cannot be said (`unverifiable`); and a drop
+  [`PreventDrop`](#preventdrop) kept (`extra`).
+- **Left out:** Setup scripts, data delivery and the version stamp, which act on every deploy by design, and scripts
+  that run every deploy (`[ALWAYS]` and product Before/After scripts).
+
+**Narrowing it -- `--DriftFailOn:<list>`.** A comma list of actions (`create`, `modify`, `drop`) and object types
+(`table`, `column`, `index`, `constraint`, `foreignKey`, `statistic`, `xmlIndex`, `fullTextIndex`, `sequence`,
+`domainType`, `domainConstraint`, `enumType`, `enumValue`, `temporal`, `changeDataCapture`, `changeTracking`,
+`database`, `schema`, `indexedView`, `materializedView`, `event`, `period`, `modules`, `migrations`). A change counts
+when its action and its type are both listed; each side defaults to all, except `migrations`, which counts only when
+named. The default is `create,modify,drop,modules`. `--DriftFailOn:drop` gates on removals only;
+`--DriftFailOn:migrations` fails a target whose release is not deployed yet. An unknown word stops the run, exit `2`.
+
+### How it reads the targets
+
+The first line of the run says which tier ran and why.
+
+| Tier | When | Engines | What the target sees |
+|---|---|---|---|
+| 0 | `KindleTheForge: false` | All four | Nothing that stays: the run's own audit rows, and what a [WhatIf](#whatif-mode) run writes and puts back. The helpers already there answer, after a check that they are this build's: missing or out of date fails the target, exit `2`. |
+| 1 | Kindling on | SQL Server, PostgreSQL | Nothing. Everything -- the kindle included -- runs on one connection in one transaction that is always rolled back. |
+| 2 | Kindling on, `Target:DriftHelperDatabase` set | MySQL, MariaDB | Nothing. The helpers are kindled into that database, the target's ownership, stamps, run migrations and expression map are copied into it, and the target is read from there. |
+
+MySQL and MariaDB commit DDL on their own, so they have no tier 1: with kindling on and no helper database, `--Drift`
+is refused, naming both ways out. The helper database must exist and the drift account must own it; SchemaQuench does
+not create it. Name it with `"DriftHelperDatabase"` in the `Target` section or `SmithySettings_Target__DriftHelperDatabase`.
+
+**Rights.** Tier 0 needs read access and the rights a [WhatIf](#whatif-mode) run needs on SchemaSmith's own tables; on SQL Server the scratch-copy check of an [expression](#expression-change-detection) SchemaSmith has not recorded also needs `CREATE TABLE` and `ALTER` on the table's schema, and without them such an expression counts as drift.
+Tier 1 needs the rights of a deploy, since the kindle runs before it is rolled back. Tier 2 needs read access to the
+target and ownership of the helper database.
+
+**Locks.** A tier-1 kindle holds its locks until the rollback, so tier-1 targets of one database run one at a time and
+`Target:LockTimeoutSeconds` defaults to `10` for the check: a blocked statement fails the target rather than waiting.
+Targets sharing a helper database take turns too.
+
+### Reading the result
+
+On the console, each template gets one line per distinct plan rather than the detail of every target -- a fan-out to
+50 tenants that all need the same change says so once (`Tenant: drift, plan a41c… on 48 of 50 target(s)`), and names
+the targets that differ. Two tenants share a plan when they need the same changes, with the schema name set aside. The
+[deployment summary](deployment-summary-report.md#drift) has the verdict per target, every counted change, and the
+plan groups.
+
+### Limits
+
+- **The top level only,** as for WhatIf: a change that exists only once an earlier change has applied is not seen.
+- **Expressions on MySQL.** An expression SchemaSmith has not recorded is compared on a scratch copy on SQL Server and
+  PostgreSQL; on MySQL and MariaDB the copy would be a real table, so such an expression counts as drift until a deploy
+  records it.
+- **Read-only targets** fail the check, exit `2`, even with `SkipIfReadOnly`: skipping would read as no drift.
+- **The change audit must be readable.** A target whose audit cannot be read fails rather than report no drift.
 
 ## Pre-Flight Diagnostics
 

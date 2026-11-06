@@ -99,6 +99,9 @@ public partial class DatabaseQuench
     /// </summary>
     public WhatIfCapture WhatIf { get; init; }
 
+    /// <summary>The modules and run-once migrations a drift check found; the change audit carries the rest.</summary>
+    public DriftCapture DriftCapture { get; init; }
+
     /// <summary>
     /// Shared run-level object-change audit capture, set via the object initializer at the
     /// <c>ProductQuench</c> construction site (#243 E5). Null on any DatabaseQuench built without one
@@ -235,6 +238,17 @@ public partial class DatabaseQuench
     // genuine pre-2016 binary where SESSION_CONTEXT (the former transport) does not exist.
     private int _sqlServerMajorVersion;
     private readonly bool _whatIfOnly;
+    private readonly bool _drift;
+    private readonly bool _driftInTransaction;
+    private DriftTransaction _driftTransaction;
+    private readonly string _driftHelperDatabase;
+    // Tier 2: the connection to the helper database, which kindling runs on.
+    private IDbConnection _driftHelperConnection;
+    private IDbCommand _driftKindleCommand;
+    // Kindling's messages are not the deploy's; a tier-1 drift check kindles on the shared connection with them muted.
+    private bool _muteServerMessages;
+    // A drift check whose change audit could not be read cannot say "no drift" (H1).
+    private bool _driftAuditUnread;
     private readonly bool _runScriptsTwice;
     private readonly bool _dropRemovedTables;
     private readonly bool _dropRemovedColumns;
@@ -438,7 +452,10 @@ public partial class DatabaseQuench
         _databaseName = options.DatabaseName;
         _schemaName = options.SchemaName ?? "";
         _suppressKindling = options.SuppressKindling;
-        _whatIfOnly = options.WhatIf;
+        _whatIfOnly = options.WhatIf || options.Drift;
+        _drift = options.Drift;
+        _driftInTransaction = options.Drift && options.DriftInTransaction;
+        _driftHelperDatabase = options.Drift && !string.IsNullOrWhiteSpace(options.DriftHelperDatabase) ? options.DriftHelperDatabase.Trim() : null;
         _runScriptsTwice = options.RunScriptsTwice;
         _dropRemovedTables = options.Drops.Tables;
         _dropRemovedColumns = options.Drops.Columns;
@@ -451,7 +468,7 @@ public partial class DatabaseQuench
         _updateTables = options.UpdateTables;
         _deliverData = options.DeliverData;
         // A preview never reads, writes or deletes a checkpoint (A16).
-        _checkpointing = options.WhatIf ? NoCheckpointing.Instance : checkpointing;
+        _checkpointing = _whatIfOnly ? NoCheckpointing.Instance : checkpointing;
         _trackRunOnceMigrations = options.TrackRunOnceMigrations;
         _pruneObsoleteMigrationTracking = options.PruneObsoleteMigrationTracking;
         _forceReKindle = options.ForceReKindle;
@@ -508,15 +525,19 @@ public partial class DatabaseQuench
         try
         {
             using var connection = GetConnection();
-            using var command = CheckServerErrors(Timeouts.NewCommand(connection));
+            using var mainCommand = CheckServerErrors(Timeouts.NewCommand(connection));
+            var command = _driftHelperDatabase == null ? mainCommand : new HelperQualifyingCommand(mainCommand, _driftHelperDatabase);
 
             // SkipIfReadOnly: the target still resolved and counted toward RequireAtLeastOneTarget,
             // so the template validates normally — it just does not apply here. A read-only target
             // (Availability Group secondary, hot standby, replica) cannot take DDL, and skipping is
             // the intended outcome rather than a failure. Checked before the extra connections are
             // opened so a skipped unit costs one connection, not four.
-            if (_template.SkipIfReadOnly && ReadOnlyTargetDetector.IsReadOnly(command, _product.Platform))
+            if ((_template.SkipIfReadOnly || IsDrift) && ReadOnlyTargetDetector.IsReadOnly(command, _product.Platform))
             {
+                // Skipping would read as "no drift".
+                if (IsDrift)
+                    throw new RunFailedException($"[{_server}].[{_databaseName}] is read-only: drift cannot be checked on a read-only target in this version.");
                 _progressLog.Info($"[{_server}].[{_databaseName}] is read-only; skipping template '{_template.Name}' (SkipIfReadOnly)");
                 QuenchSuccessful = true;
                 WasSkipped = true;
@@ -532,7 +553,33 @@ public partial class DatabaseQuench
             IDbCommand silentCommand = null;
             QuenchLanes lanes = null;
 
-            if (_product.Platform.GetBasePlatform() != Platform.MySQL)
+            if (_driftHelperDatabase != null)
+            {
+                if (string.Equals(_driftHelperDatabase, _databaseName, StringComparison.OrdinalIgnoreCase))
+                    throw new RunFailedException($"Target:DriftHelperDatabase is the target itself ({_databaseName}); name a separate database, so the target is left untouched.");
+                try
+                {
+                    _driftHelperConnection = GetConnection(ignoreInfoMessages: true, database: _driftHelperDatabase);
+                }
+                catch (DbException e)
+                {
+                    throw HelperDatabaseUnusable(e);
+                }
+                catch (RunFailedException e)
+                {
+                    throw HelperDatabaseUnusable(e);
+                }
+                _driftKindleCommand = Timeouts.NewCommand(_driftHelperConnection);
+            }
+
+            if (_driftInTransaction)
+            {
+                var sqlServer = _product.Platform.GetBasePlatform() == Platform.SqlServer;
+                _driftTransaction = new DriftTransaction(connection, savepointEachStatement: !sqlServer);
+                _driftTransaction.Control(DriftTransaction.BeginStatement(sqlServer));
+                (command, tableCommand, objectsCommand, silentCommand) = DriftLanes(connection, mainCommand, sqlServer);
+            }
+            else if (_product.Platform.GetBasePlatform() != Platform.MySQL)
             {
                 tableConnection = GetConnection();
                 tableCommand = CheckServerErrors(Timeouts.NewCommand(tableConnection));
@@ -573,8 +620,9 @@ public partial class DatabaseQuench
                 // SQL-Server-only. For SQL Server this also enforces the compat floor and selects the model-
                 // ingest encoding (compat >= 130 -> JSON/OPENJSON, below -> XML) and bakes the major version
                 // into SchemaSmith.fn_ServerMajorVersion at kindle time.
-                using (var versionCmd = CheckServerErrors(Timeouts.NewCommand(connection)))
+                using (var versionCmdRaw = CheckServerErrors(Timeouts.NewCommand(connection)))
                 {
+                    var versionCmd = _driftTransaction is { SavepointEachStatement: true } ? new DriftLaneCommand(versionCmdRaw, _driftTransaction) : versionCmdRaw;
                     var versionInfo = TargetVersionDetector.Detect(versionCmd, _product.Platform, _databaseName);
                     // Captured for every engine (CompatibilityLevel is null => 0 on non-SQL-Server). SQL Server's
                     // JSON data delivery gates on compat < 130 (B1 slice 2); the policy governs that and the
@@ -594,7 +642,8 @@ public partial class DatabaseQuench
                         case Platform.MySQL:
                             _mySqlServerVersionNum = versionInfo.ServerComparable;
                             break;
-                        case Platform.SqlServer when !_suppressKindling:
+                        // A drift check without kindling still needs the version and encoding: they decide which helpers it expects.
+                        case Platform.SqlServer when !_suppressKindling || IsDrift:
                             SafeProgressLog($"  [{_databaseName}] detected SQL Server version {VersionHelper.DisplayVersion(versionInfo)}" +
                                             (versionInfo.CompatibilityLevel is { } lvl ? $" (compatibility level {lvl})" : ""));
                             PreFlightVersionGuard.CheckOrThrow(versionInfo, _server, _databaseName);
@@ -631,6 +680,8 @@ public partial class DatabaseQuench
                 _statusMonitor?.Dispose();
                 _statusMonitor = null;
                 if (AuditIsRead) DrainChangeAudit(tableCommand ?? command);
+                // After the audit is read: its rows are in the transaction too.
+                if (_driftTransaction != null) RollBackDrift();
                 // MySQL parses the table JSON into session-scoped temp tables that every table step
                 // consumes, so the drop belongs AFTER the last consumer -- foreign keys -- not between
                 // two of them. It used to run right after the index quench, which meant ForeignKeys
@@ -642,15 +693,19 @@ public partial class DatabaseQuench
                 if (_product.Platform.GetBasePlatform() == Platform.MySQL)
                     CleanupMySqlTempTables(command);
                 connection.Close();
+                _driftHelperConnection?.Close();
                 tableConnection?.Close();
                 objectsConnection?.Close();
                 silentConnection?.Close();
                 lanes?.DeliveryConnection?.Close();
             }
 
+            if (IsDrift && _driftAuditUnread)
+                throw new RunFailedException("The change audit could not be read, so whether this target drifted is unknown.");
+
             // A preview under DestructiveChangePolicy fail lists every change it would refuse and then fails the target, so a
-            // WhatIf run is a CI gate that changes nothing.
-            var wouldRefuse = ChangeAudit?.Snapshot().Where(r => r.Action == DestructiveLog.Action && r.Mode == "wouldRefuse" && r.Target == AuditTarget).ToList();
+            // WhatIf run is a CI gate that changes nothing. A drift check counts the change instead.
+            var wouldRefuse = IsDrift ? null : ChangeAudit?.Snapshot().Where(r => r.Action == DestructiveLog.Action && r.Mode == "wouldRefuse" && r.Target == AuditTarget).ToList();
             if (wouldRefuse is { Count: > 0 })
                 throw new RunFailedException("Destructive change would be refused (DestructiveChangePolicy is fail): "
                                              + string.Join("; ", wouldRefuse.Select(DestructiveLog.Describe)) + ".");
@@ -1171,6 +1226,7 @@ public partial class DatabaseQuench
     /// SqlServer/MySQL use "1"; PostgreSQL uses "true".
     /// </summary>
     internal bool IsWhatIf => _whatIfOnly;
+    internal bool IsDrift => _drift;
 
     /// <summary>
     /// Formats a boolean value for platform-specific SQL parameters.
@@ -2094,6 +2150,46 @@ SET NOCOUNT ON
     }
 
     // Commands on a connection that reports SQL Server user errors as messages: an error must still fail the statement.
+    /// <summary>
+    /// The four lanes of a tier-1 drift check, on the one connection: each behaves as its own connection would have -- the
+    /// object lane and kindling take SQL Server errors as errors rather than messages, and kindling's messages are muted.
+    /// </summary>
+    private (IDbCommand Main, IDbCommand Table, IDbCommand Objects, IDbCommand Silent) DriftLanes(IDbConnection connection, IDbCommand mainCommand,
+        bool sqlServer)
+    {
+        var tx = _driftTransaction;
+        if (sqlServer && connection is SqlConnection sql)
+            return (mainCommand,
+                CheckServerErrors(Timeouts.NewCommand(connection)),
+                new DriftLaneCommand(Timeouts.NewCommand(connection), tx,
+                    () => sql.FireInfoMessageEventOnUserErrors = false, () => sql.FireInfoMessageEventOnUserErrors = true),
+                new DriftLaneCommand(Timeouts.NewCommand(connection), tx,
+                    () => { sql.FireInfoMessageEventOnUserErrors = false; _muteServerMessages = true; },
+                    () => { sql.FireInfoMessageEventOnUserErrors = true; _muteServerMessages = false; }));
+        return (new DriftLaneCommand(mainCommand, tx),
+            new DriftLaneCommand(Timeouts.NewCommand(connection), tx),
+            new DriftLaneCommand(Timeouts.NewCommand(connection), tx),
+            new DriftLaneCommand(Timeouts.NewCommand(connection), tx, () => _muteServerMessages = true, () => _muteServerMessages = false));
+    }
+
+    private RunFailedException HelperDatabaseUnusable(Exception e) =>
+        new($"Target:DriftHelperDatabase '{_driftHelperDatabase}' cannot be used: {e.Message} It must be an existing database the drift account owns; "
+            + "SchemaQuench does not create it.");
+
+    private void RollBackDrift()
+    {
+        try
+        {
+            _driftTransaction.Control(DriftTransaction.RollbackStatement(_product.Platform.GetBasePlatform() == Platform.SqlServer));
+        }
+        catch (DbException e)
+        {
+            // The connection's end rolls it back anyway; say so rather than hide it.
+            lock (_lockObject) _progressLog.Warn($"{LogPrefix} The drift check's transaction could not be rolled back explicitly ({e.Message}); closing the connection rolls it back.");
+        }
+        _driftTransaction = null;
+    }
+
     private IDbCommand CheckServerErrors(IDbCommand command) =>
         _product.Platform.GetBasePlatform() == Platform.SqlServer ? new ServerErrorCheckingCommand(command, TakeCapturedServerError) : command;
 
@@ -2104,8 +2200,9 @@ SET NOCOUNT ON
         return error;
     }
 
-    private IDbConnection GetConnection(bool fireInfoMessageEventOnUserErrors = true, bool ignoreInfoMessages = false)
+    private IDbConnection GetConnection(bool fireInfoMessageEventOnUserErrors = true, bool ignoreInfoMessages = false, string database = null)
     {
+        var databaseName = database ?? _databaseName;
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
         var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
         // A secondary server takes the override with its own server name (B18): as given, it deployed the secondary's
@@ -2114,8 +2211,8 @@ SET NOCOUNT ON
             && !string.Equals(_server, config[SettingsKeys.Target.Server], StringComparison.OrdinalIgnoreCase))
             connectionStringOverride = ConnectionString.RetargetServer(connectionStringOverride, _server, _product.Platform);
         var connectionString = string.IsNullOrEmpty(connectionStringOverride)
-            ? TargetConnectionString.Build(_product.Platform, _server, _databaseName, config)
-            : ConnectionString.RetargetDatabase(connectionStringOverride, _databaseName, _product.Platform);
+            ? TargetConnectionString.Build(_product.Platform, _server, databaseName, config)
+            : ConnectionString.RetargetDatabase(connectionStringOverride, databaseName, _product.Platform);
         var factory = DbConnectionFactory.ForPlatform(_product.Platform);
         var connection = factory.GetDbConnection(connectionString);
 
@@ -2186,7 +2283,8 @@ SET NOCOUNT ON
                 sessionCmd.CommandText = "SELECT CONNECTION_ID()";
                 var sessionId = Convert.ToInt64(sessionCmd.ExecuteScalar());
                 _statusMonitor = new StatusMessageMonitor(connectionString, sessionId, msg => LogServerMessage($"    {msg}"),
-                    sessionConnection: connection, warn: msg => _progressLog.Warn(msg));
+                    sessionConnection: connection, warn: msg => _progressLog.Warn(msg),
+                    table: _driftHelperDatabase == null ? "SchemaSmith_StatusMessages" : DriftHelperDatabase.Qualify("SchemaSmith_StatusMessages", _driftHelperDatabase));
             }
             catch (DbException e)
             {
@@ -2407,7 +2505,11 @@ SET NOCOUNT ON
         // Best-effort: ChangeAuditReader swallows DB errors (absent audit table, unreadable) and
         // returns null, leaving the run honestly not-instrumented; the record/mark steps can't throw.
         var rows = ChangeAuditReader.ReadAndDrain(_product.Platform, auditCmd);
-        if (rows == null) return;
+        if (rows == null)
+        {
+            _driftAuditUnread = IsDrift;
+            return;
+        }
         foreach (var r in rows) ChangeAudit.Record(r.ObjectType, r.ObjectName, r.Action, r.Mode, AuditTarget, r.Detail, r.EstimatedRows);
         foreach (var line in DowngradeLog.Lines(_product.Platform, rows)) SafeProgressLog(line);
         foreach (var (warn, line) in DestructiveLog.Lines(LogPrefix, rows))
@@ -2999,7 +3101,8 @@ SET NOCOUNT ON
     // hand change on the server changes the rendering, so the script runs. A script with no single recognisable
     // CREATE, a script from a folder declared without an ObjectType, an [ALWAYS] script, a '-- SchemaSmith: AlwaysRun'
     // sentinel, a RunScriptsTwice run, or the setting turned off never stamps. A WhatIf run reads stamps and writes none.
-    private sealed record ScriptStampProbe(string PathHash, string ScriptPath, string TextHash, ModuleScriptIdentity Identity, bool Unchanged);
+    private sealed record ScriptStampProbe(string PathHash, string ScriptPath, string TextHash, ModuleScriptIdentity Identity, bool Unchanged,
+        bool Stamped = true);
 
     private static readonly Regex AlwaysRunSentinel = new(@"--\s*SchemaSmith:\s*AlwaysRun\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
@@ -3016,13 +3119,14 @@ SET NOCOUNT ON
         var pathHash = Sha256(scriptPath);
         var textHash = Sha256(string.Join("\n", script.Batches));
         var unchanged = false;
+        var stamped = false;
         try
         {
             destCmd.CommandText = $"SELECT {Q("TextHash")}, {Q("DefinitionHash")} FROM {ScriptStampTable} WHERE {Q("ProductName")} = '{EscapeSqlLiteral(_product.Name)}' AND {Q("TemplateName")} = '{EscapeSqlLiteral(_template.Name)}' AND {Q("PathHash")} = '{pathHash}'";
             string storedText = null, storedDefinition = null;
             using (var reader = destCmd.ExecuteReader())
             {
-                if (reader.Read()) { storedText = reader.GetString(0); storedDefinition = reader.GetString(1); }
+                if (reader.Read()) { storedText = reader.GetString(0); storedDefinition = reader.GetString(1); stamped = true; }
             }
             if (storedText == textHash && !(identity.Kind == ModuleKind.View && NamesAChangedTable(script)))
             {
@@ -3035,7 +3139,7 @@ SET NOCOUNT ON
             // No stamp table (kindling suppressed on a database that never had one): the script runs as before.
             return null;
         }
-        return new ScriptStampProbe(pathHash, scriptPath, textHash, identity, unchanged);
+        return new ScriptStampProbe(pathHash, scriptPath, textHash, identity, unchanged, stamped);
     }
 
     private void RecordScriptStamp(IDbCommand destCmd, ScriptStampProbe stamp)
@@ -3443,6 +3547,7 @@ SET NOCOUNT ON
 
     private void OnSqlServerInfoMessage(object sender, SqlInfoMessageEventArgs e)
     {
+        if (_muteServerMessages) return;
         foreach (SqlError err in e.Errors)
         {
             if (err.Class > 10)
@@ -3484,6 +3589,7 @@ SET NOCOUNT ON
 
     private void OnPostgreSqlNotice(object sender, NpgsqlNoticeEventArgs e)
     {
+        if (_muteServerMessages) return;
         var verboseLogging = FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.VerboseLogging]?.ToLower() == "true";
         if (ShouldLogPostgreSqlNotice(e.Notice.MessageText, e.Notice.Where, verboseLogging))
             LogServerMessage($"      {e.Notice.MessageText}");
@@ -3540,7 +3646,9 @@ SET NOCOUNT ON
         foreach (var script in scripts.Where(s => !s.HasBeenQuenched))
         {
             script.HasBeenQuenched = true;
-            if (ProbeScriptStamp(destCmd, script, slot) is { Unchanged: true })
+            var probe = ProbeScriptStamp(destCmd, script, slot);
+            if (IsDrift) RecordDriftModule(destCmd, script, probe);
+            if (probe is { Unchanged: true })
             {
                 script.Outcome = ScriptOutcome.Unchanged;
                 entries.Add(new WhatIfConsoleEntry("skip (unchanged)", "SKIP (unchanged)", script.LogPath));
@@ -3607,6 +3715,20 @@ SET NOCOUNT ON
             SafeProgressLog(line);
     }
 
+    /// <summary>
+    /// H1: whether a module script is drift. Its stamp answers when there is one; with none, a module the server does not have
+    /// is missing, and one it has cannot be compared -- it always "would apply" -- so it is unverifiable, never counted.
+    /// </summary>
+    private void RecordDriftModule(IDbCommand destCmd, SqlScript script, ScriptStampProbe probe)
+    {
+        if (DriftCapture == null || probe is { Unchanged: true }) return;
+        var state = probe == null ? DriftModuleState.Unverifiable
+            : probe.Stamped ? DriftModuleState.WouldApply
+            : ModuleDefinitionReader.Read(destCmd, _product.Platform, probe.Identity) == null ? DriftModuleState.Missing
+            : DriftModuleState.Unverifiable;
+        DriftCapture.RecordModule(AuditTarget, script.LogPath, state);
+    }
+
     private void WhatIfLogTemplateScripts(IDbCommand destCmd, string slot, List<SqlScript> scripts, DatabaseScriptSlot checkpointSlot)
     {
         var alreadyRan = _trackRunOnceMigrations ? GetCompletedEntriesBySlot(destCmd, slot) : [];
@@ -3622,6 +3744,9 @@ SET NOCOUNT ON
             {
                 entries.Add(new WhatIfConsoleEntry("apply", "APPLY", script.LogPath));
                 WhatIf?.Record(WhatIfCategory.Apply, LogPrefix, script.LogPath);
+                // A script that runs every deploy says nothing about whether this one is deployed.
+                if (IsDrift && _trackRunOnceMigrations && !ShouldAlwaysRun(script.Name))
+                    DriftCapture?.RecordMigration(AuditTarget, script.LogPath, slot);
             }
         }
         foreach (var line in WhatIfConsoleFormatter.Render(entries, WhatIfConsoleDetail))

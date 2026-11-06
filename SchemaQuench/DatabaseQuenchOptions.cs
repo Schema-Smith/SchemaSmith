@@ -27,6 +27,12 @@ public sealed record DatabaseQuenchOptions
     /// <summary>The iteration schema of a schema template; empty for a regular template.</summary>
     public string SchemaName { get; init; } = "";
     public bool WhatIf { get; init; }
+    /// <summary>A drift check (H1): a preview whose answer is whether it would change anything. Implies <see cref="WhatIf"/>.</summary>
+    public bool Drift { get; init; }
+    /// <summary>Tier 1 of a drift check: one connection, one transaction from kindle to audit, always rolled back.</summary>
+    public bool DriftInTransaction { get; init; }
+    /// <summary>Tier 2 of a drift check (MySQL, MariaDB): the database the helpers are kindled into instead of the target.</summary>
+    public string DriftHelperDatabase { get; init; }
     public bool SuppressKindling { get; init; }
     public bool ForceReKindle { get; init; }
     public bool RunScriptsTwice { get; init; }

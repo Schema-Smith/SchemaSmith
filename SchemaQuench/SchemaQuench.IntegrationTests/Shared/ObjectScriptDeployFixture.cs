@@ -169,4 +169,85 @@ public abstract class ObjectScriptDeployFixture
             }
         }
     }
+
+    protected sealed record DriftRun(int ExitCode, DriftReport Report, List<string> Log, string Refusal = null, int? DriftTier = null)
+    {
+        public string Describe() => $"exit {ExitCode}; {Refusal}; changes: "
+                                    + string.Join(", ", Report?.Targets.SelectMany(t => t.Changes).Select(c => $"{c.ObjectType} {c.ObjectName} {c.Action}") ?? [])
+                                    + "; " + string.Join(" | ", Log.Where(l => l != null && (l.StartsWith("ERROR") || l.StartsWith("WARN") || l.Contains("rift"))));
+    }
+
+    /// <summary>
+    /// Runs the whole product through ProductQuench with <paramref name="switches"/> on the command line (--Drift by default),
+    /// as SchemaQuench.exe would, and returns the exit code it would end with and the drift verdict.
+    /// </summary>
+    protected DriftRun RunDrift(string switches = "--Drift", IReadOnlyDictionary<string, string> settings = null)
+    {
+        var reportBase = Path.Join(Path.GetTempPath(), $"DriftReport_{Guid.NewGuid():N}");
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var savedConfig = FactoryContainer.Resolve<IConfigurationRoot>();
+            try
+            {
+                var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+                var values = new Dictionary<string, string>
+                {
+                    ["SchemaPackagePath"] = PackageDir,
+                    ["Target:User"] = config[$"{ConfigPrefix}:User"] ?? config["Target:User"] ?? "TestUser",
+                    ["Target:Password"] = config[$"{ConfigPrefix}:Password"] ?? config["Target:Password"],
+                    ["Target:Port"] = config[$"{ConfigPrefix}:Port"] ?? config["Target:Port"],
+                    ["Target:Server"] = config[$"{ConfigPrefix}:Server"] ?? config["Target:Server"] ?? "127.0.0.1",
+                };
+                foreach (var prop in ConnectionString.ReadProperties(config, $"{ConfigPrefix}:ConnectionProperties"))
+                    values[$"Target:ConnectionProperties:{prop.Key}"] = prop.Value;
+                foreach (var (key, value) in settings ?? new Dictionary<string, string>())
+                    values[key] = value;
+                FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(values!).Build());
+
+                int? exited = null;
+                var environment = Substitute.For<IEnvironment>();
+                environment.CommandLine.Returns($"SchemaQuench.exe {switches} --report:{reportBase}");
+                environment.When(e => e.Exit(Arg.Any<int>())).Do(ci => exited ??= ci.ArgAt<int>(0));
+                FactoryContainer.Register(environment);
+
+                var log = new List<string>();
+                var progressLog = Substitute.For<log4net.ILog>();
+                progressLog.When(l => l.Info(Arg.Any<object>())).Do(ci => log.Add(ci.ArgAt<object>(0)?.ToString()));
+                progressLog.When(l => l.Warn(Arg.Any<object>())).Do(ci => log.Add("WARN " + ci.ArgAt<object>(0)));
+                progressLog.When(l => l.Error(Arg.Any<object>())).Do(ci => log.Add("ERROR " + ci.ArgAt<object>(0)));
+                var errorLog = Substitute.For<log4net.ILog>();
+                errorLog.When(l => l.Error(Arg.Any<object>())).Do(ci => log.Add("ERROR " + ci.ArgAt<object>(0)));
+                errorLog.When(l => l.Error(Arg.Any<object>(), Arg.Any<Exception>())).Do(ci => log.Add("ERROR " + ci.ArgAt<object>(0) + " " + ci.ArgAt<Exception>(1)?.Message));
+                LogFactory.Register("ProgressLog", progressLog);
+                LogFactory.Register("ErrorLog", errorLog);
+
+                ProductQuench product;
+                try
+                {
+                    product = new ProductQuench();
+                }
+                catch (RunFailedException e)
+                {
+                    return new DriftRun(2, null, log, e.Message);
+                }
+                try
+                {
+                    product.QuenchProduct();
+                }
+                catch (RunFailedException e)
+                {
+                    return new DriftRun(2, product.DriftReport, log, e.Message, product.DriftTier);
+                }
+                return new DriftRun(exited ?? product.ExitCode, product.DriftReport, log, null, product.DriftTier);
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                FactoryContainer.Register<IConfigurationRoot>(savedConfig);
+                foreach (var ext in new[] { ".json", ".md" })
+                    if (File.Exists(reportBase + ext)) File.Delete(reportBase + ext);
+            }
+        }
+    }
 }

@@ -49,6 +49,7 @@ public static class DeploymentSummaryText
         RenderPreventDrop(summary, lines);
         RenderUnsupportedDowngrade(summary, lines);
         RenderDestructive(summary, lines);
+        RenderDrift(summary, lines);
 
         return string.Join("\n", lines);
     }
@@ -241,12 +242,38 @@ public static class DeploymentSummaryText
         lines.Add($"- DestructiveChangePolicy: {destructive.Policy}");
         foreach (var change in destructive.Changes)
         {
-            var what = change.Kind switch { "tableDrop" => "table dropped", "columnDrop" => "column dropped", _ => change.Kind };
+            var what = change.Kind switch
+            {
+                "tableDrop" => "table dropped", "columnDrop" => "column dropped", "typeChange" => "type change", "columnReplaced" => "column replaced",
+                _ => change.Kind,
+            };
             var rows = change.EstimatedRows is { } n ? $", about {n.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} rows" : "";
             var accepted = change.Accepted ? ", accepted" : "";
             lines.Add($"  - {change.ObjectName}: {what}{rows} -- {change.Outcome}{accepted} ({FormatScope(change.Server, change.Database, null)})");
         }
     }
+
+    private static void RenderDrift(DeploymentSummary summary, List<string> lines)
+    {
+        var drift = summary.Drift;
+        if (drift == null)
+            return;
+
+        lines.Add("");
+        lines.Add("## Drift");
+        lines.Add($"- Drifted: {(drift.Drifted ? "yes" : "no")} (tier {summary.Run.DriftTier}; counts {string.Join(", ", drift.FailOn)})");
+        foreach (var target in drift.Targets)
+            lines.Add($"  - {FormatScope(target.Server, target.Database, NullIfEmpty(target.Schema))}: {target.Status}"
+                      + (target.Counted > 0 ? $", {target.Counted} change(s), plan {target.Plan}" : ""));
+        foreach (var item in drift.PendingMigrations)
+            lines.Add($"  - pending migration: {item.ObjectName} ({FormatScope(item.Server, item.Database, NullIfEmpty(item.Schema))})");
+        foreach (var item in drift.Unverifiable)
+            lines.Add($"  - cannot be compared: {item.ObjectName} ({FormatScope(item.Server, item.Database, NullIfEmpty(item.Schema))})");
+        foreach (var item in drift.Extra)
+            lines.Add($"  - kept by PreventDrop: {item.ObjectType} {item.ObjectName} ({FormatScope(item.Server, item.Database, NullIfEmpty(item.Schema))})");
+    }
+
+    private static string NullIfEmpty(string value) => string.IsNullOrEmpty(value) ? null : value;
 
     private static string FormatScope(string server, string database, string schema)
     {
