@@ -16,6 +16,8 @@ CREATE OR REPLACE PROCEDURE "SchemaSmith"."DestructiveChangeGate"(
   p_DropTables BOOLEAN,
   p_DropColumns BOOLEAN)
 LANGUAGE plpgsql
+  -- JIT off, as on every SchemaSmith procedure: see SchemaSmith.TableQuench.sql.
+  SET jit = 'off'
 AS $$
 DECLARE
   v_accept TEXT := LOWER(COALESCE(p_Accept, ''));
