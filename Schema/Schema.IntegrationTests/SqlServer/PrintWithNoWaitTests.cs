@@ -57,6 +57,20 @@ public class PrintWithNoWaitTests
         return lines;
     }
 
+    // Each line was RAISERROR's format string, so a % in generated SQL was read as a placeholder: a default '50%d'
+    // previewed as '50(null)' and a LIKE '%x%' check's line disappeared, while the real deploy ran them correctly.
+    [Test]
+    public void APercentSignIsPrintedAsWritten()
+    {
+        var lines = new[]
+        {
+            "ALTER TABLE [dbo].[T] ADD CONSTRAINT [DF_T_C] DEFAULT ('50%d') FOR [C];",
+            "ALTER TABLE [dbo].[T] ADD CONSTRAINT [CK_T_Code] CHECK ([Code] LIKE '%x%');",
+            "100% %s %% %"
+        };
+        Assert.That(Print(string.Join("\n", lines)), Is.EqualTo(lines));
+    }
+
     [Test]
     public void UnixLineEndings_EachLineIsPrintedOnce_AndTheLastOneSurvives()
     {

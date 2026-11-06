@@ -73,7 +73,9 @@ BEGIN
 
     -- DATALENGTH for the last line, for the same reason it sizes @v_End above: LEN reports 0 for a line made
     -- entirely of spaces, so a final line of indentation was silently dropped rather than printed.
-    IF @v_Line IS NOT NULL AND (@v_Last = 0 OR DATALENGTH(@v_Line) > 0) RAISERROR(@v_Line, 10, 100) WITH NOWAIT
+    -- The line is an argument, not the format string: a % in generated SQL (a LIKE pattern, a '50%d' default) was read
+    -- as a placeholder, and the preview showed SQL the deploy would not run, or dropped the line.
+    IF @v_Line IS NOT NULL AND (@v_Last = 0 OR DATALENGTH(@v_Line) > 0) RAISERROR(N'%s', 10, 100, @v_Line) WITH NOWAIT
     IF @v_Last = 1 BREAK
     SET @v_Pos = @v_LfPos + 1
   END
