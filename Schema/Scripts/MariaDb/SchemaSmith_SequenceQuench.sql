@@ -131,8 +131,8 @@ BEGIN
                     SET @ss_seq_type = 'bigint';
                     IF v_Version >= 1105 THEN
                         -- INFORMATION_SCHEMA.SEQUENCES is 11.5+, so it is only ever named inside dynamic SQL.
-                        SET @ss_seq_sql = CONCAT('SELECT LOWER(DATA_TYPE) INTO @ss_seq_type FROM INFORMATION_SCHEMA.SEQUENCES WHERE SEQUENCE_SCHEMA = ''',
-                                                 REPLACE(p_DatabaseName, '''', ''''''), ''' AND SEQUENCE_NAME = ''', REPLACE(v_Name, '''', ''''''), '''');
+                        SET @ss_seq_sql = CONCAT('SELECT LOWER(DATA_TYPE) INTO @ss_seq_type FROM INFORMATION_SCHEMA.SEQUENCES WHERE SEQUENCE_SCHEMA = ',
+                                                 QUOTE(p_DatabaseName), ' AND SEQUENCE_NAME = ', QUOTE(v_Name));
                         PREPARE ss_seq FROM @ss_seq_sql;
                         EXECUTE ss_seq;
                         DEALLOCATE PREPARE ss_seq;

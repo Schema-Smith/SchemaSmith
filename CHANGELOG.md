@@ -83,6 +83,10 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **SchemaTongs, SQL Server: a table whose name holds a dot or a bracket is extracted, and an object whose name has a character outside the database code page is extracted whole.** The table list looked tables up by an unquoted name, so such a table was left out of the package; a table, view, procedure, function or trigger named with such a character was extracted empty or left out, because its name was passed to the extraction as a non-Unicode literal. A table-level check constraint is read for the right table.
 - **SchemaTongs, MySQL and MariaDB: a table or database whose name holds a backslash is extracted whole.** The name was passed to the extraction with its backslash read as an escape, so the table file came out empty.
 - **SchemaTongs' cleanup scripts drop the object each file was written for.** The orphaned- and invalid-object cleanup scripts named the object from the file name as it stood: an encoded character stayed encoded and a delimiter in the name went unescaped, a table trigger was dropped as `schema.table.trigger` (on PostgreSQL without the `ON table` a trigger drop needs), and an overloaded PostgreSQL routine was named without the argument types that pick it out.
+- **SQL Server: Change Data Capture on a filegroup whose name holds a quote is enabled, and its rotation message names the filegroup.** The filegroup name was written into the generated `sp_cdc_enable_table` call and the progress message unescaped, so the deploy failed.
+- **SQL Server and PostgreSQL: a default constraint, or a temporal table's retention, on a table or column whose name holds a quote is recorded.** The deploy's record of the change wrote the name unescaped and failed.
+- **PostgreSQL: a serial column on a table whose schema or name holds a quote deploys.** The sequence default written for it ended its string early.
+- **MariaDB 11.5 and later: a sequence's type is read for a database or sequence whose name holds a backslash.**
 
 ## [v2.8.0](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) — 2026-11-01
 

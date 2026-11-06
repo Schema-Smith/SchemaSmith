@@ -250,13 +250,13 @@
            "DataType" = CASE TRIM(UPPER(c."DataType")) WHEN 'SERIAL2' THEN 'INT2' WHEN 'SERIAL8' THEN 'INT8' ELSE 'INT4' END,
            "Nullable" = FALSE,
            "Default" = 'nextval(''' ||
-                       CASE WHEN TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName")) IS NOT NULL
+                       REPLACE(CASE WHEN TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName")) IS NOT NULL
                              AND EXISTS (SELECT 1 FROM pg_attribute a
                                           WHERE a.attrelid = TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"))
                                             AND a.attname = c."Name" AND NOT a.attisdropped)
                              AND pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name") IS NOT NULL
                             THEN pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass::text
-                            ELSE QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName" || '_' || c."Name" || '_seq') END ||
+                            ELSE QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName" || '_' || c."Name" || '_seq') END, '''', '''''') ||
                        '''::regclass)'
      WHERE TRIM(UPPER(c."DataType")) IN ('SERIAL2', 'SERIAL4', 'SERIAL8');
     -- Family defaults, applied AFTER the synonym fold so both spellings of a type reach one rule.

@@ -340,7 +340,7 @@ BEGIN TRY
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Updating history retention period for ' + REPLACE(REPLACE(t.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(t.[Name], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE ' + t.[Schema] + '.' + t.[Name] + ' SET (SYSTEM_VERSIONING = ON (HISTORY_RETENTION_PERIOD = ' +
                                        ISNULL(t.[HistoryRetentionPeriod], 'INFINITE') + '));' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''temporal'', ''' + t.[Schema] + '.' + t.[Name] + ' (retention)'', ''changed'');' AS NVARCHAR(MAX))
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''temporal'', N''' + REPLACE((t.[Schema] + '.' + t.[Name]) COLLATE DATABASE_DEFAULT, '''', '''''') + ' (retention)'', ''changed'');' AS NVARCHAR(MAX))
                            FROM #Tables t WITH (NOLOCK)
                            JOIN #LiveTemporalRetention L WITH (NOLOCK) ON L.[Schema] = t.[Schema] AND L.[Name] = t.[Name]
                            WHERE t.IsTemporal = 1
@@ -415,7 +415,7 @@ BEGIN TRY
   RAISERROR('Add Missing Defaults', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering Column ' + REPLACE(REPLACE(c.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[ColumnName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE ' + c.[Schema] + '.' + c.[TableName] + ' ADD DEFAULT ' + c.[Default] + ' FOR ' + c.[ColumnName] + ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', ''' + c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName] + ' (default)'', ''created'');' AS NVARCHAR(MAX))
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''constraint'', N''' + REPLACE((c.[Schema] + '.' + c.[TableName] + '.' + c.[ColumnName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ' (default)'', ''created'');' AS NVARCHAR(MAX))
                            FROM #Columns c WITH (NOLOCK)
                            WHERE RTRIM(ISNULL(c.[Default], '')) <> ''
                              AND NOT EXISTS (SELECT *

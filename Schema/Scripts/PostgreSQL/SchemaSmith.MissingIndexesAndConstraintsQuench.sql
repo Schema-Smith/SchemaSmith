@@ -541,7 +541,7 @@ BEGIN
   RAISE NOTICE 'Add Missing Defaults';
   SELECT STRING_AGG('RAISE NOTICE ''  Add missing default for %.%.%'', ''' || REPLACE((tc."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER TABLE  ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(tc."Name") || ' SET DEFAULT ' || tc."Default" ||';' || CHR(10) ||
-                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || ' (default)'', ''created'');', CHR(10))
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || REPLACE((tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name")::TEXT, '''', '''''') || ' (default)'', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_columns tc
     WHERE NULLIF(tc."Default", '') IS NOT NULL
