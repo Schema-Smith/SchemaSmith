@@ -18,8 +18,8 @@ BEGIN
   -- @IncludeColumns, #ColumnChanges, #Tables and #SuppressedColumnDrops.
   DECLARE @v_Accept NVARCHAR(MAX) = LOWER(ISNULL(@Accept, '')),
           @v_List NVARCHAR(MAX)
-  DECLARE @v_Changes TABLE (Kind VARCHAR(16), TableName NVARCHAR(300), ObjectName NVARCHAR(512), EstimatedRows BIGINT NULL,
-                            Accepted BIT NOT NULL DEFAULT 0, Disposition VARCHAR(16) NULL)
+  DECLARE @v_Changes TABLE (Kind VARCHAR(16), TableName NVARCHAR(300), ObjectName NVARCHAR(512), Detail NVARCHAR(400) NULL,
+                            EstimatedRows BIGINT NULL, Accepted BIT NOT NULL DEFAULT 0, Disposition VARCHAR(16) NULL)
 
   -- A partitioned table removed from the product is refused by name by DropTablesRemovedFromProduct, the guard that answers
   -- for it; the gate stands aside so that is the message the deploy stops on.
@@ -44,6 +44,41 @@ BEGIN
           AND NOT EXISTS (SELECT 1 FROM #SuppressedColumnDrops s
                            WHERE s.[Schema] = cc.[Schema] AND s.[TableName] = cc.[TableName] AND s.[ColumnName] = cc.[ColumnName])
 
+  -- A column whose type change rounds, cuts or substitutes values without an error (fn_ColumnChangeLoss), and a plain column
+  -- the deploy drops and adds again as computed or as an identity, whose stored values the new ones replace. A computed
+  -- column changing is derived data, and a change that fails on data that does not fit loses nothing.
+  IF @IncludeColumns = 1
+    INSERT @v_Changes (Kind, TableName, ObjectName, Detail, EstimatedRows)
+      SELECT CASE WHEN cc.MustDropAndRecreate = 1 THEN 'column replaced' ELSE 'type change' END,
+             SchemaSmith.fn_StripBracketWrapping(cc.[Schema]) + '.' + SchemaSmith.fn_StripBracketWrapping(cc.[TableName]),
+             SchemaSmith.fn_StripBracketWrapping(cc.[Schema]) + '.' + SchemaSmith.fn_StripBracketWrapping(cc.[TableName]) + '.' + SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName]),
+             LEFT(CASE WHEN cc.MustDropAndRecreate = 1
+                       THEN lt.LiveType + ' -> ' + CASE WHEN RTRIM(ISNULL(c.[ComputedExpression], '')) <> '' THEN 'computed' ELSE 'IDENTITY' END
+                       ELSE lt.LiveType + ' -> ' + LTRIM(RTRIM(c.[DataType])) END, 400),
+             (SELECT SUM(p.[rows]) FROM sys.partitions p WHERE p.[object_id] = sc.[object_id] AND p.index_id < 2)
+        FROM #ColumnChanges cc
+        JOIN #Tables t ON t.[Schema] = cc.[Schema] AND t.[Name] = cc.[TableName]
+        JOIN #Columns c ON c.[Schema] = cc.[Schema] AND c.[TableName] = cc.[TableName] AND c.[ColumnName] = cc.[ColumnName]
+        JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(cc.[Schema] + '.' + cc.[TableName]) AND QUOTENAME(sc.[name]) = cc.[ColumnName] COLLATE DATABASE_DEFAULT
+        -- TYPE_NAME is catalog metadata: in a contained database it carries the catalog collation, not the database's.
+        CROSS APPLY (SELECT LiveType = (UPPER(TYPE_NAME(sc.system_type_id))
+                                       + CASE WHEN TYPE_NAME(sc.system_type_id) IN ('varchar', 'char', 'varbinary', 'binary')
+                                                   THEN '(' + CASE WHEN sc.max_length = -1 THEN 'MAX' ELSE CAST(sc.max_length AS VARCHAR(10)) END + ')'
+                                              WHEN TYPE_NAME(sc.system_type_id) IN ('nvarchar', 'nchar')
+                                                   THEN '(' + CASE WHEN sc.max_length = -1 THEN 'MAX' ELSE CAST(sc.max_length / 2 AS VARCHAR(10)) END + ')'
+                                              WHEN TYPE_NAME(sc.system_type_id) IN ('decimal', 'numeric')
+                                                   THEN '(' + CAST(sc.[precision] AS VARCHAR(10)) + ',' + CAST(sc.scale AS VARCHAR(10)) + ')'
+                                              WHEN TYPE_NAME(sc.system_type_id) IN ('datetime2', 'time', 'datetimeoffset')
+                                                   THEN '(' + CAST(sc.scale AS VARCHAR(10)) + ')'
+                                              WHEN TYPE_NAME(sc.system_type_id) = 'float'
+                                                   THEN '(' + CAST(sc.[precision] AS VARCHAR(10)) + ')'
+                                              ELSE '' END) COLLATE DATABASE_DEFAULT) lt
+        WHERE cc.DropOnly = 0 AND t.NewTable = 0 AND sc.is_computed = 0
+          AND ((cc.MustDropAndRecreate = 1
+                AND (RTRIM(ISNULL(c.[ComputedExpression], '')) <> '' OR (c.[DataType] LIKE '%IDENTITY%' AND sc.is_identity = 0)))
+               OR (cc.MustDropAndRecreate = 0 AND cc.[TypeChanged] = 1
+                   AND SchemaSmith.fn_ColumnChangeLoss(lt.LiveType, c.[DataType]) = 'loses'))
+
   IF NOT EXISTS (SELECT 1 FROM @v_Changes) RETURN
 
   UPDATE @v_Changes
@@ -55,12 +90,14 @@ BEGIN
                             WHEN @Policy = 'warn' THEN 'warned'
                             ELSE 'allowed' END
 
-  INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode, EstimatedRows)
-    SELECT @@SPID, Kind, ObjectName, 'destructive', Disposition, EstimatedRows FROM @v_Changes
+  INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode, Detail, EstimatedRows)
+    SELECT @@SPID, Kind, ObjectName, 'destructive', Disposition, Detail, EstimatedRows FROM @v_Changes
 
   IF EXISTS (SELECT 1 FROM @v_Changes WHERE Disposition = 'refused')
   BEGIN
-    SET @v_List = STUFF((SELECT '; ' + CASE Kind WHEN 'table drop' THEN 'table ' ELSE 'column ' END + ObjectName + ' dropped'
+    SET @v_List = STUFF((SELECT '; ' + CASE Kind WHEN 'table drop' THEN 'table ' + ObjectName + ' dropped'
+                                                 WHEN 'column drop' THEN 'column ' + ObjectName + ' dropped'
+                                                 ELSE Kind + ' ' + ObjectName + ' ' + ISNULL(Detail, '') END
                                 + CASE WHEN EstimatedRows IS NULL THEN '' ELSE ' (about ' + CAST(EstimatedRows AS NVARCHAR(20)) + ' rows)' END
                            FROM @v_Changes WHERE Disposition = 'refused' ORDER BY ObjectName
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')

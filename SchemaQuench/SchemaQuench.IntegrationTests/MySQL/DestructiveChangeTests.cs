@@ -12,7 +12,7 @@ namespace SchemaQuench.IntegrationTests.MySQL;
 [Category("MySQL")]
 [Category("Integration")]
 [NonParallelizable]
-public class DestructiveChangeTests : DestructiveChangeSharedTests
+public class DestructiveChangeTests : DestructiveChangeMySqlFamilyTests
 {
     protected override Platform Platform => Platform.MySQL;
     protected override string MainDb => FixtureSetup.MainDb;

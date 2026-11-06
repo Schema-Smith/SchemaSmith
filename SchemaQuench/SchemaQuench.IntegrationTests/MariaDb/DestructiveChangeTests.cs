@@ -5,6 +5,7 @@ using System.Linq;
 using NUnit.Framework;
 using Schema.Domain;
 using Schema.IntegrationTests.MariaDb;
+using SchemaQuench.IntegrationTests.MySQL;
 using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.MariaDb;
@@ -12,7 +13,7 @@ namespace SchemaQuench.IntegrationTests.MariaDb;
 [Category("MariaDb")]
 [Category("Integration")]
 [NonParallelizable]
-public class DestructiveChangeTests : DestructiveChangeSharedTests
+public class DestructiveChangeTests : DestructiveChangeMySqlFamilyTests
 {
     protected override Platform Platform => Platform.MariaDb;
     protected override string MainDb => FixtureSetup.MainDb;

@@ -741,7 +741,7 @@ public partial class DatabaseQuench
             if (inner is not PostgresException { Hint: { } detail } || !detail.StartsWith(DestructiveDetailMarker, StringComparison.Ordinal)) continue;
             foreach (var row in JArray.Parse(detail[DestructiveDetailMarker.Length..]))
                 ChangeAudit.Record((string)row["kind"], (string)row["name"], DestructiveLog.Action, (string)row["mode"], AuditTarget,
-                    estimatedRows: (long?)row["rows"]);
+                    (string)row["detail"], (long?)row["rows"]);
             return;
         }
     }

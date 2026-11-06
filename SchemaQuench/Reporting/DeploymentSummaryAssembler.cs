@@ -139,7 +139,11 @@ public static class DeploymentSummaryAssembler
         var changes = changeAudit.Snapshot()
             .Where(r => r.Action == DestructiveLog.Action)
             .Select(r => new DestructiveChange(
-                Kind: r.ObjectType switch { "table drop" => "tableDrop", "column drop" => "columnDrop", _ => r.ObjectType },
+                Kind: r.ObjectType switch
+                {
+                    "table drop" => "tableDrop", "column drop" => "columnDrop", "column replaced" => "columnReplaced",
+                    "type change" => "typeChange", _ => r.ObjectType,
+                },
                 ObjectName: r.ObjectName,
                 Detail: r.Detail,
                 Server: r.Target?.Server,

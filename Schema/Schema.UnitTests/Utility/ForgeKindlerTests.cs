@@ -354,7 +354,7 @@ public class ForgeKindlerTests
         // +1 on SQL Server = PrintDowngrade (each degrade line names what it applied to).
         // +1 on SQL Server = StampTableOwnership (a deploy whose tables are all new stamps them without the modify pass).
         // +1 on SQL Server = DropTablesRemovedFromProduct (called after the last refusal, so a refused deploy drops no table).
-        Assert.That(sqlServer.Length, Is.EqualTo(80));
+        Assert.That(sqlServer.Length, Is.EqualTo(81));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -406,7 +406,7 @@ public class ForgeKindlerTests
         //   the create pass; policy-routed below 13).
         // +1 = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
         // +1 = IdentityOptionChanges (an identity column's declared sequence options, compared and applied).
-        Assert.That(postgres.Length, Is.EqualTo(72));
+        Assert.That(postgres.Length, Is.EqualTo(73));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
@@ -556,7 +556,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_DegradeUnsupportedColumnFeatures (column degrades reported once ShouldApply has settled).
         // +1 = SchemaSmith_TypeChangeKeepsForeignKey (a widening the engine makes under a foreign key keeps the key).
         // +1 = SchemaSmith_ExpressionReadsColumn (a generated column's reads matched as whole identifiers).
-        Assert.That(mysql.Length, Is.EqualTo(114));
+        // +1 = SchemaSmith_ColumnChangeLoss (H3: a type change that rounds or cuts values, for the destructive-change gate).
+        Assert.That(mysql.Length, Is.EqualTo(115));
     }
 
     [Test]

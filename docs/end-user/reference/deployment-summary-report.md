@@ -237,9 +237,9 @@ did about it. `policy` is the run's policy; `changes[]` has one entry per change
 
 | Key | Meaning |
 | --- | --- |
-| `kind` | `tableDrop` or `columnDrop`. |
+| `kind` | `tableDrop`, `columnDrop`, `typeChange` (a type change that rounds or cuts values), or `columnReplaced` (dropped and added again for a generated-status change). |
 | `objectName` | `schema.table` or `schema.table.column` (the database for the schema on MySQL and MariaDB). |
-| `detail` | Reserved for a change that alters rather than removes; `null` for a drop. |
+| `detail` | For `typeChange` and `columnReplaced`, the change as `live -> declared` (`generated` or `computed` standing for an expression); `null` for a drop. |
 | `server` / `database` | The target. |
 | `estimatedRows` | The table's rows from the catalog; `null` when the catalog does not know. |
 | `rowSource` | `catalog`, or `unknown` when `estimatedRows` is `null`. |

@@ -17,6 +17,8 @@ internal static class DestructiveLog
         {
             "table drop" => $"table {row.ObjectName} dropped",
             "column drop" => $"column {row.ObjectName} dropped",
+            "column replaced" => $"column {row.ObjectName} replaced ({row.Detail}): dropped and added again without its values",
+            "type change" => $"column {row.ObjectName} changed {row.Detail}, which changes its values without an error",
             _ => $"{row.ObjectType} {row.ObjectName}{(string.IsNullOrEmpty(row.Detail) ? "" : " " + row.Detail)}",
         };
         return row.EstimatedRows is { } rows ? $"{what} (about {rows.ToString("N0", CultureInfo.InvariantCulture)} rows)" : what;

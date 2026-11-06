@@ -33,6 +33,7 @@ gate: BEGIN
         TableName VARCHAR(300) COLLATE utf8mb4_unicode_ci NOT NULL,
         ObjectName VARCHAR(512) COLLATE utf8mb4_unicode_ci NOT NULL,
         TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        Detail VARCHAR(400) COLLATE utf8mb4_unicode_ci NULL,
         EstimatedRows BIGINT NULL,
         Disposition VARCHAR(16) NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -82,6 +83,51 @@ gate: BEGIN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GateDefined;
     END IF;
 
+    -- A column whose type change rounds or cuts values without an error (SchemaSmith_ColumnChangeLoss), and one whose
+    -- generated status changes, which STEP 3.5 drops and adds again: a plain column's stored values are replaced by the
+    -- expression's, a generated one comes back plain and empty. Without a strict sql_mode -- the one the kindled routines
+    -- run under, which @@SESSION.sql_mode reads here -- a narrowing that would refuse clamps instead, and a NULL becomes
+    -- the type's zero when the column turns NOT NULL, and a character a utf8 column moved to a narrower character set
+    -- cannot hold becomes '?'. STRICT_TRANS_TABLES is strict only for a transactional table: on any
+    -- other the rows after the first are converted with a warning.
+    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GateEngines;
+    CREATE TEMPORARY TABLE _SchemaSmith_GateEngines ENGINE=InnoDB
+        SELECT CONVERT(IF(@@lower_case_table_names = 0, it.TABLE_NAME, LOWER(it.TABLE_NAME)) USING utf8mb4) COLLATE utf8mb4_bin AS TableKey,
+               IF(@@SESSION.sql_mode LIKE '%STRICT_ALL_TABLES%'
+                  OR (@@SESSION.sql_mode LIKE '%STRICT_TRANS_TABLES%' AND it.ENGINE = 'InnoDB'), 1, 0) AS Strict
+          FROM INFORMATION_SCHEMA.TABLES it
+         WHERE it.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(it.TABLE_SCHEMA) = v_DbKey;
+    INSERT INTO _SchemaSmith_Destructive (Kind, TableName, ObjectName, TableKey, Detail)
+    SELECT IF(ch.Replaced = 1, 'column replaced', 'type change'), ch.TableName, ch.ObjectName, ch.TableKey,
+           LEFT(IF(ch.Replaced = 1,
+                   CONCAT(IF(ch.LiveGenerated = 1, 'generated', ch.LiveType), ' -> ', IF(ch.LiveGenerated = 1, ch.DeclaredType, 'generated')),
+                   CONCAT(ch.LiveType, IF(ch.CharsetNarrowed = 1, CONCAT(' ', ch.LiveCharset), ''), IF(ch.NullsZeroed = 1, ' NULL', ''), ' -> ',
+                          ch.DeclaredType, IF(ch.CharsetNarrowed = 1, CONCAT(' ', ch.DeclaredCharset), ''), IF(ch.NullsZeroed = 1, ' NOT NULL', ''))), 400)
+      FROM (SELECT CONCAT(p_DatabaseName, '.', SchemaSmith_StripBacktickWrapping(t.TableName)) AS TableName,
+                   CONCAT(p_DatabaseName, '.', SchemaSmith_StripBacktickWrapping(t.TableName), '.', isc.COLUMN_NAME) AS ObjectName,
+                   t.TableKey, isc.COLUMN_TYPE AS LiveType, c.DataType AS DeclaredType,
+                   isc.CHARACTER_SET_NAME AS LiveCharset,
+                   LOWER(COALESCE(NULLIF(TRIM(c.CharacterSet), ''), NULLIF(SUBSTRING_INDEX(TRIM(c.Collation), '_', 1), ''))) AS DeclaredCharset,
+                   IF(IFNULL(isc.GENERATION_EXPRESSION, '') != '', 1, 0) AS LiveGenerated,
+                   IF((IFNULL(isc.GENERATION_EXPRESSION, '') != '') != (IFNULL(TRIM(c.GeneratedExpression), '') != ''), 1, 0) AS Replaced,
+                   IF(IFNULL(isc.GENERATION_EXPRESSION, '') = '' AND IFNULL(TRIM(c.GeneratedExpression), '') = ''
+                      AND SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1
+                      AND SchemaSmith_ColumnChangeLoss(isc.COLUMN_TYPE, c.CompareDataType, COALESCE(e.Strict, 0)) = 2, 1, 0) AS TypeLoses,
+                   IF(IFNULL(isc.GENERATION_EXPRESSION, '') = '' AND IFNULL(TRIM(c.GeneratedExpression), '') = ''
+                      AND COALESCE(e.Strict, 0) = 0 AND isc.IS_NULLABLE = 'YES' AND c.IsNullable = 0, 1, 0) AS NullsZeroed,
+                   IF(COALESCE(e.Strict, 0) = 0 AND isc.CHARACTER_SET_NAME LIKE 'utf8%'
+                      AND LOWER(COALESCE(NULLIF(TRIM(c.CharacterSet), ''), NULLIF(SUBSTRING_INDEX(TRIM(c.Collation), '_', 1), ''))) NOT LIKE 'utf8%', 1, 0) AS CharsetNarrowed
+              FROM _SchemaSmith_Columns c
+              JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
+              JOIN _SchemaSmith_CatColumns isc ON isc.TableKey = c.TableKey AND isc.ColumnKey = c.ColumnKey
+              LEFT JOIN _SchemaSmith_GateEngines e ON e.TableKey = t.TableKey
+             WHERE t.NewTable = 0 AND c.NewColumn = 0
+               AND c.SystemTimeRole IS NULL
+               AND SchemaSmith_IsSystemTimePeriodColumn(p_DatabaseName, SchemaSmith_StripBacktickWrapping(t.TableName), isc.COLUMN_NAME) = 0) ch
+     WHERE ch.Replaced = 1 OR ch.TypeLoses = 1 OR ch.NullsZeroed = 1 OR ch.CharsetNarrowed = 1;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GateEngines;
+
     IF NOT EXISTS (SELECT 1 FROM _SchemaSmith_Destructive) THEN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Destructive;
         LEAVE gate;
@@ -110,12 +156,15 @@ gate: BEGIN
                               WHEN v_Policy = 'warn' THEN 'warned'
                               ELSE 'allowed' END;
 
-    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode, EstimatedRows)
-    SELECT CONNECTION_ID(), Kind, ObjectName, 'destructive', Disposition, EstimatedRows FROM _SchemaSmith_Destructive;
+    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode, Detail, EstimatedRows)
+    SELECT CONNECTION_ID(), Kind, ObjectName, 'destructive', Disposition, Detail, EstimatedRows FROM _SchemaSmith_Destructive;
 
     IF EXISTS (SELECT 1 FROM _SchemaSmith_Destructive WHERE Disposition = 'refused') THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Destructive change refused: ', IF(Kind = 'table drop', 'table ', 'column '), ObjectName, ' dropped',
+        SELECT CONNECTION_ID(), CONCAT('  Destructive change refused: ',
+                                       CASE Kind WHEN 'table drop' THEN CONCAT('table ', ObjectName, ' dropped')
+                                                 WHEN 'column drop' THEN CONCAT('column ', ObjectName, ' dropped')
+                                                 ELSE CONCAT(Kind, ' ', ObjectName, ' ', COALESCE(Detail, '')) END,
                                        IF(EstimatedRows IS NULL, '', CONCAT(' (about ', EstimatedRows, ' rows)')))
           FROM _SchemaSmith_Destructive WHERE Disposition = 'refused';
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_Destructive;

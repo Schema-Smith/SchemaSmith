@@ -657,12 +657,27 @@ that makes the change -- on the command line or in the pipeline -- not in the pa
 environment, and an acceptance in it would carry itself into production. An unknown policy value stops the run with
 exit code `2`, because a typo must not quietly disarm the setting.
 
-**What counts.** A table dropped because the package no longer declares it (handed to a `CustomTableDrop` hook
-included), and a column dropped for the same reason -- including a column a rebuild leaves out. A drop the deploy does
-not make is not destructive: with `DropTablesRemovedFromProduct` or `DropColumnsRemovedFromProduct` off, or under
-`PreventDrop`, nothing is dropped and nothing is refused. A change the engine refuses when the data does not fit (a
-length cut, `NOT NULL` over existing nulls) fails the deploy on its own and is not listed. A partitioned table removed
-from the product is refused by its own guard, whose message the deploy stops on.
+**What counts.**
+
+- A table dropped because the package no longer declares it (handed to a `CustomTableDrop` hook included).
+- A column dropped for the same reason -- including a column a rebuild leaves out.
+- A column type change that rounds or cuts the values already there without an error: a smaller decimal scale or
+  fractional-second precision, a timestamp or datetime into a date, a float or a decimal with a fraction into an
+  integer, a double into a single-precision float, a 64-bit integer into a double, PostgreSQL `json` into `jsonb`
+  (duplicate keys collapse). A pair SchemaQuench has no rule for counts too.
+- A column dropped and added again because its generated or computed status changes: a plain column's stored values
+  are replaced by the expression's, and a generated column turned plain comes back empty where the engine cannot keep
+  its values (MySQL and MariaDB always; PostgreSQL before 13). On SQL Server, a plain column declared computed or
+  `IDENTITY`.
+
+A drop the deploy does not make is not destructive: with `DropTablesRemovedFromProduct` or
+`DropColumnsRemovedFromProduct` off, or under `PreventDrop`, nothing is dropped and nothing is refused. A change the
+engine refuses when the data does not fit (a length cut, an integer narrowing, `NOT NULL` over existing nulls) fails the
+deploy on its own and is not listed -- except on MySQL and MariaDB without a strict `sql_mode` (`STRICT_TRANS_TABLES` for
+InnoDB, or `STRICT_ALL_TABLES`), where the engine clamps, cuts or zeroes the value instead, so every such narrowing is
+listed, and a nullable column made `NOT NULL` is too. A partitioned table removed from the product is refused by its own
+guard, whose message the deploy stops on. Name a type change or a replaced column in `Target:AcceptDestructive` as
+`schema.table.column`.
 
 **Row counts are the catalog's estimate**, never a count of the table: SQL Server `sys.partitions`, PostgreSQL
 `reltuples` (unknown until the table has been analyzed), MySQL and MariaDB `INFORMATION_SCHEMA.TABLES.TABLE_ROWS`.

@@ -23,7 +23,7 @@ DECLARE
   v_detail TEXT;
 BEGIN
   DROP TABLE IF EXISTS temp_destructive;
-  CREATE TEMP TABLE temp_destructive ("Kind" TEXT, "TableName" TEXT, "ObjectName" TEXT, "EstimatedRows" BIGINT, "Accepted" BOOLEAN, "Disposition" TEXT);
+  CREATE TEMP TABLE temp_destructive ("Kind" TEXT, "TableName" TEXT, "ObjectName" TEXT, "Detail" TEXT, "EstimatedRows" BIGINT, "Accepted" BOOLEAN, "Disposition" TEXT);
 
   IF p_DropTables THEN
     INSERT INTO temp_destructive ("Kind", "TableName", "ObjectName")
@@ -44,6 +44,23 @@ BEGIN
                            WHERE ec."TableSchema" = c."TableSchema" AND ec."TableName" = c."TableName" AND ec."ColumnName" = c."Name")
           AND COALESCE(tt."DropColumnsRemovedFromProduct", TRUE);
   END IF;
+
+  -- A column whose type change rounds or cuts values without an error (ColumnChangeLoss), and a plain column the deploy
+  -- drops and adds again as generated -- or, below 13, a generated one added again plain and empty -- whose stored values
+  -- are replaced. Before a rebuilt table's columns leave temp_existing_columns, so a rebuild's are judged too.
+  INSERT INTO temp_destructive ("Kind", "TableName", "ObjectName", "Detail")
+    SELECT CASE WHEN replaced THEN 'column replaced' ELSE 'type change' END,
+           ec."TableSchema" || '.' || ec."TableName", ec."TableSchema" || '.' || ec."TableName" || '.' || ec."ColumnName",
+           LEFT(ec."DataType" || ' -> ' || CASE WHEN replaced AND COALESCE(c."GenerationExpression", '') <> '' THEN 'generated' ELSE c."DataType" END, 400)
+      FROM temp_existing_columns ec
+      JOIN temp_columns c ON c."TableSchema" = ec."TableSchema" AND c."TableName" = ec."TableName" AND c."Name" = ec."ColumnName"
+      JOIN temp_tables tt ON tt."Schema" = ec."TableSchema" AND tt."Name" = ec."TableName"
+      CROSS JOIN LATERAL (SELECT (COALESCE(c."GenerationExpression", '') <> '' AND COALESCE(ec."GenerationExpression", '') = '')
+                                 OR (COALESCE(c."GenerationExpression", '') = '' AND COALESCE(ec."GenerationExpression", '') <> ''
+                                     AND "SchemaSmith"."ServerVersionNum"() < 13) AS replaced) r
+      WHERE replaced
+         OR (COALESCE(ec."GenerationExpression", '') = '' AND COALESCE(c."GenerationExpression", '') = ''
+             AND "SchemaSmith"."ColumnChangeLoss"(ec."DataType", c."DataType") = 'loses');
 
   IF NOT EXISTS (SELECT 1 FROM temp_destructive) THEN
     RETURN;
@@ -71,16 +88,17 @@ BEGIN
                               ELSE 'allowed' END;
 
   IF EXISTS (SELECT 1 FROM temp_destructive WHERE "Disposition" = 'refused') THEN
-    SELECT STRING_AGG(CASE "Kind" WHEN 'table drop' THEN 'table ' ELSE 'column ' END || "ObjectName" || ' dropped'
+    SELECT STRING_AGG(CASE "Kind" WHEN 'table drop' THEN 'table ' || "ObjectName" || ' dropped' WHEN 'column drop' THEN 'column ' || "ObjectName" || ' dropped'
+                                  ELSE "Kind" || ' ' || "ObjectName" || ' ' || COALESCE("Detail", '') END
                       || COALESCE(' (about ' || "EstimatedRows" || ' rows)', ''), '; ' ORDER BY "ObjectName") FILTER (WHERE "Disposition" = 'refused'),
-           'SchemaSmith.Destructive:' || json_agg(json_build_object('kind', "Kind", 'name', "ObjectName", 'rows', "EstimatedRows", 'mode', "Disposition"))::TEXT
+           'SchemaSmith.Destructive:' || json_agg(json_build_object('kind', "Kind", 'name', "ObjectName", 'detail', "Detail", 'rows', "EstimatedRows", 'mode', "Disposition"))::TEXT
       INTO v_list, v_detail
       FROM temp_destructive;
     RAISE EXCEPTION 'Destructive change refused (DestructiveChangePolicy is fail): %. Nothing in this step was dropped or altered. Name each one in AcceptDestructive to proceed, restore it to the package, or keep it with DropColumnsRemovedFromProduct or PreventDrop.', v_list
       USING HINT = v_detail;
   END IF;
 
-  INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode", "EstimatedRows")
-    SELECT pg_backend_pid(), "Kind", "ObjectName", 'destructive', "Disposition", "EstimatedRows" FROM temp_destructive;
+  INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode", "Detail", "EstimatedRows")
+    SELECT pg_backend_pid(), "Kind", "ObjectName", 'destructive', "Disposition", "Detail", "EstimatedRows" FROM temp_destructive;
 END;
 $$;
