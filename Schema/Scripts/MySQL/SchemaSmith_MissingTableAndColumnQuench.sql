@@ -860,10 +860,11 @@ BEGIN
         -- restored by ModifiedTableQuench's ON UPDATE compare against the new column name in the same deploy.
         CALL SchemaSmith_MarkColumnRenames(p_DatabaseName);
 
-        -- MySQL refuses to rename a column that a functional key part (3837) or a generated column (3108) reads;
-        -- MariaDB rewrites both itself. A declared functional index is dropped ahead of the rename and rebuilt by the
-        -- index pass; a declared generated column is re-stated over the new name in the rename's own ALTER. One the
-        -- package does not declare could not be put back, so the deploy stops by name before anything is renamed.
+        -- MySQL refuses to rename a column that a functional key part (3837), a generated column (3108) or a check
+        -- constraint (3959) reads; MariaDB rewrites all three itself. A declared functional index or check is dropped
+        -- ahead of the rename and put back by the index or check pass; a declared generated column is re-stated over the
+        -- new name in the rename's own ALTER. One the package does not declare could not be put back, so the deploy
+        -- stops by name before anything is renamed.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RenameDependents;
         CREATE TEMPORARY TABLE _SchemaSmith_RenameDependents (
             Kind VARCHAR(16) COLLATE utf8mb4_bin NOT NULL,
@@ -896,11 +897,32 @@ BEGIN
                 EXECUTE stmt USING @ss_rename_db;
                 DEALLOCATE PREPARE stmt;
             END IF;
+            -- CHECK_CONSTRAINTS is 8.0.16, named in a prepared statement for the same reason. MySQL names a check per
+            -- database, so its name alone pairs it with the table's TABLE_CONSTRAINTS row.
+            IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
+                SET @ss_rename_db = p_DatabaseName;
+                SET @ss_rename_sql = CONCAT(
+                    'INSERT IGNORE INTO _SchemaSmith_RenameDependents (Kind, TableName, TableKey, DependentName) ',
+                    'SELECT ''check'', c.TableName, c.TableKey, tc.CONSTRAINT_NAME FROM _SchemaSmith_Columns c ',
+                    'JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId ',
+                    'JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc ON tc.TABLE_SCHEMA = ? AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = c.TableKey ',
+                    'AND tc.CONSTRAINT_TYPE = ''CHECK'' ',
+                    'JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA = tc.TABLE_SCHEMA AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME ',
+                    'WHERE LOCATE(CAST(CONCAT(''`'', SchemaSmith_EscapeBackticks(r.LiveName), ''`'') AS BINARY), ',
+                    'CAST(SchemaSmith_CheckClauseText(CONVERT(cc.CHECK_CLAUSE USING utf8mb4)) AS BINARY)) > 0');
+                PREPARE stmt FROM @ss_rename_sql;
+                EXECUTE stmt USING @ss_rename_db;
+                DEALLOCATE PREPARE stmt;
+            END IF;
         END IF;
         UPDATE _SchemaSmith_RenameDependents d SET d.Declared = 1
          WHERE d.Kind = 'index'
            AND EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
                         WHERE i.TableKey = d.TableKey AND i.IndexKey = SchemaSmith_NameKeyCI(d.DependentName));
+        UPDATE _SchemaSmith_RenameDependents d SET d.Declared = 1
+         WHERE d.Kind = 'check'
+           AND EXISTS (SELECT 1 FROM _SchemaSmith_CheckConstraints k
+                        WHERE k.TableKey = d.TableKey AND k.ConstraintKey = SchemaSmith_NameKeyCI(d.DependentName));
         UPDATE _SchemaSmith_RenameDependents d SET d.Declared = 1
          WHERE d.Kind = 'column'
            AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
@@ -926,6 +948,16 @@ BEGIN
         SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', TableName,
                       ' DROP INDEX `', REPLACE(DependentName, '`', '``'), '`')
           FROM _SchemaSmith_RenameDependents WHERE Kind = 'index';
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  Drop check `', SchemaSmith_EscapeBackticks(DependentName), '` on ', TableName, ' ahead of a column rename')
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'check';
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'constraint', CONCAT(SchemaSmith_StripBacktickWrapping(TableName), '.', DependentName), 'dropped'
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'check';
+        INSERT INTO _SchemaSmith_ColRenameStmts (Stmt)
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', TableName,
+                      ' DROP CHECK `', SchemaSmith_EscapeBackticks(DependentName), '`')
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'check';
 
         INSERT INTO _SchemaSmith_ColRenameStmts (Stmt, TableKey)
         SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',

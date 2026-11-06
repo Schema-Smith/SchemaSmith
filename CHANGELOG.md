@@ -96,6 +96,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **PostgreSQL: a column typed by an enum or domain whose name holds a non-ASCII letter is no longer altered on every deploy.**
 - **PostgreSQL: a query token resolves in a database that has a schema whose name holds a double quote.** The cleanup run before every query token failed there (42602).
 - **SQL Server: renaming a column through `OldName` deploys when a check constraint, a computed column, a filtered index or a filtered statistic reads it, and a computed column can be renamed.** `sp_rename` refused every one of these (Msg 15336, 5074, 4928), so the deploy failed. The deploy now drops what blocks the rename and puts it back from the package under the new name; one the package does not declare stops the deploy by name before anything changes.
+- **MySQL 8.0: renaming a column through `OldName` deploys when a check constraint reads it.** MySQL refused the rename (3959). A declared check is dropped ahead of the rename and put back over the new name; one the package does not declare stops the deploy by name before anything is renamed, as a functional index or generated column already did.
 
 ## [v2.8.0](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) — 2026-11-01
 
