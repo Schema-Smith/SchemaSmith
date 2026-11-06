@@ -74,6 +74,8 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **MySQL and MariaDB: an index whose table and index names together run past 64 characters is dropped when it is removed from the package.** The record of what a package owns cut the pair at 64 characters, so the index was never recognised as the package's. The record widens on the next deploy; an index recorded short before then is not recognised until it is deployed again.
 - **MySQL and MariaDB: renaming a table and removing one of its foreign keys in the same deploy drops the key.** The key's ownership record kept the table's old name, so it was left in place.
 - **MySQL: a string default holding a backslash no longer reads as changed on every deploy**, and extraction writes it so it deploys back to the same value.
+- **SQL Server: a run-once script whose path or product name holds a character outside the database code page runs once.** The record of completed scripts stored such a character as a look-alike, so the script was never found as done: the next deploy ran it again and then failed on the record's primary key. The record's columns widen to Unicode on the next deploy, keeping the rows already there.
+- **MySQL and MariaDB: a product name holding a backslash is recorded as written** in the record of completed run-once scripts, instead of losing the backslash.
 
 ## [v2.8.0](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) — 2026-11-01
 

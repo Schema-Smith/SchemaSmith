@@ -95,7 +95,8 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
 
     private void WriteBase()
     {
-        WritePackage("");
+        WritePackage(RunOnceFolders, "Before Scripts");
+        WriteFile("Before Scripts", RunOnce, "SELECT 1");
         WriteFile("Tables", "parent.json", ParentJson());
         WriteFile("Tables", "child.json", ChildJson());
         WriteFile("Tables", "gone.json", GoneJson());
@@ -104,10 +105,16 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
     // Renames of a column, an index and a table; a check, a foreign key and an index dropped; a check rewritten; a type changed; a table removed.
     private void WriteChangeSet()
     {
-        WritePackage("");
+        WritePackage(RunOnceFolders, "Before Scripts");
+        WriteFile("Before Scripts", RunOnce, "SELECT 1");
         WriteFile("Tables", "parent.json", ParentJson(col: Col + "n", colOldName: Col, ix: Ix + "n", withCheck: false, longType: "BIGINT", likePattern: "%y%", withLongIndex: false, keyIx: KeyIx + "r"));
         WriteFile("Tables", "child.json", ChildJson(Child + "n", oldName: Child, withForeignKey: false));
     }
+
+    // A run-once script: its completion record carries the product name and its path, so both must round-trip.
+    private const string RunOnce = "o'n%c,e é Ω.sql";
+    private const string RunOnceFolders = """{ "FolderPath": "Before Scripts", "QuenchSlot": "Before" }""";
+    private string RunOnceRecord() => Text1("SELECT CONCAT(COUNT(*), '|', MIN(ProductName)) FROM SchemaSmith_CompletedMigrationScripts WHERE ScriptPath LIKE '%Ω%'");
 
     private static readonly Dictionary<string, string> AllowTheChanges = new() { ["Target:DestructiveChangePolicy"] = "allow" };
 
@@ -246,6 +253,7 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
     {
         WriteBase();
         var run = Deploy(settings: AllowTheChanges);
+        ExpectEqual(RunOnceRecord(), "1|" + ProductName.Replace(@"\\", @"\"), "the run-once script recorded under its product");
         Expect(TableExists(Table) && TableExists(Child) && TableExists(Gone), "the tables");
         Expect(ColumnExists(Table, Key) && ColumnExists(Table, Col) && ColumnExists(Table, Long), "the columns, the 64-character one included");
         Expect(IndexExists(Table, Ix) && IndexExists(Table, LongIx) && IndexExists(Table, Ft), "the indexes, the 64-character and FULLTEXT ones included");
@@ -267,6 +275,7 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
         WriteBase();
         var before = Snapshot();
         var run = Deploy(settings: AllowTheChanges);
+        ExpectEqual(RunOnceRecord(), "1|" + ProductName.Replace(@"\\", @"\"), "the run-once script found, not run and recorded again");
         ExpectNone(Changes(run), "audited changes");
         ExpectEqual(Snapshot(), before, "every object as it was");
         ExpectNone(Mangled(run), "progress lines that name the table");

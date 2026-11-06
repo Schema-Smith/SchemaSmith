@@ -4,12 +4,12 @@
   "Columns": [
     {
       "Name": "[ScriptPath]",
-      "DataType": "VARCHAR(800)",
+      "DataType": "NVARCHAR(800)",
       "Nullable": false
     },
     {
       "Name": "[ProductName]",
-      "DataType": "VARCHAR(100)",
+      "DataType": "NVARCHAR(100)",
       "Nullable": false
     },
     {

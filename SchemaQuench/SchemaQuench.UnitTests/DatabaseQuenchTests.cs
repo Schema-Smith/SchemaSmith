@@ -294,9 +294,9 @@ public class DatabaseQuenchTests
         Assert.That(sql, Does.Contain("[QuenchSlot]"));
         // DELETE is STRICT on template_name (no permissive IN) so a prune in template A
         // can't shadow-delete a legacy blank-template row that template B still needs.
-        Assert.That(sql, Does.Contain("[template_name] = 'T'"));
+        Assert.That(sql, Does.Contain("[template_name] = N'T'"));
         Assert.That(sql, Does.Not.Contain("[template_name] IN"));
-        Assert.That(sql, Does.Contain("[schema_name] = ''"));
+        Assert.That(sql, Does.Contain("[schema_name] = N''"));
     }
 
     [Test]
@@ -335,9 +335,9 @@ public class DatabaseQuenchTests
 
         var sql = quench.GetSelectCompletedScriptsSql("MyProduct", "Before", "T", "");
         Assert.That(sql, Does.Contain("WITH (NOLOCK)"));
-        Assert.That(sql, Does.Contain("[template_name] = 'T'"));
+        Assert.That(sql, Does.Contain("[template_name] = N'T'"));
         Assert.That(sql, Does.Not.Contain("IN ('',"), "the completed-scripts read is scoped strictly to the active template");
-        Assert.That(sql, Does.Contain("[schema_name] = ''"));
+        Assert.That(sql, Does.Contain("[schema_name] = N''"));
     }
 
     [Test]
@@ -1889,8 +1889,8 @@ public class DatabaseQuenchTests
         var sql = quench.GetSelectCompletedScriptsSql(
             quench.ProductName, "Before", "TenantBody", quench.SchemaName);
 
-        Assert.That(sql, Does.Contain("[schema_name] = 'tenant_acme'"));
-        Assert.That(sql, Does.Contain("[template_name] = 'TenantBody'"));
+        Assert.That(sql, Does.Contain("[schema_name] = N'tenant_acme'"));
+        Assert.That(sql, Does.Contain("[template_name] = N'TenantBody'"));
     }
 
     [Test]
@@ -1903,7 +1903,7 @@ public class DatabaseQuenchTests
         var sql = quench.GetSelectCompletedScriptsSql(
             quench.ProductName, "Before", "Core", quench.SchemaName);
 
-        Assert.That(sql, Does.Contain("[schema_name] = ''"));
+        Assert.That(sql, Does.Contain("[schema_name] = N''"));
     }
 
     [Test]

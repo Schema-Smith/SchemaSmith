@@ -1263,6 +1263,15 @@ public partial class DatabaseQuench
 
     internal static string EscapeSqlLiteral(string value) => value?.Replace("'", "''") ?? "";
 
+    // A value written into a migration-tracking statement, as the platform reads a literal: N'' so SQL Server keeps a
+    // character outside the database code page, and backslashes doubled on MySQL, where they are escapes.
+    internal string Literal(string value) => _product.Platform.GetBasePlatform() switch
+    {
+        Platform.SqlServer => $"N'{EscapeSqlLiteral(value)}'",
+        Platform.MySQL => $"'{EscapeMySqlLiteral(value)}'",
+        _ => $"'{EscapeSqlLiteral(value)}'"
+    };
+
     /// <summary>
     /// Gets the delete SQL for CompletedMigrationScripts per platform. Strict equality on
     /// BOTH template_name and schema_name so a prune in one (template, schema) iteration
@@ -1272,9 +1281,9 @@ public partial class DatabaseQuench
     /// </summary>
     internal string GetDeleteCompletedScriptSql(string productName, string slot, string obsoleteScript, string templateName, string schemaName) => _product.Platform.GetBasePlatform() switch
     {
-        Platform.SqlServer => $"DELETE SchemaSmith.CompletedMigrationScripts WHERE [ProductName] = '{EscapeSqlLiteral(productName)}' AND [QuenchSlot] = '{EscapeSqlLiteral(slot)}' AND [ScriptPath] = '{EscapeSqlLiteral(obsoleteScript)}' AND [template_name] = '{EscapeSqlLiteral(templateName)}' AND [schema_name] = '{EscapeSqlLiteral(schemaName)}'",
-        Platform.PostgreSQL => $"DELETE FROM \"SchemaSmith\".\"CompletedMigrationScripts\" WHERE \"ProductName\" = '{EscapeSqlLiteral(productName)}' AND \"QuenchSlot\" = '{EscapeSqlLiteral(slot)}' AND \"ScriptPath\" = '{EscapeSqlLiteral(obsoleteScript)}' AND template_name = '{EscapeSqlLiteral(templateName)}' AND schema_name = '{EscapeSqlLiteral(schemaName)}'",
-        Platform.MySQL => $"DELETE FROM `SchemaSmith_CompletedMigrationScripts` WHERE `ProductName` = '{EscapeSqlLiteral(productName)}' AND `QuenchSlot` = '{EscapeSqlLiteral(slot)}' AND `ScriptPath` = '{EscapeSqlLiteral(obsoleteScript)}' AND `template_name` = '{EscapeSqlLiteral(templateName)}' AND `schema_name` = '{EscapeSqlLiteral(schemaName)}'",
+        Platform.SqlServer => $"DELETE SchemaSmith.CompletedMigrationScripts WHERE [ProductName] = {Literal(productName)} AND [QuenchSlot] = {Literal(slot)} AND [ScriptPath] = {Literal(obsoleteScript)} AND [template_name] = {Literal(templateName)} AND [schema_name] = {Literal(schemaName)}",
+        Platform.PostgreSQL => $"DELETE FROM \"SchemaSmith\".\"CompletedMigrationScripts\" WHERE \"ProductName\" = {Literal(productName)} AND \"QuenchSlot\" = {Literal(slot)} AND \"ScriptPath\" = {Literal(obsoleteScript)} AND template_name = {Literal(templateName)} AND schema_name = {Literal(schemaName)}",
+        Platform.MySQL => $"DELETE FROM `SchemaSmith_CompletedMigrationScripts` WHERE `ProductName` = {Literal(productName)} AND `QuenchSlot` = {Literal(slot)} AND `ScriptPath` = {Literal(obsoleteScript)} AND `template_name` = {Literal(templateName)} AND `schema_name` = {Literal(schemaName)}",
         _ => throw new ArgumentOutOfRangeException()
     };
 
@@ -1285,9 +1294,9 @@ public partial class DatabaseQuench
     /// </summary>
     internal string GetSelectCompletedScriptsSql(string productName, string slot, string templateName, string schemaName) => _product.Platform.GetBasePlatform() switch
     {
-        Platform.SqlServer => $"SELECT [ScriptPath] FROM SchemaSmith.CompletedMigrationScripts WITH (NOLOCK) WHERE [ProductName] = '{EscapeSqlLiteral(productName)}' AND [QuenchSlot] = '{EscapeSqlLiteral(slot)}' AND [template_name] = '{EscapeSqlLiteral(templateName)}' AND [schema_name] = '{EscapeSqlLiteral(schemaName)}'",
-        Platform.PostgreSQL => $"SELECT \"ScriptPath\" FROM \"SchemaSmith\".\"CompletedMigrationScripts\" WHERE \"ProductName\" = '{EscapeSqlLiteral(productName)}' AND \"QuenchSlot\" = '{EscapeSqlLiteral(slot)}' AND template_name = '{EscapeSqlLiteral(templateName)}' AND schema_name = '{EscapeSqlLiteral(schemaName)}'",
-        Platform.MySQL => $"SELECT `ScriptPath` FROM `SchemaSmith_CompletedMigrationScripts` WHERE `ProductName` = '{EscapeSqlLiteral(productName)}' AND `QuenchSlot` = '{EscapeSqlLiteral(slot)}' AND `template_name` = '{EscapeSqlLiteral(templateName)}' AND `schema_name` = '{EscapeSqlLiteral(schemaName)}'",
+        Platform.SqlServer => $"SELECT [ScriptPath] FROM SchemaSmith.CompletedMigrationScripts WITH (NOLOCK) WHERE [ProductName] = {Literal(productName)} AND [QuenchSlot] = {Literal(slot)} AND [template_name] = {Literal(templateName)} AND [schema_name] = {Literal(schemaName)}",
+        Platform.PostgreSQL => $"SELECT \"ScriptPath\" FROM \"SchemaSmith\".\"CompletedMigrationScripts\" WHERE \"ProductName\" = {Literal(productName)} AND \"QuenchSlot\" = {Literal(slot)} AND template_name = {Literal(templateName)} AND schema_name = {Literal(schemaName)}",
+        Platform.MySQL => $"SELECT `ScriptPath` FROM `SchemaSmith_CompletedMigrationScripts` WHERE `ProductName` = {Literal(productName)} AND `QuenchSlot` = {Literal(slot)} AND `template_name` = {Literal(templateName)} AND `schema_name` = {Literal(schemaName)}",
         _ => throw new ArgumentOutOfRangeException()
     };
 
@@ -1298,9 +1307,9 @@ public partial class DatabaseQuench
     /// </summary>
     internal string GetInsertCompletedScriptSql(string scriptPath, string productName, string slot, string templateName, string schemaName) => _product.Platform.GetBasePlatform() switch
     {
-        Platform.SqlServer => $"INSERT SchemaSmith.CompletedMigrationScripts ([ScriptPath], [ProductName], [QuenchSlot], [template_name], [schema_name]) VALUES('{EscapeSqlLiteral(scriptPath)}', '{EscapeSqlLiteral(productName)}', '{EscapeSqlLiteral(slot)}', '{EscapeSqlLiteral(templateName)}', '{EscapeSqlLiteral(schemaName)}')",
-        Platform.PostgreSQL => $"INSERT INTO \"SchemaSmith\".\"CompletedMigrationScripts\" (\"ScriptPath\", \"ProductName\", \"QuenchSlot\", template_name, schema_name) VALUES('{EscapeSqlLiteral(scriptPath)}', '{EscapeSqlLiteral(productName)}', '{EscapeSqlLiteral(slot)}', '{EscapeSqlLiteral(templateName)}', '{EscapeSqlLiteral(schemaName)}')",
-        Platform.MySQL => $"INSERT INTO `SchemaSmith_CompletedMigrationScripts` (`ScriptPath`, `ProductName`, `QuenchSlot`, `template_name`, `schema_name`) VALUES('{EscapeSqlLiteral(scriptPath)}', '{EscapeSqlLiteral(productName)}', '{EscapeSqlLiteral(slot)}', '{EscapeSqlLiteral(templateName)}', '{EscapeSqlLiteral(schemaName)}')",
+        Platform.SqlServer => $"INSERT SchemaSmith.CompletedMigrationScripts ([ScriptPath], [ProductName], [QuenchSlot], [template_name], [schema_name]) VALUES({Literal(scriptPath)}, {Literal(productName)}, {Literal(slot)}, {Literal(templateName)}, {Literal(schemaName)})",
+        Platform.PostgreSQL => $"INSERT INTO \"SchemaSmith\".\"CompletedMigrationScripts\" (\"ScriptPath\", \"ProductName\", \"QuenchSlot\", template_name, schema_name) VALUES({Literal(scriptPath)}, {Literal(productName)}, {Literal(slot)}, {Literal(templateName)}, {Literal(schemaName)})",
+        Platform.MySQL => $"INSERT INTO `SchemaSmith_CompletedMigrationScripts` (`ScriptPath`, `ProductName`, `QuenchSlot`, `template_name`, `schema_name`) VALUES({Literal(scriptPath)}, {Literal(productName)}, {Literal(slot)}, {Literal(templateName)}, {Literal(schemaName)})",
         _ => throw new ArgumentOutOfRangeException()
     };
 
