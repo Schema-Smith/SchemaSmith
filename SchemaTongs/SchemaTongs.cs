@@ -2312,7 +2312,7 @@ SELECT tr.name AS TriggerName
 SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier, tr.is_disabled
   FROM sys.sql_modules sm
   JOIN sys.triggers tr ON sm.object_id = tr.object_id
- WHERE tr.parent_class = 0 AND tr.name = '{EscapeSql(triggerName)}'";
+ WHERE tr.parent_class = 0 AND tr.name = N'{EscapeSql(triggerName)}'";
 
             string definition = null;
             bool usesAnsiNulls = true;
@@ -2557,7 +2557,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
   FROM sys.sql_modules sm
   JOIN sys.objects o ON sm.object_id = o.object_id
   JOIN sys.schemas s ON o.schema_id = s.schema_id
- WHERE s.name = '{EscapeSql(schemaName)}' AND o.name = '{EscapeSql(objectName)}'";
+ WHERE s.name = N'{EscapeSql(schemaName)}' AND o.name = N'{EscapeSql(objectName)}'";
 
         string definition = null;
         bool usesAnsiNulls = true;
@@ -2727,12 +2727,12 @@ SELECT s.name AS SchemaName, v.name AS ViewName
     {
         if (_ingestEncoding == IngestEncoding.Xml)
         {
-            command.CommandText = $"SELECT [SchemaSmith].[GenerateIndexedViewXml]('{EscapeSql(schema)}', '{EscapeSql(name)}')";
+            command.CommandText = $"SELECT [SchemaSmith].[GenerateIndexedViewXml](N'{EscapeSql(schema)}', N'{EscapeSql(name)}')";
             var xml = command.ExecuteScalar()?.ToString() ?? "";
             return string.IsNullOrWhiteSpace(xml) ? "" : ModelXmlSerializer.FromIngestXml(xml);
         }
 
-        command.CommandText = $"SELECT [SchemaSmith].[GenerateIndexedViewJson]('{EscapeSql(schema)}', '{EscapeSql(name)}')";
+        command.CommandText = $"SELECT [SchemaSmith].[GenerateIndexedViewJson](N'{EscapeSql(schema)}', N'{EscapeSql(name)}')";
         return command.ExecuteScalar()?.ToString() ?? "";
     }
 
@@ -3900,7 +3900,7 @@ SELECT mv.schemaname, mv.matviewname
         command.CommandText = $@"
 SELECT ROUTINE_NAME, COALESCE(EXTERNAL_LANGUAGE, 'SQL')
   FROM INFORMATION_SCHEMA.ROUTINES
-  WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
+  WHERE {MySqlNameMatch.FoldedRoutineSchema("ROUTINE_SCHEMA", MySqlLiteral(targetSchema))}
     AND ROUTINE_TYPE = '{kind}'
     AND ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
   ORDER BY ROUTINE_NAME";
@@ -3931,7 +3931,7 @@ SELECT ROUTINE_NAME, COALESCE(EXTERNAL_LANGUAGE, 'SQL')
         command.CommandText = $@"
 SELECT TABLE_NAME
   FROM INFORMATION_SCHEMA.VIEWS
-  WHERE TABLE_SCHEMA = '{EscapeSql(targetSchema)}'
+  WHERE TABLE_SCHEMA = {MySqlLiteral(targetSchema)}
     AND TABLE_NAME NOT LIKE 'SchemaSmith\_%'
   ORDER BY TABLE_NAME";
         // CREATE OR REPLACE: no window with the view missing, and a failed replace leaves the old view in place.
@@ -3951,7 +3951,7 @@ SELECT TABLE_NAME
         command.CommandText = $@"
 SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION, ACTION_ORDER
   FROM INFORMATION_SCHEMA.TRIGGERS
-  WHERE TRIGGER_SCHEMA = '{EscapeSql(targetSchema)}'
+  WHERE TRIGGER_SCHEMA = {MySqlLiteral(targetSchema)}
     AND TRIGGER_NAME NOT LIKE 'SchemaSmith\_%'
   ORDER BY TRIGGER_NAME";
         var triggers = new List<(string Name, string Table, string Timing, string[] Events, int Order)>();
@@ -3997,9 +3997,9 @@ SELECT TRIGGER_NAME, EVENT_OBJECT_TABLE, ACTION_TIMING, EVENT_MANIPULATION, ACTI
 SELECT COUNT(*)
   FROM (SELECT GRANTEE, PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.USER_PRIVILEGES
         UNION ALL
-        SELECT GRANTEE, PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.SCHEMA_PRIVILEGES WHERE TABLE_SCHEMA = '{EscapeSql(database)}'
+        SELECT GRANTEE, PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.SCHEMA_PRIVILEGES WHERE TABLE_SCHEMA = {MySqlLiteral(database)}
         UNION ALL
-        SELECT GRANTEE, PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.TABLE_PRIVILEGES WHERE TABLE_SCHEMA = '{EscapeSql(database)}') p
+        SELECT GRANTEE, PRIVILEGE_TYPE FROM INFORMATION_SCHEMA.TABLE_PRIVILEGES WHERE TABLE_SCHEMA = {MySqlLiteral(database)}) p
   WHERE p.PRIVILEGE_TYPE = '{privilege}'
     AND p.GRANTEE = CONCAT('''', SUBSTRING_INDEX(CURRENT_USER(), '@', 1), '''@''', SUBSTRING_INDEX(CURRENT_USER(), '@', -1), '''')";
         return Convert.ToInt32(command.ExecuteScalar()) > 0;
@@ -4111,7 +4111,7 @@ SELECT COUNT(*)
         command.CommandText = $@"
 SELECT EVENT_NAME
   FROM INFORMATION_SCHEMA.EVENTS
-  WHERE EVENT_SCHEMA = '{EscapeSql(targetSchema)}'
+  WHERE EVENT_SCHEMA = {MySqlLiteral(targetSchema)}
     AND EVENT_NAME NOT LIKE 'SchemaSmith\_%'
   ORDER BY EVENT_NAME
 ";
@@ -4131,7 +4131,7 @@ SELECT EVENT_NAME
             if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
 
             _progressLog.Info($"  Cast Json for event {name}");
-            command.CommandText = $"CALL SchemaSmith_GenerateEventJSON('{EscapeSql(targetSchema)}', '{EscapeSql(name)}')";
+            command.CommandText = $"CALL SchemaSmith_GenerateEventJSON({MySqlLiteral(targetSchema)}, {MySqlLiteral(name)})";
             var eventJson = command.ExecuteScalar()?.ToString() ?? "";
             if (string.IsNullOrWhiteSpace(eventJson) || eventJson.Trim() == "{}")
             {
@@ -4196,7 +4196,7 @@ SELECT p.ROUTINE_NAME,
        EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.ROUTINES b
                 WHERE b.ROUTINE_SCHEMA = p.ROUTINE_SCHEMA AND b.ROUTINE_NAME = p.ROUTINE_NAME AND b.ROUTINE_TYPE = 'PACKAGE BODY') AS HAS_BODY
   FROM INFORMATION_SCHEMA.ROUTINES p
-  WHERE {MySqlNameMatch.FoldedRoutineSchema("p.ROUTINE_SCHEMA", $"'{EscapeSql(targetSchema)}'")}
+  WHERE {MySqlNameMatch.FoldedRoutineSchema("p.ROUTINE_SCHEMA", MySqlLiteral(targetSchema))}
     AND p.ROUTINE_TYPE = 'PACKAGE'
     AND p.ROUTINE_NAME NOT LIKE 'SchemaSmith\_%'
   ORDER BY p.ROUTINE_NAME";
@@ -4252,7 +4252,7 @@ SELECT p.ROUTINE_NAME,
         command.CommandText = $@"
 SELECT TABLE_NAME
   FROM INFORMATION_SCHEMA.TABLES
- WHERE TABLE_SCHEMA = '{EscapeSql(targetSchema)}'
+ WHERE TABLE_SCHEMA = {MySqlLiteral(targetSchema)}
    AND TABLE_TYPE = 'SEQUENCE'
  ORDER BY TABLE_NAME";
 
@@ -4371,7 +4371,7 @@ WHERE TABLE_SCHEMA = @schema AND TABLE_NAME = @table AND SUBPARTITION_NAME IS NO
 SELECT TABLE_SCHEMA, TABLE_NAME
   FROM INFORMATION_SCHEMA.TABLES t
   WHERE TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED')
-    AND TABLE_SCHEMA = '{EscapeSql(targetSchema)}'
+    AND TABLE_SCHEMA = {MySqlLiteral(targetSchema)}
     AND TABLE_SCHEMA <> 'SchemaSmith'
     AND TABLE_NAME NOT LIKE 'SchemaSmith\_%'
   ORDER BY TABLE_NAME
@@ -4413,7 +4413,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
 
                 try
                 {
-                    commandJson.CommandText = $"CALL SchemaSmith_GenerateTableJSON('{EscapeSql(MySqlReservedWords.Unquote(schema))}', '{EscapeSql(MySqlReservedWords.Unquote(table))}')";
+                    commandJson.CommandText = $"CALL SchemaSmith_GenerateTableJSON({MySqlLiteral(MySqlReservedWords.Unquote(schema))}, {MySqlLiteral(MySqlReservedWords.Unquote(table))})";
 
                     string json = "";
                     using (var jsonReader = commandJson.ExecuteReader())
@@ -4551,7 +4551,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
             command.CommandText = @"
 SELECT TABLE_SCHEMA, TABLE_NAME
   FROM INFORMATION_SCHEMA.TABLES t
-  JOIN sys.objects so ON so.[object_id] = OBJECT_ID(t.TABLE_SCHEMA + '.' + t.TABLE_NAME)
+  JOIN sys.objects so ON so.[object_id] = OBJECT_ID(QUOTENAME(t.TABLE_SCHEMA) + '.' + QUOTENAME(t.TABLE_NAME))
                      AND so.is_ms_shipped = 0
   WHERE TABLE_TYPE = 'BASE TABLE'
     AND TABLE_NAME NOT LIKE 'MSPeer[_]%'
@@ -4630,7 +4630,7 @@ SELECT cc.name AS [Name],
        cc.parent_column_id,
        cc.is_disabled, cc.is_not_trusted, cc.is_not_for_replication
   FROM sys.check_constraints cc
- WHERE cc.parent_object_id = OBJECT_ID('{EscapeSql(tableSchema)}.{EscapeSql(tableName)}')
+ WHERE cc.parent_object_id = OBJECT_ID({SqlServerTableLiteral(tableSchema, tableName)})
  ORDER BY cc.name";
 
                         var allConstraints = new List<CheckConstraint>();
@@ -4694,7 +4694,7 @@ SELECT cc.name AS [Name],
     // the row size — concatenate every row.
     private static string ExtractTableModelJson(IDbCommand command, string tableSchema, string tableName, ObjectOrder objectOrder)
     {
-        command.CommandText = $"EXEC SchemaSmith.GenerateTableJSON @p_Schema = '{EscapeSql(tableSchema)}', @p_Table = '{EscapeSql(tableName)}', @p_ObjectOrder = '{objectOrder}'";
+        command.CommandText = $"EXEC SchemaSmith.GenerateTableJSON @p_Schema = N'{EscapeSql(tableSchema)}', @p_Table = N'{EscapeSql(tableName)}', @p_ObjectOrder = '{objectOrder}'";
         using var reader = command.ExecuteReader();
         var json = new StringBuilder();
         while (reader.Read())
@@ -4707,7 +4707,7 @@ SELECT cc.name AS [Name],
     // splits across rows past ~2033 chars, so concatenate every row into the single <Table> document first.
     private static string ExtractTableModelXml(IDbCommand command, string tableSchema, string tableName, ObjectOrder objectOrder)
     {
-        command.CommandText = $"EXEC SchemaSmith.GenerateTableXml @p_Schema = '{EscapeSql(tableSchema)}', @p_Table = '{EscapeSql(tableName)}', @p_ObjectOrder = '{objectOrder}'";
+        command.CommandText = $"EXEC SchemaSmith.GenerateTableXml @p_Schema = N'{EscapeSql(tableSchema)}', @p_Table = N'{EscapeSql(tableName)}', @p_ObjectOrder = '{objectOrder}'";
         using var reader = command.ExecuteReader();
         var xml = new StringBuilder();
         while (reader.Read())
@@ -4763,6 +4763,14 @@ SELECT cc.name AS [Name],
     }
 
     internal static string EscapeSql(string value) => value.Replace("'", "''");
+
+    // A MySQL or MariaDB string literal: the backslash is an escape there, so it is doubled with the quote.
+    internal static string MySqlLiteral(string value) => $"'{value.Replace("\\", "\\\\").Replace("'", "''")}'";
+
+    // A table's quoted two-part name as a Unicode literal, for OBJECT_ID: unquoted, a name holding a dot or a bracket
+    // named another object or none, and a character outside the code page was lost.
+    internal static string SqlServerTableLiteral(string schema, string table) =>
+        $"N'{EscapeSql($"[{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(table, Platform.SqlServer)}]")}'";
 
     // Index kinds a package cannot declare yet (vector indexes) are left out of the table file, so each one is named and
     // counted as skipped. XML indexes (selective ones included), spatial and JSON indexes have lists of their own, and the
