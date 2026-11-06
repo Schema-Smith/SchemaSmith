@@ -1,0 +1,52 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "invoice",
+  "Columns": [
+    {
+      "Name": "invoiceid",
+      "DataType": "integer"
+    },
+    {
+      "Name": "amount",
+      "DataType": "numeric(10,2)"
+    },
+    {
+      "Name": "taxrate",
+      "DataType": "numeric(5,4)",
+      "Default": "0.2"
+    },
+    {
+      "Name": "total",
+      "DataType": "numeric(12,2)",
+      "GenerationExpression": "amount * (1 + taxrate)"
+    },
+    {
+      "Name": "status",
+      "DataType": "varchar(10)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_invoice",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "invoiceid"
+    },
+    {
+      "Name": "ix_invoice_open",
+      "IndexColumns": "status",
+      "FilterExpression": "status = 'open'"
+    }
+  ],
+  "CheckConstraints": [
+    {
+      "Name": "ck_invoice_status",
+      "Expression": "status IN ('open','paid','void')"
+    },
+    {
+      "Name": "ck_invoice_amount",
+      "Expression": "amount >= 0"
+    }
+  ]
+}

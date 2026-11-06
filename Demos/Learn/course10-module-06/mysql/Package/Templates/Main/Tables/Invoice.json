@@ -1,0 +1,46 @@
+{
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
+  "Name": "Invoice",
+  "Columns": [
+    {
+      "Name": "InvoiceId",
+      "DataType": "int"
+    },
+    {
+      "Name": "Amount",
+      "DataType": "decimal(10,2)"
+    },
+    {
+      "Name": "TaxRate",
+      "DataType": "decimal(5,4)",
+      "Default": "0.2000"
+    },
+    {
+      "Name": "Total",
+      "DataType": "decimal(12,2)",
+      "GenerationExpression": "Amount * (1 + TaxRate)"
+    },
+    {
+      "Name": "Status",
+      "DataType": "varchar(10)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "InvoiceId"
+    }
+  ],
+  "CheckConstraints": [
+    {
+      "Name": "CK_Invoice_Status",
+      "Expression": "Status IN ('open','paid','void')"
+    },
+    {
+      "Name": "CK_Invoice_Amount",
+      "Expression": "Amount >= 0"
+    }
+  ]
+}

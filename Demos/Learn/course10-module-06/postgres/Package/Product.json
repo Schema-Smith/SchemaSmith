@@ -1,0 +1,9 @@
+{
+  "$schema": ".json-schemas/products.postgresql.schema",
+  "Name": "Ledger",
+  "ValidationScript": "SELECT true",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "Platform": "PostgreSQL"
+}

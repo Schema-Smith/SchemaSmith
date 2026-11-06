@@ -1,0 +1,150 @@
+{
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time."
+    },
+    "Name": {
+      "type": "string"
+    },
+    "Schema": {
+      "type": "string"
+    },
+    "Definition": {
+      "type": "string"
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+    },
+    "Description": {
+      "type": "string",
+      "description": "Optional. Stored as the MS_Description extended property. An omitted value leaves an existing description alone; \"\" removes it."
+    },
+    "Indexes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "Name": {
+            "type": "string"
+          },
+          "PrimaryKey": {
+            "type": "boolean"
+          },
+          "Unique": {
+            "type": "boolean"
+          },
+          "UniqueConstraint": {
+            "type": "boolean"
+          },
+          "IndexColumns": {
+            "type": "string"
+          },
+          "Description": {
+            "type": "string",
+            "description": "Optional. A description stored on the object: an MS_Description extended property on SQL Server, COMMENT ON on PostgreSQL, the COMMENT clause on MySQL and MariaDB. On SQL Server and PostgreSQL an omitted value leaves an existing description alone and \"\" removes it; on MySQL and MariaDB an omitted value clears the comment, as the engine's own DDL does."
+          },
+          "ShouldApplyExpression": {
+            "type": "string"
+          },
+          "VariantName": {
+            "type": "string",
+            "maxLength": 128,
+            "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+          },
+          "FilterExpression": {
+            "type": "string"
+          },
+          "CompressionType": {
+            "type": "string"
+          },
+          "Clustered": {
+            "type": "boolean"
+          },
+          "ColumnStore": {
+            "type": "boolean"
+          },
+          "FillFactor": {
+            "type": "integer",
+            "minimum": 0.0,
+            "maximum": 100.0
+          },
+          "IncludeColumns": {
+            "type": "string"
+          },
+          "UpdateFillFactor": {
+            "type": "boolean"
+          },
+          "FileGroup": {
+            "type": "string"
+          },
+          "IgnoreDuplicateKey": {
+            "type": "boolean"
+          },
+          "PadIndex": {
+            "type": "boolean"
+          },
+          "PartitionScheme": {
+            "type": "string"
+          },
+          "XmlCompression": {
+            "type": "boolean",
+            "description": "SQL Server 2022+. Compresses XML column data in place. Sibling of CompressionType (DATA_COMPRESSION), and independent of it. **Deployable from 2022; extracted where the server reports sys.partitions.xml_compression** (2025, and 2022 from CU26; 2022 CU25 does not). On a server without it, SchemaTongs carries the value forward from the package it is refreshing rather than dropping it."
+          },
+          "PartitionColumn": {
+            "type": "string"
+          },
+          "BucketCount": {
+            "type": "integer",
+            "minimum": 1.0,
+            "description": "BUCKET_COUNT for a HASH index on a memory-optimized table. Required for a hash index, ignored elsewhere. SQL Server rounds it up to the next power of two."
+          },
+          "Disabled": {
+            "type": "boolean",
+            "description": "The index is disabled (ALTER INDEX … DISABLE): defined but holding no data and enforcing nothing. Declared true, a live index is disabled after it is created; left false, an index someone disabled by hand is rebuilt, which enables it. Disabling a clustered index makes the table unreadable, and disabling a key's index disables the foreign keys that reference it."
+          },
+          "Order": {
+            "type": "string",
+            "description": "ColumnStore only: the ORDER columns, comma-separated in sort order. A clustered columnstore index from SQL Server 2022, a nonclustered one from 2025; below that it is created unordered and a downgrade recorded. A change re-creates the index."
+          },
+          "Extensions": {}
+        },
+        "additionalProperties": false,
+        "required": [
+          "Name"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "ColumnStore": {
+                  "const": true
+                }
+              },
+              "required": [
+                "ColumnStore"
+              ]
+            },
+            "else": {
+              "required": [
+                "IndexColumns"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name",
+    "Definition"
+  ]
+}

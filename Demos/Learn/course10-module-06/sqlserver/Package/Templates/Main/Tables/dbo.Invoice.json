@@ -1,0 +1,49 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "dbo",
+  "Name": "Invoice",
+  "Columns": [
+    {
+      "Name": "InvoiceId",
+      "DataType": "INT"
+    },
+    {
+      "Name": "Amount",
+      "DataType": "DECIMAL(10,2)",
+      "CheckExpression": "Amount >= 0"
+    },
+    {
+      "Name": "TaxRate",
+      "DataType": "DECIMAL(5,4)",
+      "Default": "0.2"
+    },
+    {
+      "Name": "Total",
+      "DataType": "DECIMAL(12,2)",
+      "ComputedExpression": "Amount * (1 + TaxRate)"
+    },
+    {
+      "Name": "Status",
+      "DataType": "VARCHAR(10)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PK_Invoice",
+      "PrimaryKey": true,
+      "Clustered": true,
+      "IndexColumns": "InvoiceId"
+    },
+    {
+      "Name": "IX_Invoice_Open",
+      "IndexColumns": "Status",
+      "FilterExpression": "Status = 'open'"
+    }
+  ],
+  "CheckConstraints": [
+    {
+      "Name": "CK_Invoice_Status",
+      "Expression": "Status IN ('open','paid','void')"
+    }
+  ]
+}
