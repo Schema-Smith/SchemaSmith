@@ -1,0 +1,55 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "booking",
+  "Columns": [
+    {
+      "Name": "bookingid",
+      "DataType": "integer"
+    },
+    {
+      "Name": "room",
+      "DataType": "integer"
+    },
+    {
+      "Name": "during",
+      "DataType": "tsrange"
+    },
+    {
+      "Name": "details",
+      "DataType": "jsonb"
+    },
+    {
+      "Name": "notes",
+      "DataType": "text"
+    },
+    {
+      "Name": "notes_tsv",
+      "DataType": "tsvector",
+      "GenerationExpression": "to_tsvector('english', notes)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_booking",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "bookingid"
+    },
+    {
+      "Name": "ix_booking_during",
+      "AccessMethod": "gist",
+      "IndexColumns": "during"
+    },
+    {
+      "Name": "ix_booking_details",
+      "AccessMethod": "gin",
+      "IndexColumns": "details jsonb_path_ops"
+    },
+    {
+      "Name": "ix_booking_notes",
+      "AccessMethod": "gin",
+      "IndexColumns": "notes_tsv"
+    }
+  ]
+}

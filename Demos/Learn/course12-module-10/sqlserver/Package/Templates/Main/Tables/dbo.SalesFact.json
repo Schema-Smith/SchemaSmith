@@ -1,0 +1,31 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "dbo",
+  "Name": "SalesFact",
+  "Columns": [
+    {
+      "Name": "SaleId",
+      "DataType": "BIGINT"
+    },
+    {
+      "Name": "SaleDate",
+      "DataType": "DATE"
+    },
+    {
+      "Name": "StoreId",
+      "DataType": "INT"
+    },
+    {
+      "Name": "Amount",
+      "DataType": "DECIMAL(12,2)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "CCI_SalesFact",
+      "ColumnStore": true,
+      "Clustered": true,
+      "Order": "[SaleDate]"
+    }
+  ]
+}

@@ -1,7 +1,7 @@
 # Course 12 — Database Setup
 
-These scripts create the nine module databases on every sandbox engine (SQL Server, PostgreSQL,
-MySQL, and MariaDB), 36 databases in total. Each database is dedicated to one module so labs stay
+These scripts create the eleven module databases on every sandbox engine (SQL Server, PostgreSQL,
+MySQL, and MariaDB), 44 databases in total. Each database is dedicated to one module so labs stay
 hermetic and do not clash with one another.
 
 ## Prerequisite
@@ -25,7 +25,7 @@ bash setup-databases.sh
 .\setup-databases.ps1
 ```
 
-Both scripts print `PASS` or `FAIL` for each of the 36 databases:
+Both scripts print `PASS` or `FAIL` for each of the 44 databases:
 
 ```
 SQL Server
@@ -38,6 +38,8 @@ SQL Server
   declared_m7                PASS
   declared_m8                PASS
   declared_m9                PASS
+  declared_m10               PASS
+  declared_m11               PASS
 PostgreSQL
   declared_m1                PASS
   ...
@@ -48,7 +50,7 @@ MariaDB
   declared_m1                PASS
   ...
 
-All 36 databases are ready.
+All 44 databases are ready.
 ```
 
 ## Databases created
@@ -64,6 +66,8 @@ All 36 databases are ready.
 | 7 · Search you declare | `declared_m7` | Full-text indexes |
 | 8 · History the database keeps | `declared_m8` | Temporal tables and system versioning |
 | 9 · History you can't rewrite | `declared_m9` | SQL Server ledger tables |
+| 10 · Indexes beyond the B-tree | `declared_m10` | SQL Server spatial, selective XML and ordered columnstore indexes; PostgreSQL GiST and GIN |
+| 11 · The security layer, declared | `declared_m11` | SQL Server row-level security, signed modules, trigger order |
 
 Each database is created on all four engines, including the ones a module doesn't use, so the setup is the same
 everywhere.

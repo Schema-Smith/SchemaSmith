@@ -24,6 +24,8 @@ $databases = @(
     'declared_m7'
     'declared_m8'
     'declared_m9'
+    'declared_m10'
+    'declared_m11'
 )
 
 foreach ($engine in Get-LabEngines) {

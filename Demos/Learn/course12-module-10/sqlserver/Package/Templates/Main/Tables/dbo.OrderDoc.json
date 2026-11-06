@@ -1,0 +1,54 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "dbo",
+  "Name": "OrderDoc",
+  "XmlCompression": true,
+  "Columns": [
+    {
+      "Name": "OrderId",
+      "DataType": "INT"
+    },
+    {
+      "Name": "Doc",
+      "DataType": "XML"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PK_OrderDoc",
+      "PrimaryKey": true,
+      "Unique": true,
+      "Clustered": true,
+      "IndexColumns": "OrderId"
+    }
+  ],
+  "XmlIndexes": [
+    {
+      "Name": "SXI_OrderDoc_Doc",
+      "Column": "Doc",
+      "Selective": {
+        "Paths": [
+          {
+            "Name": "Customer",
+            "Path": "/order/customer",
+            "Type": "xs:string",
+            "MaxLength": 40,
+            "SingletonCardinality": true
+          },
+          {
+            "Name": "Total",
+            "Path": "/order/total",
+            "Type": "DECIMAL(10,2)",
+            "SingletonCardinality": true
+          }
+        ]
+      }
+    },
+    {
+      "Name": "SXI_OrderDoc_Doc_Total",
+      "Column": "Doc",
+      "PrimaryIndex": "SXI_OrderDoc_Doc",
+      "ForPath": "Total"
+    }
+  ]
+}
