@@ -15,7 +15,7 @@ DECLARE
   restored_table TEXT;
 BEGIN
   RAISE NOTICE 'Handle Table Renames';
-  SELECT STRING_AGG('RAISE NOTICE ''  Rename Table ' || tt."Schema" || '.' || tt."OldName" || ' to ' || tt."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Rename Table %.% to %'', ''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."OldName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER TABLE ' || "SchemaSmith"."QuoteName"(tt."Schema") || '.' || "SchemaSmith"."QuoteName"(tt."OldName") || ' RENAME TO ' || "SchemaSmith"."QuoteName"(tt."Name") || ';', CHR(10))
     INTO sql_script
     FROM temp_tables tt
@@ -25,7 +25,7 @@ BEGIN
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
   RAISE NOTICE 'Handle Column Renames';
-  SELECT STRING_AGG('RAISE NOTICE ''  Rename Column ' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."OldName" || ' to ' || tc."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Rename Column %.%.% to %'', ''' || REPLACE((tc."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."OldName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER TABLE ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || ' RENAME COLUMN ' || "SchemaSmith"."QuoteName"(tc."OldName") || ' TO ' || "SchemaSmith"."QuoteName"(tc."Name") || ';', CHR(10))
     INTO sql_script
     FROM temp_columns tc
@@ -36,8 +36,8 @@ BEGIN
 
   IF EXISTS (SELECT 1 FROM pg_catalog.pg_proc p JOIN pg_namespace n ON p.pronamespace = n.oid WHERE p.proname = 'CustomTableRestore' AND n.nspname = 'SchemaSmith' ) THEN
     RAISE NOTICE 'Handle Custom Table Restore';
-    SELECT STRING_AGG('RAISE NOTICE ''  Attempt custom restore of ' || tt."Schema" || '.' || tt."Name" || ''';' || CHR(10) ||
-                      'CALL "SchemaSmith"."CustomTableRestore"(''' || tt."Schema" || ''', ''' || tt."Name" || ''');', CHR(10))
+    SELECT STRING_AGG('RAISE NOTICE ''  Attempt custom restore of %.%'', ''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
+                      'CALL "SchemaSmith"."CustomTableRestore"(''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name")::TEXT, '''', '''''') || ''');', CHR(10))
       INTO sql_script
       FROM temp_tables tt
       WHERE NOT EXISTS(SELECT * FROM information_schema.tables t WHERE t.table_schema = tt."Schema" AND t.table_name = tt."Name");
@@ -59,7 +59,7 @@ BEGIN
   END IF;
   
   RAISE NOTICE 'Add New Tables';
-  SELECT STRING_AGG('RAISE NOTICE ''  Create new table ' || tt."Schema" || '.' || tt."Name" || CASE WHEN COALESCE(tt."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tt."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Create new table %.%'', ''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name" || CASE WHEN COALESCE(tt."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tt."VariantName", '''', '''''') || ')' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'CREATE TABLE ' || "SchemaSmith"."QuoteName"(tt."Schema") || '.' || "SchemaSmith"."QuoteName"(tt."Name") || ' (' ||
                     (SELECT STRING_AGG("SchemaSmith"."QuoteName"(tc."Name") || ' ' || CASE WHEN tc."IsSerial" THEN tc."SerialKeyword" ELSE tc."DataType" END ||
                             "SchemaSmith"."CollateClause"(tc."Collation") ||
@@ -83,7 +83,7 @@ BEGIN
                     -- default_tablespace puts it, exactly as it did before this shipped.
                     CASE WHEN COALESCE(tt."Tablespace", '') <> '' THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(tt."Tablespace") ELSE '' END ||
                     ';' || CHR(10) ||
-                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''table'', ''' || tt."Schema" || '.' || tt."Name" || ''', ''created'');', CHR(10))
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''table'', ''' || REPLACE((tt."Schema" || '.' || tt."Name")::TEXT, '''', '''''') || ''', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_tables tt
     WHERE NOT EXISTS(SELECT * FROM information_schema.tables t WHERE t.table_schema = tt."Schema" AND t.table_name = tt."Name");
@@ -98,13 +98,11 @@ BEGIN
   END IF;
 
   RAISE NOTICE 'Add New Physical Columns';
-  SELECT STRING_AGG('RAISE NOTICE ''  Add new physical columns to ' || tt."Schema" || '.' || tt."Name" || ' (' ||
-                    (SELECT STRING_AGG(tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END, ', ' ORDER BY tc."_RowId")
+  SELECT STRING_AGG('RAISE NOTICE ''  Add new physical columns to %.% (%)'', ''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name")::TEXT, '''', '''''') || ''', ''' || REPLACE(((SELECT STRING_AGG(tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END, ', ' ORDER BY tc."_RowId")
                        FROM temp_columns tc
                        WHERE tc."TableSchema" = tt."Schema" AND tc."TableName" = tt."Name"
                          AND (COALESCE(tc."Generated", 'NEVER') = 'NEVER' OR COALESCE(tc."Generated", '') LIKE 'GENERATED%IDENTITY%')
-                         AND NOT EXISTS (SELECT 1 FROM information_schema.columns ic WHERE ic.table_name = tc."TableName" AND ic.table_schema = tc."TableSchema" AND ic.column_name = tc."Name")) ||
-                    ')'';' || CHR(10) ||
+                         AND NOT EXISTS (SELECT 1 FROM information_schema.columns ic WHERE ic.table_name = tc."TableName" AND ic.table_schema = tc."TableSchema" AND ic.column_name = tc."Name")))::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER TABLE ' || "SchemaSmith"."QuoteName"(tt."Schema") || '.' || "SchemaSmith"."QuoteName"(tt."Name") || ' ' ||
                     (SELECT STRING_AGG('ADD ' || "SchemaSmith"."QuoteName"(tc."Name") || ' ' || CASE WHEN tc."IsSerial" THEN tc."SerialKeyword" ELSE tc."DataType" END ||
                             "SchemaSmith"."CollateClause"(tc."Collation") ||
@@ -116,7 +114,7 @@ BEGIN
                          AND (COALESCE(tc."Generated", 'NEVER') = 'NEVER' OR COALESCE(tc."Generated", '') LIKE 'GENERATED%IDENTITY%')
                          AND NOT EXISTS (SELECT 1 FROM information_schema.columns ic WHERE ic.table_name = tc."TableName" AND ic.table_schema = tc."TableSchema" AND ic.column_name = tc."Name")) || ';' || CHR(10) ||
                     -- Object-change audit (#243 E5): one row per physical column added (folded ALTER above).
-                    COALESCE((SELECT STRING_AGG('INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''column'', ''' || tt."Schema" || '.' || tt."Name" || '.' || tc."Name" || ''', ''created'');', CHR(10))
+                    COALESCE((SELECT STRING_AGG('INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''column'', ''' || REPLACE((tt."Schema" || '.' || tt."Name" || '.' || tc."Name")::TEXT, '''', '''''') || ''', ''created'');', CHR(10))
                                 FROM temp_columns tc
                                 WHERE tc."TableSchema" = tt."Schema" AND tc."TableName" = tt."Name"
                                   AND (COALESCE(tc."Generated", 'NEVER') = 'NEVER' OR COALESCE(tc."Generated", '') LIKE 'GENERATED%IDENTITY%')

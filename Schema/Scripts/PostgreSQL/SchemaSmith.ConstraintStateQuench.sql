@@ -53,23 +53,23 @@ BEGIN
 
   SELECT STRING_AGG(
            CASE WHEN s."ObjectType" = 'foreignKey' AND NOT s."Enforced" AND s."LiveEnforced" AND v_pg18 THEN
-                  'RAISE NOTICE ''  Not enforcing ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''';' || CHR(10) ||
+                  'RAISE NOTICE ''  Not enforcing %.%.%'', ''' || REPLACE((s."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                   'ALTER TABLE ' || "SchemaSmith"."QuoteName"(s."TableSchema") || '.' || "SchemaSmith"."QuoteName"(s."TableName") || ' ALTER CONSTRAINT ' || "SchemaSmith"."QuoteName"(s."Name") || ' NOT ENFORCED;'
                 WHEN s."ObjectType" = 'foreignKey' AND s."Enforced" AND NOT s."LiveEnforced" THEN
-                  'RAISE NOTICE ''  Enforcing ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''';' || CHR(10) ||
+                  'RAISE NOTICE ''  Enforcing %.%.%'', ''' || REPLACE((s."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                   'ALTER TABLE ' || "SchemaSmith"."QuoteName"(s."TableSchema") || '.' || "SchemaSmith"."QuoteName"(s."TableName") || ' ALTER CONSTRAINT ' || "SchemaSmith"."QuoteName"(s."Name") || ' ENFORCED;'
                 WHEN v."Online" AND NOT p_WhatIf THEN
-                  'RAISE NOTICE ''  Validating ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ' (online, after this pass)'';' || CHR(10) ||
+                  'RAISE NOTICE ''  Validating %.%.% (online, after this pass)'', ''' || REPLACE((s."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                   'CALL "SchemaSmith"."DeferOnlineWork"(' || quote_literal('Validating constraint ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name") || ', ' ||
                   quote_literal(v."Validate") || ', NULL, ' || quote_literal(v."Audit") || ');'
                 ELSE
-                  'RAISE NOTICE ''  Validating ' || s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || CASE WHEN v."Online" THEN ' (online, after this pass)' ELSE '' END || ''';' || CHR(10) ||
+                  'RAISE NOTICE ''  Validating %.%.%'', ''' || REPLACE((s."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."Name" || CASE WHEN v."Online" THEN ' (online, after this pass)' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                   v."Validate"
            END ||
            CASE WHEN v."Online" AND NOT p_WhatIf THEN ''
                 WHEN v."Online" THEN CHR(10) || v."Audit"
-                ELSE CHR(10) || 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || s."ObjectType" || ''', ''' ||
-                     s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''', ''modified'');' END, CHR(10))
+                ELSE CHR(10) || 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || REPLACE((s."ObjectType")::TEXT, '''', '''''') || ''', ''' ||
+                     REPLACE((s."TableSchema" || '.' || s."TableName" || '.' || s."Name")::TEXT, '''', '''''') || ''', ''modified'');' END, CHR(10))
     INTO sql_script
     FROM temp_constraint_states s
     -- Only the validation arm is deferred; enforcing or not enforcing a key changes no rows' lock.
@@ -78,8 +78,8 @@ BEGIN
                                AND "SchemaSmith"."OnlineApplyForm"(p_OnlineApply, s."TableSchema", s."TableName", 'check') = 'online' AS "Online",
                                'ALTER TABLE ' || "SchemaSmith"."QuoteName"(s."TableSchema") || '.' || "SchemaSmith"."QuoteName"(s."TableName") ||
                                ' VALIDATE CONSTRAINT ' || "SchemaSmith"."QuoteName"(s."Name") || ';' AS "Validate",
-                               'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''' || s."ObjectType" || ''', ''' ||
-                               s."TableSchema" || '.' || s."TableName" || '.' || s."Name" || ''', ''modified'', ''online'');' AS "Audit") v
+                               'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''' || REPLACE((s."ObjectType")::TEXT, '''', '''''') || ''', ''' ||
+                               REPLACE((s."TableSchema" || '.' || s."TableName" || '.' || s."Name")::TEXT, '''', '''''') || ''', ''modified'', ''online'');' AS "Audit") v
     WHERE (s."ObjectType" = 'foreignKey' AND NOT s."Enforced" AND s."LiveEnforced" AND v_pg18)
        OR (s."ObjectType" = 'foreignKey' AND s."Enforced" AND NOT s."LiveEnforced")
        OR (s."Enforced" AND s."Validated" AND s."LiveEnforced" AND NOT s."LiveValidated");

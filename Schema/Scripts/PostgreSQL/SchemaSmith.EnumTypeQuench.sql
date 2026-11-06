@@ -47,7 +47,7 @@ BEGIN
   -- Evaluate ShouldApplyExpression: drop enum types whose condition is false so a conditional variant is
   -- SKIPPED rather than always applied (the value was parsed but never acted on). Always executes, even
   -- under --WhatIf -- this filters the internal working set, it is not user-visible DDL.
-  SELECT STRING_AGG('DELETE FROM temp_enum_types WHERE "Schema" = ''' || "Schema" || ''' AND "Name" = ''' || "Name" || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+  SELECT STRING_AGG('DELETE FROM temp_enum_types WHERE "Schema" = ''' || REPLACE(("Schema")::TEXT, '''', '''''') || ''' AND "Name" = ''' || REPLACE(("Name")::TEXT, '''', '''''') || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
     INTO sql_script
     FROM temp_enum_types
     WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
@@ -55,12 +55,12 @@ BEGIN
 
   -- Create the ones that do not exist yet, values and order intact.
   RAISE NOTICE 'Add Missing Enum Types';
-  SELECT STRING_AGG('RAISE NOTICE ''  Create enum type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Create enum type %.%'', ''' || REPLACE((t."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'CREATE TYPE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' AS ENUM (' ||
                     (SELECT STRING_AGG('''' || REPLACE(v, '''', '''''') || '''', ', ')
                        FROM UNNEST(t."Values") WITH ORDINALITY AS u(v, ord)) || ');' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-                    'VALUES (pg_backend_pid(), ''enum type'', ''' || t."Schema" || '.' || t."Name" || ''', ''created'');', CHR(10))
+                    'VALUES (pg_backend_pid(), ''enum type'', ''' || REPLACE((t."Schema" || '.' || t."Name")::TEXT, '''', '''''') || ''', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_enum_types t
    WHERE NOT EXISTS (SELECT 1 FROM pg_type ty
@@ -73,14 +73,14 @@ BEGIN
   -- Order is not cosmetic: PostgreSQL sorts and compares enum values by declared position, so appending
   -- a value the package puts in the middle would give the type a different meaning from the one declared.
   RAISE NOTICE 'Add Missing Enum Values';
-  SELECT STRING_AGG('RAISE NOTICE ''  Add enum value ' || REPLACE(m.val, '''', '''''') || ' to ' || m."Schema" || '.' || m."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Add enum value % to %.%'', ''' || REPLACE((m.val)::TEXT, '''', '''''') || ''', ''' || REPLACE((m."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((m."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER TYPE ' || "SchemaSmith"."QuoteName"(m."Schema") || '.' || "SchemaSmith"."QuoteName"(m."Name") || ' ADD VALUE IF NOT EXISTS ''' ||
                     REPLACE(m.val, '''', '''''') || '''' ||
                     CASE WHEN m.next_existing IS NOT NULL
                          THEN ' BEFORE ''' || REPLACE(m.next_existing, '''', '''''') || ''''
                          ELSE '' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-                    'VALUES (pg_backend_pid(), ''enum type'', ''' || m."Schema" || '.' || m."Name" || ''', ''modified'');', CHR(10) ORDER BY m."Schema", m."Name", m.ord)
+                    'VALUES (pg_backend_pid(), ''enum type'', ''' || REPLACE((m."Schema" || '.' || m."Name")::TEXT, '''', '''''') || ''', ''modified'');', CHR(10) ORDER BY m."Schema", m."Name", m.ord)
     INTO sql_script
     FROM (SELECT t."Schema", t."Name", u.val, u.ord,
                  -- The first DECLARED value after this one that ALREADY exists on the server. Inserting
@@ -154,8 +154,7 @@ BEGIN
 
   -- The declared description, once the object exists. '' removes the comment; an omitted one leaves whatever is there.
   RAISE NOTICE 'Fixup Enum Type Descriptions';
-  SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of enum type ' ||
-                    REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  % the description of enum type %'', ''' || REPLACE((CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Schema" || '.' || t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'COMMENT ON TYPE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' IS ' ||
                     CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||

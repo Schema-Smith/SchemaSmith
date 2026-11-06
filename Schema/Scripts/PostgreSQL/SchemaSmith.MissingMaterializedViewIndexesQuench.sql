@@ -42,9 +42,9 @@ BEGIN
   -- 15 the NND term is a constant FALSE, matching the declared value neutralised to false in
   -- MaterializedViewQuench (so an old target neither churns nor emits an unsupported clause).
   EXECUTE format($mv$
-  SELECT STRING_AGG('RAISE NOTICE ''  Dropping changed materialized view index ' || n.nspname || '.' || i.relname || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Dropping changed materialized view index %%.%%'', ''' || REPLACE((n.nspname)::TEXT, '''', '''''') || ''', ''' || REPLACE((i.relname)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'DROP INDEX IF EXISTS ' || "SchemaSmith"."QuoteName"(n.nspname) || '.' || "SchemaSmith"."QuoteName"(i.relname) || ';' || CHR(10) ||
-                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || n.nspname || '.' || c.relname || '.' || i.relname || ''', ''dropped'');', CHR(10))
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || REPLACE((n.nspname || '.' || c.relname || '.' || i.relname)::TEXT, '''', '''''') || ''', ''dropped'');', CHR(10))
     FROM temp_mv_indexes t
     JOIN pg_class c ON c.relname = t."ViewName"
                    AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = t."ViewSchema")
@@ -89,9 +89,9 @@ BEGIN
   RAISE NOTICE 'Materialized View Indexes — Drop Removed';
 
   -- Drop indexes that exist in DB but not in definitions (for views that still exist)
-  SELECT STRING_AGG('RAISE NOTICE ''  Dropping removed materialized view index ' || n.nspname || '.' || i.relname || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Dropping removed materialized view index %.%'', ''' || REPLACE((n.nspname)::TEXT, '''', '''''') || ''', ''' || REPLACE((i.relname)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'DROP INDEX IF EXISTS ' || "SchemaSmith"."QuoteName"(n.nspname) || '.' || "SchemaSmith"."QuoteName"(i.relname) || ';' || CHR(10) ||
-                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || n.nspname || '.' || c.relname || '.' || i.relname || ''', ''dropped'');', CHR(10))
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || REPLACE((n.nspname || '.' || c.relname || '.' || i.relname)::TEXT, '''', '''''') || ''', ''dropped'');', CHR(10))
     INTO sql_script
     FROM temp_materialized_views tv
     JOIN pg_class c ON c.relname = tv."Name"
@@ -109,7 +109,7 @@ BEGIN
 
   -- Create indexes that are defined but don't exist in DB
   SELECT STRING_AGG(
-    'RAISE NOTICE ''  Creating materialized view index ' || t."ViewSchema" || '.' || t."ViewName" || '.' || t."Name" || ''';' || CHR(10) ||
+    'RAISE NOTICE ''  Creating materialized view index %.%.%'', ''' || REPLACE((t."ViewSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."ViewName")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
     'CREATE' || CASE WHEN t."Unique" THEN ' UNIQUE' ELSE '' END
     || ' INDEX ' || "SchemaSmith"."QuoteName"(t."Name") || ' ON ' || "SchemaSmith"."QuoteName"(t."ViewSchema") || '.' || "SchemaSmith"."QuoteName"(t."ViewName")
     || CASE WHEN t."AccessMethod" != 'btree' THEN ' USING ' || t."AccessMethod" ELSE '' END
@@ -122,7 +122,7 @@ BEGIN
     || CASE WHEN COALESCE(t."Tablespace", '') <> '' THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(t."Tablespace") ELSE '' END
     || CASE WHEN NULLIF(t."FilterExpression", '') IS NOT NULL THEN ' WHERE ' || t."FilterExpression" ELSE '' END
     || ';' || CHR(10)
-    || 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || t."ViewSchema" || '.' || t."ViewName" || '.' || t."Name" || ''', ''created'');',
+    || 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''index'', ''' || REPLACE((t."ViewSchema" || '.' || t."ViewName" || '.' || t."Name")::TEXT, '''', '''''') || ''', ''created'');',
     CHR(10))
     INTO sql_script
     FROM temp_mv_indexes t

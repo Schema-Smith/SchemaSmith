@@ -48,7 +48,7 @@ BEGIN
   -- Evaluate ShouldApplyExpression: drop sequences whose condition is false so a conditional variant is
   -- SKIPPED rather than silently always applied. Always executes, even under --WhatIf -- this filters the
   -- internal working set, it is not user-visible DDL.
-  SELECT STRING_AGG('DELETE FROM temp_sequences WHERE "Schema" = ''' || "Schema" || ''' AND "Name" = ''' || "Name" || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+  SELECT STRING_AGG('DELETE FROM temp_sequences WHERE "Schema" = ''' || REPLACE(("Schema")::TEXT, '''', '''''') || ''' AND "Name" = ''' || REPLACE(("Name")::TEXT, '''', '''''') || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
     INTO sql_script
     FROM temp_sequences
     WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
@@ -69,7 +69,7 @@ BEGIN
   END IF;
 
   RAISE NOTICE 'Add Missing Sequences';
-  SELECT STRING_AGG('RAISE NOTICE ''  Create sequence ' || s."Schema" || '.' || s."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Create sequence %.%'', ''' || REPLACE((s."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'CREATE ' || CASE WHEN s."PersistenceType" = 'unlogged' AND "SchemaSmith"."ServerVersionNum"() >= 15 THEN 'UNLOGGED ' ELSE '' END ||
                     'SEQUENCE ' || "SchemaSmith"."QuoteName"(s."Schema") || '.' || "SchemaSmith"."QuoteName"(s."Name") || ' AS ' || s."DataType" ||
                     ' INCREMENT BY ' || s."Increment" ||
@@ -79,7 +79,7 @@ BEGIN
                     ' CACHE ' || s."Cache" ||
                     CASE WHEN s."Cycle" THEN ' CYCLE' ELSE ' NO CYCLE' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-                    'VALUES (pg_backend_pid(), ''sequence'', ''' || s."Schema" || '.' || s."Name" || ''', ''created'');', CHR(10))
+                    'VALUES (pg_backend_pid(), ''sequence'', ''' || REPLACE((s."Schema" || '.' || s."Name")::TEXT, '''', '''''') || ''', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_sequences s
    WHERE NOT EXISTS (SELECT 1 FROM pg_class c
@@ -95,7 +95,7 @@ BEGIN
   -- future RESTART and leaves the current value alone, which is exactly the intent. Nothing here emits
   -- RESTART, because that WOULD move the current value.
   RAISE NOTICE 'Fixup Modified Sequences';
-  SELECT STRING_AGG('RAISE NOTICE ''  Altering sequence ' || s."Schema" || '.' || s."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Altering sequence %.%'', ''' || REPLACE((s."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER SEQUENCE ' || "SchemaSmith"."QuoteName"(s."Schema") || '.' || "SchemaSmith"."QuoteName"(s."Name") ||
                     CASE WHEN FORMAT_TYPE(q.seqtypid, NULL) <> s."DataType" THEN ' AS ' || s."DataType" ELSE '' END ||
                     CASE WHEN q.seqincrement <> s."Increment" THEN ' INCREMENT BY ' || s."Increment" ELSE '' END ||
@@ -115,7 +115,7 @@ BEGIN
                     CASE WHEN q.seqcycle <> s."Cycle" THEN CASE WHEN s."Cycle" THEN ' CYCLE' ELSE ' NO CYCLE' END ELSE '' END ||
                     ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-                    'VALUES (pg_backend_pid(), ''sequence'', ''' || s."Schema" || '.' || s."Name" || ''', ''modified'');', CHR(10))
+                    'VALUES (pg_backend_pid(), ''sequence'', ''' || REPLACE((s."Schema" || '.' || s."Name")::TEXT, '''', '''''') || ''', ''modified'');', CHR(10))
     INTO sql_script
     FROM temp_sequences s
     JOIN pg_class c ON c.relname = s."Name" AND c.relkind = 'S'
@@ -136,10 +136,10 @@ BEGIN
   -- Persistence is its own statement (ALTER SEQUENCE ... SET LOGGED / UNLOGGED, PostgreSQL 15+). Only a declared
   -- value is converged, so a package that leaves it out never touches an existing sequence.
   RAISE NOTICE 'Fixup Sequence Persistence';
-  SELECT STRING_AGG('RAISE NOTICE ''  Setting sequence ' || s."Schema" || '.' || s."Name" || ' ' || UPPER(s."PersistenceType") || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Setting sequence %.% %'', ''' || REPLACE((s."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."Name")::TEXT, '''', '''''') || ''', ''' || REPLACE((UPPER(s."PersistenceType"))::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER SEQUENCE ' || "SchemaSmith"."QuoteName"(s."Schema") || '.' || "SchemaSmith"."QuoteName"(s."Name") || ' SET ' || UPPER(s."PersistenceType") || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-                    'VALUES (pg_backend_pid(), ''sequence'', ''' || s."Schema" || '.' || s."Name" || ''', ''modified'');', CHR(10))
+                    'VALUES (pg_backend_pid(), ''sequence'', ''' || REPLACE((s."Schema" || '.' || s."Name")::TEXT, '''', '''''') || ''', ''modified'');', CHR(10))
     INTO sql_script
     FROM temp_sequences s
     JOIN pg_class c ON c.relname = s."Name" AND c.relkind = 'S'
@@ -152,8 +152,7 @@ BEGIN
 
   -- The declared description, once the object exists. '' removes the comment; an omitted one leaves whatever is there.
   RAISE NOTICE 'Fixup Sequence Descriptions';
-  SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of sequence ' ||
-                    REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  % the description of sequence %'', ''' || REPLACE((CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Schema" || '.' || t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'COMMENT ON SEQUENCE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' IS ' ||
                     CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||

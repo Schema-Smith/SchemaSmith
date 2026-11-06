@@ -35,7 +35,7 @@ BEGIN
     END IF;
 
     RAISE NOTICE 'Validate Table Ownership';
-    SELECT STRING_AGG('RAISE NOTICE ''  Table ' || tp."Schema" || '.' || tp."TableName" || ' owned by different product. [' || tp."ProductName" || '] <> [' || p_ProductName || ']'';', CHR(10))
+    SELECT STRING_AGG('RAISE NOTICE ''  Table %.% owned by different product. [%] <> [%]'', ''' || REPLACE((tp."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tp."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tp."ProductName")::TEXT, '''', '''''') || ''', ''' || REPLACE((p_ProductName)::TEXT, '''', '''''') || ''';', CHR(10))
       INTO sql_script
       FROM temp_tables t
       JOIN "SchemaSmith"."ProductOwnership" tp ON tp."Schema" = t."Schema"

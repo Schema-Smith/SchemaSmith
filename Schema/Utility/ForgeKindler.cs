@@ -845,13 +845,14 @@ public static class ForgeKindler
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith.ExecuteOrDebug.sql"),
                 new("SchemaSmith.RecordWouldChanges.sql"),
+                // The column-list helpers split with it, keeping a comma inside a quoted name.
+                new("SchemaSmith.SplitTopLevelList.sql"),
                 new("SchemaSmith.QuoteColumnList.sql"),
                 new("SchemaSmith.QuoteIndexColumnList.sql"),
                 new("SchemaSmith.QuoteName.sql"),
                 // #242: declared index and statistics definitions compared in the form the catalog reads back.
-                // SQL-language functions are validated at creation, so the splitter and StripParenWrapping
+                // SQL-language functions are validated at creation, so the splitter (above) and StripParenWrapping
                 // must be kindled before the statistics forms that call them.
-                new("SchemaSmith.SplitTopLevelList.sql"),
                 // One reading of an index key's expression, COLLATE, operator class and parameters, behind the
                 // declared-side normaliser and quoter and the live-side rendering.
                 new("SchemaSmith.IndexKeyForms.sql"),

@@ -46,12 +46,14 @@ public class IdentifierSafetyTests : ObjectScriptDeployFixture
     private static string J(string value) => value.Replace("\\", "\\\\").Replace("\"", "\\\"");
 
     [OneTimeSetUp]
-    public void StartClean() => DropEverything();
+    public void StartClean() => DropEverything(recreate: true);
 
     [OneTimeTearDown]
-    public void DropTheHostileSchema() => DropEverything();
+    public void DropTheHostileSchema() => DropEverything(recreate: false);
 
-    private void DropEverything() => Exec($"DROP SCHEMA IF EXISTS {Q(Schema)} CASCADE; CREATE SCHEMA {Q(Schema)};");
+    // Nothing is left behind: the suite shares the database, and another fixture must not meet these names.
+    private void DropEverything(bool recreate) =>
+        Exec($"DROP SCHEMA IF EXISTS {Q(Schema)} CASCADE;" + (recreate ? $" CREATE SCHEMA {Q(Schema)};" : ""));
 
     private string ParentJson(string col = Col, string colOldName = null, string ix = Ix, bool withCheck = true, string longType = "integer",
         string likePattern = "%x%") => $$"""
@@ -304,5 +306,32 @@ public class IdentifierSafetyTests : ObjectScriptDeployFixture
         var run = Deploy(dropRemovedTables: true, settings: AllowTheChanges);
         ExpectNone(Changes(run), "audited changes");
         ExpectEqual(Snapshot(), before, "every object as it was");
+    }
+
+    // The temp-table cleanup run before every query token cast each schema name in the database to regnamespace, so a
+    // schema holding a double quote anywhere in the database broke every query token there (42602, invalid name
+    // syntax). It reads the session's temp schema by oid now, and still clears the session's temp tables.
+    [Test]
+    public void AQueryToken_Resolves_WhereASchemaNameHoldsADoubleQuote()
+    {
+        const string other = "tok\"en";
+        Exec($"DROP SCHEMA IF EXISTS {Q(other)} CASCADE; CREATE SCHEMA {Q(other)}; CREATE TABLE {Q(other)}.t (i int)");
+        try
+        {
+            Exec("CREATE TEMPORARY TABLE schemasmith_token_probe (i int)");
+            var tokens = new Dictionary<string, string> { ["Answer"] = global::Schema.Utility.TokenHelper.QueryTag + "SELECT 'yes'" };
+            using var command = Connection.CreateCommand();
+            global::Schema.Utility.TokenHelper.ResolveQueryTokens(tokens, [], command, ".", Platform.PostgreSQL);
+            Assert.Multiple(() =>
+            {
+                Assert.That(tokens["Answer"], Is.EqualTo("yes"));
+                Assert.That(Count("SELECT count(*) FROM pg_class WHERE relname = 'schemasmith_token_probe' AND relnamespace = pg_my_temp_schema()"), Is.Zero,
+                    "the session's temp tables are still cleared");
+            });
+        }
+        finally
+        {
+            Exec($"DROP SCHEMA IF EXISTS {Q(other)} CASCADE");
+        }
     }
 }

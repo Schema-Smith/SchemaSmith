@@ -56,7 +56,7 @@ BEGIN
     END IF;
 
     RAISE NOTICE 'Fixup Replica Identity';
-    SELECT STRING_AGG('RAISE NOTICE ''  Setting replica identity for ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
+    SELECT STRING_AGG('RAISE NOTICE ''  Setting replica identity for %.%'', ''' || REPLACE((t."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                       "SchemaSmith"."AfterOnlineBuild"(t."Schema", CASE WHEN t."ReplicaIdentity" = 'INDEX' THEN t."ReplicaIdentityIndex" END,
                         'Setting replica identity for ' || t."Schema" || '.' || t."Name",
                         'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' REPLICA IDENTITY ' ||

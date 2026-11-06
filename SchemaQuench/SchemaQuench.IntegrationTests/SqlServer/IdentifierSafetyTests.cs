@@ -45,12 +45,13 @@ public class IdentifierSafetyTests : ObjectScriptDeployFixture
 
     // One dropped by the change set's removal of the table, so the drop path sees a hostile name too.
     [OneTimeSetUp]
-    public void StartClean() => DropEverything();
+    public void StartClean() => DropEverything(recreate: true);
 
     [OneTimeTearDown]
-    public void DropTheHostileSchema() => DropEverything();
+    public void DropTheHostileSchema() => DropEverything(recreate: false);
 
-    private void DropEverything() => Exec($"""
+    // Nothing is left behind: the suite shares the database, and another fixture must not meet these names.
+    private void DropEverything(bool recreate) => Exec($"""
         DECLARE @s SYSNAME = {N(Schema)}, @sql NVARCHAR(MAX) = N'';
         SELECT @sql += N'ALTER TABLE ' + QUOTENAME(s.name) + N'.' + QUOTENAME(t.name) + N' DROP CONSTRAINT ' + QUOTENAME(f.name) + N';'
           FROM sys.foreign_keys f JOIN sys.tables t ON t.object_id = f.parent_object_id JOIN sys.schemas s ON s.schema_id = t.schema_id WHERE s.name = @s;
@@ -59,7 +60,7 @@ public class IdentifierSafetyTests : ObjectScriptDeployFixture
         EXEC (@sql);
         DECLARE @q NVARCHAR(300) = QUOTENAME(@s);
         IF SCHEMA_ID(@s) IS NOT NULL EXEC (N'DROP SCHEMA ' + @q);
-        EXEC (N'CREATE SCHEMA ' + @q);
+        IF {(recreate ? 1 : 0)} = 1 EXEC (N'CREATE SCHEMA ' + @q);
         """);
 
     private string ParentJson(string col = Col, string colOldName = null, string ix = Ix, string ixOldName = null, bool withCheck = true, string longType = "INT",

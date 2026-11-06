@@ -18,8 +18,7 @@ BEGIN
   IF NOT p_IndexesOnly THEN
     SELECT STRING_AGG(stmt, CHR(10))
       INTO sql_script
-      FROM (SELECT 'RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of table ' ||
-                   REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+      FROM (SELECT 'RAISE NOTICE ''  % the description of table %'', ''' || REPLACE((CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Schema" || '.' || t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                    'COMMENT ON TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' IS ' ||
                    CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
@@ -30,8 +29,7 @@ BEGIN
              WHERE t."Description" IS NOT NULL
                AND COALESCE(OBJ_DESCRIPTION(c.oid, 'pg_class'), '') IS DISTINCT FROM t."Description"
             UNION ALL
-            SELECT 'RAISE NOTICE ''  ' || CASE WHEN tc."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of column ' ||
-                   REPLACE(REPLACE(tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+            SELECT 'RAISE NOTICE ''  % the description of column %'', ''' || REPLACE((CASE WHEN tc."Description" = '' THEN 'Removing' ELSE 'Setting' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                    'COMMENT ON COLUMN ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || '.' || "SchemaSmith"."QuoteName"(tc."Name") || ' IS ' ||
                    CASE WHEN tc."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(tc."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
@@ -46,8 +44,7 @@ BEGIN
     IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
   END IF;
 
-  SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN ti."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of index ' ||
-                    REPLACE(REPLACE(ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  % the description of index %'', ''' || REPLACE((CASE WHEN ti."Description" = '' THEN 'Removing' ELSE 'Setting' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'COMMENT ON INDEX ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."Name") || ' IS ' ||
                     CASE WHEN ti."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(ti."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||

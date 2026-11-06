@@ -34,10 +34,10 @@ BEGIN
   END IF;
 
   RAISE NOTICE 'Add Missing Foreign Keys';
-  SELECT STRING_AGG('RAISE NOTICE ''  Add missing foreign key ' || fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name" || CASE WHEN COALESCE(fk."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(fk."VariantName", '''', '''''') || ')' ELSE '' END ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Add missing foreign key %.%.%'', ''' || REPLACE((fk."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((fk."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((fk."Name" || CASE WHEN COALESCE(fk."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(fk."VariantName", '''', '''''') || ')' ELSE '' END ||
                     CASE WHEN v."Online" THEN ' (online, validated after this pass)'
                          WHEN v."Form" = 'unavailable' THEN ' (online unavailable: ' || "SchemaSmith"."OnlineUnavailableReason"(fk."TableSchema", fk."TableName", 'foreignKey') || ')'
-                         ELSE '' END || ''';' || CHR(10) ||
+                         ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER TABLE  ' || "SchemaSmith"."QuoteName"(fk."TableSchema") || '.' || "SchemaSmith"."QuoteName"(fk."TableName") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(fk."Name") || ' FOREIGN KEY (' || "SchemaSmith"."QuoteColumnList"(fk."Columns") || ')' ||
                     ' REFERENCES ' || "SchemaSmith"."QuoteName"(fk."RelatedTableSchema") || '.' || "SchemaSmith"."QuoteName"(fk."RelatedTable") || ' (' || "SchemaSmith"."QuoteColumnList"(fk."RelatedColumns") || ')' ||
                     CASE WHEN NULLIF(fk."MatchType", '') IS NOT NULL THEN ' MATCH ' || fk."MatchType" ELSE '' END ||
@@ -57,8 +57,8 @@ BEGIN
                          WHEN v."Online" THEN 'CALL "SchemaSmith"."DeferOnlineWork"(' || quote_literal('Validating foreign key ' || fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name") || ', ' || quote_literal(v."Validate") || ', NULL, NULL);' || CHR(10)
                          ELSE '' END ||
                     CASE WHEN v."Form" IS NULL
-                         THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name" || ''', ''created'');'
-                         ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''foreignKey'', ''' || fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name" || ''', ''created'', ''' || v."Form" || ''');' END, CHR(10))
+                         THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || REPLACE((fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name")::TEXT, '''', '''''') || ''', ''created'');'
+                         ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''foreignKey'', ''' || REPLACE((fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name")::TEXT, '''', '''''') || ''', ''created'', ''' || REPLACE((v."Form")::TEXT, '''', '''''') || ''');' END, CHR(10))
     INTO sql_script
     FROM temp_fks fk
     -- Online needs a validation to defer: a key declared not validated, or not enforced, is already the light form.
