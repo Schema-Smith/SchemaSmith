@@ -1841,6 +1841,8 @@ SQL Server allows one full-text index per table. Declare it as a single `FullTex
 ]
 ```
 
+To move existing databases to a new definition one maintenance window at a time -- a new catalog, say -- declare both definitions as variants gated on what is deployed. See [Staged rollouts](../guide/09-power-workflows.md#staged-rollouts).
+
 ---
 
 ## Full-Text Indexes (MySQL)
