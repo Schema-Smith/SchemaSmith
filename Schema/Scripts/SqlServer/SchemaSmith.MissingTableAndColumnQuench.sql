@@ -179,6 +179,137 @@ BEGIN TRY
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
+  RAISERROR('Drop Objects That Block Column Renames', 10, 100) WITH NOWAIT
+  -- sp_rename refuses a column while a check constraint, a computed column, a filtered index or a filtered statistic
+  -- reads it (15336, 5074), and will not rename a computed column at all (4928). Those come off here, found through
+  -- sys.sql_expression_dependencies, and the passes that add missing computed columns, indexes, statistics and checks
+  -- put them back from the package under the new name. One the package does not declare could not be put back, so
+  -- the deploy stops by name before anything is dropped.
+  IF OBJECT_ID('tempdb..#RenamingColumns') IS NOT NULL DROP TABLE #RenamingColumns
+  SELECT c.[Schema], c.[TableName], TableId = OBJECT_ID(c.[Schema] + '.' + c.[TableName]),
+         ColumnId = COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName]), SchemaSmith.fn_StripBracketWrapping(c.[OldName]), 'ColumnId')
+    INTO #RenamingColumns
+    FROM #Columns c WITH (NOLOCK)
+    WHERE COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName]), SchemaSmith.fn_StripBracketWrapping(c.[OldName]), 'AllowsNull') IS NOT NULL
+      AND COLUMNPROPERTY(OBJECT_ID(c.[Schema] + '.' + c.[TableName]), SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), 'AllowsNull') IS NULL
+
+  -- A computed column cannot read another, so the computed columns to drop are one step from a renaming column.
+  IF OBJECT_ID('tempdb..#RenameBlockingColumns') IS NOT NULL DROP TABLE #RenameBlockingColumns
+  SELECT DISTINCT r.[Schema], r.[TableName], r.TableId, ColumnId = sc.column_id, ColumnName = sc.[name] COLLATE DATABASE_DEFAULT
+    INTO #RenameBlockingColumns
+    FROM #RenamingColumns r WITH (NOLOCK)
+    JOIN sys.computed_columns sc ON sc.[object_id] = r.TableId
+    WHERE sc.column_id = r.ColumnId
+       OR EXISTS (SELECT 1 FROM sys.sql_expression_dependencies d
+                   WHERE d.referencing_class = 1 AND d.referencing_id = r.TableId AND d.referencing_minor_id = sc.column_id
+                     AND d.referenced_id = r.TableId AND d.referenced_minor_id = r.ColumnId)
+
+  IF OBJECT_ID('tempdb..#RenameBlockers') IS NOT NULL DROP TABLE #RenameBlockers
+  ;WITH ReadColumns AS (SELECT [Schema], [TableName], TableId, ColumnId FROM #RenamingColumns WITH (NOLOCK)
+                        UNION SELECT [Schema], [TableName], TableId, ColumnId FROM #RenameBlockingColumns WITH (NOLOCK))
+  SELECT DISTINCT b.[Schema], b.[TableName], b.[Kind], b.[ObjectName], b.[ParentColumn], b.[DropOrder],
+         [AuditType] = CASE b.[Kind] WHEN 'index' THEN 'index' ELSE 'constraint' END,
+         [AuditName] = b.[Schema] + '.' + b.[TableName] + '.' + CASE b.[Kind] WHEN 'check' THEN b.[ObjectName] ELSE QUOTENAME(b.[ObjectName]) END,
+         [Declared] = CAST(0 AS BIT)
+    INTO #RenameBlockers
+    FROM (-- Filtered indexes and statistics, and checks, that read a renaming column or a computed column being dropped
+          SELECT rc.[Schema], rc.[TableName],
+                 [Kind] = CASE d.referencing_class WHEN 7 THEN 'index' WHEN 9 THEN 'statistic' ELSE 'check' END,
+                 [ObjectName] = (CASE d.referencing_class WHEN 7 THEN i.[name] WHEN 9 THEN s.[name] ELSE ck.[name] END) COLLATE DATABASE_DEFAULT,
+                 [ParentColumn] = COL_NAME(ck.parent_object_id, NULLIF(ck.parent_column_id, 0)) COLLATE DATABASE_DEFAULT,
+                 [DropOrder] = CASE d.referencing_class WHEN 7 THEN 1 WHEN 9 THEN 3 ELSE 4 END
+            FROM ReadColumns rc
+            JOIN sys.sql_expression_dependencies d ON d.referenced_id = rc.TableId AND d.referenced_minor_id = rc.ColumnId
+            LEFT JOIN sys.indexes i ON d.referencing_class = 7 AND i.[object_id] = d.referencing_id AND i.index_id = d.referencing_minor_id
+            LEFT JOIN sys.stats s ON d.referencing_class = 9 AND s.[object_id] = d.referencing_id AND s.stats_id = d.referencing_minor_id
+            LEFT JOIN sys.check_constraints ck ON d.referencing_class = 1 AND d.referencing_minor_id = 0 AND ck.[object_id] = d.referencing_id
+            WHERE i.index_id IS NOT NULL OR s.stats_id IS NOT NULL OR ck.[object_id] IS NOT NULL
+          UNION ALL
+          -- Indexes, key constraints and created statistics on a computed column being dropped
+          SELECT bc.[Schema], bc.[TableName],
+                 [Kind] = CASE WHEN i.is_primary_key = 1 OR i.is_unique_constraint = 1 THEN 'constraint' ELSE 'index' END,
+                 [ObjectName] = i.[name] COLLATE DATABASE_DEFAULT, NULL,
+                 [DropOrder] = CASE WHEN i.is_primary_key = 1 OR i.is_unique_constraint = 1 THEN 2 ELSE 1 END
+            FROM #RenameBlockingColumns bc WITH (NOLOCK)
+            JOIN sys.index_columns ic ON ic.[object_id] = bc.TableId AND ic.column_id = bc.ColumnId
+            JOIN sys.indexes i ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
+          UNION ALL
+          SELECT bc.[Schema], bc.[TableName], 'statistic', s.[name] COLLATE DATABASE_DEFAULT, NULL, 3
+            FROM #RenameBlockingColumns bc WITH (NOLOCK)
+            JOIN sys.stats_columns sc ON sc.[object_id] = bc.TableId AND sc.column_id = bc.ColumnId
+            JOIN sys.stats s ON s.[object_id] = sc.[object_id] AND s.stats_id = sc.stats_id AND s.user_created = 1) b
+
+  -- A column-level check is declared as its column's CheckExpression, under the column's new name when it is the one
+  -- being renamed; everything else by its own name.
+  UPDATE b SET [Declared] = 1
+    FROM #RenameBlockers b
+    WHERE (b.[Kind] IN ('index', 'constraint')
+           AND EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
+                        WHERE i.[Schema] = b.[Schema] AND i.[TableName] = b.[TableName]
+                          AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = b.[ObjectName]))
+       OR (b.[Kind] = 'statistic'
+           AND EXISTS (SELECT 1 FROM #Statistics s WITH (NOLOCK)
+                        WHERE s.[Schema] = b.[Schema] AND s.[TableName] = b.[TableName]
+                          AND SchemaSmith.fn_StripBracketWrapping(s.[StatisticName]) = b.[ObjectName]))
+       OR (b.[Kind] = 'check'
+           AND (EXISTS (SELECT 1 FROM #CheckConstraints k WITH (NOLOCK)
+                         WHERE k.[Schema] = b.[Schema] AND k.[TableName] = b.[TableName]
+                           AND SchemaSmith.fn_StripBracketWrapping(k.[ConstraintName]) = b.[ObjectName])
+                OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
+                            WHERE c.[Schema] = b.[Schema] AND c.[TableName] = b.[TableName]
+                              AND b.[ParentColumn] IN (SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), SchemaSmith.fn_StripBracketWrapping(c.[OldName]))
+                              AND RTRIM(ISNULL(c.[CheckExpression], '')) <> '')))
+
+  DECLARE @v_RenameUndeclared NVARCHAR(MAX) =
+    STUFF((SELECT ', ' + x.[Name]
+             FROM (SELECT [Name] = b.[Kind] + ' ' + b.[Schema] + '.' + b.[TableName] + '.' + QUOTENAME(b.[ObjectName])
+                     FROM #RenameBlockers b WITH (NOLOCK)
+                     WHERE b.[Declared] = 0
+                   UNION ALL
+                   SELECT 'computed column ' + bc.[Schema] + '.' + bc.[TableName] + '.' + QUOTENAME(bc.[ColumnName])
+                     FROM #RenameBlockingColumns bc WITH (NOLOCK)
+                     WHERE NOT EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
+                                        WHERE c.[Schema] = bc.[Schema] AND c.[TableName] = bc.[TableName]
+                                          AND bc.[ColumnName] IN (SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), SchemaSmith.fn_StripBracketWrapping(c.[OldName]))
+                                          AND RTRIM(ISNULL(c.[ComputedExpression], '')) <> '')) x
+             ORDER BY x.[Name]
+             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF @v_RenameUndeclared IS NOT NULL
+    RAISERROR('A column rename needs %s dropped first, which the package does not declare, so nothing in this run could put it back. Declare it in the table''s JSON, or drop it in a Before script.', 16, 1, @v_RenameUndeclared)
+
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping ' + REPLACE(REPLACE(b.[Kind], '''', ''''''), '%', '%%') + ' ' + REPLACE(REPLACE(b.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(b.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(QUOTENAME(b.[ObjectName]), '''', ''''''), '%', '%%') + ' before a column rename'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  CASE b.[Kind]
+                                       WHEN 'index' THEN 'DROP INDEX ' + QUOTENAME(b.[ObjectName]) + ' ON ' + b.[Schema] + '.' + b.[TableName] + ';'
+                                       WHEN 'statistic' THEN 'DROP STATISTICS ' + b.[Schema] + '.' + b.[TableName] + '.' + QUOTENAME(b.[ObjectName]) + ';'
+                                       ELSE 'ALTER TABLE ' + b.[Schema] + '.' + b.[TableName] + ' DROP CONSTRAINT ' + QUOTENAME(b.[ObjectName]) + ';'
+                                       END + CHAR(13) + CHAR(10) +
+                                  CASE WHEN b.[Kind] = 'statistic' THEN ''
+                                       ELSE 'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, N''' + REPLACE(b.[AuditType], '''', '''''') + ''', N''' + REPLACE(b.[AuditName] COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''dropped'');'
+                                       END AS NVARCHAR(MAX))
+                           FROM #RenameBlockers b WITH (NOLOCK)
+                           ORDER BY b.[DropOrder], b.[Schema], b.[TableName], b.[ObjectName]
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  IF @WhatIf = 1
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+      SELECT @@SPID, b.[AuditType], b.[AuditName], 'wouldDrop'
+        FROM #RenameBlockers b WITH (NOLOCK)
+        WHERE b.[Kind] <> 'statistic'
+
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping computed column ' + REPLACE(REPLACE(bc.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(bc.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(QUOTENAME(bc.[ColumnName]), '''', ''''''), '%', '%%') + ' before a column rename'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'ALTER TABLE ' + bc.[Schema] + '.' + bc.[TableName] + ' DROP COLUMN ' + QUOTENAME(bc.[ColumnName]) + ';' AS NVARCHAR(MAX))
+                           FROM #RenameBlockingColumns bc WITH (NOLOCK)
+                           ORDER BY bc.[Schema], bc.[TableName], bc.ColumnId
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  -- Parse flagged them as existing; the computed-column pass adds only what is new.
+  IF @WhatIf = 0
+    UPDATE c SET [NewColumn] = 1
+      FROM #Columns c
+      JOIN #RenameBlockingColumns bc WITH (NOLOCK) ON bc.[Schema] = c.[Schema] AND bc.[TableName] = c.[TableName]
+                                               AND bc.[ColumnName] IN (SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), SchemaSmith.fn_StripBracketWrapping(c.[OldName]))
+      WHERE RTRIM(ISNULL(c.[ComputedExpression], '')) <> ''
+
   RAISERROR('Handle Column Renames', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Rename ' + REPLACE(REPLACE(c.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[OldName], '''', ''''''), '%', '%%') + ' to ' + REPLACE(REPLACE(c.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(c.[ColumnName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'EXEC sp_rename N''' + REPLACE((c.[Schema] + '.' + c.[TableName] + '.' + c.[OldName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]), '''', '''''') + ''', ''COLUMN'';' + CHAR(13) + CHAR(10) AS NVARCHAR(MAX))

@@ -95,6 +95,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **PostgreSQL: a name holding a quote or a percent sign no longer fails the deploy in a progress notice or a change record.** Names reach a generated notice as its arguments and a generated literal with their quotes doubled; a column list split a quoted name holding a comma; a materialized view's tablespace was written unquoted.
 - **PostgreSQL: a column typed by an enum or domain whose name holds a non-ASCII letter is no longer altered on every deploy.**
 - **PostgreSQL: a query token resolves in a database that has a schema whose name holds a double quote.** The cleanup run before every query token failed there (42602).
+- **SQL Server: renaming a column through `OldName` deploys when a check constraint, a computed column, a filtered index or a filtered statistic reads it, and a computed column can be renamed.** `sp_rename` refused every one of these (Msg 15336, 5074, 4928), so the deploy failed. The deploy now drops what blocks the rename and puts it back from the package under the new name; one the package does not declare stops the deploy by name before anything changes.
 
 ## [v2.8.0](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) — 2026-11-01
 
