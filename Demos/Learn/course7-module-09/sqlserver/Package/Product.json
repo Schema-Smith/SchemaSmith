@@ -1,0 +1,8 @@
+{
+  "$schema": ".json-schemas/products.sqlserver.schema",
+  "Name": "Shop",
+  "ValidationScript": "SELECT CAST(1 AS BIT)",
+  "TemplateOrder": [ "Registry", "Tenant" ],
+  "ScriptTokens": { "ControlDb": "fleet_control", "ReleaseVersion": "1.0.0" },
+  "Platform": "SqlServer"
+}

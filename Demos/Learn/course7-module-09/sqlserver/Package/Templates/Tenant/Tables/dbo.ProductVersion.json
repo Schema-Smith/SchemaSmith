@@ -1,0 +1,12 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "dbo",
+  "Name": "ProductVersion",
+  "Columns": [
+    { "Name": "Product", "DataType": "VARCHAR(50)" },
+    { "Name": "Version", "DataType": "VARCHAR(20)" }
+  ],
+  "Indexes": [
+    { "Name": "PK_ProductVersion", "PrimaryKey": true, "Clustered": true, "IndexColumns": "Product" }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
+  "Name": "ProductVersion",
+  "Columns": [
+    {
+      "Name": "Product",
+      "DataType": "varchar(50)"
+    },
+    {
+      "Name": "Version",
+      "DataType": "varchar(20)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "Product"
+    }
+  ]
+}

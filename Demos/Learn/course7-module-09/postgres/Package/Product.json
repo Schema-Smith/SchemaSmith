@@ -1,0 +1,14 @@
+{
+  "$schema": ".json-schemas/products.postgresql.schema",
+  "Name": "Shop",
+  "ValidationScript": "SELECT true",
+  "TemplateOrder": [
+    "Registry",
+    "Tenant"
+  ],
+  "ScriptTokens": {
+    "ControlDb": "fleet_control",
+    "ReleaseVersion": "1.0.0"
+  },
+  "Platform": "PostgreSQL"
+}

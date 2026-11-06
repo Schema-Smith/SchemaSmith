@@ -1,0 +1,7 @@
+{
+  "$schema": "../../.json-schemas/templates.postgresql.schema",
+  "Name": "Tenant",
+  "IdentificationDatabase": "{{ControlDb}}",
+  "DatabaseIdentificationScript": "SELECT databasename FROM public.tenants",
+  "VersionStampScript": "DELETE FROM public.productversion WHERE product = '{{ProductName}}'; INSERT INTO public.productversion (product, version) VALUES ('{{ProductName}}', '{{ReleaseVersion}}');"
+}

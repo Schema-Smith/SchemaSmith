@@ -1,0 +1,7 @@
+{
+  "$schema": "../../.json-schemas/templates.mysql.schema",
+  "Name": "Tenant",
+  "IdentificationDatabase": "{{ControlDb}}",
+  "DatabaseIdentificationScript": "SELECT DatabaseName FROM Tenants",
+  "VersionStampScript": "DELETE FROM ProductVersion WHERE Product = '{{ProductName}}'; INSERT INTO ProductVersion (Product, Version) VALUES ('{{ProductName}}', '{{ReleaseVersion}}');"
+}

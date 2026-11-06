@@ -1,0 +1,24 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "tenants",
+  "Columns": [
+    {
+      "Name": "databasename",
+      "DataType": "text"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_tenants",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "databasename"
+    }
+  ],
+  "DataDelivery": {
+    "ContentFile": "data/public.tenants.tabledata",
+    "MergeType": "Insert/Update/Delete",
+    "MatchColumns": "databasename"
+  }
+}

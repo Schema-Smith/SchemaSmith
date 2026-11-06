@@ -1,0 +1,7 @@
+{
+  "$schema": "../../.json-schemas/templates.sqlserver.schema",
+  "Name": "Tenant",
+  "IdentificationDatabase": "{{ControlDb}}",
+  "DatabaseIdentificationScript": "SELECT DatabaseName FROM dbo.Tenants",
+  "VersionStampScript": "DELETE FROM dbo.ProductVersion WHERE Product = '{{ProductName}}'; INSERT INTO dbo.ProductVersion (Product, Version) VALUES ('{{ProductName}}', '{{ReleaseVersion}}');"
+}
