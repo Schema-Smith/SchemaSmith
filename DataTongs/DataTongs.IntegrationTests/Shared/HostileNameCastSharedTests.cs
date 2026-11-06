@@ -50,7 +50,7 @@ public abstract class HostileNameCastSharedTests
     {
         _connection = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(DatabaseConnectionString);
         _connection.Open();
-        _outputDir = Path.Combine(Path.GetTempPath(), $"DataTongsHostile_{Guid.NewGuid():N}");
+        _outputDir = Path.Join(Path.GetTempPath(), $"DataTongsHostile_{Guid.NewGuid():N}");
         Directory.CreateDirectory(_outputDir);
         using var command = _connection.CreateCommand();
         CreateSchema(command);
