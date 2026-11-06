@@ -1,0 +1,134 @@
+# Course 12, Module 3 — Index-Only Templates: tuning a table you do not own (lab)
+
+Goal: you need an index on a table you are not allowed to change. It belongs to a vendor product, or
+it is a replicated copy whose shape is dictated upstream — either way, the columns are not yours and a
+deploy that "corrects" them would be a bug, not a feature. `IndexOnlyTableQuenches` narrows a whole
+template to exactly that: it manages indexes, statistics, and XML/full-text indexes, and touches
+nothing else.
+
+The table in this lab is created **outside the package**, by a script standing in for the vendor. The
+package never declares its columns — only the indexes you want on it.
+
+## Before you start
+
+- The [sandbox](../docker) is up and the Course 12 databases exist (run [`../course12-setup`](../course12-setup)
+  once — it creates `declared_m3`).
+- The CLI is on your PATH: `schemaquench --version` answers **2.7.0 or later**.
+
+## Step 1: Let the "vendor" create its table
+
+This is the part you do not control. Run it once per engine:
+
+```bash
+# from course12-module-03
+for e in sqlserver postgres mysql mariadb; do
+  ../lab-sql.sh $e declared_m3 "$(cat vendor-schema/create-vendor-table.$e.sql)"
+done
+```
+
+`vendor_order` now exists with four columns — `order_id`, `customer_ref`, `placed_at`, `status` — and a
+primary key. Your package had nothing to do with any of it.
+
+## Step 2: Declare indexes, and only indexes
+
+Look at the table file. It has **no `Columns` block at all**:
+
+```json
+{
+  "Schema": "[dbo]",
+  "Name": "[vendor_order]",
+  "Indexes": [
+    { "Name": "[IX_vendor_order_customer_placed]", "IndexColumns": "[customer_ref],[placed_at]" },
+    { "Name": "[IX_vendor_order_status]", "IndexColumns": "[status]" }
+  ]
+}
+```
+
+That is only legal because the template says so:
+
+```json
+{ "Name": "Main", "IndexOnlyTableQuenches": true, "DatabaseIdentificationScript": "..." }
+```
+
+It is a **template-level** switch, not a per-table one — the whole template runs in index-only mode.
+Deploy:
+
+```bash
+# from course12-module-03
+cd <engine> && schemaquench --ConfigFile:deploy.settings.json ; cd ..
+# exit 0 on all four engines
+```
+
+Watch the log line, because it changes shape to tell you which mode you are in:
+
+```text
+  Quenching indexes                    <- index-only mode
+  Quenching indexes and constraints    <- a normal template
+```
+
+## Step 3: Check what did *not* happen
+
+This is the assertion that matters. The indexes landed:
+
+```bash
+# from course12-module-03
+../lab-sql.sh sqlserver declared_m3 "SELECT i.name FROM sys.indexes i JOIN sys.tables t ON t.object_id=i.object_id WHERE t.name='vendor_order' AND i.name IS NOT NULL ORDER BY i.name"
+# → IX_vendor_order_customer_placed, IX_vendor_order_status, PK__vendor_o__...
+../lab-sql.sh postgres declared_m3 "SELECT indexname FROM pg_indexes WHERE tablename='vendor_order' ORDER BY indexname"
+../lab-sql.sh mysql declared_m3 "SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema='declared_m3' AND table_name='vendor_order' ORDER BY index_name"
+../lab-sql.sh mariadb declared_m3 "SELECT DISTINCT index_name FROM information_schema.statistics WHERE table_schema='declared_m3' AND table_name='vendor_order' ORDER BY index_name"
+```
+
+And the vendor's columns are exactly as the vendor left them:
+
+```bash
+# from course12-module-03
+../lab-sql.sh sqlserver declared_m3 "SELECT STRING_AGG(name,',') FROM sys.columns WHERE object_id=OBJECT_ID('dbo.vendor_order')"
+# → order_id,customer_ref,placed_at,status
+../lab-sql.sh postgres declared_m3 "SELECT string_agg(column_name, ',' ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='public' AND table_name='vendor_order'"
+../lab-sql.sh mysql declared_m3 "SELECT GROUP_CONCAT(column_name ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='declared_m3' AND table_name='vendor_order'"
+../lab-sql.sh mariadb declared_m3 "SELECT GROUP_CONCAT(column_name ORDER BY ordinal_position) FROM information_schema.columns WHERE table_schema='declared_m3' AND table_name='vendor_order'"
+```
+
+Four columns, unchanged, in the vendor's order. **Do not take the clean exit code as proof of that** —
+a green run tells you nothing about what was left alone, which is the entire value of this mode. Query
+the columns. Re-run the deploy and query them again; it is idempotent, and the second run changes
+nothing either.
+
+## Step 4: A table that is not there fails the deploy
+
+Worth knowing before you design a package around this. Declare an index on a table the database does
+not have, and the run does **not** skip it:
+
+```text
+        Creating index [dbo].[ghost_table].[IX_ghost_never_lands]
+Cannot find the object "dbo.ghost_table" because it does not exist or you do not have permissions.
+```
+
+Exit **2**. Same on MySQL and MariaDB (`Table 'declared_m3.ghost_table' doesn't exist`). Index-only
+mode skips *table creation* — it does not skip *tables*. So one package covering a vendor's optional
+modules, aimed at a deployment that installed only some of them, fails rather than quietly doing the
+subset. If you need that, gate the table with `ShouldApplyExpression` and let the package decide
+explicitly.
+
+> The reference used to say "Tables that don't exist are silently skipped" — they are not, on any
+> engine tested. That was reported from this lab and [corrected](https://github.com/Schema-Smith/SchemaSmith/blob/main/docs/end-user/reference/schema-packages.md):
+> the docs now say a declared table absent from the target **fails the deploy**, and point at
+> `ShouldApplyExpression` as the supported way to cover a vendor's optional modules.
+
+## Cleanup
+
+```bash
+# from course12-module-03
+for e in sqlserver mysql mariadb; do ../lab-sql.sh $e declared_m3 "DROP TABLE IF EXISTS vendor_order"; done
+../lab-sql.sh postgres declared_m3 "DROP TABLE IF EXISTS public.vendor_order"
+```
+
+## The principle
+
+Every other template in this course owns its tables outright: declare the shape, and SchemaSmith
+converges the database to it. That is the right default and the wrong behaviour for a table someone
+else defines — there, "converge to the model" would mean reverting the vendor's next release.
+`IndexOnlyTableQuenches` narrows the contract to the part that *is* yours. The tuning is yours; the
+shape stays theirs; and your supplementary indexes survive in source control like everything else you
+deploy.

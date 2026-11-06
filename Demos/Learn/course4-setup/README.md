@@ -1,7 +1,7 @@
 # Course 4 — Database Setup
 
-These scripts create the fifteen cookbook databases on every sandbox engine (SQL Server, PostgreSQL,
-MySQL, and MariaDB) — 60 databases in total. Each database is dedicated to one recipe so labs stay
+These scripts create the nine cookbook databases on every sandbox engine (SQL Server, PostgreSQL,
+MySQL, and MariaDB), 36 databases in total. Each database is dedicated to one recipe so labs stay
 hermetic and do not clash with one another.
 
 ## Prerequisite
@@ -25,7 +25,7 @@ bash setup-databases.sh
 .\setup-databases.ps1
 ```
 
-Both scripts print `PASS` or `FAIL` for each of the 60 databases:
+Both scripts print `PASS` or `FAIL` for each of the 36 databases:
 
 ```
 SQL Server
@@ -38,15 +38,6 @@ SQL Server
   cookbook_r6                PASS
   cookbook_r8                PASS
   cookbook_r9                PASS
-  cookbook_r11               PASS
-  cookbook_r12               PASS
-  cookbook_r13               PASS
-  cookbook_r14               PASS
-  cookbook_r15               PASS
-  cookbook_r16               PASS
-  cookbook_r17               PASS
-  cookbook_r18               PASS
-  cookbook_r19               PASS
 PostgreSQL
   cookbook_r1_prod           PASS
   ...
@@ -57,7 +48,7 @@ MariaDB
   cookbook_r1_prod           PASS
   ...
 
-All 72 databases are ready.
+All 36 databases are ready.
 ```
 
 ## Databases created
@@ -72,15 +63,6 @@ All 72 databases are ready.
 | 6 — surviving a rebuild | `cookbook_r6` | Rebuild-survival recipe |
 | 8 — authoring recyclebin hooks | `cookbook_r8` | Custom drop/restore hook authoring recipe |
 | 9 — Extensions as a source of truth | `cookbook_r9` | Data-dictionary-from-metadata recipe |
-| 11 — declared, not scripted | `cookbook_r11` | Declared-objects recipe |
-| 12 — declared events | `cookbook_r12` | Scheduled-events recipe |
-| 13 — index-only templates | `cookbook_r13` | Index-only template recipe |
-| 14 — subfolder organization | `cookbook_r14` | Subfolder-layout recipe |
-| 15 — expression change detection | `cookbook_r15` | Expression-change recipe |
-| 16 — trust the round trip | `cookbook_r16` | Round-trip recipe |
-| 17 — search you declare | `cookbook_r17` | Full-text index recipe |
-| 18 — history the database keeps | `cookbook_r18` | Temporal and system-versioning recipe |
-| 19 — history you can't rewrite | `cookbook_r19` | Ledger-table recipe |
 
 Recipes 7 and 10 bring their own databases, so they have no row here.
 
@@ -88,10 +70,6 @@ Each database is created on all four engines:
 
 | Engine     | Databases |
 | ---------- | --------- |
-| SQL Server | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r19` |
-| PostgreSQL | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r19` |
-| MySQL      | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r19` |
-| MariaDB    | `cookbook_r1_prod`, `cookbook_r1_nonprod`, `cookbook_r2` … `cookbook_r6`, `cookbook_r8`, `cookbook_r9`, `cookbook_r11` … `cookbook_r19` |
 
 ## Connection details
 

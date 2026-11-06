@@ -1,0 +1,6 @@
+{
+  "$schema": "../../.json-schemas/templates.sqlserver.schema",
+  "Name": "Main",
+  "IndexOnlyTableQuenches": true,
+  "DatabaseIdentificationScript": "SELECT name FROM sys.databases WHERE name = 'declared_m3'"
+}

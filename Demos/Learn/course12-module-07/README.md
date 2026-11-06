@@ -1,0 +1,319 @@
+# Course 12, Module 7 — Search you declare (lab)
+
+Goal: full-text search is the index family most packages leave as a hand-run script. It has its own objects (a
+catalog on SQL Server) and its own rules (one per table on SQL Server, as many as you like on MySQL and MariaDB). This
+module declares it like any other index: deployed, left alone when nothing changed, re-created when it changes, and
+dropped by absence. Then it shows the two things that sit outside the package: a MySQL **parser**, and a server that
+doesn't have Full-Text Search at all.
+
+Three engines: `mysql/`, `mariadb/` and `sqlserver/`, everything against `declared_m7`. PostgreSQL has no full-text
+index object. Its equivalent is an ordinary GIN index over a `tsvector` expression, so there's nothing full-text-specific to declare there.
+
+## Before you start
+
+- The [sandbox](../docker) is up and the Course 12 databases exist (run [`../course12-setup`](../course12-setup)
+  once — it creates `declared_m7`).
+- The CLI is on your PATH: `schemaquench --version` answers **2.8.0 or later**.
+- Ports: MySQL **13306**, MariaDB **13307**. The SQL Server half needs a server with Full-Text Search, which the stock
+  sandbox image doesn't have. Step 5 builds one.
+
+## Step 1: Declare a full-text index (MySQL and MariaDB)
+
+[`Article.json`](mysql/Package/Templates/Main/Tables/Article.json) declares one, beside the ordinary indexes:
+
+```json
+"FullTextIndexes": [
+  { "Name": "ft_article_title", "Columns": "`Title`" }
+]
+```
+
+```bash
+# from course12-module-07
+for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.json); done
+# exit 0, both
+```
+
+```
+      Create table `Article`
+      Create fulltext index: `Article`.`ft_article_title`
+```
+
+Give it something to find, and search it:
+
+```bash
+# from course12-module-07
+for e in mysql mariadb; do ../lab-sql.sh $e declared_m7 "INSERT INTO Article VALUES (1, 'Quenching steel', 'Plunge the hot blade into oil.'), (2, 'Choosing an anvil', 'A heavy anvil returns more of each blow; quenching comes later.'), (3, 'Forge safety', 'Wear leather.')"; done
+../lab-sql.sh mysql declared_m7 "SELECT ArticleId FROM Article WHERE MATCH(Title) AGAINST ('quenching') ORDER BY ArticleId"
+# → 1
+../lab-sql.sh mariadb declared_m7 "SELECT ArticleId FROM Article WHERE MATCH(Title) AGAINST ('quenching') ORDER BY ArticleId"
+# → 1
+```
+
+Article 2 mentions quenching too, but only in `Body`, and the index covers `Title`.
+
+## Step 2: Re-run, and change the columns
+
+Run the deploy again: exit 0, and nothing under `Create missing fulltext indexes`. The index matches its declaration.
+
+Now widen it to both columns:
+
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "mysql/Package/Templates/Main/Tables/Article.json" set "FullTextIndexes[Name=ft_article_title].Columns" '"`Title`, `Body`"' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "mariadb/Package/Templates/Main/Tables/Article.json" set "FullTextIndexes[Name=ft_article_title].Columns" '"`Title`, `Body`"' -->
+```json
+{ "Name": "ft_article_title", "Columns": "`Title`, `Body`" }
+```
+
+```bash
+# from course12-module-07
+for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.json); done
+# exit 0, both
+```
+
+```
+      Drop modified fulltext index: ALTER TABLE `declared_m7`.`Article` DROP INDEX `ft_article_title`
+      Create fulltext index: `Article`.`ft_article_title`
+```
+
+A full-text index can't be altered, so a changed one is dropped and created again. Both lines are in the log. The
+MariaDB log has one more, after them:
+
+```
+      Building fulltext index `Article`.`ft_article_title` by copying the table, so it covers the rows already in it
+```
+
+MariaDB 10.4 and later have an engine bug here: a full-text index added in place to a table that has (or had) one
+leaves out the rows already in the table, so every search would miss them. The deploy works around it by building the
+index with `ALGORITHM=COPY`. That rebuilds the whole table, and **writes to it wait until the copy finishes**, so treat
+a full-text change to a big, busy MariaDB table like any other table rebuild and schedule it. An empty table has no rows
+to miss and keeps the in-place build. Search both columns:
+
+```bash
+# from course12-module-07
+../lab-sql.sh mysql declared_m7 "SELECT ArticleId FROM Article WHERE MATCH(Title, Body) AGAINST ('quenching') ORDER BY ArticleId"
+# → 1
+# → 2
+../lab-sql.sh mariadb declared_m7 "SELECT ArticleId FROM Article WHERE MATCH(Title, Body) AGAINST ('quenching') ORDER BY ArticleId"
+# → 1
+# → 2
+```
+
+## Step 3: An index you didn't declare
+
+Someone adds one by hand:
+
+```bash
+# from course12-module-07
+for e in mysql mariadb; do ../lab-sql.sh $e declared_m7 "CREATE FULLTEXT INDEX ft_handmade ON Article (Body)"; done
+```
+
+Deploy: exit 0, and `ft_handmade` is still there. `deploy.settings.json` has `DropIndexesRemovedFromProduct` on, but
+that flag drops indexes this package used to declare, and `ft_handmade` was never in it. An index you didn't write is
+someone else's until you say otherwise. Say so with `DropUnknownIndexes` (a top-level key in `deploy.settings.json`):
+
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "mysql/deploy.settings.json" set DropUnknownIndexes true -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "mariadb/deploy.settings.json" set DropUnknownIndexes true -->
+```bash
+# from course12-module-07
+for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.json); done
+# exit 0, both:
+#       Drop index not declared for this deploy: Article.ft_handmade
+../lab-sql.sh mysql declared_m7 "SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = 'declared_m7' AND INDEX_TYPE = 'FULLTEXT' GROUP BY INDEX_NAME"
+# → ft_article_title
+../lab-sql.sh mariadb declared_m7 "SELECT INDEX_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = 'declared_m7' AND INDEX_TYPE = 'FULLTEXT' GROUP BY INDEX_NAME"
+# → ft_article_title
+```
+
+The same two flags govern every index family. Turn `DropUnknownIndexes` back off:
+
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "mysql/deploy.settings.json" del DropUnknownIndexes -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "mariadb/deploy.settings.json" del DropUnknownIndexes -->
+
+## Step 4: A parser is the server's, not the package's
+
+MySQL ships an `ngram` parser for text with no spaces between words, such as Chinese or Japanese. Declare a second
+index that uses it:
+
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "mysql/Package/Templates/Main/Tables/Article.json" append FullTextIndexes '{"Name": "ft_article_title_ngram", "Columns": "`Title`", "Parser": "ngram"}' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "mariadb/Package/Templates/Main/Tables/Article.json" append FullTextIndexes '{"Name": "ft_article_title_ngram", "Columns": "`Title`", "Parser": "ngram"}' -->
+```json
+{ "Name": "ft_article_title_ngram", "Columns": "`Title`", "Parser": "ngram" }
+```
+
+```bash
+# from course12-module-07/mysql
+schemaquench --ConfigFile:deploy.settings.json        # exit 0
+#       Create fulltext index: `Article`.`ft_article_title_ngram`
+```
+
+```bash
+# from course12-module-07/mariadb
+schemaquench --ConfigFile:deploy.settings.json        # exit 2
+```
+
+```
+Error: Function 'ngram' is not defined
+```
+
+MariaDB ships no `ngram` parser. A parser is a server plugin, not something SchemaSmith can supply, and the deploy
+fails with the engine's own error. That's the taught failure on MariaDB. Take the index back out there:
+
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "mariadb/Package/Templates/Main/Tables/Article.json" remove-where FullTextIndexes "Name=ft_article_title_ngram" -->
+
+Extract MySQL and look at what comes back:
+
+```bash
+# from course12-module-07/mysql
+schematongs --ConfigFile:SchemaTongs.settings.json        # exit 0
+```
+
+`extracted/Templates/Main/Tables/Article.json` has both indexes, and `"Parser": "ngram"` on the second. One rule to
+know: the parser is used when an index is **created**, and not compared afterwards. MySQL and MariaDB report it only in
+`SHOW CREATE TABLE`, so changing `Parser` on a deployed index changes nothing. To change a parser, rename the index.
+
+## Step 5: SQL Server, on a server that has Full-Text Search
+
+The stock SQL Server image doesn't include Full-Text Search. The sandbox's `fts` profile builds one that does, from
+[`../docker/Dockerfile.fts`](../docker/Dockerfile.fts): the same 2022 image plus Microsoft's `mssql-server-fts`
+package. The build takes a few minutes the first time:
+
+```bash
+# from docker
+docker compose --profile fts up -d --build sqlserver-fts
+```
+
+Wait for `docker ps` to show `learn-sqlserver-fts` as `healthy` (port **11436**), then create the database there:
+
+```bash
+# from course12-module-07
+LEARN_CONTAINER=learn-sqlserver-fts ../lab-sql.sh sqlserver master "IF DB_ID('declared_m7') IS NULL CREATE DATABASE declared_m7"
+LEARN_CONTAINER=learn-sqlserver-fts ../lab-sql.sh sqlserver master "SELECT FULLTEXTSERVICEPROPERTY('IsFullTextInstalled')"
+# → 1
+```
+
+SQL Server allows one full-text index per table, so it's a single object. It names a **catalog** and a **key index**:
+
+```json
+"FullTextIndex": {
+  "FullTextCatalog": "[LibraryCatalog]",
+  "KeyIndex": "[PK_Article]",
+  "ChangeTracking": "AUTO",
+  "Columns": "[Title],[Body]"
+}
+```
+
+The catalog is a scripted object, in [`FullTextCatalogs/LibraryCatalog.sql`](sqlserver/Package/Templates/Main/FullTextCatalogs/LibraryCatalog.sql),
+which runs before the tables. The key index has to be unique, on one `NOT NULL` column.
+
+```bash
+# from course12-module-07/sqlserver
+schemaquench --ConfigFile:deploy.settings.json        # exit 0
+```
+
+```
+    Quenched .\Package\Templates\Main\FullTextCatalogs\LibraryCatalog.sql
+        Adding fulltext index on [dbo].[Article]
+```
+
+`ChangeTracking: AUTO` means SQL Server populates the index in the background as rows change, so give it a moment
+after the insert:
+
+```bash
+# from course12-module-07
+LEARN_CONTAINER=learn-sqlserver-fts ../lab-sql.sh sqlserver declared_m7 "INSERT dbo.Article VALUES (1, N'Quenching steel', N'Plunge the hot blade into oil.'), (2, N'Choosing an anvil', N'A heavy anvil returns more of each blow; quenching comes later.'), (3, N'Forge safety', N'Wear leather.')"
+LEARN_CONTAINER=learn-sqlserver-fts ../lab-sql.sh sqlserver declared_m7 "WAITFOR DELAY '00:00:08'; SELECT ArticleId FROM dbo.Article WHERE CONTAINS((Title, Body), N'quenching') ORDER BY ArticleId"
+# → 1
+# → 2
+```
+
+Run the deploy again:
+
+```bash
+# from course12-module-07/sqlserver
+schemaquench --ConfigFile:deploy.settings.json        # exit 0
+```
+
+No `Dropping fulltext index` line and no `Adding` line: the index matches its declaration and is left alone. That
+matters more here than for an ordinary index, because each re-create is a full repopulation. `Columns` lists
+`[Title],[Body]`, and SQL Server's catalog lists them the other way round. The order you write them in doesn't matter,
+because they're compared as a set.
+
+## Step 6: Catch a bad key index before it deploys
+
+Point `KeyIndex` at `IX_Article_Title`, which isn't unique, and lint:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Tables/dbo.Article.json" set FullTextIndex.KeyIndex '"[IX_Article_Title]"' -->
+```bash
+# from course12-module-07
+schemaquench --Validate --SchemaPackagePath:./sqlserver/Package        # exit 2
+```
+
+```
+ERROR [SS-FT-001] Template 'Main' / Table '[Article]': Table '[Article]' names full-text KeyIndex '[IX_Article_Title]', which is not unique. SQL Server builds a full-text index only over an unfiltered unique index on a single NOT NULL column (error 7653), so the deploy fails creating it - name one of the table's declared indexes that is.
+```
+
+Put it back to `[PK_Article]`:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Tables/dbo.Article.json" set FullTextIndex.KeyIndex '"[PK_Article]"' -->
+
+## Step 7: The same package on a server without Full-Text Search
+
+The plain sandbox SQL Server (port 11433) has no Full-Text Search. Deploy the same package there with
+[`deploy.plain.settings.json`](sqlserver/deploy.plain.settings.json):
+
+```bash
+# from course12-module-07/sqlserver
+schemaquench --ConfigFile:deploy.plain.settings.json        # exit 1
+```
+
+```
+        Full-text index skipped on [dbo].[Article]: Full-Text Search is not installed - the table deploys without it (downgraded)
+```
+
+The table deploys and the index is recorded as a downgrade, under the default `UnsupportedFeaturePolicy` of `warn`. The
+exit code is 1 and the summary's outcome is `Incomplete`, with one downgrade naming `[dbo].[Article]`. It's the same
+package on two servers with two outcomes, and you can see from the summary which is which. Set the policy to `fail` and
+the deploy refuses instead.
+
+## Step 8: Drop by absence
+
+Empty the list on MySQL and MariaDB:
+
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "mysql/Package/Templates/Main/Tables/Article.json" set FullTextIndexes '[]' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "mariadb/Package/Templates/Main/Tables/Article.json" set FullTextIndexes '[]' -->
+```bash
+# from course12-module-07
+for e in mysql mariadb; do (cd $e && schemaquench --ConfigFile:deploy.settings.json); done
+# exit 0, both:
+#       Drop index not declared for this deploy: Article.ft_article_title
+../lab-sql.sh mysql declared_m7 "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = 'declared_m7' AND INDEX_TYPE = 'FULLTEXT'"
+# → 0
+../lab-sql.sh mariadb declared_m7 "SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = 'declared_m7' AND INDEX_TYPE = 'FULLTEXT'"
+# → 0
+```
+
+MySQL drops `ft_article_title_ngram` too, since it left the package along with the other one.
+
+## What you proved
+
+- A full-text index is declared like any other: created, left alone, re-created when its columns change, dropped by
+  absence, and governed by the same two drop flags.
+- A parser is a server plugin. SchemaSmith uses it at create time and doesn't compare it afterwards.
+- On SQL Server the catalog is a script and the key index has rules `--Validate` checks. On a server without Full-Text
+  Search the index is skipped and recorded, not a failure halfway through the deploy.
+
+## Clean up
+
+```bash
+# from course12-module-07
+rm -rf mysql/extracted
+for e in mysql mariadb; do ../lab-sql.sh $e declared_m7 "DROP TABLE IF EXISTS Article"; done
+../lab-sql.sh sqlserver declared_m7 "DROP TABLE IF EXISTS dbo.Article"
+```
+
+```bash
+# from docker
+docker compose rm -sfv sqlserver-fts
+docker image rm schemasmith-learn/mssql-fts:2022
+```
+
+Put the package files back with `git checkout -- .` (from this folder) if you want to run the module again.
