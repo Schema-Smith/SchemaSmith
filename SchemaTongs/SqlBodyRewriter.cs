@@ -72,8 +72,10 @@ public static class SqlBodyRewriter
     // single-quote escape sequences (`''`). The optional `N` prefix handles SQL Server's
     // Unicode literals. This is the standard pattern used in T-SQL lexers when full
     // lexing is overkill.
+    // Comments are masked too: an apostrophe in one used to open a fake literal running to the next quote, hiding the
+    // references in between. Bracketed and double-quoted identifiers are matched only to be kept as they are.
     private static readonly Regex StringLiteralPattern = new(
-        @"N?'(?:[^']|'')*'",
+        @"(?<keep>\[(?:[^\]]|\]\])*\]|""(?:[^""]|"""")*"")|--[^\r\n]*|/\*.*?\*/|N?'(?:[^']|'')*'",
         RegexOptions.Compiled | RegexOptions.Singleline);
 
     public static SqlBodyRewriterResult Rewrite(string body, string sourceSchema)
@@ -92,6 +94,7 @@ public static class SqlBodyRewriter
         var literals = new List<string>();
         var masked = StringLiteralPattern.Replace(body, m =>
         {
+            if (m.Groups["keep"].Success) return m.Value;
             literals.Add(m.Value);
             return $"{MaskStart}{literals.Count - 1}{MaskEnd}";
         });

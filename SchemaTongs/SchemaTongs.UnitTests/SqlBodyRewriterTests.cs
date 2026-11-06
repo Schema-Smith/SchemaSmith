@@ -28,6 +28,15 @@ public class SqlBodyRewriterTests
         Assert.That(result.Body, Is.EqualTo("SELECT * FROM {{SchemaName}}.[Customers]"));
     }
 
+    // An apostrophe in a comment opened a fake string literal running to the next quote, and the seed-schema references
+    // inside that span were left pointing at the seed schema, so the tenant's module read the seed's tables.
+    [Test]
+    public void AnApostropheInAComment_DoesNotHideTheReferencesAfterIt()
+    {
+        var result = Rewrite("-- don't read the seed\nSELECT * FROM tenant_seed.Customers WHERE Name = 'x'\n/* it's fine */ SELECT * FROM [tenant_seed].[Orders]");
+        Assert.That(result.Body, Is.EqualTo("-- don't read the seed\nSELECT * FROM {{SchemaName}}.Customers WHERE Name = 'x'\n/* it's fine */ SELECT * FROM {{SchemaName}}.[Orders]"));
+    }
+
     [Test]
     public void Unbracketed_SourceSchemaQualified_Rewritten()
     {

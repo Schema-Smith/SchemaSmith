@@ -343,7 +343,8 @@ public class ProgramTests
                 var config = new ConfigurationBuilder().AddInMemoryCollection(configValues).Build();
                 FactoryContainer.Register<IConfigurationRoot>(config);
 
-                var ex = Assert.Throws<Exception>(() => Program.WriteSchemasOnly());
+                // A fixable failure (exit 2), not an unexpected one (exit 3).
+                var ex = Assert.Throws<RunFailedException>(() => Program.WriteSchemasOnly());
                 Assert.That(ex.Message, Does.Contain("Product.json not found"));
             }
             finally

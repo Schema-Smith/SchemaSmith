@@ -897,6 +897,15 @@ public class SchemaTongs
         return true;
     }
 
+    // A schema-template script names {{SchemaName}} where the seed schema was; the source database only has the seed.
+    internal static string ScriptForValidation(string script, bool isSchemaTemplate, string sourceSchema, Platform platform)
+    {
+        if (!isSchemaTemplate || string.IsNullOrEmpty(sourceSchema) || script == null) return script;
+        var name = Identifier.EscapeDelimited(Identifier.Unwrap(sourceSchema, platform), platform);
+        var quoted = platform.GetBasePlatform() == Platform.PostgreSQL ? $"\"{name}\"" : $"[{name}]";
+        return script.Replace(SchemaDefaultResolver.SchemaNameToken, quoted);
+    }
+
     internal void ValidateAndHandleScript(IDbConnection connection, string filePath, string script,
         ScriptObjectType objectType)
     {
@@ -922,7 +931,7 @@ public class SchemaTongs
             _progressLog.Info($"  Re-validating changed script: {Path.GetFileName(filePath)}");
         }
 
-        var result = _scriptValidator.ValidateScript(connection, script, objectType, _platform);
+        var result = _scriptValidator.ValidateScript(connection, ScriptForValidation(script, _isSchemaTemplate, _sourceSchema, _platform), objectType, _platform);
         if (result.IsValid) return;
 
         _progressLog.Warn($"  Invalid script detected: {Path.GetFileName(filePath)} — {result.ErrorMessage}");
@@ -1948,10 +1957,7 @@ SELECT s.name AS TableSchema, pt.name AS TableName, tr.name AS TriggerName
             if (sql == null) continue;
             sql += SqlServerTriggerTail(command, tableSchema, tableName, triggerName);
 
-            var escapedSchema = Regex.Escape(tableSchema);
-            var escapedTable = Regex.Escape(tableName);
-            var tablePattern = $@"(?<=\bON\s+)\[?{escapedSchema}\]?\.\[?{escapedTable}\]?";
-            sql = Regex.Replace(sql, tablePattern, $"[{Identifier.EscapeDelimited(tableSchema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(tableName, Platform.SqlServer)}]", RegexOptions.IgnoreCase);
+            sql = QualifyTriggerTable(sql, tableSchema, tableName);
 
             // Schema-template mode: drop the schema-qualified prefix in the filename.
             var encodedFile = _isSchemaTemplate
@@ -2337,13 +2343,14 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier, tr.is_disab
             if (!definition.Contains("\r\n"))
                 definition = definition.Replace("\n", "\r\n");
 
-            var createMatch = Regex.Match(definition, @"(?<!\w)CREATE(\s+)TRIGGER\b", RegexOptions.IgnoreCase);
+            var createMatch = Regex.Match(SqlTextMask.Blank(definition), @"(?<!\w)CREATE(\s+)TRIGGER\b", RegexOptions.IgnoreCase);
             if (createMatch.Success)
                 definition = WithOrAlter(definition, createMatch);
 
-            var escapedName = Regex.Escape(triggerName);
-            var namePattern = $@"(?<=TRIGGER\s+)\[?{escapedName}\]?";
-            definition = Regex.Replace(definition, namePattern, $"[{Identifier.EscapeDelimited(triggerName, Platform.SqlServer)}]", RegexOptions.IgnoreCase);
+            var header = CreateHeaderName.Match(SqlTextMask.Blank(definition));
+            if (header.Success && string.Equals(header.Groups["full"].Value.Trim().Trim('[', ']', '"'), triggerName, StringComparison.OrdinalIgnoreCase))
+                definition = definition[..header.Groups["full"].Index] + $"[{Identifier.EscapeDelimited(triggerName, Platform.SqlServer)}]"
+                             + definition[(header.Groups["full"].Index + header.Groups["full"].Length)..];
 
             definition = Regex.Replace(definition, @"(?<=\bAS[ \t]*\r\n)([ \t]*)(?=\S)", "$1\r\n");
 
@@ -2425,16 +2432,16 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier, tr.is_disab
 
     internal static string DefinedObjectName(string definition)
     {
-        var match = CreateHeaderName.Match(definition);
+        var match = CreateHeaderName.Match(SqlTextMask.Blank(definition));
         if (!match.Success) return null;
-        var full = match.Groups["full"].Value;
+        var full = definition.Substring(match.Groups["full"].Index, match.Groups["full"].Length);
         var last = full.LastIndexOf('.');
         return (last >= 0 ? full[(last + 1)..] : full).Trim().Trim('[', ']', '"');
     }
 
     internal static string ReplaceDefinedName(string definition, string schemaName, string objectName)
     {
-        var match = CreateHeaderName.Match(definition);
+        var match = CreateHeaderName.Match(SqlTextMask.Blank(definition));
         if (!match.Success) return definition;
         var full = match.Groups["full"];
         return definition[..full.Index] + $"[{Identifier.EscapeDelimited(schemaName, Platform.SqlServer)}].[{Identifier.EscapeDelimited(objectName, Platform.SqlServer)}]" + definition[(full.Index + full.Length)..];
@@ -2452,19 +2459,43 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier, tr.is_disab
 
     internal static string ConvertToCreateOrAlter(string definition, string schemaName, string objectName)
     {
-        var createMatch = Regex.Match(definition,
+        var createMatch = Regex.Match(SqlTextMask.Blank(definition),
             @"(?<!\w)CREATE(\s+)(PROC|PROCEDURE|FUNCTION|VIEW|TRIGGER)\b",
             RegexOptions.IgnoreCase);
         var result = createMatch.Success ? WithOrAlter(definition, createMatch) : definition;
+        return QualifyHeaderName(result, schemaName, objectName);
+    }
 
-        var escapedSchema = Regex.Escape(schemaName);
-        var escapedName = Regex.Escape(objectName);
-        var namePattern = $@"\[?{escapedSchema}\]?\.\[?{escapedName}\]?";
-        var match = Regex.Match(result, namePattern, RegexOptions.IgnoreCase);
-        if (match.Success)
-            result = result.Substring(0, match.Index) + $"[{Identifier.EscapeDelimited(schemaName, Platform.SqlServer)}].[{Identifier.EscapeDelimited(objectName, Platform.SqlServer)}]" + result.Substring(match.Index + match.Length);
+    // Writes the header's own name as [schema].[name] when the header names this object with its schema. Only the header:
+    // the body may call another object whose name starts with this one's, or this one.
+    private static string QualifyHeaderName(string definition, string schemaName, string objectName)
+    {
+        var header = CreateHeaderName.Match(SqlTextMask.Blank(definition));
+        if (!header.Success) return definition;
+        var full = header.Groups["full"];
+        var parts = Regex.Match(definition.Substring(full.Index, full.Length),
+            @"^(?<schema>\[[^\]]+\]|""[^""]+""|[\w$#@]+)\s*\.\s*(?<name>\[[^\]]+\]|""[^""]+""|[\w$#@]+)$");
+        if (!parts.Success
+            || !string.Equals(parts.Groups["schema"].Value.Trim('[', ']', '"'), schemaName, StringComparison.OrdinalIgnoreCase)
+            || !string.Equals(parts.Groups["name"].Value.Trim('[', ']', '"'), objectName, StringComparison.OrdinalIgnoreCase))
+            return definition;
+        return definition[..full.Index] + $"[{Identifier.EscapeDelimited(schemaName, Platform.SqlServer)}].[{Identifier.EscapeDelimited(objectName, Platform.SqlServer)}]" + definition[(full.Index + full.Length)..];
+    }
 
-        return result;
+    // The table a trigger is ON, written as [schema].[table]: the first ON after the trigger's header, and only when it
+    // names this table whole.
+    internal static string QualifyTriggerTable(string definition, string tableSchema, string tableName)
+    {
+        var masked = SqlTextMask.Blank(definition);
+        var header = Regex.Match(masked, @"(?<!\w)CREATE\s+(OR\s+ALTER\s+)?TRIGGER\b", RegexOptions.IgnoreCase);
+        if (!header.Success) return definition;
+        var on = new Regex($@"\bON\s+\[?{Regex.Escape(tableSchema)}\]?\s*\.\s*\[?{Regex.Escape(tableName)}\]?(?![\w$#@\]])", RegexOptions.IgnoreCase);
+        var first = Regex.Match(masked[header.Index..], @"\bON\s+", RegexOptions.IgnoreCase);
+        if (!first.Success) return definition;
+        var match = on.Match(masked, header.Index + first.Index);
+        if (!match.Success || match.Index != header.Index + first.Index) return definition;
+        var nameStart = match.Index + first.Length;
+        return definition[..nameStart] + $"[{Identifier.EscapeDelimited(tableSchema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(tableName, Platform.SqlServer)}]" + definition[(match.Index + match.Length)..];
     }
 
     private ModuleSyntax ReadModuleSyntax(string value)

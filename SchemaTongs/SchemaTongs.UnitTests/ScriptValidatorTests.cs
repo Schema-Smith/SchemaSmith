@@ -22,6 +22,33 @@ public class ScriptValidatorTests
         _validator = new ScriptValidator();
     }
 
+    #region RewriteWithTempName — comments and names that need quoting
+
+    // A comment's apostrophe hid the CREATE behind a fake literal, and a name class of \w+ refused any name with a space,
+    // hyphen or dot: each case reported "Could not rewrite" and wrote a valid module as .sqlerror.
+    [TestCase("-- don't run this by hand\nCREATE PROCEDURE [dbo].[usp_X] AS SELECT 'a'", "CREATE PROCEDURE [dbo].[_validate_", "[usp_X]")]
+    [TestCase("/* CREATE VIEW [dbo].[old] */\nCREATE VIEW [dbo].[vNew] AS SELECT 1 AS x", "CREATE VIEW [dbo].[_validate_", "[vNew]")]
+    [TestCase("CREATE VIEW [dbo].[My View] AS SELECT 1 AS x", "CREATE VIEW [dbo].[_validate_", "[My View]")]
+    [TestCase("CREATE VIEW [my-schema].[v.1] AS SELECT 1 AS x", "CREATE VIEW [my-schema].[_validate_", "[v.1]")]
+    [TestCase("CREATE VIEW dbo.vPlain AS SELECT 1 AS x", "CREATE VIEW dbo.[_validate_", "vPlain")]
+    public void RewriteWithTempName_SqlServer_RenamesTheModuleItself(string script, string expectedStart, string ownName)
+    {
+        var result = _validator.RewriteWithTempName(script, Platform.SqlServer);
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.RewrittenScript, Does.Contain(expectedStart).And.Not.Contain(ownName), "the module's own name is the one replaced");
+    }
+
+    [TestCase("-- don't\nCREATE OR REPLACE VIEW \"my schema\".\"my view\" AS SELECT 1", "CREATE OR REPLACE VIEW \"my schema\".\"_validate_", "\"my view\"")]
+    [TestCase("CREATE VIEW public.v AS SELECT 1", "CREATE VIEW public.\"_validate_", "public.v ")]
+    public void RewriteWithTempName_PostgreSql_RenamesTheModuleItself(string script, string expectedStart, string ownName)
+    {
+        var result = _validator.RewriteWithTempName(script, Platform.PostgreSQL);
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.RewrittenScript, Does.Contain(expectedStart).And.Not.Contain(ownName), "the module's own name is the one replaced");
+    }
+
+    #endregion
+
     #region RewriteWithTempName — SQL Server
 
     [Test]

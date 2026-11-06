@@ -42,7 +42,17 @@ public static class Program
 
         if (CommandLineParser.ContainsSwitch("WriteSchemasOnly"))
         {
-            LogBackup.BackupLogsAndExit("SchemaTongs", 0, WriteSchemasOnly());
+            int warnings;
+            try
+            {
+                warnings = WriteSchemasOnly();
+            }
+            catch (RunFailedException e)
+            {
+                LogBackup.FailedRunExit("SchemaTongs", e);
+                return;
+            }
+            LogBackup.BackupLogsAndExit("SchemaTongs", 0, warnings);
             return;
         }
 
@@ -89,7 +99,7 @@ public static class Program
         var productFile = Path.Combine(productPath, "Product.json");
 
         if (!FileWrapper.GetFromFactory().Exists(productFile))
-            throw new Exception($"Product.json not found at '{productFile}'. Set 'Product:Path' to the product directory.");
+            throw new RunFailedException($"Product.json not found at '{productFile}'. Set 'Product:Path' to the product directory.");
 
         var product = Product.LoadForDisplay(productFile);
         Console.WriteLine($"Regenerating .json-schemas for {product.Name} ({product.Platform})...");

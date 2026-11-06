@@ -65,6 +65,22 @@ public class ValidateAndHandleScriptTests
         LogFactory.Clear();
     }
 
+    // A schema-template script carries {{SchemaName}} where the seed schema was, and was validated that way against the
+    // source database, so every qualified module failed and was written as .sqlerror. It is validated against the seed.
+    [TestCase(Platform.SqlServer, "tenant seed", "CREATE VIEW [tenant seed].[v] AS SELECT * FROM [tenant seed].[t]")]
+    [TestCase(Platform.PostgreSQL, "tenant_seed", "CREATE VIEW \"tenant_seed\".\"v\" AS SELECT * FROM \"tenant_seed\".\"t\"")]
+    public void ScriptForValidation_PutsTheSeedSchemaBackForTheSchemaTemplateToken(Platform platform, string seed, string expected)
+    {
+        var script = platform == Platform.SqlServer
+            ? "CREATE VIEW {{SchemaName}}.[v] AS SELECT * FROM {{SchemaName}}.[t]"
+            : "CREATE VIEW {{SchemaName}}.\"v\" AS SELECT * FROM {{SchemaName}}.\"t\"";
+        Assert.Multiple(() =>
+        {
+            Assert.That(SchemaTongs.ScriptForValidation(script, true, seed, platform), Is.EqualTo(expected));
+            Assert.That(SchemaTongs.ScriptForValidation(script, false, seed, platform), Is.EqualTo(script), "not a schema template: unchanged");
+        });
+    }
+
     [Test]
     public void ValidateAndHandleScript_ValidationDisabled_NoValidationOccurs()
     {
