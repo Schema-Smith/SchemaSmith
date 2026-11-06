@@ -167,7 +167,7 @@
     CROSS APPLY t.[TableXml].nodes('/Table/Columns') AS Y(col)
     CROSS APPLY (SELECT
       [ColumnName] = col.value('(Name/text())[1]', 'NVARCHAR(500)'),
-      [DataType] = col.value('(DataType/text())[1]', 'NVARCHAR(100)'),
+      [DataType] = col.value('(DataType/text())[1]', 'NVARCHAR(MAX)'),
       [GeneratedAlways] = col.value('(GeneratedAlways/text())[1]', 'NVARCHAR(20)'),
       [Hidden] = CONVERT(BIT, CASE LOWER(col.value('(Hidden/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [Nullable] = CONVERT(BIT, CASE LOWER(col.value('(Nullable/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),

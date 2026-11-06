@@ -651,7 +651,7 @@
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(Columns) WITH (
       [ColumnName] NVARCHAR(500) '$.Name',
-      [DataType] NVARCHAR(100) '$.DataType',
+      [DataType] NVARCHAR(MAX) '$.DataType',
       [Nullable] BIT '$.Nullable',
       [Default] NVARCHAR(MAX) '$.Default',
       [CheckExpression] NVARCHAR(MAX) '$.CheckExpression',

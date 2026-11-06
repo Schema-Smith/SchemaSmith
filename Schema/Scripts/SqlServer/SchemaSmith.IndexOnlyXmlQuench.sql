@@ -1380,7 +1380,7 @@ BEGIN TRY
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Creating statistics ' + s.[Schema] + '.' + s.[TableName] + '.' + s.[StatisticName] + CASE WHEN RTRIM(ISNULL(s.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(s.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'CREATE STATISTICS ' + s.[StatisticName] + ' ON ' + s.[Schema] + '.' + s.[TableName] + ' (' + s.[Columns] + ')' +
                                   CASE WHEN RTRIM(ISNULL(s.[FilterExpression], '')) <> '' THEN ' WHERE ' + s.[FilterExpression] ELSE '' END +
-                                  ' WITH SAMPLE ' + CAST(ISNULL(s.[SampleSize], 100) AS NVARCHAR(20)) + ' PERCENT;' AS NVARCHAR(MAX))
+                                  CASE WHEN ISNULL(s.[SampleSize], 0) > 0 THEN ' WITH SAMPLE ' + CAST(s.[SampleSize] AS NVARCHAR(20)) + ' PERCENT' ELSE '' END + ';' AS NVARCHAR(MAX))
                            FROM #Statistics s WITH (NOLOCK)
                            WHERE NOT EXISTS (SELECT *
                                                FROM sys.stats ss

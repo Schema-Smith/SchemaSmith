@@ -33,6 +33,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
     {""Name"":""Computed"",""DataType"":""INT"",""ComputedExpression"":""Id + 1"",""Persisted"":true,""Nullable"":false},
     {""Name"":""ComputedUndeclared"",""DataType"":""INT"",""ComputedExpression"":""Id + 2"",""Persisted"":true},
     {""Name"":""PlainUndeclared"",""DataType"":""INT""},
+    {""Name"":""LongType"",""DataType"":""DECIMAL(18, 2) /* A DATATYPE LONGER THAN ONE HUNDRED CHARACTERS, WHICH BOTH SHREDS USED TO CUT OFF AT ONE HUNDRED */""},
     {""Name"":""SysStart"",""DataType"":""DATETIME2(2)"",""Nullable"":false,""GeneratedAlways"":""RowStart"",""Hidden"":true},
     {""Name"":""SysEnd"",""DataType"":""DATETIME2"",""Nullable"":false,""GeneratedAlways"":""RowEnd""}
   ],
@@ -114,6 +115,7 @@ namespace SchemaQuench.IntegrationTests.SqlServer
                 var columnRows = string.Join("\n", jsonTables[System.Array.IndexOf(ConsumedTables, "#Columns")]);
                 Assert.That(tablesRows, Does.Contain("[SysStart]").And.Contain("DATETIME2(2)").And.Contain("[SysEnd]").And.Contain("DATETIME2(7)"), "the pair is on #Tables");
                 Assert.That(columnRows, Does.Not.Contain("SysStart").And.Not.Contain("SysEnd"), "and not on #Columns");
+                Assert.That(columnRows, Does.Contain("CUT OFF AT ONE HUNDRED */"), "a DataType longer than 100 characters arrives whole");
                 // Spatial rows arrive normalized on both tiers: names wrapped, scheme and densities upper-cased, fill factor 0 as unset.
                 var spatialRows = string.Join("\n", jsonTables[System.Array.IndexOf(ConsumedTables, "#SpatialIndexes")]);
                 Assert.That(spatialRows, Does.Contain("IndexName=[sx_shape]|Column=[Shape]|Tessellation=GEOMETRY_GRID|XMin=-1.5|")
