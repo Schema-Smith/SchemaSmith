@@ -12,6 +12,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Fixed
 
+- **`--WhatIf` no longer touches deployment checkpoints.** A preview recorded the table steps as done, so a later `--ResumeQuench` after a failed preview skipped those table changes and still reported success; and a preview after a failed deploy discarded that deploy's resume point, so the resume started over. A checkpoint written by an earlier version is still honoured, with a warning that a preview may have written it.
 - **MariaDB reads each table's index visibility separately on a case-sensitive server.** Two tables whose names differ only in case shared one visibility reading, so an index on one could be made visible or ignored to match the other.
 - **MySQL refuses a CHECK constraint name already used in the schema, before creating any check.** MySQL names checks per schema, so a name two tables shared, or one another table already held, failed part-way through the deploy with a bare "Duplicate check constraint name" that named neither table; the deploy log now lists each conflict.
 - **MySQL scripts are split only on real DELIMITER commands, and never inside a string or comment.** A script that mentioned the word DELIMITER only in a comment had its procedure body cut at the first semicolon, and a delimiter at the end of a line inside a string or block comment ended the statement there.

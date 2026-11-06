@@ -236,6 +236,9 @@ public class FileCheckpointManager : ICheckpointing
 
     #region Database Checkpoint I/O
 
+    // Written by 2.9 and later. A preview from 2.9 on records nothing, so a file carrying this line was written by a real run.
+    private const string CurrentFormatLine = "# Format: 2";
+
     private DatabaseCheckpoint GetOrLoadDatabaseCheckpoint(TrackingScope scope)
     {
         // CompositeKey includes SchemaName so two iterations of the same template against
@@ -268,7 +271,15 @@ public class FileCheckpointManager : ICheckpointing
         try
         {
             var content = FileWrapper.GetFromFactory().ReadAllText(filePath);
-            return ParseDatabaseCheckpoint(content, scope.ProductName, scope.TemplateName, scope.Server, scope.DatabaseName, scope.SchemaName);
+            var checkpoint = ParseDatabaseCheckpoint(content, scope.ProductName, scope.TemplateName, scope.Server, scope.DatabaseName, scope.SchemaName);
+            // TRANSITIONAL (pre-2.9 checkpoints may carry --WhatIf steps, A16): before 2.9 a preview recorded steps it never
+            // applied. Such a file is still honoured, so a real resume across the upgrade keeps its progress, but the resume
+            // says so. Roadmap: delete the release after 2.9, when no checkpoint written before it can still be on disk.
+            if (!content.Contains(CurrentFormatLine) && checkpoint.CompletedSteps.Count > 0)
+                LogFactory.GetLogger("ProgressLog").Warn(
+                    $"Resuming [{scope.DatabaseName}] from a checkpoint written before SchemaQuench 2.9; if it was left by a --WhatIf run, "
+                    + "delete it and run without --ResumeQuench.");
+            return checkpoint;
         }
         catch
         {
@@ -377,6 +388,7 @@ public class FileCheckpointManager : ICheckpointing
     {
         var sb = new StringBuilder();
         sb.AppendLine("# SchemaQuench Database Checkpoint");
+        sb.AppendLine(CurrentFormatLine);
         sb.AppendLine($"# Product: {checkpoint.ProductName}");
         sb.AppendLine($"# Template: {checkpoint.TemplateName}");
         sb.AppendLine($"# Server: {checkpoint.Server}");

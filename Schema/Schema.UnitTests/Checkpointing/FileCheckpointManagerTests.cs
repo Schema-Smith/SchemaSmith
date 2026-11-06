@@ -3,6 +3,7 @@
 using System;
 using System.IO;
 using System.Linq;
+using NSubstitute;
 using Schema.Checkpointing;
 
 namespace Schema.UnitTests.Checkpointing;
@@ -566,5 +567,50 @@ public class FileCheckpointManagerTests
 
         Assert.That(ran, Is.False, "a resumed run repeated a completed step");
         Assert.That(mgr.GetDatabaseCheckpointSummary(DbScope()).CompletedSteps, Is.EqualTo(1));
+    }
+
+    // A16: a checkpoint from before 2.9 may have been written by a --WhatIf run, which recorded steps it never applied.
+    // It is still honoured, so a legitimate resume across the upgrade keeps its progress, but the resume says so.
+    [Test]
+    public void ResumingFromACheckpointWrittenBefore29_WarnsThatAPreviewMayHaveWrittenIt()
+    {
+        var progress = NSubstitute.Substitute.For<log4net.ILog>();
+        Schema.Utility.LogFactory.Register("ProgressLog", progress);
+        try
+        {
+            new FileCheckpointManager(_tempDir, adoptExisting: false).Track(DbScope(), "ModifiedTables", () => { });
+            var file = Directory.GetFiles(_tempDir, "*.checkpoint").Single();
+            File.WriteAllLines(file, File.ReadAllLines(file).Where(l => !l.StartsWith("# Format:")));
+
+            var resume = new FileCheckpointManager(_tempDir, adoptExisting: true);
+            Assert.That(resume.HasCompleted(DbScope(), "ModifiedTables"), Is.True, "the older checkpoint is still honoured");
+            Assert.That(resume.HasCompleted(DbScope(), "IndexesAndConstraints"), Is.False);
+
+            progress.Received(1).Warn(NSubstitute.Arg.Is<object>(o => o.ToString()!.Contains("before SchemaQuench 2.9") && o.ToString()!.Contains("--WhatIf")));
+        }
+        finally
+        {
+            Schema.Utility.LogFactory.Clear();
+        }
+    }
+
+    [Test]
+    public void ResumingFromACurrentCheckpoint_DoesNotWarn()
+    {
+        var progress = NSubstitute.Substitute.For<log4net.ILog>();
+        Schema.Utility.LogFactory.Register("ProgressLog", progress);
+        try
+        {
+            new FileCheckpointManager(_tempDir, adoptExisting: false).Track(DbScope(), "ModifiedTables", () => { });
+            Assert.That(File.ReadAllText(Directory.GetFiles(_tempDir, "*.checkpoint").Single()), Does.Contain("# Format: 2"));
+
+            var resume = new FileCheckpointManager(_tempDir, adoptExisting: true);
+            Assert.That(resume.HasCompleted(DbScope(), "ModifiedTables"), Is.True);
+            progress.DidNotReceive().Warn(NSubstitute.Arg.Any<object>());
+        }
+        finally
+        {
+            Schema.Utility.LogFactory.Clear();
+        }
     }
 }

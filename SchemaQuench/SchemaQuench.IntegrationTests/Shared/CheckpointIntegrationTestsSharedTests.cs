@@ -407,6 +407,58 @@ ModifiedTables
         }
     }
 
+    // A16: a preview loaded the checkpoint (which, without --ResumeQuench, discards it) and a successful preview then
+    // cleaned up the run's checkpoints, so "deploy fails, preview, resume" started the resume over from scratch.
+    [Test]
+    public void APreviewLeavesAFailedDeploysResumePointForTheResume()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Register(FixtureConfig);
+            FactoryContainer.Register(_environment);
+            LogFactory.Register("ErrorLog", _errorLog);
+            LogFactory.Register("ProgressLog", _progressLog);
+
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            config["SchemaPackagePath"] = TestHelper.GetTestProductPath(ProductPlatformFolder, "ResumeProbe");
+            config["CheckpointDirectory"] = _checkpointDir;
+            Directory.CreateDirectory(_checkpointDir);
+            using (var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString))
+            {
+                conn.Open();
+                conn.ChangeDatabase(_mainDb);
+                using var cmd = conn.CreateCommand();
+                ForgeKindler.KindleTheForge(cmd, Platform, forceReKindle: false);
+            }
+
+            var product = Product.Load();
+            var storedDb = StoredDatabaseName();
+            var dbCheckpointPath = Path.Join(_checkpointDir,
+                Path.GetFileName($"{FileNameEncoder.Encode(product.Name)}.{FileNameEncoder.Encode("Main")}.{FileNameEncoder.Encode(_server)}.{FileNameEncoder.Encode(storedDb)}.{FileNameEncoder.Encode("")}.checkpoint"));
+            File.WriteAllText(dbCheckpointPath, $"# SchemaQuench Database Checkpoint\n# Product: {product.Name}\n# Template: Main\n# Server: {_server}\n# Database: {storedDb}\n\n[Completed Steps]\nModifiedTables\n");
+
+            try
+            {
+                _environment.CommandLine.Returns("--SkipKindlingForge --WhatIf");
+                Program.Main(["SkipKindlingForge", "WhatIf"]);
+                Assert.That(File.Exists(dbCheckpointPath), Is.True, "the failed deploy's resume point survived the preview");
+
+                _environment.ClearReceivedCalls();
+                _environment.CommandLine.Returns("--SkipKindlingForge --ResumeQuench");
+                Program.Main(["SkipKindlingForge"]);
+                _environment.DidNotReceive().Exit(Arg.Is<int>(c => c != 0));
+                var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+                Assert.That(summary.SelectToken("run.resumedFromCheckpoint")?.Value<bool>(), Is.True, "the resume took it up");
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                FactoryContainer.Unregister<ICheckpointing>();
+            }
+        }
+    }
+
     private string StoredDatabaseName()
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);

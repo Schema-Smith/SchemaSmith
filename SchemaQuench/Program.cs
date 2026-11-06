@@ -121,7 +121,8 @@ public static class Program
         // checkpoints so the next invocation can resume.
         if (!productQuench.Failed)
         {
-            CleanupCheckpoints();
+            // A preview took up no checkpoint, so a failed deploy's resume point is still the real run's to use.
+            if (!productQuench.IsWhatIfOnly) CleanupCheckpoints();
             // #576: a clean run leaves none of its debug files behind.
             ResolvedSqlArtifactWriter.DeleteOwned(DebugSql.ArtifactDirectory, o => o.Run == ResolvedSqlArtifactWriter.RunId);
             // 1 when a feature was downgraded on a target that lacks it: the deploy finished, but not everything the

@@ -150,7 +150,8 @@ public class ProductQuench
         _targetDatabases = ReadFilterArray(SettingsKeys.Target.Databases);
         _targetSchemas = ReadFilterArray(SettingsKeys.Target.Schemas);
         _templateTargets = ReadTemplateTargets(_config);
-        _checkpointing = FileCheckpointManager.GetFromFactory();
+        // A preview neither records progress nor reads or discards a failed deploy's resume point (A16).
+        _checkpointing = IsWhatIfOnly ? NoCheckpointing.Instance : FileCheckpointManager.GetFromFactory();
 
         // Secondary servers are SqlServer-only (Availability Groups)
         if (_product.Platform == Platform.SqlServer)
@@ -911,7 +912,12 @@ public class ProductQuench
         RemoveOldTableQuenchScripts();
 
         if (CommandLineParser.ContainsSwitch("ResumeQuench"))
-            _progressLog.Info("Resuming: each database continues from its own checkpoint, and product scripts run again");
+        {
+            if (IsWhatIfOnly)
+                _progressLog.Warn("--WhatIf previews the whole deploy: --ResumeQuench is ignored, and the checkpoints are left for the real run");
+            else
+                _progressLog.Info("Resuming: each database continues from its own checkpoint, and product scripts run again");
+        }
 
         using var command = GetCommand(_primaryServer);
 

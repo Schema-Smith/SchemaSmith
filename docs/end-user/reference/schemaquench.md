@@ -747,7 +747,7 @@ The gaps a dry run has are each explained where the feature is; this is the one 
 - **Nothing is created.** A database `CreateIfMissing` would create is reported, not created, and its work units preview every object as new. See [CreateIfMissing](#createifmissing).
 - **Ownership not stamped.** Ownership rows and markers are a real write, so the preview skips them; on SQL Server the extended-property statements are printed instead. See [Table Ownership](#table-ownership).
 - **No map is recorded.** Nothing is recorded and anything the scratch-copy check verified is put back at the end of the run.
-- **Steps are checkpointed.** The table steps are recorded under the same step names as a real run, and a clean preview deletes them at the end. A preview that fails leaves them behind, and a later `--ResumeQuench` reads them as completed work -- so do not resume a real run from a failed preview's checkpoints. See [WhatIf and checkpoints](#whatif-and-checkpoints).
+- **Nothing is checkpointed.** A preview neither records progress nor reads or removes the checkpoint files, so a failed deploy's resume point is still there after you preview it. See [WhatIf and checkpoints](#whatif-and-checkpoints).
 
 ### Debug SQL output
 
@@ -1972,7 +1972,9 @@ Resume is for finishing the run that failed, with the fix confined to what faile
 
 ### WhatIf and checkpoints
 
-A `--WhatIf` run checkpoints the same way a real run does: the baseline validation, the PostgreSQL type and sequence steps and the three table steps (`ModifiedTables`, `IndexesAndConstraints`, `TableFeatures`) are recorded under the same names as they are previewed, and the scripts it lists are not. A preview that completes deletes its own checkpoints, as any clean run does. A preview that fails leaves them, and a later real run with `--ResumeQuench` reads them as completed work and skips those steps. Do not resume a real run from a failed preview's checkpoints: delete the files, or run without `--ResumeQuench`.
+A `--WhatIf` run does not touch the checkpoint files: it records no progress, and it neither reads nor removes the files a failed deploy left. So a deploy that fails can be previewed and then resumed with `--ResumeQuench`, and the resume continues where the deploy stopped. Combined with `--WhatIf`, `--ResumeQuench` is ignored and says so: the preview covers the whole deploy.
+
+A checkpoint written by SchemaQuench 2.8 or earlier may have been left by a preview, which then recorded steps it never applied. Such a file is still honoured, so a resume across the upgrade keeps its progress, but the resume warns once per database; if the file came from a preview, delete it and run without `--ResumeQuench`.
 
 ### Automatic cleanup after success
 

@@ -452,7 +452,7 @@ public class DatabaseQuench
         _dropRemovedIndexes = dropRemovedIndexes;
         _updateTables = updateTables;
         _deliverData = deliverData;
-        _checkpointing = checkpointing;
+        _checkpointing = IsWhatIf ? NoCheckpointing.Instance : checkpointing;
         _dropUnknownIndexes = FormatBooleanFlag(dropUnknownIndexes);
         _trackRunOnceMigrations = trackRunOnceMigrations;
         _pruneObsoleteMigrationTracking = pruneObsoleteMigrationTracking;
@@ -496,7 +496,7 @@ public class DatabaseQuench
         _dropUnknownIndexes = dropUnknownIndexes;
         _updateTables = updateTables;
         _deliverData = deliverData;
-        _checkpointing = checkpointing;
+        _checkpointing = IsWhatIf ? NoCheckpointing.Instance : checkpointing;
         _trackRunOnceMigrations = trackRunOnceMigrations;
         _pruneObsoleteMigrationTracking = pruneObsoleteMigrationTracking;
         _forceReKindle = forceReKindle;
