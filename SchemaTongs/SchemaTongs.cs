@@ -3641,7 +3641,7 @@ SELECT 'Event Triggers' AS Folder,
         command.CommandText = @"
 SELECT 'Rules' AS Folder,
        ns.nspname || '.' || c.relname || '.' || r.rulename AS FullName,
-       REPLACE(PG_GET_RULEDEF(r.oid), 'CREATE RULE', 'CREATE OR REPLACE RULE') AS Code
+       REGEXP_REPLACE(PG_GET_RULEDEF(r.oid), '^CREATE RULE', 'CREATE OR REPLACE RULE') AS Code
   FROM pg_rewrite r
   JOIN pg_class c ON r.ev_class = c.oid
   JOIN pg_namespace ns ON c.relnamespace = ns.oid

@@ -27,6 +27,8 @@ public static class PatchManifest
             if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
 
             var normalized = line.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
+            if (Path.IsPathRooted(normalized) || Array.Exists(normalized.Split(Path.DirectorySeparatorChar), segment => segment == ".."))
+                throw new PatchBuildException($"Manifest path must name a file inside the source: '{line}'.");
             if (!FileWrapper.GetFromFactory().Exists(Path.Join(sourcePath, normalized)))
                 throw new PatchBuildException($"Manifest path does not exist under source: '{line}'.");
 

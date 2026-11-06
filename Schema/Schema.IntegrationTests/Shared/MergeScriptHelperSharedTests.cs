@@ -75,6 +75,44 @@ public abstract class MergeScriptHelperSharedTests
         _connection?.Dispose();
     }
 
+    // B27: a script written for another database renamed its table by replacing the qualified name everywhere in the
+    // script, so a value in the data that spelled the qualified name was rewritten too.
+    [Test]
+    public void BuildMergeScript_RetargetedScript_LeavesDataThatSpellsTheTableNameAlone()
+    {
+        if (_serverVersionNum is > 0 and < 800)
+            Assert.Ignore($"Automatic data delivery is gated below MySQL 8.0 (detected {_serverVersionNum}).");
+        using var command = _connection.CreateCommand();
+        var tableName = $"rq_{Guid.NewGuid():N}"[..20];
+        var spelled = $"`{_testDb}`.`{tableName}`";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, note VARCHAR(200) NULL)";
+            command.ExecuteNonQuery();
+
+            var tableData = $"[{{\"id\":1,\"note\":\"{spelled}\"}}]";
+            var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, tableName, tableData, "`id`",
+                true, true, false, false, null!, destSchemaOverride: "", mySqlServerVersionNum: _serverVersionNum);
+
+            command.CommandText = $"USE `{_testDb}`";
+            command.ExecuteNonQuery();
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT note FROM `{_testDb}`.`{tableName}` WHERE id = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo(spelled));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void BuildMergeScript_TableNameWithSingleQuote_GeneratesValidScript()
     {

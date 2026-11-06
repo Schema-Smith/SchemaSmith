@@ -2004,7 +2004,41 @@ SELECT c.column_name, c.udt_name
         if (destOverride == null) return script;
         var qualified = $"`{databaseName.Trim().Trim('`')}`.`{tableName.Trim().Trim('`')}`";
         var target = destOverride.Trim().Trim('`');
-        return script.Replace(qualified, target.Length == 0 ? $"`{tableName.Trim().Trim('`')}`" : $"`{target}`.`{tableName.Trim().Trim('`')}`");
+        var replacement = target.Length == 0 ? $"`{tableName.Trim().Trim('`')}`" : $"`{target}`.`{tableName.Trim().Trim('`')}`";
+        return ReplaceOutsideStringLiterals(script, qualified, replacement);
+    }
+
+    // The table's data travels inside the script as string literals, and a value may spell the qualified name too.
+    private static string ReplaceOutsideStringLiterals(string script, string find, string replacement)
+    {
+        var result = new System.Text.StringBuilder(script.Length);
+        var quote = '\0';
+        for (var i = 0; i < script.Length; i++)
+        {
+            var c = script[i];
+            if (quote == '\0')
+            {
+                if (string.CompareOrdinal(script, i, find, 0, find.Length) == 0)
+                {
+                    result.Append(replacement);
+                    i += find.Length - 1;
+                    continue;
+                }
+                if (c is '\'' or '"') quote = c;
+            }
+            else if (c == '\\' && i + 1 < script.Length)
+            {
+                result.Append(c).Append(script[++i]);
+                continue;
+            }
+            else if (c == quote)
+            {
+                if (i + 1 < script.Length && script[i + 1] == quote) { result.Append(c).Append(script[++i]); continue; }
+                quote = '\0';
+            }
+            result.Append(c);
+        }
+        return result.ToString();
     }
 
     private static string BuildMergeScriptMySql(IDbCommand cmd, string databaseName, string tableName,

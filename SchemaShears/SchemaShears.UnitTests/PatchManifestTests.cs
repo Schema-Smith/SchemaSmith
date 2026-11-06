@@ -60,4 +60,27 @@ public class PatchManifestTests
     {
         Assert.Throws<PatchBuildException>(() => PatchManifest.Read(Path.Join(_root, "nope.txt"), _source));
     }
+
+    // B27: a manifest line could climb out of the source with "..", and its file was copied into the patch.
+    [TestCase("../outside.json")]
+    [TestCase("Templates/../../outside.json")]
+    public void Read_APathLeavingTheSource_Throws_NamingThePath(string entry)
+    {
+        File.WriteAllText(Path.Join(_root, "outside.json"), "{}");
+        var manifest = Path.Join(_root, "m.txt");
+        File.WriteAllText(manifest, entry + "\n");
+
+        var ex = Assert.Throws<PatchBuildException>(() => PatchManifest.Read(manifest, _source));
+        Assert.That(ex.Message, Does.Contain("outside.json").And.Contain("inside the source"));
+    }
+
+    [Test]
+    public void Read_AnAbsolutePath_Throws()
+    {
+        var manifest = Path.Join(_root, "m.txt");
+        File.WriteAllText(manifest, Path.Join(_source, "Product.json") + "\n");
+
+        var ex = Assert.Throws<PatchBuildException>(() => PatchManifest.Read(manifest, _source));
+        Assert.That(ex.Message, Does.Contain("inside the source"));
+    }
 }

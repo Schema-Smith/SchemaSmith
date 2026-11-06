@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 
 namespace Schema.DataAccess;
 
@@ -14,7 +15,7 @@ public static class BatchSplitter
     public static List<string> Split(string script)
     {
         var batches = new List<string>();
-        if (script.Contains("DELIMITER"))
+        if (script.Split('\n').Any(IsDelimiterCommand))
             SplitDelimitedScript(batches, script);
         else
             batches.Add(script);
@@ -22,53 +23,88 @@ public static class BatchSplitter
         return batches;
     }
 
+    private static bool IsDelimiterCommand(string line) =>
+        line.Trim().StartsWith("DELIMITER ", StringComparison.OrdinalIgnoreCase);
+
+    private enum ScanState { Code, SingleQuote, DoubleQuote, Backtick, BlockComment }
+
     private static void SplitDelimitedScript(List<string> batches, string script)
     {
-        // Split by DELIMITER commands and execute each part
         var currentDelimiter = ";";
-        var lines = script.Split('\n');
         var currentStatement = "";
+        var state = ScanState.Code;
 
-        foreach (var line in lines)
+        foreach (var line in script.Split('\n'))
         {
             var trimmedLine = line.Trim();
 
-            // Check for DELIMITER command
-            if (trimmedLine.StartsWith("DELIMITER ", StringComparison.OrdinalIgnoreCase))
+            if (state == ScanState.Code && IsDelimiterCommand(line))
             {
-                // Execute any pending statement before changing delimiter
                 if (!string.IsNullOrWhiteSpace(currentStatement))
                 {
                     batches.Add(currentStatement.Trim());
                     currentStatement = "";
                 }
 
-                // Change delimiter
                 currentDelimiter = trimmedLine.Substring(10).Trim();
                 continue;
             }
 
-            // Add line to current statement
             currentStatement += line + "\n";
 
-            // Check if statement is complete
-            if (currentDelimiter != ";" && trimmedLine.EndsWith(currentDelimiter))
-            {
-                // Remove the custom delimiter from the end
-                currentStatement = currentStatement.Trim();
-                if (currentStatement.EndsWith(currentDelimiter)) currentStatement = currentStatement.Substring(0, currentStatement.Length - currentDelimiter.Length);
+            // The statement ends where a line ends in the delimiter -- unless that delimiter is inside a string, a
+            // quoted identifier or a comment.
+            var trimmedEnd = line.TrimEnd();
+            var delimiterAt = trimmedEnd.EndsWith(currentDelimiter, StringComparison.Ordinal) ? trimmedEnd.Length - currentDelimiter.Length : -1;
+            state = ScanLine(line, state, delimiterAt, out var delimiterIsCode);
+            if (!delimiterIsCode) continue;
 
-                if (!string.IsNullOrWhiteSpace(currentStatement)) batches.Add(currentStatement.Trim());
-                currentStatement = "";
-            }
-            else if (currentDelimiter == ";" && trimmedLine.EndsWith(";"))
-            {
-                // Standard semicolon delimiter
-                if (!string.IsNullOrWhiteSpace(currentStatement)) batches.Add(currentStatement.Trim());
-                currentStatement = "";
-            }
+            currentStatement = currentStatement.Trim();
+            if (currentStatement.EndsWith(currentDelimiter, StringComparison.Ordinal) && currentDelimiter != ";")
+                currentStatement = currentStatement.Substring(0, currentStatement.Length - currentDelimiter.Length);
+            if (!string.IsNullOrWhiteSpace(currentStatement)) batches.Add(currentStatement.Trim());
+            currentStatement = "";
         }
 
         if (!string.IsNullOrWhiteSpace(currentStatement)) batches.Add(currentStatement.Trim());
+    }
+
+    // Carries the lexical state across one line, and reports whether the character at checkAt was outside every string,
+    // quoted identifier and comment.
+    private static ScanState ScanLine(string line, ScanState state, int checkAt, out bool codeAtCheck)
+    {
+        codeAtCheck = false;
+        for (var i = 0; i < line.Length; i++)
+        {
+            if (i == checkAt) codeAtCheck = state == ScanState.Code;
+            var c = line[i];
+            var next = i + 1 < line.Length ? line[i + 1] : '\0';
+            switch (state)
+            {
+                case ScanState.Code:
+                    if (c == '\'') state = ScanState.SingleQuote;
+                    else if (c == '"') state = ScanState.DoubleQuote;
+                    else if (c == '`') state = ScanState.Backtick;
+                    else if (c == '/' && next == '*') { state = ScanState.BlockComment; i++; }
+                    else if (c == '#' || (c == '-' && next == '-' && (i + 2 >= line.Length || char.IsWhiteSpace(line[i + 2]))))
+                        return state;
+                    break;
+                case ScanState.SingleQuote:
+                case ScanState.DoubleQuote:
+                    var quote = state == ScanState.SingleQuote ? '\'' : '"';
+                    if (c == '\\') i++;
+                    else if (c == quote && next == quote) i++;
+                    else if (c == quote) state = ScanState.Code;
+                    break;
+                case ScanState.Backtick:
+                    if (c == '`' && next == '`') i++;
+                    else if (c == '`') state = ScanState.Code;
+                    break;
+                case ScanState.BlockComment:
+                    if (c == '*' && next == '/') { state = ScanState.Code; i++; }
+                    break;
+            }
+        }
+        return state;
     }
 }

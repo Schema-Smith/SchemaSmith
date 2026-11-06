@@ -664,6 +664,36 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
           AND tc.CONSTRAINT_TYPE = 'CHECK';
     END IF;
 
+    -- MySQL names CHECK constraints per schema, not per table (MariaDB per table), so a check name another table
+    -- already holds, or that two declared tables share, failed mid-deploy as a bare 3822 naming neither table.
+    -- Refused here, before any check is created.
+    IF SchemaSmith_SupportsCheckConstraints() = 1 AND VERSION() NOT LIKE '%MariaDB%' THEN
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkDeclared;
+        CREATE TEMPORARY TABLE _SchemaSmith_ChkDeclared ENGINE=InnoDB
+            SELECT c.TableName, c.ConstraintName, c.TableKey, c.ConstraintKey FROM _SchemaSmith_CheckConstraints c;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkCollisions;
+        CREATE TEMPORARY TABLE _SchemaSmith_ChkCollisions (Message TEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        INSERT INTO _SchemaSmith_ChkCollisions (Message)
+        SELECT DISTINCT CONCAT('  CHECK constraint ', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ' declared on ',
+                               SchemaSmith_StripBacktickWrapping(c.TableName), ' is already the name of a check on ', e.TableName)
+          FROM _SchemaSmith_CheckConstraints c
+          JOIN _SchemaSmith_ChkExist e ON e.ConstraintKey = c.ConstraintKey AND e.TableKey <> c.TableKey;
+        INSERT INTO _SchemaSmith_ChkCollisions (Message)
+        SELECT DISTINCT CONCAT('  CHECK constraint ', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ' is declared on both ',
+                               SchemaSmith_StripBacktickWrapping(c.TableName), ' and ', SchemaSmith_StripBacktickWrapping(d.TableName))
+          FROM _SchemaSmith_CheckConstraints c
+          JOIN _SchemaSmith_ChkDeclared d ON d.ConstraintKey = c.ConstraintKey AND d.TableKey > c.TableKey;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkDeclared;
+        IF EXISTS (SELECT 1 FROM _SchemaSmith_ChkCollisions) THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), Message FROM _SchemaSmith_ChkCollisions;
+            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkCollisions;
+            -- Keep < 128 chars: MySQL refuses an over-long MESSAGE_TEXT.
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CHECK constraint names must be unique per schema on MySQL; see the deploy log for the names in conflict.';
+        END IF;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkCollisions;
+    END IF;
+
     -- =========================================================================
     -- STEP 4: Create missing check constraints (MySQL 8.0.16+)
     -- =========================================================================
