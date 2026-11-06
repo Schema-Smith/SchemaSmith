@@ -67,7 +67,7 @@ All 44 databases are ready.
 | 8 · History the database keeps | `declared_m8` | Temporal tables and system versioning |
 | 9 · History you can't rewrite | `declared_m9` | SQL Server ledger tables |
 | 10 · Indexes beyond the B-tree | `declared_m10` | SQL Server spatial, selective XML and ordered columnstore indexes; PostgreSQL GiST and GIN |
-| 11 · The security layer, declared | `declared_m11` | SQL Server row-level security, signed modules, trigger order |
+| 11 · The security layer, declared | `declared_m11` | SQL Server row-level security, Always Encrypted keys, signed modules, trigger state and order |
 
 Each database is created on all four engines, including the ones a module doesn't use, so the setup is the same
 everywhere.
