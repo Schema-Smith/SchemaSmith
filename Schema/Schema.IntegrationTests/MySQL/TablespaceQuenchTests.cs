@@ -270,4 +270,36 @@ public class TablespaceQuenchTests
         Assert.DoesNotThrow(() => Deploy($", \"Tablespace\": \"{Tablespace1}\""));
         Assert.That(DeployedTablespace(), Is.EqualTo(Tablespace1));
     }
+
+    // The table rebuilt by the procedure itself, after the parse it reads, on this fixture's connection.
+    private void Rebuild(string extraProps)
+    {
+        var json = "[{ \"Name\": \"`" + TableName + "`\", \"Engine\": \"InnoDB\"" + extraProps
+                   + ", \"Columns\": [ { \"Name\": \"`id`\", \"DataType\": \"INT\", \"Nullable\": false } ],"
+                   + " \"Indexes\": [ { \"Name\": \"PRIMARY\", \"PrimaryKey\": true, \"Unique\": true, \"IndexColumns\": \"`id`\" } ] }]";
+        Exec($"CALL SchemaSmith_ParseTableJson('{_testDb}', '{json.Replace("'", "''")}')");
+        Exec($"CALL SchemaSmith_RebuildTable('{_testDb}', '{TableName}', 0)");
+    }
+
+    [Test]
+    public void ARebuiltTable_StaysInItsTablespace_WhenThePackageDoesNotDeclareIt()
+    {
+        Exec($"CREATE TABLE `{_testDb}`.`{TableName}` (`id` INT NOT NULL PRIMARY KEY) TABLESPACE {Tablespace1}");
+
+        Rebuild("");
+
+        Assert.That(DeployedTablespace(), Is.EqualTo(Tablespace1));
+    }
+
+    [Test]
+    public void ARebuiltTable_IsBuiltInItsDeclaredTablespace()
+    {
+        Exec($"CREATE TABLE `{_testDb}`.`{TableName}` (`id` INT NOT NULL PRIMARY KEY)");
+
+        Rebuild($", \"Tablespace\": \"{Tablespace1}\"");
+
+        Assert.That(DeployedTablespace(), Is.EqualTo(Tablespace1));
+        Assert.DoesNotThrow(() => Deploy($", \"Tablespace\": \"{Tablespace1}\""),
+            "rebuilt in the default, the table failed the next deploy as a move");
+    }
 }

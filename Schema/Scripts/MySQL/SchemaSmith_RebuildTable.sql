@@ -10,9 +10,9 @@ DELIMITER //
 -- caller decides that and calls this; the procedure is also directly callable, which is what makes it
 -- testable before any decision path exists.
 --
--- Deliberately NOT this procedure's job: secondary indexes, unique/check constraints, foreign keys, and
--- the table attributes the convergence passes own (ROW_FORMAT, COMMENT, the declared AUTO_INCREMENT
--- seed). The old table is dropped whole, which takes all of them with it, and the ordinary quench passes
+-- Deliberately NOT this procedure's job: secondary indexes, unique/check constraints, foreign keys, the
+-- declared AUTO_INCREMENT seed and COMPRESSION. The table's other options are the exception: the shadow is
+-- created with them (section 6), because what it is created with is what it has. The old table is dropped whole, which takes all of them with it, and the ordinary quench passes
 -- that follow re-add them from the same JSON that produced _SchemaSmith_Columns. Re-adding them here
 -- would duplicate that logic against a second source of truth, so the surface stays small on purpose and
 -- the one thing this procedure owns is the DATA.
@@ -121,6 +121,16 @@ BEGIN
     DECLARE v_RowsAfter BIGINT DEFAULT -1;
     DECLARE v_RowsFinal BIGINT DEFAULT -1;
     DECLARE v_FkId INT;
+    DECLARE v_LiveOptions VARCHAR(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_DeclaredOptions TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_KeptOptions TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_OptionsRest VARCHAR(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_OptionToken VARCHAR(2000) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_OwnsTablespace TINYINT DEFAULT 0;
+    DECLARE v_OwnsDataDirectory TINYINT DEFAULT 0;
+    DECLARE v_DirectoryAt INT DEFAULT 0;
+    DECLARE v_LiveTablespace VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_LiveDataDirectory VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_NeedSchema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_NeedTable VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_NeedKey VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -406,8 +416,8 @@ BEGIN
 
     -- Aggregates, so the read always yields exactly one row and the variables land NULL rather than
     -- keeping a previous value on a miss.
-    SELECT MAX(ist.AUTO_INCREMENT), MAX(ist.TABLE_COLLATION), MAX(ist.ENGINE)
-      INTO v_CapturedAutoIncrement, v_LiveCollation, v_LiveEngine
+    SELECT MAX(ist.AUTO_INCREMENT), MAX(ist.TABLE_COLLATION), MAX(ist.ENGINE), MAX(ist.CREATE_OPTIONS)
+      INTO v_CapturedAutoIncrement, v_LiveCollation, v_LiveEngine, v_LiveOptions
       FROM INFORMATION_SCHEMA.TABLES ist
      WHERE ist.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ist.TABLE_SCHEMA) = v_DbKey
        AND SchemaSmith_IdentifierKey(ist.TABLE_NAME) = v_TableKey;
@@ -530,23 +540,91 @@ BEGIN
     -- foreign-key drops are materialized one row per statement below.
     -- ================================================================================================
 
-    -- ENGINE and COLLATE are the only table options the shadow carries, and both are load-bearing HERE in
-    -- a way the rest are not. COLLATE decides whether the characters in every row survive the copy: a
+    -- ENGINE and COLLATE come first, and both are load-bearing HERE in a way the rest are not. COLLATE decides whether the characters in every row survive the copy: a
     -- shadow built at the DATABASE default would silently transcode a table that is not at that default.
     -- ENGINE is taken from the declaration exactly as MissingTableAndColumnQuench takes it on a fresh
     -- CREATE (ParseTableJson defaults it to InnoDB), so a rebuilt table is the table a fresh create would
     -- have produced rather than a third variant. Declared collation wins when the package states one --
     -- ModifiedTableQuench would converge to it moments later anyway -- and the LIVE collation is
     -- inherited when it does not, which is precisely SchemaSmith's existing "leave collation alone unless
-    -- declared" behaviour. ROW_FORMAT, COMMENT and the declared AUTO_INCREMENT seed are deliberately NOT
-    -- carried: they are pure attributes owned by the convergence passes, and the declared seed in
-    -- particular would fight the captured counter this procedure exists to preserve.
+    -- declared" behaviour. The table's other options follow below.
     -- An omitted Engine keeps the table's own, as the in-place pass does.
     SELECT COALESCE(NULLIF(TRIM(MAX(t.Collation)), ''), v_LiveCollation), COALESCE(MAX(t.Engine), v_LiveEngine),
            COALESCE(MAX(t.AutoIncrementKeyClause), '')
       INTO v_Collation, v_Engine, v_AutoIncrementKeyClause
       FROM _SchemaSmith_Tables t
      WHERE t.TableKey = v_TableKey;
+
+    -- THE TABLE'S OTHER OPTIONS. The shadow is created with them, because what it is created with is what the table
+    -- has afterwards: an option the package does not declare is otherwise reset, and a DECLARED placement built any
+    -- other way fails the check that follows, which refuses to move a table -- after this engine has already
+    -- committed the swap. Declared options are written as a fresh CREATE writes them
+    -- (SchemaSmith_MissingTableAndColumnQuench); the rest are the table's own CREATE_OPTIONS, as the catalog lists
+    -- them. A comment is not among them: an omitted Comment means none, and ModifiedTableQuench clears it in place.
+    -- Two declared options are left to the passes that follow: the AUTO_INCREMENT seed, which would fight the
+    -- captured counter, and COMPRESSION, which a filesystem without hole punching refuses (4029) and
+    -- ModifiedTableQuench handles under the unsupported-feature policy. A rebuild rewrites the table anyway, so
+    -- creating it on a declared tablespace or data directory costs nothing extra. (A partitioned table is refused in
+    -- section 1.)
+    SELECT CONCAT(
+               CASE WHEN t.RowFormat IS NOT NULL AND t.RowFormat != '' THEN CONCAT(' ROW_FORMAT=', t.RowFormat) ELSE '' END,
+               CASE WHEN t.KeyBlockSize IS NOT NULL THEN CONCAT(' KEY_BLOCK_SIZE=', t.KeyBlockSize) ELSE '' END,
+               CASE WHEN t.PageCompressed = 1 AND VERSION() LIKE '%MariaDB%' THEN ' PAGE_COMPRESSED=1' ELSE '' END,
+               CASE WHEN t.PageCompressed = 1 AND t.PageCompressionLevel IS NOT NULL AND VERSION() LIKE '%MariaDB%'
+                    THEN CONCAT(' PAGE_COMPRESSION_LEVEL=', t.PageCompressionLevel) ELSE '' END,
+               CASE WHEN t.Encryption IS NOT NULL AND t.Encryption != '' AND VERSION() NOT LIKE '%MariaDB%'
+                    THEN CONCAT(' ENCRYPTION=''', t.Encryption, '''') ELSE '' END,
+               CASE WHEN t.Encrypted = 1 AND VERSION() LIKE '%MariaDB%' THEN ' ENCRYPTED=YES' ELSE '' END,
+               CASE WHEN t.Encrypted = 1 AND t.EncryptionKeyId IS NOT NULL AND VERSION() LIKE '%MariaDB%'
+                    THEN CONCAT(' ENCRYPTION_KEY_ID=', t.EncryptionKeyId) ELSE '' END,
+               CASE WHEN t.Comment IS NOT NULL AND t.Comment != '' THEN CONCAT(' COMMENT=', QUOTE(t.Comment)) ELSE '' END,
+               CASE WHEN t.Tablespace IS NOT NULL AND t.Tablespace != '' AND VERSION() NOT LIKE '%MariaDB%'
+                    THEN CONCAT(' TABLESPACE ', t.Tablespace) ELSE '' END,
+               CASE WHEN t.DataDirectory IS NOT NULL AND t.DataDirectory != '' THEN CONCAT(' DATA DIRECTORY=', QUOTE(t.DataDirectory)) ELSE '' END),
+           t.Tablespace IS NOT NULL AND t.Tablespace != '', t.DataDirectory IS NOT NULL AND t.DataDirectory != ''
+      INTO v_DeclaredOptions, v_OwnsTablespace, v_OwnsDataDirectory
+      FROM _SchemaSmith_Tables t
+     WHERE t.TableKey = v_TableKey
+     LIMIT 1;
+
+    -- The table's own options, one name=value token at a time, all of them: a declared option written above comes
+    -- after its live token in the CREATE, and the last one wins. An option declared off writes nothing above, so the
+    -- live one stays, which is what ModifiedTableQuench does in place (it only turns page compression on, and
+    -- converges encryption itself). MariaDB lists a
+    -- data or index directory here too, as a spaced key with a quoted path that may itself hold spaces; those are
+    -- cut out first, and placement is read by the procedures below that read it everywhere else. MySQL quotes a string
+    -- value in double quotes, which ANSI_QUOTES would read as an identifier; MariaDB backticks its engine-defined
+    -- options' names and accepts them back in that form.
+    SET v_KeptOptions = '';
+    SET v_OptionsRest = TRIM(COALESCE(v_LiveOptions, ''));
+    SET v_DirectoryAt = LOCATE('DIRECTORY=''', v_OptionsRest);
+    WHILE v_DirectoryAt > 0 DO
+        -- Everything before the key's first word (DATA or INDEX), then everything after the path's closing quote.
+        SET v_OptionToken = TRIM(LEFT(v_OptionsRest, GREATEST(v_DirectoryAt - 1, 0)));
+        SET v_OptionToken = LEFT(v_OptionToken, CHAR_LENGTH(v_OptionToken) - CHAR_LENGTH(SUBSTRING_INDEX(v_OptionToken, ' ', -1)));
+        SET v_OptionsRest = TRIM(CONCAT(v_OptionToken, ' ',
+                                        SUBSTRING(v_OptionsRest, LOCATE('''', v_OptionsRest, v_DirectoryAt + 11) + 1)));
+        SET v_DirectoryAt = LOCATE('DIRECTORY=''', v_OptionsRest);
+    END WHILE;
+    WHILE v_OptionsRest != '' DO
+        SET v_OptionToken = SUBSTRING_INDEX(v_OptionsRest, ' ', 1);
+        SET v_OptionsRest = TRIM(SUBSTRING(v_OptionsRest, CHAR_LENGTH(v_OptionToken) + 1));
+        IF v_OptionToken != '' AND LOCATE('=', v_OptionToken) > 0 THEN
+            SET v_KeptOptions = CONCAT(v_KeptOptions, ' ', REPLACE(v_OptionToken, '"', ''''));
+        END IF;
+    END WHILE;
+    IF v_OwnsTablespace = 0 THEN
+        CALL SchemaSmith_TableTablespace(v_SchemaRaw, v_TableRaw, v_LiveTablespace);
+        IF COALESCE(v_LiveTablespace, '') != '' THEN
+            SET v_KeptOptions = CONCAT(v_KeptOptions, ' TABLESPACE ', SchemaSmith_SafeBacktickWrap(v_LiveTablespace));
+        END IF;
+    END IF;
+    IF v_OwnsDataDirectory = 0 THEN
+        CALL SchemaSmith_TableDataDirectory(v_SchemaRaw, v_TableRaw, v_LiveDataDirectory);
+        IF COALESCE(v_LiveDataDirectory, '') != '' THEN
+            SET v_KeptOptions = CONCAT(v_KeptOptions, ' DATA DIRECTORY=', QUOTE(v_LiveDataDirectory));
+        END IF;
+    END IF;
 
     -- THE PRIMARY KEY IS THE ONE INDEX THIS PROCEDURE EMITS, AND ONLY BECAUSE THE ENGINE FORCES IT.
     -- MySQL and MariaDB reject a CREATE TABLE whose AUTO_INCREMENT column is not part of a key (error
@@ -576,7 +654,8 @@ BEGIN
         -- collation name up to the first underscore), so the two agree on what a collation means.
         CASE WHEN v_Collation IS NOT NULL AND TRIM(v_Collation) <> ''
              THEN CONCAT(' DEFAULT CHARACTER SET ', SUBSTRING_INDEX(v_Collation, '_', 1), ' COLLATE ', v_Collation)
-             ELSE '' END);
+             ELSE '' END,
+        v_KeptOptions, v_DeclaredOptions);
 
     SET v_CopySql = CASE WHEN v_CopyColumnList IS NULL THEN NULL
                          ELSE CONCAT('INSERT INTO ', v_ShadowQualified, ' (', v_CopyColumnList, ')',

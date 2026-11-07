@@ -832,9 +832,12 @@ guessing:
 - The rebuilt table is created with the table's storage, so it is written once. On SQL Server that is its
   filegroup and large-object filegroup, declared or not, and its declared data compression. On PostgreSQL it
   is its tablespace, `UNLOGGED` persistence, access method and storage parameters (its TOAST table's too) —
-  each as the package declares it or, where it does not, as it was. A declared tablespace the table is not on
-  yet is where the rebuilt table is created: the move SchemaQuench refuses in place costs nothing extra in a
-  rebuild, which rewrites the table anyway.
+  each as the package declares it or, where it does not, as it was. On MySQL and MariaDB it is the table's
+  options — row format, key block size, page compression, encryption, statistics settings and the rest — and its
+  tablespace and data directory, the same way; a declared `Compression` and `AutoIncrementValue` are applied
+  after, as they are in place. On PostgreSQL a declared tablespace the table is not on yet is where the rebuilt
+  table is created: the move SchemaQuench refuses in place costs nothing extra in a rebuild, which rewrites the
+  table anyway. On MySQL and MariaDB that move is still refused, before the rebuild.
 
 > **MySQL and MariaDB:** those engines cannot roll DDL back, so a rebuild there wants a quiesced table.
 > SchemaQuench makes the swap itself atomic and verifies the row count immediately before it, so the
