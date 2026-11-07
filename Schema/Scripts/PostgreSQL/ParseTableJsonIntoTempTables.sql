@@ -64,7 +64,10 @@
            (elem #>> '{RebuildPolicy,OnOrderMismatch}')::BOOLEAN AS "RebuildPolicyOnOrderMismatch",
            COALESCE(JSON_TYPEOF(elem -> 'RebuildPolicy') = 'object', FALSE) AS "RebuildPolicySpecified",
            -- The table's OnlineApply (OFF, PREFER, REQUIRE) over the deploy's; NULL inherits (OnlineApplyMode).
-           UPPER(NULLIF(TRIM(elem ->> 'OnlineApply'), '')) AS "OnlineApply"
+           UPPER(NULLIF(TRIM(elem ->> 'OnlineApply'), '')) AS "OnlineApply",
+           -- Declarative partitioning: empty when the package does not manage it (not "unpartitioned").
+           COALESCE(UPPER(TRIM(elem #>> '{Partitioning,Method}')), '') AS "PartitionMethod",
+           COALESCE(elem #>> '{Partitioning,Expression}', '') AS "PartitionExpression"
     FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord);
 
     -- ShouldApply scoped by "_RowId" so each generated DELETE targets exactly the source row.
@@ -73,6 +76,28 @@
       FROM temp_tables
       WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, false);
+
+    -- Every declared partition, flattened: its root table, its immediate parent, and its own key when it is partitioned
+    -- again. Built from the tables that survived the gate, as every other set below is.
+    DROP TABLE IF EXISTS temp_partitions;
+    CREATE TEMPORARY TABLE temp_partitions AS
+    WITH RECURSIVE my_tables(arr) AS (VALUES(table_json::JSON)),
+    parts AS (
+      SELECT te.elem ->> 'Schema' AS "TableSchema", te.elem ->> 'Name' AS "TableName", te.elem ->> 'Name' AS "ParentName",
+             p.value AS pj, 1 AS "Depth", p.ordinality AS "Position"
+        FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+        CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS(COALESCE(te.elem #> '{Partitioning,Partitions}', '[]'::JSON)) WITH ORDINALITY AS p(value, ordinality)
+       WHERE te.ord IN (SELECT "_RowId" FROM temp_tables)
+      UNION ALL
+      SELECT parts."TableSchema", parts."TableName", parts.pj ->> 'Name', c.value, parts."Depth" + 1, c.ordinality
+        FROM parts
+        CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS(COALESCE(parts.pj #> '{Partitioning,Partitions}', '[]'::JSON)) WITH ORDINALITY AS c(value, ordinality))
+    SELECT "TableSchema", "TableName", "ParentName", pj ->> 'Name' AS "Name", TRIM(COALESCE(pj ->> 'Bound', '')) AS "Bound",
+           NULLIF(TRIM(COALESCE(pj ->> 'Tablespace', '')), '') AS "Tablespace",
+           COALESCE(UPPER(TRIM(pj #>> '{Partitioning,Method}')), '') AS "Method",
+           COALESCE(pj #>> '{Partitioning,Expression}', '') AS "Expression",
+           "Depth", "Position", UPPER(TRIM(COALESCE(pj ->> 'Bound', ''))) = 'DEFAULT' AS "IsDefault"
+      FROM parts;
 
     -- Each set below is read from the array again, so it keeps only the entries whose table survived the gate:
     -- a skipped table takes its columns, keys, checks and statistics with it, and of two same-named variants

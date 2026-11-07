@@ -902,6 +902,8 @@ public static class ForgeKindler
                 new("SchemaSmith.ExpressionMapRecord.sql"),
                 // #508: an unrecorded expression is checked on a scratch copy before it is re-applied.
                 new("SchemaSmith.ExpressionMapAdopt.sql"),
+                // Declared partitioning, verified before any DDL by TableQuench.
+                new("SchemaSmith.PartitionVerify.sql"),
                 // Read by ModifiedTableQuench: a declared identity sequence option that differs from the live sequence.
                 new("SchemaSmith.IdentityOptionChanges.sql"),
                 new("SchemaSmith.ColumnTypeArguments.sql"),

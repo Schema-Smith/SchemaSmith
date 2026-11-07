@@ -48,6 +48,7 @@ BEGIN
   CALL "SchemaSmith"."ValidateTableOwnership"(p_ProductName, p_WhatIf);
   -- #508: before any table or column is created, so only what already exists is checked on a scratch copy.
   CALL "SchemaSmith"."ExpressionMapAdopt"(p_WhatIf);
+  CALL "SchemaSmith"."PartitionVerify"(p_WhatIf);
   CALL "SchemaSmith"."MissingTableAndColumnQuench"(p_WhatIf);
   CALL "SchemaSmith"."ModifiedTableQuench"(p_WhatIf := p_WhatIf, p_DropUnknownIndexes := p_DropUnknownIndexes, p_DropTablesRemovedFromProduct := p_DropTablesRemovedFromProduct,
                                            p_RebuildPolicyMode := p_RebuildPolicyMode, p_RebuildPolicyThreshold := p_RebuildPolicyThreshold, p_RebuildPolicyOnOrderMismatch := p_RebuildPolicyOnOrderMismatch,

@@ -1370,7 +1370,7 @@ DECLARE @TableDefinitions XML = '{EscapeSqlLiteral(IterationTableXml)}',
                 // Ownership first, so a refusal leaves another product's table as it was. #508: adoption before any table
                 // or column is created, so only what already exists is checked on a scratch copy.
                 tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ValidateTableOwnership""(p_ProductName := '{EscapeSqlLiteral(_product.Name)}', p_WhatIf := {SqlFlag(_whatIfOnly)}, p_TemplateName := '{EscapeSqlLiteral(_template.Name)}', p_SchemaName := '{EscapeSqlLiteral(_schemaName)}');
-CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {SqlFlag(_whatIfOnly)}); CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)})";
+CALL ""SchemaSmith"".""ExpressionMapAdopt""(p_WhatIf := {SqlFlag(_whatIfOnly)}); CALL ""SchemaSmith"".""PartitionVerify""(p_WhatIf := {SqlFlag(_whatIfOnly)}); CALL ""SchemaSmith"".""MissingTableAndColumnQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)})";
                 break;
             }
             case Platform.MySQL:

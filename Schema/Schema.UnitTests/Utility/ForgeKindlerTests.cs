@@ -414,7 +414,7 @@ public class ForgeKindlerTests
         // +1 on PostgreSQL = SchemaSmith.ExcludeKeyForms (an exclusion's keys, declared and live, read one way).
         // +1 on PostgreSQL = SchemaSmith.DeclaredTypeCanonical (a declared type and modifier as format_type renders it).
         // +1 on PostgreSQL = SchemaSmith.SerialSequenceName (the sequence a serial column gets, as the engine names it).
-        Assert.That(postgres.Length, Is.EqualTo(76));
+        Assert.That(postgres.Length, Is.EqualTo(77));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor

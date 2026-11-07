@@ -13,6 +13,7 @@ DECLARE
   sql_script TEXT = '';
   restore_candidates TEXT[];
   restored_table TEXT;
+  saved_time_zone TEXT;
 BEGIN
   RAISE NOTICE 'Handle Table Renames';
   SELECT STRING_AGG('RAISE NOTICE ''  Rename Table %.% to %'', ''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."OldName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
@@ -84,11 +85,14 @@ BEGIN
                          -- present at CREATE time, and inlining them here created a plain column then churned
                          -- it to generated via a drop-and-re-add. Identity columns are NOT deferred.
                          AND NOT (COALESCE(tc."Generated", 'NEVER') = 'ALWAYS' AND COALESCE(tc."GenerationExpression", '') <> '')) || ')' ||
+                    CASE WHEN tt."PartitionMethod" <> '' THEN ' PARTITION BY ' || tt."PartitionMethod" || ' (' || tt."PartitionExpression" || ')' ELSE '' END ||
                     -- USING precedes WITH in the grammar and has existed since PostgreSQL 12, so a new table gets its
                     -- declared access method on every supported version. Only changing an existing table's method
-                    -- needs 15 (SET ACCESS METHOD, in ModifiedTableQuench).
-                    CASE WHEN COALESCE(tt."AccessMethod", '') <> '' THEN ' USING ' || "SchemaSmith"."QuoteName"(tt."AccessMethod") ELSE '' END ||
-                    ' WITH (fillfactor = ' || tt."FillFactor" || ')' ||
+                    -- needs 15 (SET ACCESS METHOD, in ModifiedTableQuench). A partitioned table takes one from 17.
+                    CASE WHEN COALESCE(tt."AccessMethod", '') <> '' AND (tt."PartitionMethod" = '' OR "SchemaSmith"."ServerVersionNum"() >= 17)
+                         THEN ' USING ' || "SchemaSmith"."QuoteName"(tt."AccessMethod") ELSE '' END ||
+                    -- A partitioned table holds no rows and takes no storage parameters.
+                    CASE WHEN tt."PartitionMethod" = '' THEN ' WITH (fillfactor = ' || tt."FillFactor" || ')' ELSE '' END ||
                     -- TABLESPACE follows WITH in the CREATE TABLE grammar. Emitted only when declared:
                     -- an unset Tablespace means placement is not managed, so the table lands wherever
                     -- default_tablespace puts it, exactly as it did before this shipped.
@@ -107,6 +111,33 @@ BEGIN
         FROM temp_tables tt
         WHERE NOT EXISTS(SELECT * FROM information_schema.tables t WHERE t.table_schema = tt."Schema" AND t.table_name = tt."Name");
   END IF;
+
+  -- Each declared partition the database lacks, parents before children and DEFAULT last at each level (a partition
+  -- added beside a DEFAULT scans it). Before every index and key pass, so the ones declared on the parent reach each
+  -- partition through the engine. Under UTC, so a timestamp with time zone written without an offset means the same
+  -- instant on every deploy, as extraction writes it.
+  RAISE NOTICE 'Add Missing Partitions';
+  saved_time_zone := current_setting('TimeZone');
+  PERFORM set_config('TimeZone', 'UTC', true);
+  SELECT STRING_AGG('RAISE NOTICE ''  Create partition %.% of %'', ''' || REPLACE(p."TableSchema", '''', '''''') || ''', ''' || REPLACE(p."Name", '''', '''''') || ''', ''' || REPLACE(p."ParentName", '''', '''''') || ''';' || CHR(10) ||
+                    'CREATE TABLE ' || "SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."Name") ||
+                    ' PARTITION OF ' || "SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."ParentName") || ' ' || p."Bound" ||
+                    CASE WHEN p."Method" <> '' THEN ' PARTITION BY ' || p."Method" || ' (' || p."Expression" || ')' ELSE '' END ||
+                    CASE WHEN p."Tablespace" IS NOT NULL THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(p."Tablespace") ELSE '' END || ';' || CHR(10) ||
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''partition'', ''' ||
+                    REPLACE(p."TableSchema" || '.' || p."ParentName" || '.' || p."Name", '''', '''''') || ''', ''created'');', CHR(10)
+                    ORDER BY p."TableSchema", p."TableName", p."Depth", p."IsDefault", p."Position")
+    INTO sql_script
+    FROM temp_partitions p
+    WHERE to_regclass("SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."Name")) IS NULL;
+  CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
+  IF p_WhatIf THEN
+    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+      SELECT pg_backend_pid(), 'partition', p."TableSchema" || '.' || p."ParentName" || '.' || p."Name", 'wouldCreate'
+        FROM temp_partitions p
+        WHERE to_regclass("SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."Name")) IS NULL;
+  END IF;
+  PERFORM set_config('TimeZone', saved_time_zone, true);
 
   RAISE NOTICE 'Add New Physical Columns';
   SELECT STRING_AGG('RAISE NOTICE ''  Add new physical columns to %.% (%)'', ''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name")::TEXT, '''', '''''') || ''', ''' || REPLACE(((SELECT STRING_AGG(tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END, ', ' ORDER BY tc."_RowId")
