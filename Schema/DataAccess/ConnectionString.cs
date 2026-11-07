@@ -27,6 +27,43 @@ public static class ConnectionString
     }
 
     /// <summary>
+    /// How long each command on an extraction connection may run: <c>Source:CommandTimeoutSeconds</c>, <c>0</c> (the default)
+    /// for no limit. Unset, every command took the client library's 30 seconds, so extracting a large table's data failed.
+    /// A command timeout already in the connection properties or a --ConnectionString wins.
+    /// </summary>
+    public static string WithSourceCommandTimeout(string connectionString, Platform platform, IConfigurationRoot config)
+    {
+        var raw = config?[Configuration.SettingsKeys.SourceCommandTimeoutSeconds];
+        var seconds = 0;
+        if (!string.IsNullOrWhiteSpace(raw) && (!int.TryParse(raw.Trim(), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out seconds)))
+            throw new Utility.RunFailedException($"{Configuration.SettingsKeys.SourceCommandTimeoutSeconds} is '{raw}'; it must be a whole number of seconds, 0 for no limit.");
+        return WithCommandTimeout(connectionString, platform, seconds);
+    }
+
+    internal static string WithCommandTimeout(string connectionString, Platform platform, int seconds)
+    {
+        if (string.IsNullOrEmpty(connectionString)) return connectionString;
+        switch (platform.GetBasePlatform())
+        {
+            case Platform.SqlServer:
+                var sql = new SqlConnectionStringBuilder(connectionString);
+                if (!sql.ShouldSerialize("Command Timeout")) sql.CommandTimeout = seconds;
+                return sql.ToString();
+            case Platform.PostgreSQL:
+                var pg = new NpgsqlConnectionStringBuilder(connectionString);
+                if (!pg.ShouldSerialize("Command Timeout")) pg.CommandTimeout = seconds;
+                return pg.ToString();
+            case Platform.MySQL:
+                var my = new MySqlConnectionStringBuilder(connectionString);
+                if (!my.ShouldSerialize("Default Command Timeout")) my.DefaultCommandTimeout = (uint)seconds;
+                return my.ToString();
+            default:
+                return connectionString;
+        }
+    }
+
+    /// <summary>
     /// Rebuilds <paramref name="connectionString"/> to target <paramref name="databaseName"/>, preserving
     /// host, auth, and any other connection options. Returns the input unchanged when either argument
     /// is null/empty, so callers can invoke unconditionally.

@@ -229,7 +229,8 @@ public class SchemaTongs
                                   "This is required for SchemaSmith stored procedures that use PREPARE/EXECUTE.");
             }
             var overrideFactory = GetConnectionFactory();
-            var overrideConnection = overrideFactory.GetDbConnection(connectionStringOverride);
+            var overrideConnection = overrideFactory.GetDbConnection(
+                ConnectionString.WithSourceCommandTimeout(connectionStringOverride, _platform, FactoryContainer.ResolveOrCreate<IConfigurationRoot>()));
             overrideConnection.Open();
             return Prepared(overrideConnection);
         }
@@ -245,7 +246,8 @@ public class SchemaTongs
         CommandLineParser.ApplyTransportSecuritySwitch(_platform, connectionProperties);
         var integratedSecurity = string.Equals(config[SettingsKeys.Source.IntegratedSecurity] ?? config[SettingsKeys.Target.IntegratedSecurity], "true", StringComparison.OrdinalIgnoreCase);
 
-        var connectionString = ConnectionString.Build(_platform, server, targetDb, user, password, port, connectionProperties, integratedSecurity: integratedSecurity);
+        var connectionString = ConnectionString.WithSourceCommandTimeout(
+            ConnectionString.Build(_platform, server, targetDb, user, password, port, connectionProperties, integratedSecurity: integratedSecurity), _platform, config);
         var connectionFactory = GetConnectionFactory();
         var connection = connectionFactory.GetDbConnection(connectionString);
         connection.Open();

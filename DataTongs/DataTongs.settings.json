@@ -12,6 +12,7 @@
                                        // but should not be used.
         // "CompatEncoding": "", // Override the payload encoding chosen for the source server
                                  // (Json | Xml). Blank = choose automatically.
+        // "CommandTimeoutSeconds": 0, // How long one extraction command may run. 0 (default) = no limit.
         "ConnectionProperties": {
             // Extra connection-string properties, and they are PER ENGINE -- a key one engine does not know
             // is rejected outright, so this ships empty rather than pre-filled. SQL Server against a

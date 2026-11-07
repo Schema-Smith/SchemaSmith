@@ -142,6 +142,7 @@ For the full explanation of configuration loading, environment variable mapping,
     "Schema": "",                      // SQL Server / PostgreSQL: set to extract a schema template
     "Platform": "",
     "CompatEncoding": "",              // auto (blank), legacy or modern
+    "CommandTimeoutSeconds": 0,        // how long one extraction command may run; 0 (default) = no limit
     "ConnectionProperties": {
       "TrustServerCertificate": "True"
     }
@@ -211,7 +212,7 @@ For the full explanation of configuration loading, environment variable mapping,
 }
 ```
 
-The platform-specific `ShouldCast` flags are simply ignored when they don't apply to the configured `Source:Platform`. You can leave the full set in place across all your environments. Every `ShouldCast` object flag defaults to `true` when it is left out; `ValidateScripts` and the deprecated `ScriptDynamicDependencyRemovalForFunctions` default to `false`. `Sequences` and `Packages` act on MariaDB only -- MySQL has neither object, so the flags mean nothing there whatever they say. `Source:CompatEncoding` takes `auto` (the default when blank), `legacy` or `modern`, choosing the payload encoding SchemaTongs uses against a SQL Server source; `auto` picks the legacy form when the database's compatibility level is below 130 or the server is older than SQL Server 2017.
+The platform-specific `ShouldCast` flags are simply ignored when they don't apply to the configured `Source:Platform`. You can leave the full set in place across all your environments. Every `ShouldCast` object flag defaults to `true` when it is left out; `ValidateScripts` and the deprecated `ScriptDynamicDependencyRemovalForFunctions` default to `false`. `Sequences` and `Packages` act on MariaDB only -- MySQL has neither object, so the flags mean nothing there whatever they say. `Source:CompatEncoding` takes `auto` (the default when blank), `legacy` or `modern`, choosing the payload encoding SchemaTongs uses against a SQL Server source; `auto` picks the legacy form when the database's compatibility level is below 130 or the server is older than SQL Server 2017. `Source:CommandTimeoutSeconds` is how long one extraction command may run, `0` (the default) for no limit; a command timeout set in `ConnectionProperties` or a `--ConnectionString` takes precedence.
 
 ### Source connection
 

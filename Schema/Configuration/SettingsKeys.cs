@@ -251,6 +251,7 @@ public static class SettingsKeys
     public const string DriftHelperDatabase = "Target:DriftHelperDatabase";
     public const string CompatEncoding = "Target:CompatEncoding";
     public const string SourceCompatEncoding = "Source:CompatEncoding";
+    public const string SourceCommandTimeoutSeconds = "Source:CommandTimeoutSeconds";
     public const string ArtifactPath = "ArtifactPath";
     // TRANSITIONAL (ScrubArtifacts, deprecated in 2.8, #576): read only to warn that it does nothing. Delete two releases
     // past 2.8 GA with its contract entry and warning (roadmap: the deprecated 2.8 settings).

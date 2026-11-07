@@ -122,7 +122,7 @@ public static class SettingsContract
         SettingsKeys.Source.Server, SettingsKeys.Source.User, SettingsKeys.Source.Password,
         SettingsKeys.Source.Port, SettingsKeys.Source.Platform, SettingsKeys.Source.Database,
         SettingsKeys.Source.Schema, SettingsKeys.Source.IntegratedSecurity,
-        SettingsKeys.Source.ConnectionProperties, SettingsKeys.SourceCompatEncoding,
+        SettingsKeys.Source.ConnectionProperties, SettingsKeys.SourceCompatEncoding, SettingsKeys.SourceCommandTimeoutSeconds,
         SettingsKeys.Target.Platform,
         // Each Source:* connection key falls back to its Target:* twin when absent.
         SettingsKeys.Target.Server, SettingsKeys.Target.User, SettingsKeys.Target.Password, SettingsKeys.Target.Port,
