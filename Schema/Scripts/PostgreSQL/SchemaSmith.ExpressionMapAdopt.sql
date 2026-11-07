@@ -77,6 +77,21 @@ BEGIN
        WHERE COALESCE(col."GenerationExpression", '') != '' AND a.generation_expression IS NOT NULL
          AND col."GenerationExpression" != a.generation_expression
          AND NOT "SchemaSmith"."ExpressionMapUnchanged"(col."TableSchema", col."TableName", 'COLUMN', col."Name", 'generated', col."GenerationExpression", a.generation_expression);
+
+    -- Column defaults, set on the copy's own column (LIKE copies the column without its default).
+    INSERT INTO temp_expression_map_candidates
+      SELECT col."TableSchema", col."TableName", 'COLUMN', col."Name", 'default', col."Default", a.column_default::TEXT,
+             'ALTER TABLE {probe} ALTER COLUMN ' || quote_ident(col."Name") || ' SET DEFAULT ' || col."Default",
+             'SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid) FROM pg_catalog.pg_attrdef d JOIN pg_catalog.pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum WHERE d.adrelid = ''pg_temp.schemasmith_probe''::regclass AND a.attname = ' || quote_literal(col."Name")
+        FROM temp_columns col
+        JOIN information_schema.columns a
+          ON a.table_schema = col."TableSchema" AND a.table_name = col."TableName" AND a.column_name = col."Name"
+       WHERE COALESCE(col."Default", '') != '' AND a.column_default IS NOT NULL
+         AND NOT col."IsSerial"
+         AND COALESCE(col."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%'
+         AND COALESCE(col."GenerationExpression", '') = ''
+         AND col."Default" != a.column_default::TEXT
+         AND NOT "SchemaSmith"."ExpressionMapUnchanged"(col."TableSchema", col."TableName", 'COLUMN', col."Name", 'default', col."Default", a.column_default::TEXT);
   END IF;
 
   -- Partial-index filters. The key does not shape the predicate, so the copy's index is keyed on a constant.

@@ -84,6 +84,18 @@ BEGIN
       JOIN information_schema.columns a
         ON a.table_schema = col."TableSchema" AND a.table_name = col."TableName" AND a.column_name = col."Name"
      WHERE COALESCE(col."GenerationExpression", '') != '';
+
+  -- Column defaults, read as ModifiedTableQuench reads them (information_schema). A serial column's default is built
+  -- from the catalog and never authored; an identity or generated column has no default to record.
+  INSERT INTO temp_expression_map_declared
+    SELECT col."TableSchema", col."TableName", 'COLUMN', col."Name", 'default', col."Default", a.column_default::TEXT
+      FROM temp_columns col
+      JOIN information_schema.columns a
+        ON a.table_schema = col."TableSchema" AND a.table_name = col."TableName" AND a.column_name = col."Name"
+     WHERE COALESCE(col."Default", '') != '' AND a.column_default IS NOT NULL
+       AND NOT col."IsSerial"
+       AND COALESCE(col."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%'
+       AND COALESCE(col."GenerationExpression", '') = '';
   END IF;
 
   IF to_regclass('pg_temp.temp_indexes') IS NOT NULL THEN

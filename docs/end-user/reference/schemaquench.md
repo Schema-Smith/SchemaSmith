@@ -1106,7 +1106,7 @@ version -- `Re-baselined 3 recorded expression(s) ... No object was changed.` --
 the first deploy after it.
 
 **Covered surfaces:** check constraints, computed columns, column defaults, and filtered-index and
-filtered-statistic predicates (SQL Server); check constraints, generated columns, partial-index predicates,
+filtered-statistic predicates (SQL Server); check constraints, generated columns, column defaults, partial-index predicates,
 extended-statistics expressions, row-level security `USING` / `WITH CHECK` expressions and materialized view
 bodies (PostgreSQL); check constraints, generated columns and expression defaults (MySQL, MariaDB). Index and statistic predicates
 are covered by `IndexOnlyTableQuenches` too, which compares indexes separately from the full table quench.

@@ -876,7 +876,6 @@ public static class ForgeKindler
                 new("SchemaSmith.ColumnTypeArguments.sql"),
                 // Calls ColumnTypeArguments and QuoteName, and is called by extraction and the table quench.
                 new("SchemaSmith.ColumnDataType.sql"),
-                new("SchemaSmith.StripTypeCast.sql"),
                 new("SchemaSmith.ServerVersionNum.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.IndexNullsNotDistinct.sql"),

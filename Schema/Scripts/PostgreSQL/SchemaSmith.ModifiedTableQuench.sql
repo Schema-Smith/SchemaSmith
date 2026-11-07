@@ -366,6 +366,32 @@ BEGIN
        AND "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'COLUMN', c."Name",
              'generated', c."GenerationExpression", COALESCE(ec."GenerationExpression", ''));
 
+    -- Column defaults, the same way: compared raw from here on, so PostgreSQL's own rendering ('N'::character varying,
+    -- upper('n'::text)) reads as the declared text only where the map says the declared text produced it -- or where
+    -- this run created the column with it. A serial column's default is built from the catalog, never authored, and an
+    -- identity or generated column has none to compare.
+    UPDATE temp_existing_columns ec
+       SET "Default" = c."Default"
+      FROM temp_columns c
+     WHERE c."TableSchema" = ec."TableSchema"
+       AND c."TableName" = ec."TableName"
+       AND c."Name" = ec."ColumnName"
+       AND COALESCE(c."Default", '') != ''
+       AND COALESCE(ec."Default", '') != ''
+       AND c."Default" != ec."Default"
+       AND NOT c."IsSerial"
+       AND COALESCE(c."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%'
+       AND COALESCE(c."GenerationExpression", '') = ''
+       AND ((to_regclass('pg_temp.temp_created_columns') IS NOT NULL
+             AND EXISTS (SELECT 1 FROM pg_temp.temp_created_columns cc
+                          WHERE cc."TableSchema" = c."TableSchema" AND cc."TableName" = c."TableName" AND cc."Name" = c."Name"))
+            OR "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'COLUMN', c."Name",
+                 'default', c."Default", ec."Default"));
+    -- Used once: a later call in this session that did not create these columns must not read them as created.
+    IF to_regclass('pg_temp.temp_created_columns') IS NOT NULL THEN
+      TRUNCATE pg_temp.temp_created_columns;
+    END IF;
+
     RAISE NOTICE 'Detect declared-vs-deployed column order drift';
     DROP TABLE IF EXISTS temp_declared_column_order;
     CREATE TEMPORARY TABLE temp_declared_column_order AS
@@ -422,7 +448,7 @@ BEGIN
                         WHERE c."TableSchema" = t."Schema" AND c."TableName" = t."Name"
                           AND (REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')
                             OR c."Nullable" != ec."Nullable"
-                            OR COALESCE("SchemaSmith"."StripTypeCast"(c."Default"), '') != COALESCE("SchemaSmith"."StripTypeCast"(ec."Default"), '')
+                            OR COALESCE(c."Default", '') != COALESCE(ec."Default", '')
                             OR COALESCE(c."Collation", '') != COALESCE(ec."Collation", '')
                             OR COALESCE(REGEXP_REPLACE(c."Generated", '\s*\(.*$', ''), 'NEVER') != COALESCE(REGEXP_REPLACE(ec."Generated", '\s*\(.*$', ''), 'NEVER')
                             OR COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')
@@ -1756,7 +1782,7 @@ BEGIN
                 AND ic."TableName" = c."TableName"
                 AND (REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ic."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(iec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')
                   OR ic."Nullable" != iec."Nullable"
-                  OR COALESCE("SchemaSmith"."StripTypeCast"(ic."Default"), '') != COALESCE("SchemaSmith"."StripTypeCast"(iec."Default"), '')
+                  OR COALESCE(ic."Default", '') != COALESCE(iec."Default", '')
                   OR COALESCE(ic."Collation", '') != COALESCE(iec."Collation", '')
                   OR COALESCE(REGEXP_REPLACE(ic."Generated", '\s*\(.*$', ''), 'NEVER') != COALESCE(REGEXP_REPLACE(iec."Generated", '\s*\(.*$', ''), 'NEVER')
                   OR COALESCE(ic."GenerationExpression", '') != COALESCE(iec."GenerationExpression", '')
@@ -1775,7 +1801,7 @@ BEGIN
                        FROM temp_columns sc
                        JOIN temp_existing_columns sec ON sec."TableSchema" = sc."TableSchema" AND sec."TableName" = sc."TableName" AND sec."ColumnName" = sc."Name"
                       WHERE sc."TableSchema" = c."TableSchema" AND sc."TableName" = c."TableName" AND sc."IsSerial"
-                        AND COALESCE("SchemaSmith"."StripTypeCast"(sc."Default"), '') != COALESCE("SchemaSmith"."StripTypeCast"(sec."Default"), '')) || CHR(10), '') ||
+                        AND COALESCE(sc."Default", '') != COALESCE(sec."Default", '')) || CHR(10), '') ||
            'ALTER TABLE ' || "SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName") || CHR(10) ||
            STRING_AGG(NULLIF(RTRIM(TRIM(TRAILING ',' FROM
                       CASE WHEN REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') OR COALESCE(c."Collation", '') != COALESCE(ec."Collation", '')
@@ -1800,7 +1826,10 @@ BEGIN
                                      THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' DROP NOT NULL,'
                                      ELSE ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET NOT NULL,' END
                            ELSE '' END ||
-                      CASE WHEN COALESCE("SchemaSmith"."StripTypeCast"(c."Default"), '') != COALESCE("SchemaSmith"."StripTypeCast"(ec."Default"), '')
+                      -- A type change leaves the stored default rendered for the old type, so a declared one is set again.
+                      CASE WHEN COALESCE(c."Default", '') != COALESCE(ec."Default", '')
+                                OR (COALESCE(c."Default", '') != ''
+                                    AND REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'))
                            THEN CASE WHEN COALESCE(c."Default", '') = ''
                                      THEN ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' DROP DEFAULT,'
                                      ELSE ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(c."Name") || ' SET DEFAULT ' || c."Default" || ',' END
@@ -1835,7 +1864,7 @@ BEGIN
                         AND ic.column_name = c."Name")
         AND (REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')
           OR c."Nullable" != ec."Nullable"
-          OR COALESCE("SchemaSmith"."StripTypeCast"(c."Default"), '') != COALESCE("SchemaSmith"."StripTypeCast"(ec."Default"), '')
+          OR COALESCE(c."Default", '') != COALESCE(ec."Default", '')
           OR COALESCE(c."Collation", '') != COALESCE(ec."Collation", '')
           -- Identity KIND only, both sides. The catalog records the kind and nothing else (see the live
           -- rendering above), while a package may legitimately declare
@@ -1896,7 +1925,7 @@ BEGIN
                             AND ic.column_name = c."Name")
             AND (REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC') != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')
               OR c."Nullable" != ec."Nullable"
-              OR COALESCE("SchemaSmith"."StripTypeCast"(c."Default"), '') != COALESCE("SchemaSmith"."StripTypeCast"(ec."Default"), '')
+              OR COALESCE(c."Default", '') != COALESCE(ec."Default", '')
               OR COALESCE(c."Collation", '') != COALESCE(ec."Collation", '')
               OR COALESCE(REGEXP_REPLACE(c."Generated", '\s*\(.*$', ''), 'NEVER') != COALESCE(REGEXP_REPLACE(ec."Generated", '\s*\(.*$', ''), 'NEVER')
               OR COALESCE(c."GenerationExpression", '') != COALESCE(ec."GenerationExpression", '')

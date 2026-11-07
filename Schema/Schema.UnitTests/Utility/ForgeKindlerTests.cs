@@ -94,7 +94,6 @@ public class ForgeKindlerTests
         Assert.That(scripts, Does.Contain("SchemaSmith.QuoteColumnList.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.QuoteIndexColumnList.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.StripParenWrapping.sql"));
-        Assert.That(scripts, Does.Contain("SchemaSmith.StripTypeCast.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.ServerVersionNum.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.StripLeadingSelect.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.RebuildBlockedReason.sql"));
@@ -410,7 +409,8 @@ public class ForgeKindlerTests
         // +1 = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
         // +1 = IdentityOptionChanges (an identity column's declared sequence options, compared and applied).
         // +1 on PostgreSQL = Kindling_RebuildSetAsideForeignKeys_Table (inbound keys a rebuild sets aside).
-        Assert.That(postgres.Length, Is.EqualTo(74));
+        // -1 on PostgreSQL = SchemaSmith.StripTypeCast (defaults compare raw, through the expression map).
+        Assert.That(postgres.Length, Is.EqualTo(73));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor

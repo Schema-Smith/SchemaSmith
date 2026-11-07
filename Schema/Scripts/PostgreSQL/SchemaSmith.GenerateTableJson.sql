@@ -61,7 +61,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                     ELSE "SchemaSmith"."ColumnDataType"(c.data_type, c.udt_schema, c.udt_name, c.domain_schema, c.domain_name, c.character_maximum_length, c.numeric_precision, c.numeric_scale, c.datetime_precision, a.atttypid, a.atttypmod) END AS "DataType",
                                CASE WHEN c.is_nullable = 'YES' THEN TRUE ELSE FALSE END AS "Nullable",
                                CASE WHEN ser.objid IS NOT NULL AND a.attidentity = '' AND c.column_default LIKE 'nextval(%' THEN NULL
-                                    ELSE "SchemaSmith"."StripParenWrapping"(c.column_default) END AS "Default",
+                                    -- Raw, as the compare reads it: a re-extracted package is then exactly what PostgreSQL stores.
+                                    ELSE c.column_default END AS "Default",
                                "SchemaSmith"."ColumnCollation"(c.collation_schema, c.collation_name) AS "Collation",
                                -- ALWAYS has always carried its START WITH and INCREMENT BY; BY DEFAULT writes options only when
                                -- one differs from the default, so a plain one stays as it was. The rest of a sequence's options

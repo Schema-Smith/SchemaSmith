@@ -58,6 +58,17 @@ BEGIN
     END IF;
   END IF;
   
+  -- The columns this run creates, with their tables. Each is created with its declared default, so
+  -- ModifiedTableQuench need not compare that default with the text PostgreSQL stores for it on this run;
+  -- ExpressionMapRecord records the pair at the end of it.
+  DROP TABLE IF EXISTS temp_created_columns;
+  CREATE TEMPORARY TABLE temp_created_columns AS
+    SELECT c."TableSchema", c."TableName", c."Name"
+      FROM temp_columns c
+     WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_attribute a
+                        WHERE a.attrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
+                          AND a.attname = c."Name" AND a.attnum > 0 AND NOT a.attisdropped);
+
   RAISE NOTICE 'Add New Tables';
   SELECT STRING_AGG('RAISE NOTICE ''  Create new table %.%'', ''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name" || CASE WHEN COALESCE(tt."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tt."VariantName", '''', '''''') || ')' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'CREATE TABLE ' || "SchemaSmith"."QuoteName"(tt."Schema") || '.' || "SchemaSmith"."QuoteName"(tt."Name") || ' (' ||
