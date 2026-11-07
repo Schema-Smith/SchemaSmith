@@ -105,7 +105,7 @@ BEGIN
                'COMMENT ON CONSTRAINT ' || "SchemaSmith"."QuoteName"(k."Name") || ' ON ' || "SchemaSmith"."QuoteName"(k."TableSchema") || '.' || "SchemaSmith"."QuoteName"(k."TableName") || ' IS ' ||
                CASE WHEN k."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(k."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-               'VALUES (pg_backend_pid(), ''' || k."AuditType" || ''', ''' || REPLACE(k."TableSchema" || '.' || k."TableName" || '.' || k."Name", '''', '''''') || ''', ''modified'');'
+               'VALUES (pg_backend_pid(), ''' || REPLACE(k."AuditType", '''', '''''') || ''', ''' || REPLACE(k."TableSchema" || '.' || k."TableName" || '.' || k."Name", '''', '''''') || ''', ''modified'');'
           FROM (SELECT "TableSchema", "TableName", "Name", "Description", 'foreignKey' AS "AuditType" FROM temp_fks
                 UNION ALL SELECT "TableSchema", "TableName", "Name", "Description", 'constraint' FROM temp_checks
                 UNION ALL SELECT "TableSchema", "TableName", "Name", "Description", 'constraint' FROM temp_excludes) k
