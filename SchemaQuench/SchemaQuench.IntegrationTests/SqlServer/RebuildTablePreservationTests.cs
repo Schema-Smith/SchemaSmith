@@ -174,27 +174,22 @@ IF OBJECT_ID('SchemaSmith.RebuildSetAsideForeignKeys') IS NOT NULL DELETE FROM S
         using var r = Seeded();
         r.Exec($"CREATE TABLE dbo.[{r.Token}_C] (Id INT NOT NULL, ParentId INT NULL CONSTRAINT [{r.Token}_FK] REFERENCES dbo.[{r.Parent}] (Id))");
 
-        r.Deploy(r.ParentJson("NVARCHAR(60)"), _productName, foreignKeys: false);
-        Assert.That(r.Scalar($"SELECT COUNT(*) FROM sys.foreign_keys WHERE [name] = '{r.Token}_FK'"), Is.EqualTo("0"), "setup: the run stopped with the key set aside");
-        Assert.That(r.Scalar($"SELECT COUNT(*) FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE [KeyName] = '{r.Token}_FK'"), Is.EqualTo("1"), "and recorded");
+        // The run stops right after the rebuild: the table has no primary key yet, and the key is set aside.
+        r.Parse(r.ParentJson("NVARCHAR(60)"));
+        r.Exec($"EXEC SchemaSmith.RebuildTable @p_Schema = 'dbo', @p_Table = '{r.Parent}'");
+        Assert.That(r.Scalar($"SELECT COUNT(*) FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE [KeyName] = '{r.Token}_FK'"), Is.EqualTo("1"), "setup: the key is recorded");
 
-        using (var next = new SqlConnection(_connectionString))
+        // Another product deploys before this one runs again. The key cannot come back yet, and that must not fail a
+        // deploy that has nothing to do with it.
+        using (var other = new Run(_connectionString, _mainDb))
         {
-            next.Open();
-            next.ChangeDatabase(_mainDb);
-            using var cmd = next.CreateCommand();
-            cmd.CommandTimeout = 300;
-            var (createTables, fillTables) = ForgeKindler.GetParseTableJsonPhases(Platform.SqlServer);
-            cmd.CommandText = createTables;
-            cmd.ExecuteNonQuery();
-            cmd.CommandText = "DECLARE @v_SQL NVARCHAR(MAX) = ''\nSET NOCOUNT ON\n" + fillTables;
-            cmd.Parameters.Add("@TableDefinitions", SqlDbType.NVarChar, -1).Value = r.ParentJson("NVARCHAR(60)");
-            cmd.Parameters.Add("@UpdateFillFactor", SqlDbType.Bit).Value = false;
-            cmd.ExecuteNonQuery();
-            cmd.Parameters.Clear();
-            cmd.CommandText = $"EXEC SchemaSmith.ForeignKeyQuench @ProductName = '{_productName}', @WhatIf = 0";
-            cmd.ExecuteNonQuery();
+            Assert.DoesNotThrow(() => other.Deploy($$"""
+[ { "Schema": "[dbo]", "Name": "[{{other.Token}}_U]", "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false } ] } ]
+""", $"Unrelated_{r.Token}"));
         }
+        Assert.That(r.Scalar($"SELECT COUNT(*) FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE [KeyName] = '{r.Token}_FK'"), Is.EqualTo("1"), "and the key waits");
+
+        r.Deploy(r.ParentJson("NVARCHAR(60)"), _productName);
 
         Assert.Multiple(() =>
         {

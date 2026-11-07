@@ -97,7 +97,13 @@ BEGIN TRY
             DELETE FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE [ChildSchema] = @v_RsSchema AND [ChildTable] = @v_RsTable AND [KeyName] = @v_RsKey
           END TRY
           BEGIN CATCH
-            SET @v_RsFailed = ISNULL(@v_RsFailed + '; ', '') + @v_RsChild + '.' + QUOTENAME(@v_RsKey) + ' (' + ERROR_MESSAGE() + ')'
+            -- The rebuilt table does not have the key this one references yet (1776, often with 1750): the run that set
+            -- it aside stopped before its index pass, and this may be another product's deploy. The record waits for the
+            -- run that puts that key back.
+            IF ERROR_NUMBER() IN (1776, 1750) AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys sf WHERE sf.[parent_object_id] = OBJECT_ID(@v_RsChild) AND sf.[name] = @v_RsKey)
+              RAISERROR('  Foreign key %s.%s waits: the table it references has no key for it yet', 10, 100, @v_RsChild, @v_RsKey) WITH NOWAIT
+            ELSE
+              SET @v_RsFailed = ISNULL(@v_RsFailed + '; ', '') + @v_RsChild + '.' + QUOTENAME(@v_RsKey) + ' (' + ERROR_MESSAGE() + ')'
           END CATCH
         END
       END
