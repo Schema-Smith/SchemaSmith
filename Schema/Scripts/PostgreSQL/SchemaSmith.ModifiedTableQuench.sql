@@ -2066,9 +2066,9 @@ BEGIN
       -- A partitioned table or index holds no rows: its tablespace is only where new partitions go, so a declared one
       -- is set, never refused, and the partitions already there stay where they are.
       SELECT STRING_AGG('RAISE NOTICE ''  Setting the tablespace of partitioned % %.% to % (existing partitions are not moved)'', ''' ||
-                        p.kind || ''', ''' || REPLACE(p.sch, '''', '''''') || ''', ''' || REPLACE(p.obj, '''', '''''') || ''', ''' || REPLACE(p.declared, '''', '''''') || ''';' || CHR(10) ||
+                        REPLACE(p.kind, '''', '''''') || ''', ''' || REPLACE(p.sch, '''', '''''') || ''', ''' || REPLACE(p.obj, '''', '''''') || ''', ''' || REPLACE(p.declared, '''', '''''') || ''';' || CHR(10) ||
                         'ALTER ' || UPPER(p.kind) || ' ' || "SchemaSmith"."QuoteName"(p.sch) || '.' || "SchemaSmith"."QuoteName"(p.obj) || ' SET TABLESPACE ' || "SchemaSmith"."QuoteName"(p.declared) || ';' || CHR(10) ||
-                        'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || p.kind || ''', ''' ||
+                        'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || REPLACE(p.kind, '''', '''''') || ''', ''' ||
                         REPLACE(p.sch || '.' || CASE WHEN p.kind = 'index' THEN p.tbl || '.' ELSE '' END || p.obj, '''', '''''') || ''', ''modified'');', CHR(10))
         INTO sql_script
         FROM (SELECT t."Schema" AS sch, t."Name" AS tbl, t."Name" AS obj, 'table' AS kind, t."Tablespace" AS declared, COALESCE(ts.spcname, v_default_tablespace) AS live
