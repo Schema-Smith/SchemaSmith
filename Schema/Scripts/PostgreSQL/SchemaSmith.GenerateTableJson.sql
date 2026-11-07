@@ -41,7 +41,7 @@ END LOOP;
 FOR skipped_fk IN SELECT con.conname
                     FROM pg_catalog.pg_constraint con
                    WHERE con.conrelid = ("SchemaSmith"."QuoteName"(p_Schema) || '.' || "SchemaSmith"."QuoteName"(p_Table))::regclass
-                     AND con.contype = 'f'
+                     AND con.contype = 'f' AND con.conparentid = 0
                      AND "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid)
                    ORDER BY con.conname LOOP
   RAISE WARNING 'Foreign key %.%.% uses PERIOD (a temporal foreign key), which is not modelled: left out of the package rather than written as a plain key.',
@@ -207,7 +207,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                           JOIN pg_catalog.pg_class frel ON frel.oid = con.confrelid
                           JOIN pg_catalog.pg_namespace fnsp ON fnsp.oid = frel.relnamespace
                           WHERE con.conrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
-                            AND con.contype = 'f'
+                            AND con.contype = 'f' AND con.conparentid = 0
                             AND NOT "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid)
                           ORDER BY con.conname) sub) AS "ForeignKeys",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))

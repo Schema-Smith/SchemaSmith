@@ -601,7 +601,10 @@ BEGIN
         JOIN pg_catalog.pg_constraint con ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(t."Schema") ||  '.' || "SchemaSmith"."QuoteName"(t."Name"))
         JOIN pg_catalog.pg_class frel ON frel.oid = con.confrelid
         JOIN pg_catalog.pg_namespace fnsp ON fnsp.oid = frel.relnamespace
-        WHERE con.contype = 'f';
+        WHERE con.contype = 'f'
+          -- A key into a partitioned table is cloned onto this table once per partition (conparentid <> 0); the clones
+          -- are the engine's, not keys of their own, and cannot be dropped.
+          AND con.conparentid = 0;
 
     RAISE NOTICE 'Collect Existing Check Constraint Definitions';
     DROP TABLE IF EXISTS temp_existing_checks;

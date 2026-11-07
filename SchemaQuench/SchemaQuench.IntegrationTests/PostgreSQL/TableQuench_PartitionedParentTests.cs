@@ -209,4 +209,62 @@ public class TableQuench_PartitionedParentTests : BaseTableQuenchTests
             Exec(conn, $"DELETE FROM \"SchemaSmith\".\"ProductOwnership\" WHERE \"ProductName\" = '{product}'");
         }
     }
+
+    // A foreign key into a partitioned table is cloned onto the referencing table once per partition (conparentid <> 0,
+    // named fk_1, fk_2 on 18 and fk_col_fkey, fk_col_fkey1 on 12). Read as keys of their own they are undeclared, so a
+    // deploy would drop them, or compare them, every time.
+    [Test]
+    public void AForeignKeyIntoAPartitionedTable_IsOneKey_AndTheSecondDeployChangesNothing()
+    {
+        var table = "part_fk_" + Guid.NewGuid().ToString("N")[..8];
+        var product = "PartFk_" + table;
+        using var conn = Open(_mainDb);
+        try
+        {
+            Exec(conn, $"CREATE TABLE public.{table} (id integer NOT NULL, d date NOT NULL) PARTITION BY RANGE (d); " +
+                       $"CREATE TABLE public.{table}_2025 PARTITION OF public.{table} FOR VALUES FROM ('2025-01-01') TO ('2026-01-01'); " +
+                       $"CREATE TABLE public.{table}_2026 PARTITION OF public.{table} FOR VALUES FROM ('2026-01-01') TO ('2027-01-01');");
+            var json = $$"""
+                [{ "Schema": "public", "Name": "{{table}}",
+                   "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false }, { "Name": "d", "DataType": "date", "Nullable": false } ],
+                   "Indexes": [ { "Name": "pk_{{table}}", "PrimaryKey": true, "Unique": true, "IndexColumns": "id,d" } ] },
+                 { "Schema": "public", "Name": "{{table}}_ref",
+                   "Columns": [ { "Name": "rid", "DataType": "integer", "Nullable": false }, { "Name": "id", "DataType": "integer", "Nullable": true },
+                                { "Name": "d", "DataType": "date", "Nullable": true } ],
+                   "Indexes": [ { "Name": "pk_{{table}}_ref", "PrimaryKey": true, "Unique": true, "IndexColumns": "rid" } ],
+                   "ForeignKeys": [ { "Name": "fk_{{table}}_ref", "Columns": "id,d", "RelatedTableSchema": "public", "RelatedTable": "{{table}}", "RelatedColumns": "id,d" } ] }]
+                """;
+            using (var cmd = conn.CreateCommand())
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product), "first");
+            Exec(conn, "DELETE FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid()");
+            using (var cmd = conn.CreateCommand())
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product), "second");
+            var changes = new List<string>();
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.CommandText = "SELECT \"ObjectType\" || ' ' || \"ObjectName\" || ' ' || \"ActionType\" FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid()";
+                using var r = cmd.ExecuteReader();
+                while (r.Read()) changes.Add(r.GetString(0));
+            }
+            // A rebuild of the referencing table carries its keys over: the one key, which the engine clones again, not
+            // the clones as keys of their own.
+            var rebuilt = json.Replace($"\"Name\": \"{table}_ref\",", $"\"Name\": \"{table}_ref\", \"RebuildPolicy\": {{ \"Mode\": \"ALWAYS\" }},")
+                              .Replace("\"Name\": \"rid\", \"DataType\": \"integer\"", "\"Name\": \"rid\", \"DataType\": \"bigint\"");
+            using (var cmd = conn.CreateCommand())
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, rebuilt, productName: product), "a rebuild of the referencing table");
+            Assert.Multiple(() =>
+            {
+                Assert.That(changes, Is.Empty, "the second deploy changes nothing");
+                Assert.That(Scalar(conn, $"SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'public.{table}_ref'::regclass AND attname = 'rid'"), Is.EqualTo("bigint"), "the rebuild ran");
+                Assert.That(Scalar(conn, $"SELECT COUNT(*) FROM pg_constraint WHERE conrelid = 'public.{table}_ref'::regclass AND contype = 'f' AND conparentid = 0"), Is.EqualTo("1"));
+                Assert.That(Scalar(conn, $"SELECT json_array_length((\"SchemaSmith\".\"GenerateTableJSON\"('public', '{table}_ref')::json) -> 'ForeignKeys')"), Is.EqualTo("1"),
+                    "extraction writes the one key, not its clones");
+            });
+        }
+        finally
+        {
+            Exec(conn, $"DROP TABLE IF EXISTS public.{table}_ref; DROP TABLE IF EXISTS public.{table} CASCADE");
+            Exec(conn, $"DELETE FROM \"SchemaSmith\".\"ProductOwnership\" WHERE \"ProductName\" = '{product}'");
+        }
+    }
 }
