@@ -48,6 +48,7 @@ public class RuleExtractionTests
                 CREATE TABLE public.items (id int PRIMARY KEY);
                 CREATE TABLE public.notes (msg text);
                 CREATE RULE log_items AS ON INSERT TO public.items DO ALSO INSERT INTO public.notes VALUES ('CREATE RULE fired');
+                COMMENT ON RULE log_items ON public.items IS 'Logs each item''s insert';
                 """;
             cmd.ExecuteNonQuery();
         }
@@ -89,6 +90,26 @@ public class RuleExtractionTests
         var script = File.ReadAllText(file);
         Assert.That(script, Does.StartWith("CREATE OR REPLACE RULE"), script);
         Assert.That(script, Does.Contain("'CREATE RULE fired'"), script);
+    }
+
+    // G3: the extracted script puts the rule's comment back.
+    [Test]
+    public void ARulesComment_IsCarriedByItsScript()
+    {
+        var script = File.ReadAllText(Path.Join(_productPath, "Templates", "Main", "Rules", "public.items.log_items.sql"));
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_sourceDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "COMMENT ON RULE log_items ON public.items IS NULL";
+        cmd.ExecuteNonQuery();
+        foreach (var statement in PostgreSqlStatementSplitter.Split(script))
+        {
+            cmd.CommandText = statement;
+            cmd.ExecuteNonQuery();
+        }
+        cmd.CommandText = "SELECT OBJ_DESCRIPTION((SELECT oid FROM pg_rewrite WHERE rulename = 'log_items'), 'pg_rewrite')";
+        Assert.That(cmd.ExecuteScalar(), Is.EqualTo("Logs each item's insert"), script);
     }
 
     private IConfigurationRoot BuildConfig(IConfigurationRoot root)

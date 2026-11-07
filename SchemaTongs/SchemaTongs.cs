@@ -1312,6 +1312,14 @@ SELECT s.name, s.schema_id
         }
     }
 
+    // G3: a schema-scoped object's extended properties, in a batch after its create, so a deploy to a database that never
+    // had them carries them.
+    private string SqlServerExtendedPropertyTail(IDbCommand command, string schema, string level1Type, string name)
+    {
+        var properties = GetExtendedProperties(command, "SCHEMA", schema, level1Type, name);
+        return properties.Length == 0 ? "" : "\r\nGO\r\n" + properties;
+    }
+
     internal string GetExtendedProperties(IDbCommand command, string level0Type, string level0Name,
         string level1Type = null, string level1Name = null,
         string level2Type = null, string level2Name = null)
@@ -1409,7 +1417,8 @@ SELECT s.name AS SchemaName, t.name AS TypeName,
             var typeSpec = FormatBaseType(baseType, maxLength, precision, scale);
             var nullSpec = isNullable ? "NULL" : "NOT NULL";
             var script = $"IF NOT EXISTS (SELECT * FROM sys.types st JOIN sys.schemas ss ON st.schema_id = ss.schema_id WHERE st.name = N'{EscapeSql(name)}' AND ss.name = N'{EscapeSql(schema)}')\r\n" +
-                         $"CREATE TYPE [{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(name, Platform.SqlServer)}] FROM {typeSpec} {nullSpec}";
+                         $"CREATE TYPE [{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(name, Platform.SqlServer)}] FROM {typeSpec} {nullSpec}" +
+                         SqlServerExtendedPropertyTail(command, schema, "TYPE", name);
 
             var fileName = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".sql"));
             script = RewriteSqlBodyForSchemaTemplate(script, fileName);
@@ -1560,7 +1569,7 @@ SELECT cc.definition
                                (isMemoryOptimized ? "\r\nWITH (MEMORY_OPTIMIZED = ON)" : "");
 
             var script = $"IF NOT EXISTS (SELECT * FROM sys.types st JOIN sys.schemas ss ON st.schema_id = ss.schema_id WHERE st.name = N'{EscapeSql(name)}' AND ss.name = N'{EscapeSql(schema)}')\r\n" +
-                         createScript;
+                         createScript + SqlServerExtendedPropertyTail(command, schema, "TYPE", name);
 
             var fileName = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".sql"));
             script = RewriteSqlBodyForSchemaTemplate(script, fileName);
@@ -1782,7 +1791,8 @@ SELECT s.name AS SchemaName, sy.name AS SynonymName, sy.base_object_name
             // (like Schemas above) the guarded create goes through EXEC sys.sp_executesql dynamic SQL
             // rather than a plain IF block.
             var script = $"IF NOT EXISTS (SELECT * FROM sys.synonyms sy JOIN sys.schemas ss ON sy.schema_id = ss.schema_id WHERE sy.name = N'{EscapeSql(name)}' AND ss.name = N'{EscapeSql(schema)}')\r\n" +
-                         $"EXEC sys.sp_executesql N'CREATE SYNONYM [{EscapeSql(Identifier.EscapeDelimited(schema, Platform.SqlServer))}].[{EscapeSql(Identifier.EscapeDelimited(name, Platform.SqlServer))}] FOR {EscapeSql(baseObjectName)}'\r\n";
+                         $"EXEC sys.sp_executesql N'CREATE SYNONYM [{EscapeSql(Identifier.EscapeDelimited(schema, Platform.SqlServer))}].[{EscapeSql(Identifier.EscapeDelimited(name, Platform.SqlServer))}] FOR {EscapeSql(baseObjectName)}'\r\n" +
+                         SqlServerExtendedPropertyTail(command, schema, "SYNONYM", name);
 
             var fileName = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".sql"));
             script = RewriteSqlBodyForSchemaTemplate(script, fileName);
@@ -2182,7 +2192,8 @@ SELECT ps.[name], pf.[name], fg.[name]
         foreach (var function in functions)
             sb.Append($"IF NOT EXISTS (SELECT 1 FROM sys.partition_functions WHERE [name] = N'{EscapeSql(function.Name)}')\r\n  " +
                       Exec($"CREATE PARTITION FUNCTION {Quote(function.Name)} ({function.Type}) AS RANGE {(function.Right ? "RIGHT" : "LEFT")} FOR VALUES (" +
-                           string.Join(", ", boundaries.Where(b => b.Function == function.Name).Select(b => b.Value)) + ")") + "\r\n");
+                           string.Join(", ", boundaries.Where(b => b.Function == function.Name).Select(b => b.Value)) + ")") + "\r\n" +
+                      GetExtendedProperties(command, "PARTITION FUNCTION", function.Name));
         foreach (var scheme in schemes.GroupBy(x => (x.Name, x.Function)))
         {
             var fileGroups = scheme.Select(x => x.FileGroup).ToList();
@@ -2192,7 +2203,8 @@ SELECT ps.[name], pf.[name], fg.[name]
                 ? "ALL TO ([PRIMARY])"
                 : "TO (" + string.Join(", ", fileGroups.Select(Quote)) + ")";
             sb.Append($"IF NOT EXISTS (SELECT 1 FROM sys.partition_schemes WHERE [name] = N'{EscapeSql(scheme.Key.Name)}')\r\n  " +
-                      Exec($"CREATE PARTITION SCHEME {Quote(scheme.Key.Name)} AS PARTITION {Quote(scheme.Key.Function)} {to}") + "\r\n");
+                      Exec($"CREATE PARTITION SCHEME {Quote(scheme.Key.Name)} AS PARTITION {Quote(scheme.Key.Function)} {to}") + "\r\n" +
+                      GetExtendedProperties(command, "PARTITION SCHEME", scheme.Key.Name));
         }
 
         DirectoryWrapper.GetFromFactory().CreateDirectory(folder);
@@ -3082,7 +3094,7 @@ SELECT con.conname AS ""Name"",
 SELECT 'Schemas' AS Folder,
        n.nspname AS FullName,
        'CREATE SCHEMA IF NOT EXISTS ' || QUOTE_IDENT(n.nspname) ||
-       ';' AS Code
+       ';'" + PgCommentTail("'SCHEMA ' || QUOTE_IDENT(n.nspname)", "OBJ_DESCRIPTION(n.oid, 'pg_namespace')") + @" AS Code
   FROM pg_namespace n
   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'public', 'SchemaSmith')
     AND n.nspname NOT LIKE 'pg_temp_%'
@@ -3235,7 +3247,7 @@ SELECT 'Composite Types' AS Folder,
                   CASE WHEN a.attcollation <> 0 AND a.attcollation <> ty.typcollation
                        THEN ' COLLATE ' || QUOTE_IDENT(cn.nspname) || '.' || QUOTE_IDENT(co.collname) ELSE '' END,
                   ', ' ORDER BY a.attnum) ||
-       E');\n    END IF;\nEND\n$$;' AS Code
+       E');\n    END IF;\nEND\n$$;'" + PgCommentTail("'TYPE ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(t.typname)", "OBJ_DESCRIPTION(t.oid, 'pg_type')") + @" AS Code
   FROM pg_type t
   JOIN pg_class c ON t.typrelid = c.oid
   JOIN pg_attribute a ON c.oid = a.attrelid
@@ -3251,7 +3263,7 @@ SELECT 'Composite Types' AS Folder,
     AND ns.nspname NOT LIKE 'pg_temp_%'
     AND ns.nspname NOT LIKE 'pg_toast_temp_%'
     AND " + PostgreSqlNotExtensionMember("pg_type", "t.oid") + @"
-  GROUP BY ns.nspname, t.typname;
+  GROUP BY ns.nspname, t.typname, t.oid;
 ";
         PerformPostgreSqlCasting(command, "Composite Types");
     }
@@ -3263,6 +3275,7 @@ SELECT 'Composite Types' AS Folder,
         var version = PostgreSqlServerVersionNum(command);
         var locale = version >= 170000 ? "c.colllocale" : version >= 150000 ? "c.colliculocale" : "c.collcollate";
         var rules = version >= 160000 ? "COALESCE(', RULES = ' || QUOTE_LITERAL(c.collicurules), '')" : "''";
+        var comment = PgCommentTail("'COLLATION ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.collname)", "OBJ_DESCRIPTION(c.oid, 'pg_collation')");
         command.CommandText = $@"
 SELECT 'Collations' AS Folder,
        n.nspname || '.' || c.collname AS FullName,
@@ -3273,7 +3286,7 @@ SELECT 'Collations' AS Folder,
             ELSE 'LC_COLLATE = ' || QUOTE_LITERAL(c.collcollate) || ', LC_CTYPE = ' || QUOTE_LITERAL(c.collctype)
        END ||
        CASE WHEN c.collisdeterministic = false THEN ', DETERMINISTIC = false' ELSE '' END ||
-       ');' AS Code
+       ');'{comment} AS Code
   FROM pg_collation c
   JOIN pg_namespace n ON c.collnamespace = n.oid
                      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
@@ -3300,7 +3313,7 @@ SELECT CASE p.prokind
        CASE WHEN COUNT(*) OVER (PARTITION BY p.pronamespace, p.proname) > 1
             THEN '(' || COALESCE((SELECT STRING_AGG(FORMAT_TYPE(u.t, NULL), ', ' ORDER BY u.n) FROM UNNEST(p.proargtypes::oid[]) WITH ORDINALITY AS u(t, n)), '') || ')' ELSE '' END AS FullName,
        n.nspname || '.' || p.proname AS BaseName,
-       PG_GET_FUNCTIONDEF(p.oid) AS Code
+       PG_GET_FUNCTIONDEF(p.oid)" + PgCommentTail("'FUNCTION ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(p.proname) || '(' || PG_GET_FUNCTION_IDENTITY_ARGUMENTS(p.oid) || ')'", "OBJ_DESCRIPTION(p.oid, 'pg_proc')", terminate: true) + @" AS Code
   FROM pg_proc p
   JOIN pg_namespace n ON p.pronamespace = n.oid
                      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
@@ -3350,7 +3363,7 @@ SELECT 'Aggregates' AS Folder,
        COALESCE(E',\n    SORTOP = OPERATOR(' || QUOTE_IDENT(opn.nspname) || '.' || op.oprname || ')', '') ||
        CASE p.proparallel WHEN 's' THEN E',\n    PARALLEL = SAFE' WHEN 'r' THEN E',\n    PARALLEL = RESTRICTED' ELSE '' END ||
        CASE WHEN a.aggkind = 'h' THEN E',\n    HYPOTHETICAL' ELSE '' END ||
-       E'\n);' AS Code
+       E'\n);'" + PgCommentTail("'AGGREGATE ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(p.proname) || '(' || PG_GET_FUNCTION_IDENTITY_ARGUMENTS(p.oid) || ')'", "OBJ_DESCRIPTION(p.oid, 'pg_proc')") + @" AS Code
   FROM pg_proc p
   JOIN pg_namespace n ON p.pronamespace = n.oid
   JOIN pg_aggregate a ON a.aggfnoid = p.oid
@@ -3380,7 +3393,7 @@ SELECT 'Procedures' AS Folder,
        CASE WHEN COUNT(*) OVER (PARTITION BY p.pronamespace, p.proname) > 1
             THEN '(' || COALESCE((SELECT STRING_AGG(FORMAT_TYPE(u.t, NULL), ', ' ORDER BY u.n) FROM UNNEST(p.proargtypes::oid[]) WITH ORDINALITY AS u(t, n)), '') || ')' ELSE '' END AS FullName,
        n.nspname || '.' || p.proname AS BaseName,
-       PG_GET_FUNCTIONDEF(p.oid) AS Code
+       PG_GET_FUNCTIONDEF(p.oid)" + PgCommentTail("'PROCEDURE ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(p.proname) || '(' || PG_GET_FUNCTION_IDENTITY_ARGUMENTS(p.oid) || ')'", "OBJ_DESCRIPTION(p.oid, 'pg_proc')", terminate: true) + @" AS Code
   FROM pg_proc p
   JOIN pg_namespace n ON p.pronamespace = n.oid
                      AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
@@ -3489,6 +3502,7 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
             CASE WHEN p.pubupdate THEN 'update' END,
             CASE WHEN p.pubdelete THEN 'delete' END,
             CASE WHEN p.pubtruncate THEN 'truncate' END))";
+        var comment = PgCommentTail("'PUBLICATION ' || QUOTE_IDENT(p.pubname)", "OBJ_DESCRIPTION(p.oid, 'pg_publication')");
         command.CommandText = $@"
 SELECT 'Publications' AS Folder,
        p.pubname AS FullName,
@@ -3504,7 +3518,7 @@ SELECT 'Publications' AS Folder,
        CASE WHEN p.puballtables OR (t.tables IS NULL AND s.schemas IS NULL) THEN ''
             ELSE E'\nALTER PUBLICATION ' || QUOTE_IDENT(p.pubname) || ' SET ' || CONCAT_WS(', ', 'TABLE ' || t.tables, 'TABLES IN SCHEMA ' || s.schemas) || ';'
        END ||
-       E'\nALTER PUBLICATION ' || QUOTE_IDENT(p.pubname) || ' SET (publish = ' || {publish} || {setViaRoot} || {setGenerated} || ');' AS Code
+       E'\nALTER PUBLICATION ' || QUOTE_IDENT(p.pubname) || ' SET (publish = ' || {publish} || {setViaRoot} || {setGenerated} || ');'{comment} AS Code
   FROM pg_publication p
   LEFT JOIN LATERAL (
        SELECT STRING_AGG(QUOTE_IDENT(rn.nspname) || '.' || QUOTE_IDENT(rc.relname) || {columnList} || {rowFilter}, ', ' ORDER BY rn.nspname, rc.relname) AS tables
@@ -3531,6 +3545,7 @@ SELECT 'Publications' AS Folder,
                     AND (mt.typnamespace <> t.typnamespace
                          OR mt.typname <> CASE WHEN STRPOS(t.typname, 'range') > 0 THEN REGEXP_REPLACE(t.typname, 'range', 'multirange') ELSE t.typname || '_multirange' END)), '')"
             : "''";
+        var comment = PgCommentTail("'TYPE ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(t.typname)", "OBJ_DESCRIPTION(t.oid, 'pg_type')");
         command.CommandText = $@"
 SELECT 'Range Types' AS Folder,
        n.nspname || '.' || t.typname AS FullName,
@@ -3542,7 +3557,7 @@ SELECT 'Range Types' AS Folder,
        COALESCE(', CANONICAL = ' || (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = r.rngcanonical), '') ||
        COALESCE(', SUBTYPE_DIFF = ' || (SELECT QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = r.rngsubdiff), '') ||
        {multirange} ||
-       E');\n    END IF;\nEND\n$$;' AS Code
+       E');\n    END IF;\nEND\n$$;'{comment} AS Code
   FROM pg_range r
   JOIN pg_type t ON t.oid = r.rngtypid
   JOIN pg_namespace n ON n.oid = t.typnamespace
@@ -3590,7 +3605,7 @@ SELECT 'Text Search Configurations' AS Folder,
                                   WHERE m.mapcfg = c.oid
                                   GROUP BY m.maptokentype) md
                            JOIN TS_TOKEN_TYPE(c.cfgparser) tt ON tt.tokid = md.maptokentype
-                          GROUP BY md.dicts) g), '') AS Code
+                          GROUP BY md.dicts) g), '')" + PgCommentTail("'TEXT SEARCH CONFIGURATION ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.cfgname)", "OBJ_DESCRIPTION(c.oid, 'pg_ts_config')") + @" AS Code
   FROM pg_ts_config c
   JOIN pg_namespace n ON n.oid = c.cfgnamespace
   JOIN pg_ts_parser p ON p.oid = c.cfgparser
@@ -3624,7 +3639,7 @@ SELECT 'Operators' AS Folder,
        COALESCE((SELECT ', JOIN = ' || QUOTE_IDENT(pn.nspname) || '.' || QUOTE_IDENT(p.proname) FROM pg_proc p JOIN pg_namespace pn ON pn.oid = p.pronamespace WHERE p.oid = o.oprjoin), '') ||
        CASE WHEN o.oprcanhash THEN ', HASHES' ELSE '' END ||
        CASE WHEN o.oprcanmerge THEN ', MERGES' ELSE '' END ||
-       E');\n    END IF;\nEND\n$$;' AS Code
+       E');\n    END IF;\nEND\n$$;'" + PgCommentTail("'OPERATOR ' || QUOTE_IDENT(n.nspname) || '.' || o.oprname || ' (' || CASE WHEN o.oprleft = 0 THEN 'NONE' ELSE FORMAT_TYPE(o.oprleft, NULL) END || ', ' || CASE WHEN o.oprright = 0 THEN 'NONE' ELSE FORMAT_TYPE(o.oprright, NULL) END || ')'", "OBJ_DESCRIPTION(o.oid, 'pg_operator')") + @" AS Code
   FROM pg_operator o
   JOIN pg_namespace n ON n.oid = o.oprnamespace
  WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
@@ -3650,7 +3665,7 @@ SELECT 'Casts' AS Folder,
             WHEN 'i' THEN 'WITH INOUT'
             ELSE 'WITHOUT FUNCTION' END ||
        CASE c.castcontext WHEN 'a' THEN ' AS ASSIGNMENT' WHEN 'i' THEN ' AS IMPLICIT' ELSE '' END ||
-       E';\n    END IF;\nEND\n$$;' AS Code
+       E';\n    END IF;\nEND\n$$;'" + PgCommentTail("'CAST (' || FORMAT_TYPE(c.castsource, NULL) || ' AS ' || FORMAT_TYPE(c.casttarget, NULL) || ')'", "OBJ_DESCRIPTION(c.oid, 'pg_cast')") + @" AS Code
   FROM pg_cast c
  WHERE c.oid >= 16384
    AND " + PostgreSqlNotEngineOwned("pg_cast", "c.oid") + @";
@@ -3672,7 +3687,7 @@ SELECT 'Event Triggers' AS Folder,
             WHEN 'D' THEN E'\nALTER EVENT TRIGGER ' || QUOTE_IDENT(e.evtname) || ' DISABLE;'
             WHEN 'R' THEN E'\nALTER EVENT TRIGGER ' || QUOTE_IDENT(e.evtname) || ' ENABLE REPLICA;'
             WHEN 'A' THEN E'\nALTER EVENT TRIGGER ' || QUOTE_IDENT(e.evtname) || ' ENABLE ALWAYS;'
-            ELSE '' END AS Code
+            ELSE '' END" + PgCommentTail("'EVENT TRIGGER ' || QUOTE_IDENT(e.evtname)", "OBJ_DESCRIPTION(e.oid, 'pg_event_trigger')") + @" AS Code
   FROM pg_event_trigger e
  WHERE " + PostgreSqlNotExtensionMember("pg_event_trigger", "e.oid") + @";
 ";
@@ -3684,7 +3699,7 @@ SELECT 'Event Triggers' AS Folder,
         command.CommandText = @"
 SELECT 'Rules' AS Folder,
        ns.nspname || '.' || c.relname || '.' || r.rulename AS FullName,
-       REGEXP_REPLACE(PG_GET_RULEDEF(r.oid), '^CREATE RULE', 'CREATE OR REPLACE RULE') AS Code
+       REGEXP_REPLACE(PG_GET_RULEDEF(r.oid), '^CREATE RULE', 'CREATE OR REPLACE RULE')" + PgCommentTail("'RULE ' || QUOTE_IDENT(r.rulename) || ' ON ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(c.relname)", "OBJ_DESCRIPTION(r.oid, 'pg_rewrite')") + @" AS Code
   FROM pg_rewrite r
   JOIN pg_class c ON r.ev_class = c.oid
   JOIN pg_namespace ns ON c.relnamespace = ns.oid
@@ -3713,7 +3728,7 @@ SELECT 'Triggers' AS Folder,
             WHEN 'D' THEN E'\nALTER TABLE ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname) || ' DISABLE TRIGGER ' || QUOTE_IDENT(t.tgname) || ';'
             WHEN 'R' THEN E'\nALTER TABLE ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname) || ' ENABLE REPLICA TRIGGER ' || QUOTE_IDENT(t.tgname) || ';'
             WHEN 'A' THEN E'\nALTER TABLE ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname) || ' ENABLE ALWAYS TRIGGER ' || QUOTE_IDENT(t.tgname) || ';'
-            ELSE '' END AS Code
+            ELSE '' END" + PgCommentTail("'TRIGGER ' || QUOTE_IDENT(t.tgname) || ' ON ' || QUOTE_IDENT(ns.nspname) || '.' || QUOTE_IDENT(tbl.relname)", "OBJ_DESCRIPTION(t.oid, 'pg_trigger')") + @" AS Code
   FROM pg_trigger t
   JOIN pg_class tbl ON t.tgrelid = tbl.oid
   JOIN pg_namespace ns ON tbl.relnamespace = ns.oid
@@ -3741,7 +3756,7 @@ SELECT 'Views' AS Folder,
        n.nspname || '.' || c.relname AS FullName,
        'CREATE OR REPLACE VIEW ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.relname) ||
        COALESCE(' WITH (' || ARRAY_TO_STRING(c.reloptions, ', ') || ')', '') ||
-       E' AS\n' || PG_GET_VIEWDEF(c.oid, true) AS Code
+       E' AS\n' || PG_GET_VIEWDEF(c.oid, true)" + PgCommentTail("'VIEW ' || QUOTE_IDENT(n.nspname) || '.' || QUOTE_IDENT(c.relname)", "OBJ_DESCRIPTION(c.oid, 'pg_class')") + @" AS Code
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
   WHERE c.relkind = 'v'
@@ -3829,6 +3844,11 @@ SELECT mv.schemaname, mv.matviewname
         return new[] { fullName, baseName }.Any(n =>
             _objectsToCast.Contains(n.ToLower()) || _objectsToCast.Contains(Identifier.SplitQualifiedName(n, _platform).Name.ToLower()));
     }
+
+    // G3: a scripted object's comment, after its definition, so a deploy to a database that never had it carries it.
+    // Empty when the object has none. terminate: the definition (PG_GET_FUNCTIONDEF) ends without a semicolon.
+    internal static string PgCommentTail(string target, string description, bool terminate = false) =>
+        $" || COALESCE(E'{(terminate ? ";" : "")}\\nCOMMENT ON ' || {target} || ' IS ' || QUOTE_LITERAL({description}) || ';', '')";
 
     private void PerformPostgreSqlCasting(IDbCommand command, string castType)
     {

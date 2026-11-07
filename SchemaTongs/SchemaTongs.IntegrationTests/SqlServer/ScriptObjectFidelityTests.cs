@@ -206,6 +206,26 @@ SELECT sq.name COLLATE DATABASE_DEFAULT + ':' + TYPE_NAME(sq.system_type_id) COL
         Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("vNew"), "the old name must not come back as a second view");
     }
 
+    // ---- extended properties ---------------------------------------------------------------------------------
+
+    // G3: an alias type's, a table type's and a synonym's extended properties are written after the object, so a deploy
+    // to a database that never had them carries them.
+    [Test]
+    public void TypesAndSynonyms_CarryTheirExtendedProperties_ToADatabaseThatNeverHadThem()
+    {
+        using var conn = Open(_targetDb);
+        using var cmd = conn.CreateCommand();
+        Deploy(cmd, Script("DataTypes", "dbo.Money2"));
+        Deploy(cmd, Script("DataTypes", "dbo.TT"));
+        Deploy(cmd, Script("Synonyms", "dbo.SynT"));
+        cmd.CommandText = @"
+SELECT STRING_AGG(CONVERT(NVARCHAR(400), x.objname + N'.' + x.name + N'=' + CONVERT(NVARCHAR(200), x.value)), N'|') WITHIN GROUP (ORDER BY x.objname, x.name)
+  FROM (SELECT objname, name, value FROM fn_listextendedproperty(NULL, 'SCHEMA', 'dbo', 'TYPE', NULL, NULL, NULL)
+        UNION ALL
+        SELECT objname, name, value FROM fn_listextendedproperty(NULL, 'SCHEMA', 'dbo', 'SYNONYM', NULL, NULL, NULL)) x";
+        Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("Money2.MS_Description=Amount's type|Money2.Owner=Finance|SynT.MS_Description=Points at T|TT.MS_Description=Line items"));
+    }
+
     // ---- fixture ---------------------------------------------------------------------------------------------
 
     private string Script(string folder, string name)
@@ -239,7 +259,7 @@ SELECT sq.name COLLATE DATABASE_DEFAULT + ':' + TYPE_NAME(sq.system_type_id) COL
             var parts = ci.ArgAt<string>(0).Replace('\\', '/').Split('/');
             if (parts.Length < 2) return;
             var folder = parts[^2];
-            if (folder is "DataTypes" or "Sequences" or "FullTextCatalogs" or "Views")
+            if (folder is "DataTypes" or "Sequences" or "FullTextCatalogs" or "Views" or "Synonyms")
                 _scripts[$"{folder}/{System.IO.Path.GetFileNameWithoutExtension(parts[^1])}"] = ci.ArgAt<string>(1);
         });
         var progressLog = Substitute.For<ILog>();
@@ -259,9 +279,9 @@ SELECT sq.name COLLATE DATABASE_DEFAULT + ':' + TYPE_NAME(sq.system_type_id) COL
             config["Source:database"] = _sourceDb;
             foreach (var prop in ConnectionString.ReadProperties(config, "SqlServer:ConnectionProperties"))
                 config[$"Source:ConnectionProperties:{prop.Key}"] = prop.Value;
-            foreach (var kind in new[] { "Tables", "Schemas", "Functions", "Procedures", "TableTriggers", "StopLists", "DDLTriggers", "XMLSchemaCollections", "IndexedViews", "Synonyms" })
+            foreach (var kind in new[] { "Tables", "Schemas", "Functions", "Procedures", "TableTriggers", "StopLists", "DDLTriggers", "XMLSchemaCollections", "IndexedViews" })
                 config[$"ShouldCast:{kind}"] = "false";
-            foreach (var kind in new[] { "UserDefinedTypes", "Sequences", "Catalogs", "Views" })
+            foreach (var kind in new[] { "UserDefinedTypes", "Sequences", "Catalogs", "Views", "Synonyms" })
                 config[$"ShouldCast:{kind}"] = "true";
             FactoryContainer.Register<IConfigurationRoot>(config);
             new SchemaTongs(Platform.SqlServer).CastTemplate();
@@ -314,6 +334,12 @@ CREATE TYPE dbo.TT AS TABLE (
             Run(cmd, "CREATE FULLTEXT CATALOG FT_Opts WITH ACCENT_SENSITIVITY = OFF AS DEFAULT");
             Run(cmd, "CREATE FULLTEXT CATALOG FT_Plain");
         }
+        Run(cmd, "CREATE TYPE dbo.Money2 FROM DECIMAL(10, 2) NULL");
+        Run(cmd, "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Amount''s type', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TYPE', @level1name = N'Money2'");
+        Run(cmd, "EXEC sys.sp_addextendedproperty @name = N'Owner', @value = N'Finance', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TYPE', @level1name = N'Money2'");
+        Run(cmd, "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Line items', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TYPE', @level1name = N'TT'");
+        Run(cmd, "CREATE SYNONYM dbo.SynT FOR dbo.T");
+        Run(cmd, "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Points at T', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'SYNONYM', @level1name = N'SynT'");
         Run(cmd, "CREATE VIEW dbo.vOld AS SELECT 1 AS x");
         Run(cmd, "EXEC sp_rename 'dbo.vOld', 'vNew'");
     }

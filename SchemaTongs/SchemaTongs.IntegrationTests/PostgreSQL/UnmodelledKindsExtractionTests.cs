@@ -222,7 +222,23 @@ public class UnmodelledKindsExtractionTests
               UNION ALL
               SELECT FORMAT('cast %s->%s %s %s %s', c.castsource::regtype, c.casttarget::regtype, c.castfunc::regprocedure, c.castcontext, c.castmethod) FROM pg_cast c WHERE c.oid >= 16384
               UNION ALL
-              SELECT FORMAT('evt %s %s %s %s %s', e.evtname, e.evtevent, e.evtfoid::regproc, e.evtenabled, e.evttags) FROM pg_event_trigger e) q
+              SELECT FORMAT('evt %s %s %s %s %s', e.evtname, e.evtevent, e.evtfoid::regproc, e.evtenabled, e.evttags) FROM pg_event_trigger e
+              -- G3: each kind's comment, so the round trip proves the extracted script carries it.
+              UNION ALL
+              SELECT FORMAT('comment type %s: %s', t.oid::regtype, OBJ_DESCRIPTION(t.oid, 'pg_type'))
+                FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace WHERE n.nspname = 'app' AND OBJ_DESCRIPTION(t.oid, 'pg_type') IS NOT NULL
+              UNION ALL
+              SELECT FORMAT('comment ts %s: %s', c.cfgname, OBJ_DESCRIPTION(c.oid, 'pg_ts_config'))
+                FROM pg_ts_config c JOIN pg_namespace n ON n.oid = c.cfgnamespace WHERE n.nspname = 'app' AND OBJ_DESCRIPTION(c.oid, 'pg_ts_config') IS NOT NULL
+              UNION ALL
+              SELECT FORMAT('comment op %s: %s', o.oid::regoperator, OBJ_DESCRIPTION(o.oid, 'pg_operator'))
+                FROM pg_operator o JOIN pg_namespace n ON n.oid = o.oprnamespace WHERE n.nspname = 'app' AND OBJ_DESCRIPTION(o.oid, 'pg_operator') IS NOT NULL
+              UNION ALL
+              SELECT FORMAT('comment cast %s->%s: %s', c.castsource::regtype, c.casttarget::regtype, OBJ_DESCRIPTION(c.oid, 'pg_cast'))
+                FROM pg_cast c WHERE c.oid >= 16384 AND OBJ_DESCRIPTION(c.oid, 'pg_cast') IS NOT NULL
+              UNION ALL
+              SELECT FORMAT('comment evt %s: %s', e.evtname, OBJ_DESCRIPTION(e.oid, 'pg_event_trigger'))
+                FROM pg_event_trigger e WHERE OBJ_DESCRIPTION(e.oid, 'pg_event_trigger') IS NOT NULL) q
             """;
         return cmd.ExecuteScalar()?.ToString() ?? "";
     }
@@ -341,6 +357,12 @@ public class UnmodelledKindsExtractionTests
             CREATE TRIGGER child_tr BEFORE INSERT ON app.child FOR EACH ROW EXECUTE FUNCTION app.row_fn();
             CREATE TABLE app.typed OF app.cents;
             CREATE TRIGGER typed_tr BEFORE INSERT ON app.typed FOR EACH ROW EXECUTE FUNCTION app.row_fn();
+            COMMENT ON TYPE app.span IS 'The span''s note';
+            COMMENT ON TEXT SEARCH CONFIGURATION app.docs IS 'Docs note';
+            COMMENT ON OPERATOR app.=== (app.cents, app.cents) IS 'Equals note';
+            COMMENT ON OPERATOR app.~~~ (NONE, app.cents) IS 'Prefix note';
+            COMMENT ON CAST (app.cents AS int) IS 'Cast note';
+            COMMENT ON EVENT TRIGGER audit_ddl IS 'Event trigger note';
             """;
         cmd.ExecuteNonQuery();
     }

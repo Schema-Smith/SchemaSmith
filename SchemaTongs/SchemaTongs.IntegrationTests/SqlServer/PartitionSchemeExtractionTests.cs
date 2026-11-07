@@ -52,6 +52,8 @@ public class PartitionSchemeExtractionTests
             Run(cmd, "CREATE PARTITION SCHEME [ps_Code] AS PARTITION [pf_Code] ALL TO ([PRIMARY])");
             Run(cmd, "CREATE PARTITION FUNCTION [pf_Unused] (INT) AS RANGE RIGHT FOR VALUES (1)");
             Run(cmd, "CREATE PARTITION SCHEME [ps_Unused] AS PARTITION [pf_Unused] ALL TO ([PRIMARY])");
+            Run(cmd, "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Order ids', @level0type = N'PARTITION FUNCTION', @level0name = N'pf_Id'");
+            Run(cmd, "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Placed date''s scheme', @level0type = N'PARTITION SCHEME', @level0name = N'ps_O''Day'");
             Run(cmd, "CREATE TABLE dbo.Orders (Id INT NOT NULL, Placed DATETIME2(3) NOT NULL, Code NVARCHAR(10) NOT NULL, " +
                      "CONSTRAINT PK_Orders PRIMARY KEY CLUSTERED (Id) ON [ps_Id](Id))");
             Run(cmd, "CREATE INDEX IX_Orders_Placed ON dbo.Orders (Placed) ON [ps_O'Day](Placed)");
@@ -107,6 +109,13 @@ public class PartitionSchemeExtractionTests
             Run(cmd, script);
             Assert.That(Layout(cmd), Is.EqualTo(string.Join(" | ", Layout(_db).Split(" | ").Where(x => !x.StartsWith("pf_Unused")))),
                 "the same functions, boundaries and schemes as the source");
+            cmd.CommandText = @"
+SELECT STRING_AGG(CONVERT(NVARCHAR(400), x.objname + N'.' + x.name + N'=' + CONVERT(NVARCHAR(200), x.value)), N'|') WITHIN GROUP (ORDER BY x.objname)
+  FROM (SELECT objname, name, value FROM fn_listextendedproperty(NULL, 'PARTITION FUNCTION', NULL, NULL, NULL, NULL, NULL)
+        UNION ALL
+        SELECT objname, name, value FROM fn_listextendedproperty(NULL, 'PARTITION SCHEME', NULL, NULL, NULL, NULL, NULL)) x";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("pf_Id.MS_Description=Order ids|ps_O'Day.MS_Description=Placed date's scheme"),
+                "their extended properties come with them (G3)");
 
             ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
             var table = File.ReadAllText(Path.Join(templateDir, "Tables", "dbo.Orders.json"));

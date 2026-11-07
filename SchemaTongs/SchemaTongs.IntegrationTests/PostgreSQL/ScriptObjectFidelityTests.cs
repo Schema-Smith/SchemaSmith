@@ -246,6 +246,38 @@ public class ScriptObjectFidelityTests
         });
     }
 
+    // ---- comments --------------------------------------------------------------------------------------------
+
+    // G3: a scripted object's comment is written after its definition, so a deploy to a database that never had it
+    // carries it. Functions and procedures take the path where the definition has no closing semicolon of its own.
+    [Test]
+    public void EachScriptedKind_CarriesItsComment_ToADatabaseThatNeverHadIt()
+    {
+        using var conn = Open(_targetDb);
+        using var cmd = conn.CreateCommand();
+        var cases = new (string Script, string Probe, string Expected)[]
+        {
+            ("Schemas/pgp", "OBJ_DESCRIPTION('pgp'::regnamespace, 'pg_namespace')", "Schema note"),
+            ("Functions/pgp.sf", "OBJ_DESCRIPTION('pgp.sf(int, int)'::regprocedure, 'pg_proc')", "Function's note"),
+            ("Procedures/pgp.pr_note", "OBJ_DESCRIPTION('pgp.pr_note()'::regprocedure, 'pg_proc')", "Procedure note"),
+            ("Views/pgp.v_sb", "OBJ_DESCRIPTION('pgp.v_sb'::regclass, 'pg_class')", "View note"),
+            ("Aggregates/pgp.agg_full", "OBJ_DESCRIPTION('pgp.agg_full(int)'::regprocedure, 'pg_proc')", "Aggregate note"),
+            ("Composite Types/pgp.ct", "OBJ_DESCRIPTION('pgp.ct'::regtype, 'pg_type')", "Type note"),
+            ("Collations/pgp.coll_libc", "OBJ_DESCRIPTION((SELECT oid FROM pg_collation WHERE collname = 'coll_libc'), 'pg_collation')", "Collation note"),
+            ("Publications/pub_empty", "OBJ_DESCRIPTION((SELECT oid FROM pg_publication WHERE pubname = 'pub_empty'), 'pg_publication')", "Publication note"),
+            ("Triggers/pgp.t.tr_plain", "OBJ_DESCRIPTION((SELECT oid FROM pg_trigger WHERE tgname = 'tr_plain'), 'pg_trigger')", "Trigger note"),
+        };
+        foreach (var (script, _, _) in cases) Deploy(cmd, Script(script.Split('/')[0], script.Split('/')[1]));
+
+        var found = new List<string>();
+        foreach (var (script, probe, _) in cases)
+        {
+            cmd.CommandText = "SELECT " + probe;
+            found.Add($"{script}: {cmd.ExecuteScalar()}");
+        }
+        Assert.That(found, Is.EqualTo(cases.Select(c => $"{c.Script}: {c.Expected}").ToList()), "each comment, as the target reads it after the extracted scripts ran");
+    }
+
     // ---- fixture ---------------------------------------------------------------------------------------------
 
     private string Script(string folder, string name)
@@ -279,7 +311,7 @@ public class ScriptObjectFidelityTests
             var parts = ci.ArgAt<string>(0).Replace('\\', '/').Split('/');
             if (parts.Length < 2) return;
             var folder = parts[^2];
-            if (folder is "Views" or "Triggers" or "Aggregates" or "Composite Types" or "Collations" or "Publications")
+            if (folder is "Views" or "Triggers" or "Aggregates" or "Composite Types" or "Collations" or "Publications" or "Schemas" or "Functions" or "Procedures")
                 _scripts[$"{folder}/{System.IO.Path.GetFileNameWithoutExtension(parts[^1])}"] = ci.ArgAt<string>(1);
         });
         lock (FactoryContainer.SharedLockObject)
@@ -297,9 +329,9 @@ public class ScriptObjectFidelityTests
             config["Source:database"] = _sourceDb;
             foreach (var prop in ConnectionString.ReadProperties(config, "PostgreSQL:ConnectionProperties"))
                 config[$"Source:ConnectionProperties:{prop.Key}"] = prop.Value;
-            foreach (var kind in new[] { "Tables", "Schemas", "DomainTypes", "EnumTypes", "Functions", "Procedures", "Sequences", "Rules", "MaterializedViews" })
+            foreach (var kind in new[] { "Tables", "DomainTypes", "EnumTypes", "Sequences", "Rules", "MaterializedViews" })
                 config[$"ShouldCast:{kind}"] = "false";
-            foreach (var kind in new[] { "Views", "TableTriggers", "Aggregates", "CompositeTypes", "Collations", "Publications" })
+            foreach (var kind in new[] { "Views", "TableTriggers", "Aggregates", "CompositeTypes", "Collations", "Publications", "Schemas", "Functions", "Procedures" })
                 config[$"ShouldCast:{kind}"] = "true";
             FactoryContainer.Register<IConfigurationRoot>(config);
             new SchemaTongs(Platform.PostgreSQL).CastTemplate();
@@ -363,6 +395,17 @@ public class ScriptObjectFidelityTests
             Run(cmd, "CREATE PUBLICATION pub_sch FOR TABLES IN SCHEMA pgp");
         }
         if (AtLeast(180000)) Run(cmd, "CREATE PUBLICATION pub_gen FOR TABLE t WITH (publish_generated_columns = stored)");
+
+        Run(cmd, "CREATE PROCEDURE pr_note() LANGUAGE sql AS 'SELECT 1'");
+        Run(cmd, "COMMENT ON SCHEMA pgp IS 'Schema note'");
+        Run(cmd, "COMMENT ON FUNCTION sf(int, int) IS 'Function''s note'");
+        Run(cmd, "COMMENT ON PROCEDURE pr_note() IS 'Procedure note'");
+        Run(cmd, "COMMENT ON VIEW v_sb IS 'View note'");
+        Run(cmd, "COMMENT ON AGGREGATE agg_full(int) IS 'Aggregate note'");
+        Run(cmd, "COMMENT ON TYPE ct IS 'Type note'");
+        Run(cmd, "COMMENT ON COLLATION coll_libc IS 'Collation note'");
+        Run(cmd, "COMMENT ON PUBLICATION pub_empty IS 'Publication note'");
+        Run(cmd, "COMMENT ON TRIGGER tr_plain ON t IS 'Trigger note'");
     }
 
     private static void Run(IDbCommand cmd, string sql)
