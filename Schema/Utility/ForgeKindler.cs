@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
@@ -77,8 +78,15 @@ public static class ForgeKindler
             var current = ReadStamp(command, platform);
             if (!forceReKindle && string.Equals(current, expected, StringComparison.Ordinal))
             {
-                Log.Info($"  Kindle stamp current ({expected[..12]}…) — skipping kindle");
-                return;
+                // A MySQL-family dump made without --routines (the default) restores the stamp table and no routine, so a
+                // current stamp alone left every later deploy failing on a missing helper until --ForceReKindle.
+                var missing = platform.GetBasePlatform() == Platform.MySQL ? MissingMySqlHelperCount(command, platform, encoding) : 0;
+                if (missing <= 0)
+                {
+                    Log.Info($"  Kindle stamp current ({expected[..12]}…) — skipping kindle");
+                    return;
+                }
+                Log.Info($"  Kindle stamp current, but {missing} SchemaSmith helper routine(s) are missing — re-kindling");
             }
 
             // Only now is a WRITE about to happen, which is the only thing a read-only target rules out.
@@ -162,6 +170,24 @@ public static class ForgeKindler
             KindleOneFile(command, s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
                 serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable, existingRoutines);
     }
+
+    // One scalar on the skip path: how many of the routines this build kindles the database lacks.
+    internal static int MissingMySqlHelperCount(IDbCommand command, Platform platform, IngestEncoding encoding)
+    {
+        var expected = KindledMySqlRoutines(platform, encoding);
+        command.CommandText = "SELECT COUNT(DISTINCT ROUTINE_NAME) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_NAME IN ("
+                              + string.Join(", ", expected.Select(r => "'" + r + "'")) + ")";
+        return expected.Length - Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private static readonly ConcurrentDictionary<(Platform, IngestEncoding), string[]> KindledRoutineNames = new();
+
+    /// <summary>The routines a MySQL-family kindle creates, read from the scripts it runs.</summary>
+    internal static string[] KindledMySqlRoutines(Platform platform, IngestEncoding encoding) =>
+        KindledRoutineNames.GetOrAdd((platform, encoding), key => GetKindlingScripts(key.Item1, key.Item2)
+            .SelectMany(s => MySqlCreateRoutine.Matches(ResourceLoader.Load(s.FileName, key.Item1)).Select(m => m.Groups["name"].Value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray());
 
     // Every MySQL-family routine script drops before it creates. On a fresh database none of them exists, and those
     // drops were a round trip each, a third of the kindle; a drop is skipped only for a routine the database lacks.

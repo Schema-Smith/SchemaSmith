@@ -2013,6 +2013,8 @@ public class SchemaTongsTests
             _command.ExecuteScalar().Returns(_ =>
             {
                 var sql = _command.CommandText ?? string.Empty;
+                // The kindle's routine count names every helper, GenerateEventJSON among them, so it is answered first.
+                if (sql.Contains("information_schema.ROUTINES")) return (object)100_000L;
                 if (sql.Contains("GenerateEventJSON")) return (object)eventJson;
                 if (KindleGateTestHelpers.IsReadOnlyProbe(sql)) return (object)0;
                 if (sql.Contains("GET_LOCK")) return (object)1L;

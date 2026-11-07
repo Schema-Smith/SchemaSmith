@@ -45,6 +45,9 @@ internal static class KindleGateTestHelpers
                 return (object)1L;
             if (sql.Contains("information_schema.tables"))
                 return (object)1L;
+            // The helper routines are all there: the count of present routines is never short of what the kindle creates.
+            if (sql.Contains("information_schema.ROUTINES"))
+                return (object)100_000L;
             if (sql.Contains("SchemaSmith_KindleStamp") && sql.StartsWith("SELECT", StringComparison.OrdinalIgnoreCase))
                 return (object)stamp;
             return null;

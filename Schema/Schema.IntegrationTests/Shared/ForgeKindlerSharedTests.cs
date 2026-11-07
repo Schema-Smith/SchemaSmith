@@ -356,6 +356,45 @@ public abstract class ForgeKindlerSharedTests
         Assert.That(command.ExecuteScalar(), Is.EqualTo(first), "Skip path must not rewrite the stamp.");
     }
 
+    // #608: a dump made without --routines (the default for mysqldump and mariadb-dump) restores the stamp table and no
+    // routine. A current stamp skipped the kindle, so every deploy failed on a missing helper until --ForceReKindle.
+    // Its own database: dropping the shared one's routines would break every fixture running beside it.
+    [Test]
+    public void Kindle_StampCurrentButTheRoutinesGone_ReKindles()
+    {
+        var db = "probe_kindle_" + System.Guid.NewGuid().ToString("N")[..8];
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"CREATE DATABASE `{db}`";
+        command.ExecuteNonQuery();
+        try
+        {
+            _connection.ChangeDatabase(db);
+            ForgeKindler.KindleTheForge(command, Platform);
+            Assert.That(ForgeKindler.MissingMySqlHelperCount(command, Platform, IngestEncoding.Json), Is.Zero,
+                "after a kindle every routine the scripts create is present, so a current stamp still skips");
+
+            var routines = new List<(string Type, string Name)>();
+            command.CommandText = "SELECT ROUTINE_TYPE, ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE()";
+            using (var reader = command.ExecuteReader())
+                while (reader.Read()) routines.Add((reader.GetString(0), reader.GetString(1)));
+            foreach (var (type, name) in routines)
+            {
+                command.CommandText = $"DROP {type} `{name}`";
+                command.ExecuteNonQuery();
+            }
+
+            ForgeKindler.KindleTheForge(command, Platform);
+            command.CommandText = "SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE()";
+            Assert.That(System.Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(routines.Count), "the kindle ran again and put every routine back");
+        }
+        finally
+        {
+            _connection.ChangeDatabase(MainDb);
+            command.CommandText = $"DROP DATABASE IF EXISTS `{db}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void Kindle_ForceReKindle_RewritesStamp()
     {
