@@ -862,6 +862,7 @@ public static class ForgeKindler
                 new("SchemaSmith.IndexKeyForms.sql"),
                 new("SchemaSmith.ExcludeKeyForms.sql"),
                 new("SchemaSmith.DeclaredTypeCanonical.sql"),
+                new("SchemaSmith.SerialSequenceName.sql"),
                 new("SchemaSmith.NormalizeIndexColumnList.sql"),
                 new("SchemaSmith.StripParenWrapping.sql"),
                 new("SchemaSmith.StatisticsDefinitionForms.sql"),

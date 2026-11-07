@@ -287,7 +287,7 @@
                                             AND a.attname = c."Name" AND NOT a.attisdropped)
                              AND pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name") IS NOT NULL
                             THEN pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass::text
-                            ELSE QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName" || '_' || c."Name" || '_seq') END, '''', '''''') ||
+                            ELSE QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT("SchemaSmith"."SerialSequenceName"(c."TableSchema", c."TableName", c."Name")) END, '''', '''''') ||
                        '''::regclass)'
      WHERE TRIM(UPPER(c."DataType")) IN ('SERIAL2', 'SERIAL4', 'SERIAL8');
     -- Family defaults, applied AFTER the synonym fold so both spellings of a type reach one rule.

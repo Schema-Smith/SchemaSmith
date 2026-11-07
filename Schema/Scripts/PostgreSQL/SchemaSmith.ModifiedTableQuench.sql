@@ -215,6 +215,17 @@ BEGIN
                           WHERE tp."Schema" = t."Schema" AND tp."TableName" = t."Name");
     CALL "SchemaSmith"."ExecuteOrDebug"(protect_notice, p_WhatIf);
 
+    -- A serial column's default names its sequence as the catalog renders it (search_path-aware), which the parse
+    -- could only guess for a table this run created after it ran; read it again now that the column owns one.
+    UPDATE temp_columns c
+       SET "Default" = 'nextval(''' || REPLACE(pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass::text, '''', '''''') || '''::regclass)'
+     WHERE c."IsSerial"
+       AND TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName")) IS NOT NULL
+       AND EXISTS (SELECT 1 FROM pg_attribute a
+                    WHERE a.attrelid = TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"))
+                      AND a.attname = c."Name" AND NOT a.attisdropped)
+       AND pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name") IS NOT NULL;
+
     RAISE NOTICE 'Collect Existing Column Definitions';
     DROP TABLE IF EXISTS temp_existing_columns;
     CREATE TEMPORARY TABLE temp_existing_columns AS
@@ -1827,7 +1838,7 @@ BEGIN
                 THEN ' (not covered by OnlineApply)' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
            -- A column converging to serial needs its sequence first: created and owned by the column here, made the
            -- default by the ALTER below. IF NOT EXISTS keeps an earlier half-applied run harmless.
-           COALESCE((SELECT STRING_AGG('CREATE SEQUENCE IF NOT EXISTS ' || QUOTE_IDENT(sc."TableSchema") || '.' || QUOTE_IDENT(sc."TableName" || '_' || sc."Name" || '_seq') ||
+           COALESCE((SELECT STRING_AGG('CREATE SEQUENCE IF NOT EXISTS ' || QUOTE_IDENT(sc."TableSchema") || '.' || QUOTE_IDENT("SchemaSmith"."SerialSequenceName"(sc."TableSchema", sc."TableName", sc."Name")) ||
                                        ' OWNED BY ' || QUOTE_IDENT(sc."TableSchema") || '.' || QUOTE_IDENT(sc."TableName") || '.' || QUOTE_IDENT(sc."Name") || ';', CHR(10))
                        FROM temp_columns sc
                        JOIN temp_existing_columns sec ON sec."TableSchema" = sc."TableSchema" AND sec."TableName" = sc."TableName" AND sec."ColumnName" = sc."Name"
