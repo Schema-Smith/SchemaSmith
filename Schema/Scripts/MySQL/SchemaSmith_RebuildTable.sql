@@ -5,8 +5,8 @@
 DELIMITER //
 
 -- Replaces one table with a table built to the DECLARED definition, carrying its rows across:
--- refuse-if-blocked, capture the AUTO_INCREMENT counter, create a shadow, copy, reseed, swap, drop the
--- inbound foreign keys, drop the old one. Nothing in here decides WHEN a rebuild should happen -- the
+-- refuse-if-blocked, capture the AUTO_INCREMENT counter, create a shadow, copy, reseed, swap, set the
+-- inbound foreign keys aside, drop the old one. Nothing in here decides WHEN a rebuild should happen -- the
 -- caller decides that and calls this; the procedure is also directly callable, which is what makes it
 -- testable before any decision path exists.
 --
@@ -67,8 +67,8 @@ DELIMITER //
 --     already correct and complete under its own name with all of the data, plus a parked t_old holding
 --     the pre-rebuild rows. No data is lost either way; the operator drops t_old once satisfied.
 --
---   Referential integrity is missing only between step 3 and the foreign-key quench pass that re-creates
---     the inbound keys from the CHILD tables' own JSON. On the other two engines that gap spans the whole
+--   Referential integrity is missing only between step 3 and the foreign-key quench pass that restores
+--     the inbound keys set aside in SchemaSmith_RebuildSetAsideForeignKeys. On the other two engines that gap spans the whole
 --     copy; here it spans two statements.
 --
 -- WHAT THIS CANNOT PROTECT AGAINST, stated rather than papered over: because every DDL statement commits
@@ -121,6 +121,10 @@ BEGIN
     DECLARE v_RowsAfter BIGINT DEFAULT -1;
     DECLARE v_RowsFinal BIGINT DEFAULT -1;
     DECLARE v_FkId INT;
+    DECLARE v_NeedSchema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_NeedTable VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_NeedKey VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_Need VARCHAR(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     -- Name keys for the catalog compares: the catalog may spell the schema and table differently from the caller
     -- (lower_case_table_names), and the shadow and old names this procedure constructs are folded the same way.
     DECLARE v_DbCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
@@ -199,6 +203,8 @@ BEGIN
         -- from it (section 6). All three are created by the same parse, so in practice they arrive
         -- together -- but a dependency that is read must be a dependency that is checked.
         SELECT COUNT(*) INTO v_Probe FROM _SchemaSmith_Indexes;
+        -- And _SchemaSmith_ForeignKeys: an inbound key this package declares is not set aside as an undeclared one.
+        SELECT COUNT(*) INTO v_Probe FROM _SchemaSmith_ForeignKeys;
     END;
 
     IF v_WorkingSetMissing = 1 THEN
@@ -605,14 +611,16 @@ BEGIN
     -- foreign key still references the table, and if the drop ever were permitted the child's referential
     -- integrity would be severed silently instead of failing loudly.
     --
-    -- They are NOT re-added here. Each one is defined in its OWNING table's JSON, so that table's
-    -- foreign-key quench pass sees it missing and re-creates it from the package. Re-adding them inside
-    -- this procedure would mean maintaining foreign-key construction against a second source of truth.
+    -- They are not re-added here: the replacement has no index for most of them until the index pass runs. Each one is
+    -- set aside in SchemaSmith_RebuildSetAsideForeignKeys instead, and SchemaSmith_ForeignKeyQuench puts it back -- one
+    -- this package declares from its declaration, any other from the definition captured here. That needs the rebuilt
+    -- table to still have what the key references: the columns, unchanged, under a declared primary key or unique index
+    -- over exactly those columns. When it would not, the rebuild is refused below, naming the key.
     --
     -- AlterTable is the child's name AFTER the rename, which differs from ChildTable in exactly one case:
     -- a SELF-reference, whose owning table is the one being renamed aside. Dropping that by its original
     -- name would aim the ALTER at the brand-new replacement, which carries no such constraint, and fail.
-    -- ChildTable is kept alongside it so the audit still names the object the operator knows.
+    -- ChildTable is kept alongside it so the audit, and the restore, name the table the operator knows.
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildInboundFks;
     CREATE TEMPORARY TABLE _SchemaSmith_RebuildInboundFks (
         RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
@@ -620,18 +628,69 @@ BEGIN
         ChildTable VARCHAR(64) NOT NULL,
         AlterTable VARCHAR(64) NOT NULL,
         ConstraintName VARCHAR(64) COLLATE utf8mb4_bin NOT NULL,
+        ChildColumns TEXT,
+        ReferencedColumns TEXT,
+        DeleteRule VARCHAR(64),
+        UpdateRule VARCHAR(64),
+        Definition TEXT,
+        Declared TINYINT NOT NULL DEFAULT 0,
+        Need VARCHAR(500),
         Stmt TEXT
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildInboundFkColumns;
+    CREATE TEMPORARY TABLE _SchemaSmith_RebuildInboundFkColumns (
+        RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
+        FkRowId INT,
+        ChildSchema VARCHAR(64) NOT NULL,
+        ChildTable VARCHAR(64) NOT NULL,
+        ConstraintName VARCHAR(64) COLLATE utf8mb4_bin NOT NULL,
+        ColumnName VARCHAR(64) NOT NULL,
+        ColumnKey VARCHAR(260) COLLATE utf8mb4_bin
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildLiveColumns;
+    CREATE TEMPORARY TABLE _SchemaSmith_RebuildLiveColumns (
+        RowId INT AUTO_INCREMENT NOT NULL PRIMARY KEY,
+        ColumnKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        COLUMN_TYPE LONGTEXT,
+        CHARACTER_SET_NAME VARCHAR(64),
+        COLLATION_NAME VARCHAR(64)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
     -- Landed raw first and rewritten in place afterwards, rather than folded into one SELECT with a CASE:
     -- an INFORMATION_SCHEMA column and a procedure variable do not share a collation, and combining them
     -- in one expression is an illegal-mix error rather than a wrong answer. Every statement below either
-    -- reads I_S alone or reads the temp table alone, so no expression ever spans the two.
-    INSERT INTO _SchemaSmith_RebuildInboundFks (ChildSchema, ChildTable, AlterTable, ConstraintName)
-    SELECT DISTINCT kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.TABLE_NAME, kcu.CONSTRAINT_NAME
+    -- reads I_S alone or reads the temp tables alone, so no expression ever spans the two.
+    INSERT INTO _SchemaSmith_RebuildInboundFks (ChildSchema, ChildTable, AlterTable, ConstraintName, ChildColumns, ReferencedColumns, DeleteRule, UpdateRule)
+    SELECT kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.TABLE_NAME, kcu.CONSTRAINT_NAME,
+           GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(kcu.COLUMN_NAME), '`') ORDER BY kcu.ORDINAL_POSITION SEPARATOR ','),
+           GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(kcu.REFERENCED_COLUMN_NAME), '`') ORDER BY kcu.ORDINAL_POSITION SEPARATOR ','),
+           MAX(rc.DELETE_RULE), MAX(rc.UPDATE_RULE)
+      FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
+      JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
+        ON rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA AND rc.TABLE_NAME = kcu.TABLE_NAME AND rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME
+     WHERE kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
+       AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = v_TableKey
+     GROUP BY kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.CONSTRAINT_NAME;
+
+    INSERT INTO _SchemaSmith_RebuildInboundFkColumns (ChildSchema, ChildTable, ConstraintName, ColumnName)
+    SELECT kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.REFERENCED_COLUMN_NAME
       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
      WHERE kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
        AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = v_TableKey;
+
+    INSERT INTO _SchemaSmith_RebuildLiveColumns (ColumnKey, COLUMN_TYPE, CHARACTER_SET_NAME, COLLATION_NAME)
+    SELECT SchemaSmith_NameKeyCI(isc.COLUMN_NAME), isc.COLUMN_TYPE, isc.CHARACTER_SET_NAME, isc.COLLATION_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS isc
+     WHERE isc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(isc.TABLE_SCHEMA) = v_DbKey
+       AND SchemaSmith_IdentifierKey(isc.TABLE_NAME) = v_TableKey;
+
+    UPDATE _SchemaSmith_RebuildInboundFkColumns k
+      JOIN _SchemaSmith_RebuildInboundFks f
+        ON CAST(f.ChildSchema AS BINARY) = CAST(k.ChildSchema AS BINARY) AND CAST(f.ChildTable AS BINARY) = CAST(k.ChildTable AS BINARY)
+       AND f.ConstraintName = k.ConstraintName
+       SET k.FkRowId = f.RowId, k.ColumnKey = SchemaSmith_NameKeyCI(k.ColumnName);
 
     UPDATE _SchemaSmith_RebuildInboundFks
        SET AlterTable = v_OldRaw
@@ -641,7 +700,68 @@ BEGIN
     UPDATE _SchemaSmith_RebuildInboundFks
        SET Stmt = CONCAT('ALTER TABLE ', SchemaSmith_SafeBacktickWrap(ChildSchema), '.',
                          SchemaSmith_SafeBacktickWrap(AlterTable),
-                         ' DROP FOREIGN KEY ', SchemaSmith_SafeBacktickWrap(ConstraintName));
+                         ' DROP FOREIGN KEY ', SchemaSmith_SafeBacktickWrap(ConstraintName)),
+           Definition = CONCAT('FOREIGN KEY (', ChildColumns, ') REFERENCES ', SchemaSmith_SafeBacktickWrap(v_SchemaRaw), '.',
+                               SchemaSmith_SafeBacktickWrap(v_TableRaw), ' (', ReferencedColumns, ') ON DELETE ', DeleteRule,
+                               ' ON UPDATE ', UpdateRule);
+
+    -- Declared: this package defines the key on a table in this database, so the foreign-key pass adds it from that.
+    UPDATE _SchemaSmith_RebuildInboundFks f
+       SET f.Declared = 1
+     WHERE SchemaSmith_IdentifierKey(f.ChildSchema) = v_DbKey
+       AND EXISTS (SELECT 1 FROM _SchemaSmith_ForeignKeys d
+                    WHERE d.TableKey = SchemaSmith_IdentifierKey(f.ChildTable)
+                      AND d.KeyNameKey = SchemaSmith_NameKeyCI(f.ConstraintName));
+
+    UPDATE _SchemaSmith_RebuildInboundFks f
+       SET f.Need = 'every referenced column to stay declared'
+     WHERE f.Declared = 0
+       AND EXISTS (SELECT 1 FROM _SchemaSmith_RebuildInboundFkColumns k
+                    WHERE k.FkRowId = f.RowId
+                      AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Columns c WHERE c.TableKey = v_TableKey AND c.ColumnKey = k.ColumnKey));
+
+    UPDATE _SchemaSmith_RebuildInboundFks f
+       SET f.Need = CONCAT('a declared primary key or unique index over exactly (', f.ReferencedColumns, ')')
+     WHERE f.Declared = 0 AND f.Need IS NULL
+       AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
+                        WHERE i.TableKey = v_TableKey
+                          AND (i.IsPrimaryKey = 1 OR i.IsUnique = 1)
+                          AND CAST(LOWER(SchemaSmith_NormalizeIndexColumns(i.IndexColumns)) AS BINARY) = CAST(LOWER(f.ReferencedColumns) AS BINARY));
+
+    -- The type, character set and collation tests ModifiedTableQuench applies to a key over a changing column.
+    UPDATE _SchemaSmith_RebuildInboundFks f
+       SET f.Need = 'the referenced columns to keep their current definition'
+     WHERE f.Declared = 0 AND f.Need IS NULL
+       AND EXISTS (SELECT 1 FROM _SchemaSmith_RebuildInboundFkColumns k
+                     JOIN _SchemaSmith_Columns c ON c.TableKey = v_TableKey AND c.ColumnKey = k.ColumnKey
+                     JOIN _SchemaSmith_RebuildLiveColumns isc ON isc.ColumnKey = k.ColumnKey
+                    WHERE k.FkRowId = f.RowId
+                      AND ((c.Collation IS NOT NULL AND isc.COLLATION_NAME != c.Collation)
+                           OR (c.CharacterSet IS NOT NULL AND TRIM(c.CharacterSet) != '' AND isc.CHARACTER_SET_NAME IS NOT NULL
+                               AND CAST(IF(LOWER(TRIM(isc.CHARACTER_SET_NAME)) = 'utf8', 'utf8mb3', LOWER(TRIM(isc.CHARACTER_SET_NAME))) AS BINARY)
+                                   != CAST(IF(LOWER(TRIM(c.CharacterSet)) = 'utf8', 'utf8mb3', LOWER(TRIM(c.CharacterSet))) AS BINARY))
+                           OR (SchemaSmith_ColumnTypeDiffers(isc.COLUMN_TYPE, c.CompareDataType) = 1
+                               AND SchemaSmith_TypeChangeKeepsForeignKey(isc.COLUMN_TYPE, c.CompareDataType, isc.CHARACTER_SET_NAME, c.CharacterSet) = 0)));
+
+    SELECT COUNT(*) INTO v_Count FROM _SchemaSmith_RebuildInboundFks WHERE Need IS NOT NULL;
+    IF v_Count > 0 THEN
+        SELECT ChildSchema, ChildTable, ConstraintName, Need
+          INTO v_NeedSchema, v_NeedTable, v_NeedKey, v_Need
+          FROM _SchemaSmith_RebuildInboundFks WHERE Need IS NOT NULL
+         ORDER BY ChildSchema, ChildTable, ConstraintName LIMIT 1;
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        VALUES (CONNECTION_ID(), CONCAT('  Table rebuild refused for ', v_Qualified, ': foreign key ', v_NeedKey, ' on ', v_NeedSchema, '.', v_NeedTable,
+                ' references it and is not declared in this package. A rebuild sets such keys aside and restores them afterwards, which needs ',
+                v_Need, '. Declare the key in the package that owns ', v_NeedSchema, '.', v_NeedTable,
+                ', or change this table with Before/After migration scripts.'));
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildInboundFks;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildInboundFkColumns;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildLiveColumns;
+        SET @ss_msg = LEFT(CONCAT('Table rebuild refused for ', v_TableRaw, ': undeclared foreign key ', v_NeedKey, ' references it. See the deploy log.'), 128);
+        SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+    END IF;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildInboundFkColumns;
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildLiveColumns;
 
     -- ================================================================================================
     -- 7. WHATIF -- print, execute nothing.
@@ -678,6 +798,12 @@ BEGIN
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT CONNECTION_ID(), 'foreignKey', CONCAT(f.ChildTable, '.', f.ConstraintName), 'wouldDrop'
           FROM _SchemaSmith_RebuildInboundFks f;
+
+        -- A key this package does not declare comes back from the definition set aside for it.
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'foreignKey', CONCAT(f.ChildTable, '.', f.ConstraintName), 'wouldCreate'
+          FROM _SchemaSmith_RebuildInboundFks f
+         WHERE f.Declared = 0;
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildInboundFks;
     ELSE
@@ -768,6 +894,13 @@ BEGIN
             SET @ss_msg = CONCAT('Table rebuild aborted for ', v_TableRaw, ': the source changed mid-rebuild. See the deploy log.');
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         END IF;
+
+        -- Recorded before the swap, so there is no point at which a key is off its table with no record to restore it
+        -- from. One still on its table when the next foreign-key pass looks is simply cleared.
+        REPLACE INTO SchemaSmith_RebuildSetAsideForeignKeys (ChildSchema, ChildTable, KeyName, ParentSchema, ParentTable,
+                                                             ReferencedColumns, Definition, Declared)
+        SELECT f.ChildSchema, f.ChildTable, f.ConstraintName, v_SchemaRaw, v_TableRaw, f.ReferencedColumns, f.Definition, f.Declared
+          FROM _SchemaSmith_RebuildInboundFks f;
 
         SET @exec_sql = v_SwapSql;
         PREPARE stmt FROM @exec_sql;

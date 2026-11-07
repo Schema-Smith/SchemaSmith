@@ -28,6 +28,26 @@ BEGIN
     DECLARE v_DbCi VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci DEFAULT p_DatabaseName;
     DECLARE v_DbKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT SchemaSmith_IdentifierKey(p_DatabaseName);
 
+    -- STEP 2b: one key a table rebuild set aside at a time.
+    DECLARE v_SaId INT;
+    DECLARE v_SaChildSchema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_SaChildTable VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_SaKeyName VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_SaParentSchema VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_SaParentTable VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_SaChildCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+    DECLARE v_SaParentCi VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+    DECLARE v_SaRefColumns TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_SaDefinition TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_SaLabel VARCHAR(200) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_SaError VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_SaFailed TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
+    DECLARE v_SaChildExists INT DEFAULT 0;
+    DECLARE v_SaKeyExists INT DEFAULT 0;
+    DECLARE v_SaParentReady INT DEFAULT 0;
+    DECLARE v_SaRemoved TINYINT DEFAULT 0;
+    DECLARE v_SavedChecks INT DEFAULT 1;
+
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_Done = TRUE;
 
     SET SESSION group_concat_max_len = 1000000;
@@ -311,6 +331,109 @@ BEGIN
             SET @v_fkcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKCreateStmts WHERE RowId > @v_fkcreate_id);
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKCreateStmts;
+    END IF;
+
+    -- =========================================================================
+    -- STEP 2b: Restore the foreign keys a table rebuild set aside
+    -- =========================================================================
+    -- SchemaSmith_RebuildTable drops every key that references the table it rebuilds and records it here. A key back
+    -- on its table -- declared and added above, or re-created by hand -- is done with; one whose table is gone cannot
+    -- come back; one this product owns and no longer declares stays dropped, as the pass below drops it on a table that
+    -- was not rebuilt. Every other one is added again from its captured definition, with checks off so it comes back
+    -- over the rows it had. A key whose table has no index for it yet waits for the run that puts that index back,
+    -- which may not be this one. Any run restores any of them, and one that fails stays recorded, named in the error.
+    IF EXISTS (SELECT 1 FROM SchemaSmith_RebuildSetAsideForeignKeys) THEN
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Restore foreign keys set aside by a table rebuild');
+        SET v_SavedChecks = @@SESSION.foreign_key_checks;
+        SET v_SaId = (SELECT MIN(Id) FROM SchemaSmith_RebuildSetAsideForeignKeys);
+        WHILE v_SaId IS NOT NULL DO
+            SELECT ChildSchema, ChildTable, KeyName, ParentSchema, ParentTable, ReferencedColumns, Definition
+              INTO v_SaChildSchema, v_SaChildTable, v_SaKeyName, v_SaParentSchema, v_SaParentTable, v_SaRefColumns, v_SaDefinition
+              FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE Id = v_SaId;
+            SET v_SaChildCi = v_SaChildSchema;
+            SET v_SaParentCi = v_SaParentSchema;
+            SET v_SaLabel = CONCAT(v_SaChildSchema, '.', v_SaChildTable, '.', v_SaKeyName);
+
+            SELECT COUNT(*) INTO v_SaChildExists FROM INFORMATION_SCHEMA.TABLES t
+             WHERE t.TABLE_SCHEMA = v_SaChildCi AND SchemaSmith_IdentifierKey(t.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(v_SaChildSchema)
+               AND SchemaSmith_IdentifierKey(t.TABLE_NAME) = SchemaSmith_IdentifierKey(v_SaChildTable) AND t.TABLE_TYPE = 'BASE TABLE';
+            SELECT COUNT(*) INTO v_SaKeyExists FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+             WHERE tc.TABLE_SCHEMA = v_SaChildCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(v_SaChildSchema)
+               AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(v_SaChildTable)
+               AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY' AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = SchemaSmith_NameKeyCI(v_SaKeyName);
+            SET v_SaRemoved = 0;
+            IF p_DropForeignKeysRemovedFromProduct = 1 AND SchemaSmith_IdentifierKey(v_SaChildSchema) = v_DbKey
+               AND EXISTS (SELECT 1 FROM SchemaSmith_ProductOwnership po
+                            WHERE SchemaSmith_OwnedNameMatches(po.ObjectName, v_SaChildTable, v_SaKeyName) = 1
+                              AND po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                              AND SchemaSmith_IdentifierKey(po.ObjectSchema) = v_DbKey
+                              AND po.ObjectType COLLATE utf8mb4_unicode_ci = _utf8mb4'FOREIGN KEY' COLLATE utf8mb4_unicode_ci)
+               AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_ForeignKeys f
+                                WHERE f.TableKey = SchemaSmith_IdentifierKey(v_SaChildTable) AND f.KeyNameKey = SchemaSmith_NameKeyCI(v_SaKeyName))
+               AND COALESCE((SELECT t.DropForeignKeysRemovedFromProduct FROM _SchemaSmith_Tables t
+                              WHERE t.TableKey = SchemaSmith_IdentifierKey(v_SaChildTable) LIMIT 1), 1) = 1 THEN
+                SET v_SaRemoved = 1;
+            END IF;
+
+            -- The referenced table, with an index whose leading columns are the key's, in order: what the engine needs.
+            SELECT COUNT(*) INTO v_SaParentReady
+              FROM (SELECT GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(s.COLUMN_NAME), '`') ORDER BY s.SEQ_IN_INDEX SEPARATOR ',') AS Cols
+                      FROM INFORMATION_SCHEMA.STATISTICS s
+                     WHERE s.TABLE_SCHEMA = v_SaParentCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(v_SaParentSchema)
+                       AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(v_SaParentTable)
+                       AND s.INDEX_TYPE NOT IN ('FULLTEXT', 'SPATIAL')
+                     GROUP BY s.INDEX_NAME) x
+             WHERE CAST(LOWER(LEFT(x.Cols, CHAR_LENGTH(v_SaRefColumns))) AS BINARY) = CAST(LOWER(v_SaRefColumns) AS BINARY)
+               AND (CHAR_LENGTH(x.Cols) = CHAR_LENGTH(v_SaRefColumns)
+                    OR CAST(SUBSTRING(x.Cols, CHAR_LENGTH(v_SaRefColumns) + 1, 1) AS BINARY) = CAST(',' AS BINARY));
+
+            IF v_SaChildExists = 0 OR v_SaKeyExists > 0 OR v_SaRemoved = 1 THEN
+                IF v_SaChildExists = 0 THEN
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  Not restoring foreign key ', v_SaLabel, ': the table no longer exists'));
+                END IF;
+                IF p_WhatIf = 0 THEN
+                    DELETE FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE Id = v_SaId;
+                END IF;
+            ELSEIF v_SaParentReady = 0 THEN
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('  Foreign key ', v_SaLabel, ' waits: ', v_SaParentSchema, '.', v_SaParentTable,
+                        ' has no index for it to reference yet'));
+            ELSE
+                SET @exec_sql = CONCAT('ALTER TABLE ', SchemaSmith_SafeBacktickWrap(v_SaChildSchema), '.', SchemaSmith_SafeBacktickWrap(v_SaChildTable),
+                                       ' ADD CONSTRAINT ', SchemaSmith_SafeBacktickWrap(v_SaKeyName), ' ', v_SaDefinition);
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Restoring foreign key ', v_SaLabel));
+                IF p_WhatIf = 1 THEN
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @exec_sql);
+                    INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+                    VALUES (CONNECTION_ID(), 'foreignKey', CONCAT(v_SaChildTable, '.', v_SaKeyName), 'wouldCreate');
+                ELSE
+                    BEGIN
+                        DECLARE EXIT HANDLER FOR SQLEXCEPTION
+                        BEGIN
+                            GET DIAGNOSTICS CONDITION 1 v_SaError = MESSAGE_TEXT;
+                            SET SESSION foreign_key_checks = v_SavedChecks;
+                            SET v_SaFailed = CONCAT_WS('; ', v_SaFailed, CONCAT(v_SaLabel, ' (', v_SaError, ')'));
+                        END;
+                        SET SESSION foreign_key_checks = 0;
+                        PREPARE stmt FROM @exec_sql;
+                        EXECUTE stmt;
+                        DEALLOCATE PREPARE stmt;
+                        SET SESSION foreign_key_checks = v_SavedChecks;
+                        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+                        VALUES (CONNECTION_ID(), 'foreignKey', CONCAT(v_SaChildTable, '.', v_SaKeyName), 'created');
+                        DELETE FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE Id = v_SaId;
+                    END;
+                END IF;
+            END IF;
+            SET v_SaId = (SELECT MIN(Id) FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE Id > v_SaId);
+        END WHILE;
+        IF v_SaFailed IS NOT NULL THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            VALUES (CONNECTION_ID(), CONCAT('  Foreign keys set aside by a table rebuild could not be restored, and stay recorded for the next run: ', v_SaFailed));
+            SET @ss_msg = LEFT(CONCAT('Foreign keys set aside by a table rebuild could not be restored: ', v_SaFailed), 128);
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+        END IF;
     END IF;
 
     -- =========================================================================

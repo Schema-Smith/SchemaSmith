@@ -169,6 +169,7 @@ public class ForgeKindlerTests
         Assert.That(scripts, Does.Contain("Kindling_ProductOwnership_Table.sql"));
         Assert.That(scripts, Does.Contain("Kindling_StatusMessages_Table.sql"));
         Assert.That(scripts, Does.Contain("Kindling_ChangeAudit_Table.sql"));
+        Assert.That(scripts, Does.Contain("Kindling_RebuildSetAsideForeignKeys_Table.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith_QuoteIdentifier.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith_StripBacktickWrapping.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith_SafeBacktickWrap.sql"));
@@ -563,7 +564,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_EscapeBackticks (a bare name's backticks doubled, whatever collation it arrives in).
         // +1 = SchemaSmith_CheckClauseText (MySQL's CHECK_CLAUSE read back as the SQL that was declared).
         // +1 = SchemaSmith_DecodeStringLiteral (a default's literal compared as the value it stands for).
-        Assert.That(mysql.Length, Is.EqualTo(118));
+        // +1 = Kindling_RebuildSetAsideForeignKeys_Table (inbound keys a rebuild sets aside).
+        Assert.That(mysql.Length, Is.EqualTo(119));
     }
 
     [Test]

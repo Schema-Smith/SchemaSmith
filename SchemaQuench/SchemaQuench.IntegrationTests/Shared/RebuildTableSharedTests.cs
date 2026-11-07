@@ -462,17 +462,22 @@ INSERT INTO `{child}` (`Id`, `ParentId`) VALUES (10, 1), (11, 2);");
                 + "constrained against it instead of against the replacement.");
 
             Assert.That(Int(cmd, childKeyCount), Is.EqualTo(0),
-                "The inbound key is deliberately NOT re-added here: it is declared in the CHILD's JSON, so "
-                + "the child's foreign-key quench pass re-creates it. What must never happen is the key "
-                + "surviving pointed at the renamed-away table.");
+                "The procedure does not re-add the key -- the foreign-key pass does. What must never happen "
+                + "is the key surviving pointed at the renamed-away table.");
 
             Assert.That(AuditCount(cmd, $"{child}.{fkName}", "dropped"), Is.EqualTo(1),
-                "A key this rebuild removed and does not put back has to appear in the run manifest, or "
-                + "the operator has no record that referential integrity was briefly dropped on their behalf.");
+                "A key this rebuild removed has to appear in the run manifest.");
+
+            Assert.That(Scalar(cmd, "SELECT CONCAT(Declared, '|', Definition) FROM SchemaSmith_RebuildSetAsideForeignKeys "
+                                    + $"WHERE ChildTable = {Lit(child)} AND KeyName = {Lit(fkName)}")?.ToString(),
+                Does.StartWith($"0|FOREIGN KEY (`ParentId`) REFERENCES `{_mainDb}`.`{parent}` (`Id`) ON DELETE "),
+                "The key -- not declared by this package -- is set aside for the foreign-key pass to put back. "
+                + "Dropped and left to the child's JSON, a key no package declares was gone for good.");
         }
         finally
         {
             Exec(cmd, $"DROP TABLE IF EXISTS `{child}`");
+            Exec(cmd, $"DELETE FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE ChildTable = {Lit(child)}");
             Exec(cmd, $"DROP TABLE IF EXISTS `{parent}`, `{parent}_SchemaSmithRebuild`, `{parent}_SchemaSmithOld`");
             conn.Close();
         }
