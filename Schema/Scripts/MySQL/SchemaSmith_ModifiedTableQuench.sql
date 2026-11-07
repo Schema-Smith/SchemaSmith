@@ -825,15 +825,11 @@ BEGIN
     -- immediately before each call so a pooled connection can never carry a stale policy from a previous
     -- template (see SetMySqlRebuildPolicy).
     --
-    -- NO EXPLICIT BYPASS IS NEEDED ON THIS ENGINE, and that is a property of how the passes are written
-    -- rather than luck: every column pass below (STEP 3 modify, STEP 3.5 generated-status recreate,
-    -- STEP 4 drop) re-reads INFORMATION_SCHEMA.COLUMNS at the moment it runs. A rebuilt table's live
-    -- columns already ARE the declared definition, so each of those predicates finds nothing for it.
-    -- (SQL Server and PostgreSQL compare against a snapshot taken before this point, so there the
-    -- snapshot has to be pruned; here there is no snapshot to go stale.) The one visible difference is
-    -- in WhatIf: nothing is actually rebuilt in a preview, so a previewed rebuild is listed alongside
-    -- the in-place statements it would have replaced. The preview is honest about the rebuild -- the
-    -- 'wouldRebuild' audit row and the full printed sequence are both there -- and no statement runs.
+    -- A real run needs no bypass on this engine: every column pass below (STEP 3 modify, STEP 3.5
+    -- generated-status recreate, STEP 4 drop) re-reads the catalog when it runs, and a rebuilt table's live
+    -- columns already ARE the declared definition. A preview rebuilds nothing, so those passes read
+    -- SchemaSmith_SnapshotQuenchColumns, which leaves the elected tables out -- the preview then lists what
+    -- the real run does, as SQL Server and PostgreSQL do by pruning their snapshot.
     -- MariaDB names a column-level check after its column, so a TABLE-level check with a column's name is a shape the
     -- engine never makes on its own: it is what a redeploy of a package extracted before the column-level check was
     -- modelled created. It is not the column's check -- a JSON column with only that reads as text (JSON_OBJECT returns
@@ -1160,6 +1156,20 @@ BEGIN
         SET @v_rebuild_id := (SELECT MIN(RowId) FROM _SchemaSmith_RebuildElection WHERE RowId > @v_rebuild_id);
     END WHILE;
 
+    -- A preview rebuilt nothing, so the column passes below would list the in-place changes the rebuild replaces; they
+    -- read SchemaSmith_SnapshotQuenchColumns, which leaves these tables out.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PreviewRebuilt;
+    CREATE TEMPORARY TABLE _SchemaSmith_PreviewRebuilt (
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL PRIMARY KEY
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    IF p_WhatIf = 1 THEN
+        INSERT IGNORE INTO _SchemaSmith_PreviewRebuilt (TableKey)
+        SELECT t.TableKey
+          FROM _SchemaSmith_Tables t
+          JOIN _SchemaSmith_RebuildElection e
+            ON e.TableName = CONVERT(SchemaSmith_StripBacktickWrapping(t.TableName) USING utf8mb4) COLLATE utf8mb4_bin;
+    END IF;
+
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildElection;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RebuildFacts;
 
@@ -1281,7 +1291,7 @@ BEGIN
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
             -- FKs declared ON a column whose collation is changing.
-            CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+            CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
             INSERT IGNORE INTO _SchemaSmith_ColumnCollationFKsToDrop (TableName, ConstraintName)
             SELECT DISTINCT CONVERT(kcu.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
                             CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
@@ -1306,7 +1316,7 @@ BEGIN
                         AND SchemaSmith_TypeChangeKeepsForeignKey(isc.COLUMN_TYPE, c.CompareDataType, isc.CHARACTER_SET_NAME, c.CharacterSet) = 0));
 
             -- And FKs POINTING AT one. Separate INSERT for the same optimizer reason as the table-level twin.
-            CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+            CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
             INSERT IGNORE INTO _SchemaSmith_ColumnCollationFKsToDrop (TableName, ConstraintName)
             SELECT DISTINCT CONVERT(kcu.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
                             CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
@@ -1338,7 +1348,7 @@ BEGIN
                         OR SchemaSmith_ServerVersionPatchNum() BETWEEN 110809 AND 119999
                         OR SchemaSmith_ServerVersionPatchNum() BETWEEN 110413 AND 110499
                         OR SchemaSmith_ServerVersionPatchNum() BETWEEN 101119 AND 101199) THEN
-                CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+                CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
                 INSERT IGNORE INTO _SchemaSmith_ColumnCollationFKsToDrop (TableName, ConstraintName)
                 SELECT DISTINCT CONVERT(kcu.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
                                 CONVERT(kcu.CONSTRAINT_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci
@@ -1365,7 +1375,7 @@ BEGIN
             -- keys gone.
             IF EXISTS (SELECT 1 FROM _SchemaSmith_ColumnCollationFKsToDrop)
                AND NOT (VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1102) THEN
-                CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+                CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
                 -- A scalar subquery, for the reason the undeclared-key check below gives.
                 SET @ss_online_refuse = (SELECT CONCAT(CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4), _utf8mb4'.',
                                                        CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4))
@@ -1453,7 +1463,7 @@ BEGIN
         JOIN _SchemaSmith_Columns c ON c.TableKey = tl.TableKey AND c.ColumnKey = tl.ColumnKey
         JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
         WHERE t.NewTable = 0 AND c.NewColumn = 0 AND c.CompareCheckExpression IS NOT NULL;
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
@@ -1566,7 +1576,7 @@ BEGIN
         GROUP BY c.TableName;
 
         -- #363: WhatIf twin of the ELSE-branch 'column'/'modified' audit; same source/predicate, wouldModify.
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT CONNECTION_ID(), 'column', CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName)), 'wouldModify'
@@ -1676,7 +1686,7 @@ BEGIN
         -- predicate as the fold below, evaluated before the ALTER (INFORMATION_SCHEMA still reflects
         -- the OLD definition); per-column (no GROUP BY). Same INFORMATION_SCHEMA read pattern the
         -- statement-build below uses — not the #337 set-based-UPDATE shape.
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         -- Staged, and written for each table once its ALTER has run: a refused or failed ALTER changed nothing.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColAudit;
@@ -1798,7 +1808,7 @@ BEGIN
         JOIN _SchemaSmith_Columns c ON c.TableKey = tl.TableKey AND c.ColumnKey = tl.ColumnKey
         JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName
         WHERE t.NewTable = 0 AND c.NewColumn = 0 AND c.CompareCheckExpression IS NOT NULL;
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO _SchemaSmith_ModifyColStmts (Stmt, TableName, OnlineMode)
         SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
@@ -1924,7 +1934,7 @@ BEGIN
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Recreate columns (generated status changes)');
         -- Show DROP COLUMN statements
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
                       SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.TableName)), '` DROP COLUMN `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`')
@@ -1947,7 +1957,7 @@ BEGIN
                AND SchemaSmith_GeneratedKindChanged(isc.EXTRA, c.GeneratedType) = 1)
           );
         -- Show ADD COLUMN statements
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
                       SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.TableName)), '` ADD COLUMN ', c.ColumnScript)
@@ -1973,7 +1983,7 @@ BEGIN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Recreate columns (generated status changes)');
 
         -- Per-column progress messages, set-based (preserves the per-column log line).
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Recreate column: ', SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName))
         FROM _SchemaSmith_Columns c
@@ -2004,7 +2014,7 @@ BEGIN
         CREATE TEMPORARY TABLE _SchemaSmith_GenStatusStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_GenStatusStmts (Stmt)
         SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.TableName)), '` ',
                       GROUP_CONCAT(CONCAT('DROP COLUMN `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`') ORDER BY c.ColumnName SEPARATOR ', '))
@@ -2028,7 +2038,7 @@ BEGIN
           )
         GROUP BY c.TableName;
 
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_GenStatusStmts (Stmt)
         SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.TableName)), '` ',
                       GROUP_CONCAT(CONCAT('ADD COLUMN ', c.ColumnScript) ORDER BY c.ColumnName SEPARATOR ', '))
@@ -2110,7 +2120,7 @@ BEGIN
 
     -- Identify columns to drop: exist in DB but not in JSON definition. Column names compare through their keys:
     -- the engine treats a column spelled differently only in case as the same column, so it is never dropped.
-    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+    CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
     INSERT INTO _SchemaSmith_ColumnsToDrop (TableName, ColumnName, TableKey, ColumnKey)
     SELECT
         SchemaSmith_StripBacktickWrapping(t.TableName) AS TableName,
@@ -2147,7 +2157,7 @@ BEGIN
             ColumnName VARCHAR(128) COLLATE utf8mb4_bin NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_WouldDropColumns (TableName, ColumnName)
         SELECT SchemaSmith_StripBacktickWrapping(t.TableName), isc.COLUMN_NAME
         FROM _SchemaSmith_Tables t
@@ -2384,7 +2394,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- INSERT IGNORE: a generated column referencing two-or-more dropped columns produces
         -- multiple join rows for the same (TableName, ColumnName); the original loop had no
         -- DISTINCT here either, but the folded form needs the PK to hold a single row per column.
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         INSERT IGNORE INTO _SchemaSmith_GenColsToDrop (TableName, ColumnName)
         SELECT
             CONVERT(isc_gen.TABLE_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
@@ -2436,7 +2446,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColsToDrop;
 
         -- Now drop the columns themselves
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Drop column: ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
                       SchemaSmith_EscapeBackticks(CONVERT(ctd.TableName USING utf8mb4)) COLLATE utf8mb4_unicode_ci,
@@ -2457,7 +2467,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColDropped;
         CREATE TEMPORARY TABLE _SchemaSmith_ColDropped (RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY, TableKey VARCHAR(260) COLLATE utf8mb4_bin, ObjectName VARCHAR(400))
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-        CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+        CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
         INSERT INTO _SchemaSmith_ColDropStmts (Stmt, TableKey, TableName)
         SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
                       SchemaSmith_EscapeBackticks(CONVERT(ctd.TableName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '` ',
@@ -2509,7 +2519,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- MODIFIED FIRST or AFTER the one before it, in one statement through the online forms (instant on MariaDB 10.4+,
     -- INPLACE, LOCK=NONE elsewhere). Its definitions match the declaration by now (STEP 3), so the statement moves the
     -- columns and changes nothing else; the columns the package no longer declares went in STEP 4.
-    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+    CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ReorderCols;
     CREATE TEMPORARY TABLE _SchemaSmith_ReorderCols (
         RequiredPrimaryKey BIGINT AUTO_INCREMENT PRIMARY KEY,
@@ -3240,7 +3250,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
 
             SET v_ExclDone = FALSE;
             CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
-            CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+            CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
             OPEN cur_Excl;
             excl_loop: LOOP
                 FETCH cur_Excl INTO v_ExclSql;

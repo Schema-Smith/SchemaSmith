@@ -451,6 +451,13 @@ public abstract class RebuildDecisionSharedTests : BaseTableQuenchTests
             "WhatIf must not widen the column either -- the elected rebuild must not have been quietly "
             + "replaced by an in-place alter.");
         Assert.That(RowCount(cmd, table), Is.EqualTo(2), "WhatIf touches no rows.");
+        Assert.That(Int(cmd, "SELECT COUNT(*) FROM SchemaSmith_ChangeAudit "
+                             + $"WHERE SessionId = CONNECTION_ID() AND ObjectName LIKE {Lit(table + ".%")} AND ActionType = 'wouldModify'"), Is.Zero,
+            "The real run rebuilds the table and modifies none of its columns in place, so the preview must not "
+            + "report column modifications beside the rebuild.");
+        Assert.That(Int(cmd, "SELECT COUNT(*) FROM SchemaSmith_StatusMessages "
+                             + $"WHERE SessionId = CONNECTION_ID() AND Message LIKE {Lit("%" + table + "%MODIFY COLUMN%")}"), Is.Zero,
+            "Nor print the in-place MODIFY COLUMN the rebuild replaces.");
 
         Exec(cmd, $"DROP TABLE IF EXISTS `{table}`");
         conn.Close();

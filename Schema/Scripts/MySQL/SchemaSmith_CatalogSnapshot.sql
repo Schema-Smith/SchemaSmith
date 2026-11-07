@@ -85,6 +85,19 @@ BEGIN
      WHERE TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(TABLE_SCHEMA) = v_DbKey;
 END //
 
+-- ModifiedTableQuench's column passes, from its rebuild point on: the COLUMNS snapshot without the tables a preview
+-- elected for a rebuild (_SchemaSmith_PreviewRebuilt, empty outside WhatIf). A real run rebuilds them first, so their
+-- live columns already match and no pass finds anything; a preview has not, and would otherwise list the in-place
+-- changes the rebuild replaces.
+DROP PROCEDURE IF EXISTS SchemaSmith_SnapshotQuenchColumns//
+
+CREATE PROCEDURE SchemaSmith_SnapshotQuenchColumns(IN p_DatabaseName VARCHAR(128) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci)
+SQL SECURITY DEFINER
+BEGIN
+    CALL SchemaSmith_SnapshotCatalogColumns(p_DatabaseName);
+    DELETE c FROM _SchemaSmith_CatColumns c JOIN _SchemaSmith_PreviewRebuilt r ON r.TableKey = c.TableKey;
+END //
+
 -- MySQL 8 serves TABLES.AUTO_INCREMENT and the other table statistics from a server-wide cache that lives for
 -- information_schema_stats_expiry (24 hours by default), so a read can return a value from before the table was dropped,
 -- re-created or truncated. A caller that decides something from a statistic brackets the read with these two. The
