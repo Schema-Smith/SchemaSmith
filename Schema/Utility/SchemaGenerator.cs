@@ -27,8 +27,29 @@ public static class SchemaGenerator
     /// </summary>
     public static JObject GenerateSchema(Type rootType, Func<Type, Type> elementTypeResolver, Platform? platform = null)
     {
-        return BuildObjectSchema(rootType, elementTypeResolver, platform);
+        _building = [];
+        _recursive = [];
+        try
+        {
+            var schema = BuildObjectSchema(rootType, elementTypeResolver, platform);
+            if (_recursive.Count == 0) return schema;
+            // A type that contains itself (a partition that is itself partitioned) is written once here and referred to
+            // wherever it recurs; built inline it never ended.
+            var definitions = new JObject();
+            foreach (var type in _recursive.OrderBy(t => t.Name, StringComparer.Ordinal).ToList())
+                definitions[type.Name] = BuildObjectSchema(type, elementTypeResolver, platform);
+            schema["definitions"] = definitions;
+            return schema;
+        }
+        finally
+        {
+            _building = null;
+            _recursive = null;
+        }
     }
+
+    [ThreadStatic] private static HashSet<Type> _building;
+    [ThreadStatic] private static HashSet<Type> _recursive;
 
     public static JObject MergeExtensionsDefinition(JObject generated, JObject existing)
     {
@@ -71,6 +92,23 @@ public static class SchemaGenerator
     }
 
     private static JObject BuildObjectSchema(Type type, Func<Type, Type> elementTypeResolver, Platform? platform)
+    {
+        if (_building != null && !_building.Add(type))
+        {
+            _recursive.Add(type);
+            return new JObject { ["$ref"] = "#/definitions/" + type.Name };
+        }
+        try
+        {
+            return BuildObjectSchemaOnce(type, elementTypeResolver, platform);
+        }
+        finally
+        {
+            _building?.Remove(type);
+        }
+    }
+
+    private static JObject BuildObjectSchemaOnce(Type type, Func<Type, Type> elementTypeResolver, Platform? platform)
     {
         var schema = new JObject { ["type"] = "object" };
         var properties = new JObject();
