@@ -1016,7 +1016,8 @@ public sealed class CoherenceCheck : ISchemaCheck
         var hasPrefixKeyParts = table is MySqlTable;
         foreach (var column in keyParts.Take(lastPartIsPeriod ? keyParts.Count - 1 : keyParts.Count).Select(StripOrderingSuffix)
                      .Select(column => hasPrefixKeyParts ? StripPrefixLength(column) : column)
-                     .Where(column => !IsExpressionKeyPart(column))
+                     .Select(column => table is PostgreSqlTable ? PostgreSqlKeyColumn(column) : column)
+                     .Where(column => column != null && !IsExpressionKeyPart(column))
                      .Where(column => !graphPseudoColumns.Contains(NormalizeIdentifier(column), StringComparer.OrdinalIgnoreCase))
                      .Where(column => !localColumnNames.Contains(NormalizeIdentifier(column))))
             yield return new Finding(Severity.Error, IndexColumnCode, Category, location,
@@ -1885,12 +1886,32 @@ public sealed class CoherenceCheck : ISchemaCheck
     // need a real SQL parser and is out of scope — skip rather than false-flag.
     internal static bool IsExpressionKeyPart(string column) => column.StartsWith('(');
 
+    // A PostgreSQL key part is a column followed by what qualifies it (an operator class, COLLATE, NULLS FIRST/LAST), or an
+    // expression, which a function call can be without outer parentheses. The column is the part's first name; anything
+    // with a parenthesis outside a quoted name is an expression, and names no column here (null).
+    internal static string PostgreSqlKeyColumn(string part)
+    {
+        var text = part.Trim();
+        var end = 0;
+        if (text.StartsWith('"'))
+        {
+            end = 1;
+            while (end < text.Length && (text[end] != '"' || (end + 1 < text.Length && text[end + 1] == '"')))
+                end += text[end] == '"' ? 2 : 1;
+            end = Math.Min(end + 1, text.Length);
+        }
+        else
+            while (end < text.Length && !char.IsWhiteSpace(text[end]) && text[end] != '(') end++;
+        return text[end..].Contains('(') || text[..end].Contains('(') ? null : text[..end];
+    }
+
     /// <summary>The table's columns an index key names, matched the way the deploy matches them; expression key parts name none.</summary>
     internal static IEnumerable<Column> KeyColumns(Table table, Index index)
     {
         var keyNames = SplitNames(index.IndexColumns).Select(StripOrderingSuffix)
             .Select(part => table is MySqlTable ? StripPrefixLength(part) : part)
-            .Where(part => !IsExpressionKeyPart(part))
+            .Select(part => table is PostgreSqlTable ? PostgreSqlKeyColumn(part) : part)
+            .Where(part => part != null && !IsExpressionKeyPart(part))
             .Select(NormalizeIdentifier)
             .ToHashSet(NameComparer(table));
         return table.Columns.Where(c => keyNames.Contains(NormalizeIdentifier(c.Name ?? "")));

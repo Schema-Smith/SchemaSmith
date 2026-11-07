@@ -75,6 +75,42 @@ public class CoherenceCheckTests
         return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
     }
 
+    // #609: a PostgreSQL key part is a column with an operator class, COLLATE or NULLS ordering after it, or an expression
+    // (a function call needs no outer parentheses there). Both deploy; --Validate read the whole part as a column name.
+    private static Schema.Domain.PostgreSQL.PostgreSqlTable PgBooking(string indexColumns) => new()
+    {
+        Name = "booking",
+        Schema = "public",
+        Columns =
+        {
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "bookingid", DataType = "integer" },
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "details", DataType = "jsonb" },
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "Notes", DataType = "text" }
+        },
+        Indexes = { new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "ix_booking", IndexColumns = indexColumns } }
+    };
+
+    [TestCase("details jsonb_path_ops")]
+    [TestCase("\"Notes\" text_pattern_ops DESC NULLS LAST")]
+    [TestCase("\"Notes\" COLLATE \"C\"")]
+    [TestCase("bookingid DESC NULLS FIRST, details")]
+    [TestCase("to_tsvector('english', \"Notes\")")]
+    [TestCase("to_tsvector('english'::regconfig, \"Notes\"), bookingid")]
+    [TestCase("(lower(\"Notes\"))")]
+    public void PostgreSqlKeyPart_WithAnOperatorClassOrAsAnExpression_IsNotAMissingColumn(string indexColumns)
+    {
+        Assert.That(RunOnPgTable(PgBooking(indexColumns)).Where(f => f.Code == "SS-IDX-001"), Is.Empty);
+    }
+
+    [TestCase("detail jsonb_path_ops", "detail")]
+    [TestCase("notes text_pattern_ops", "notes")]
+    [TestCase("\"bookingId\" DESC", "\"bookingId\"")]
+    public void PostgreSqlKeyPart_NamingNoColumn_IsStillReported(string indexColumns, string reported)
+    {
+        var findings = RunOnPgTable(PgBooking(indexColumns)).Where(f => f.Code == "SS-IDX-001").ToArray();
+        Assert.That(findings.Select(f => f.Message), Has.One.Contains($"'{reported}'"));
+    }
+
     // ---- PostgreSQL names compare exactly ----
     //
     // SchemaSmith deploys every PostgreSQL name quoted, so a key to `Customer` where the table is `customer` fails the
