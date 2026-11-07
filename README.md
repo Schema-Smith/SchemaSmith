@@ -2,7 +2,7 @@
 
 *Terraform for SQL Server, Postgres, MySQL, and MariaDB databases*
 
-> **SchemaSmith v2.8.0 released.** Index and column changes without blocking the table (`OnlineApply`), a `Setup` script slot, `Description` on every engine, constraint enforcement and validation state, temporal keys, SQL Server spatial, selective XML and JSON indexes, MariaDB extraction, and patch-level MySQL and MariaDB floors (a breaking change — see the notes). [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) · [CHANGELOG](https://github.com/Schema-Smith/SchemaSmith/blob/main/CHANGELOG.md)
+> **SchemaSmith v2.8.0 released.** Index and column changes without blocking the table (`OnlineApply`), a `Setup` script slot, `Description` on every engine, constraint enforcement and validation state, temporal keys, SQL Server spatial, selective XML and JSON indexes, MariaDB extraction, and patch-level MySQL and MariaDB floors (a breaking change — see the notes). [Read the v2.8.0 announcement](https://github.com/Schema-Smith/SchemaSmith/discussions/615) · [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) · [CHANGELOG](https://github.com/Schema-Smith/SchemaSmith/blob/main/CHANGELOG.md)
 
 ![Build](https://github.com/Schema-Smith/SchemaSmith/actions/workflows/continuous-integration.yml/badge.svg)
 [![Latest Release](https://img.shields.io/github/v/release/Schema-Smith/SchemaSmith)](https://github.com/Schema-Smith/SchemaSmith/releases/latest)
