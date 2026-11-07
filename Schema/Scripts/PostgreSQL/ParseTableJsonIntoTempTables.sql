@@ -185,6 +185,37 @@
        SET "DataType" = REGEXP_REPLACE("DataType", '^_(.+)$', '\1[]')
      WHERE "DataType" ~ '^_';
 
+    -- More spellings of one type, each proven by format_type, folded on the declared side (extraction and the live
+    -- compare already agree, through ColumnDataType). PostgreSQL ignores array dimensions and bounds (int[][], int[3]
+    -- are integer[]); dec is decimal; a scalar numeric with scale 0 reads back without it, an array one with it; bare
+    -- char and character are character(1); float(p) is real up to 24 and double precision above.
+    UPDATE temp_columns
+       SET "DataType" = REGEXP_REPLACE("DataType", '(\s*\[\s*[0-9]*\s*\])+\s*$', '[]')
+     WHERE "DataType" ~ '\[\s*[0-9]+\s*\]\s*$' OR "DataType" ~ '\]\s*\[';
+    UPDATE temp_columns
+       SET "DataType" = REGEXP_REPLACE("DataType", '^\s*dec\s*', 'NUMERIC', 'i')
+     WHERE "DataType" ~* '^\s*dec\s*(\(|\[|$)';
+    UPDATE temp_columns
+       SET "DataType" = REGEXP_REPLACE("DataType", '^\s*NUMERIC\s*\(\s*([0-9]+)\s*,\s*0\s*\)\s*$', 'NUMERIC(\1)', 'i')
+     WHERE "DataType" ~* '^\s*NUMERIC\s*\(\s*[0-9]+\s*,\s*0\s*\)\s*$';
+    UPDATE temp_columns
+       SET "DataType" = REGEXP_REPLACE("DataType", '^\s*NUMERIC\s*\(\s*([0-9]+)\s*\)\s*\[\]\s*$', 'NUMERIC(\1,0)[]', 'i')
+     WHERE "DataType" ~* '^\s*NUMERIC\s*\(\s*[0-9]+\s*\)\s*\[\]\s*$';
+    UPDATE temp_columns
+       SET "DataType" = 'CHAR(1)'
+     WHERE "DataType" ~* '^\s*(char|character)\s*$';
+    UPDATE temp_columns
+       SET "DataType" = CASE WHEN SUBSTRING("DataType" FROM '([0-9]+)')::INT <= 24 THEN 'FLOAT4' ELSE 'FLOAT8' END
+     WHERE "DataType" ~* '^\s*float\s*\(\s*[0-9]+\s*\)\s*$';
+    -- A collation written delimited ("C") that is one of pg_catalog's: ColumnCollation reports those bare, and
+    -- CollateClause delimits it again for DDL, so only the compare sees the difference.
+    UPDATE temp_columns c
+       SET "Collation" = SUBSTRING(c."Collation" FROM 2 FOR CHAR_LENGTH(c."Collation") - 2)
+     WHERE c."Collation" ~ '^"[^".]+"$'
+       AND EXISTS (SELECT 1 FROM pg_catalog.pg_collation co
+                    WHERE co.collnamespace = 'pg_catalog'::regnamespace
+                      AND co.collname = SUBSTRING(c."Collation" FROM 2 FOR CHAR_LENGTH(c."Collation") - 2));
+
     -- Synonym mapping
     UPDATE temp_columns
        SET "DataType" = CASE WHEN TRIM(UPPER("DataType")) = 'BIGINT' THEN 'INT8'

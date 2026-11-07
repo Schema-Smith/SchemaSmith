@@ -97,7 +97,7 @@ BEGIN
   RAISE NOTICE 'Fixup Modified Sequences';
   SELECT STRING_AGG('RAISE NOTICE ''  Altering sequence %.%'', ''' || REPLACE((s."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((s."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER SEQUENCE ' || "SchemaSmith"."QuoteName"(s."Schema") || '.' || "SchemaSmith"."QuoteName"(s."Name") ||
-                    CASE WHEN FORMAT_TYPE(q.seqtypid, NULL) <> s."DataType" THEN ' AS ' || s."DataType" ELSE '' END ||
+                    CASE WHEN FORMAT_TYPE(q.seqtypid, NULL) <> COALESCE(FORMAT_TYPE(TO_REGTYPE(s."DataType"), NULL), s."DataType") THEN ' AS ' || s."DataType" ELSE '' END ||
                     CASE WHEN q.seqincrement <> s."Increment" THEN ' INCREMENT BY ' || s."Increment" ELSE '' END ||
                     CASE WHEN s."MinValue" IS NOT NULL AND q.seqmin <> s."MinValue" THEN ' MINVALUE ' || s."MinValue"
                          -- Declared value CLEARED (back to unset) but the server still carries a non-default
@@ -121,7 +121,8 @@ BEGIN
     JOIN pg_class c ON c.relname = s."Name" AND c.relkind = 'S'
     JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = s."Schema"
     JOIN pg_sequence q ON q.seqrelid = c.oid
-   WHERE FORMAT_TYPE(q.seqtypid, NULL) <> s."DataType"
+   -- The engine's own resolver names the declared type as format_type does, so BIGINT, int8 and bigint are one type.
+   WHERE FORMAT_TYPE(q.seqtypid, NULL) <> COALESCE(FORMAT_TYPE(TO_REGTYPE(s."DataType"), NULL), s."DataType")
       OR q.seqincrement <> s."Increment"
       OR (s."MinValue" IS NOT NULL AND q.seqmin <> s."MinValue")
       OR (s."MinValue" IS NULL AND q.seqmin <> (CASE WHEN q.seqincrement > 0 THEN 1 ELSE (CASE FORMAT_TYPE(q.seqtypid, NULL) WHEN 'smallint' THEN -32768 WHEN 'integer' THEN -2147483648 ELSE -9223372036854775808 END) END))

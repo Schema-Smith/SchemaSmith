@@ -270,9 +270,12 @@ BEGIN
       JOIN pg_type lt ON lt.oid = a.atttypid
      WHERE tc."TableSchema" = ec."TableSchema" AND tc."TableName" = ec."TableName" AND tc."Name" = ec."ColumnName"
        AND tc."DataType" IS DISTINCT FROM ec."DataType"
-       AND POSITION('(' IN tc."DataType") = 0
        AND lt.typnamespace <> 'pg_catalog'::REGNAMESPACE
-       AND TO_REGTYPE(tc."DataType") = a.atttypid;
+       AND TO_REGTYPE(tc."DataType") = a.atttypid
+       -- With no modifier it names what the column has (the legacy spelling); with one, only when it is the same
+       -- modifier as the engine renders it -- geometry(Point,3857) over a 4326 column is a real change.
+       AND (POSITION('(' IN tc."DataType") = 0
+            OR "SchemaSmith"."DeclaredTypeCanonical"(tc."DataType") = FORMAT_TYPE(a.atttypid, a.atttypmod));
 
     UPDATE temp_columns tc
        SET "Collation" = ec."Collation"

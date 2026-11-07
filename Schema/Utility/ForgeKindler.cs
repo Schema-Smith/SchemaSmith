@@ -861,6 +861,7 @@ public static class ForgeKindler
                 // declared-side normaliser and quoter and the live-side rendering.
                 new("SchemaSmith.IndexKeyForms.sql"),
                 new("SchemaSmith.ExcludeKeyForms.sql"),
+                new("SchemaSmith.DeclaredTypeCanonical.sql"),
                 new("SchemaSmith.NormalizeIndexColumnList.sql"),
                 new("SchemaSmith.StripParenWrapping.sql"),
                 new("SchemaSmith.StatisticsDefinitionForms.sql"),

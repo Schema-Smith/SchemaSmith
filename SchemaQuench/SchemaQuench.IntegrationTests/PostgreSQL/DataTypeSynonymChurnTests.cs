@@ -53,6 +53,17 @@ public class DataTypeSynonymChurnTests : BaseTableQuenchTests
     // package that spells it out compared unequal to its own deployment -- in both spellings.
     [TestCase("timestamp(6) with time zone", TestName = "Synonym_TIMESTAMP_DefaultPrecision_DoesNotChurn")]
     [TestCase("timestamptz(6)", TestName = "Synonym_TIMESTAMPTZ_DefaultPrecision_DoesNotChurn")]
+    // Spellings the fold table lacked; format_type proves each pair is one type.
+    [TestCase("int[][]", TestName = "Synonym_ARRAY_DIMENSIONS_DoesNotChurn")]                              // -> integer[]
+    [TestCase("int[3]", TestName = "Synonym_ARRAY_BOUND_DoesNotChurn")]                                    // -> integer[]
+    [TestCase("dec(5)", TestName = "Synonym_DEC_DoesNotChurn")]                                            // -> numeric(5,0)
+    [TestCase("dec", TestName = "Synonym_DEC_Bare_DoesNotChurn")]                                          // -> numeric
+    [TestCase("numeric(18,0)", TestName = "Synonym_NUMERIC_ScaleZero_DoesNotChurn")]                       // -> numeric(18,0)
+    [TestCase("numeric(18)[]", TestName = "Synonym_NUMERIC_Array_DoesNotChurn")]                           // -> numeric(18,0)[]
+    [TestCase("char", TestName = "Synonym_CHAR_Bare_DoesNotChurn")]                                        // -> character(1)
+    [TestCase("character", TestName = "Synonym_CHARACTER_Bare_DoesNotChurn")]                              // -> character(1)
+    [TestCase("float(10)", TestName = "Synonym_FLOAT_P_Single_DoesNotChurn")]                              // -> real
+    [TestCase("float(30)", TestName = "Synonym_FLOAT_P_Double_DoesNotChurn")]                              // -> double precision
     public void ColumnDeclaredWithASynonym_IsNotRealteredOnRedeploy(string synonym)
     {
         var uniqueId = Guid.NewGuid().ToString("N")[..8];
