@@ -22,6 +22,8 @@ DECLARE
   v_version TEXT := current_setting('server_version');
   v_rendered TEXT;
   v_adopted INTEGER := 0;
+  v_rebaselined INTEGER := 0;
+  v_previous TEXT;
   r RECORD;
 BEGIN
   IF to_regclass('pg_temp.temp_columns') IS NULL AND to_regclass('pg_temp.temp_indexes') IS NULL THEN RETURN; END IF;
@@ -189,6 +191,13 @@ BEGIN
                               AND u."ObjectName" = r."ObjectName" AND u."Slot" = r."Slot");
     END IF;
 
+    -- A row recorded under another major version is the engine re-rendering its own text after an upgrade (PostgreSQL
+    -- 14 changed how it deparses several expressions), not a declaration verified for the first time: said as such.
+    v_previous := NULL;
+    SELECT m."EngineVersion" INTO v_previous FROM "SchemaSmith"."ExpressionMap" m
+     WHERE m."ObjectSchema" = r."ObjectSchema" AND m."ObjectTable" = r."ObjectTable" AND m."ObjectKind" = r."ObjectKind"
+       AND m."ObjectName" = r."ObjectName" AND m."Slot" = r."Slot" AND m."AuthoredText" = r."AuthoredText";
+
     INSERT INTO "SchemaSmith"."ExpressionMap" AS em
       ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot", "AuthoredText", "CanonicalText",
        "PlatformName", "EngineVersion", "CompatLevel", "UpdatedUtc")
@@ -197,9 +206,16 @@ BEGIN
     ON CONFLICT ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot")
     DO UPDATE SET "AuthoredText" = EXCLUDED."AuthoredText", "CanonicalText" = EXCLUDED."CanonicalText",
                   "EngineVersion" = EXCLUDED."EngineVersion", "UpdatedUtc" = now();
-    v_adopted := v_adopted + 1;
+    IF v_previous IS NOT NULL AND SPLIT_PART(v_previous, '.', 1) <> SPLIT_PART(v_version, '.', 1) THEN
+      v_rebaselined := v_rebaselined + 1;
+    ELSE
+      v_adopted := v_adopted + 1;
+    END IF;
   END LOOP;
 
+  IF v_rebaselined > 0 THEN
+    RAISE NOTICE '  Re-baselined % expression(s) recorded under an earlier PostgreSQL major version, after checking each on a scratch copy of its table: PostgreSQL % renders the declared text as exactly what the database holds. No object was changed.', v_rebaselined, v_version;
+  END IF;
   IF v_adopted > 0 THEN
     RAISE NOTICE '  Verified % expression(s) on a scratch copy of their table: the declared text renders to exactly what the database holds, so they are recorded rather than re-applied.', v_adopted;
   END IF;

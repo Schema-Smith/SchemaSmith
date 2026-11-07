@@ -114,6 +114,34 @@ public class TableQuench_ExpressionMapAdoptTests : BaseTableQuenchTests
         });
     }
 
+    // After an upgrade across PostgreSQL 14 the engine renders some stored expressions differently, so a recorded row no
+    // longer matches the live text. The copy shows the declaration still produces exactly that text: re-baselined, and
+    // said so, rather than re-applied or reported as verified for the first time. Simulated by recording the rows as an
+    // earlier major version would have left them.
+    [Test]
+    public void ARowRecordedUnderAnEarlierMajorVersion_IsReBaselined_NotReApplied()
+    {
+        var t = $"adoptmajor_{Guid.NewGuid():N}"[..20];
+        WithTable(t, (cmd, messages) =>
+        {
+            Exec(cmd, Create(t));
+            RunTableQuenchProc(cmd, Json(t));
+            var before = Identity(cmd, t);
+            Exec(cmd, $"""UPDATE "SchemaSmith"."ExpressionMap" SET "CanonicalText" = "CanonicalText" || ' ', "EngineVersion" = '13.18' WHERE "ObjectTable" = '{t}'""");
+
+            messages.Clear();
+            RunTableQuenchProc(cmd, Json(t));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Identity(cmd, t), Is.EqualTo(before), "nothing re-applied");
+                Assert.That(messages, Has.Some.Contains("Re-baselined 3 expression(s) recorded under an earlier PostgreSQL major version"));
+                Assert.That(messages, Has.None.Contains("Verified"), "an upgrade's re-rendering is not a first verification");
+                Assert.That(Scalar(cmd, $"""SELECT COUNT(*) FROM "SchemaSmith"."ExpressionMap" WHERE "ObjectTable" = '{t}' AND "EngineVersion" = '13.18'"""), Is.EqualTo("0"));
+            });
+        });
+    }
+
     [Test]
     public void ARealDifference_IsStillReApplied()
     {

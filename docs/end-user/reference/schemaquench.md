@@ -1103,7 +1103,9 @@ Nothing needs migrating, and the table can be emptied at any time: the worst cas
 
 **A re-baseline is logged, not silent.** The deploy log says how many records were refreshed and for which
 version -- `Re-baselined 3 recorded expression(s) ... No object was changed.` -- so an engine upgrade is visible in
-the first deploy after it.
+the first deploy after it. On PostgreSQL a major upgrade can change how the engine renders an expression it already
+stores; such a record is checked on a copy like any unrecorded expression and logged as `Re-baselined ... recorded
+under an earlier PostgreSQL major version`, again without touching the object.
 
 **Covered surfaces:** check constraints, computed columns, column defaults, and filtered-index and
 filtered-statistic predicates (SQL Server); check constraints, generated columns, column and domain defaults, index key
