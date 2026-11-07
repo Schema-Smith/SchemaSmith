@@ -2490,10 +2490,11 @@ SET NOCOUNT ON
                 var captured = CaptureModulePermissions(destCmd, script);
                 var signatures = CaptureModuleSignatures(destCmd, script);
                 QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
-                if (script.Error != null && TryClearSchemaBoundDependents(destCmd, script, out var droppedModuleScripts))
+                if (script.Error != null && TryClearSchemaBoundDependents(destCmd, script, out var droppedModuleScripts, out var policyGuard))
                 {
                     QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
                     if (script.Error == null) RecreateDroppedModules(destCmd, droppedModuleScripts, showErrors);
+                    if (policyGuard != null) EndPolicyGuard(destCmd, script, droppedModuleScripts, policyGuard);
                 }
                 if (captured != null && script.HasBeenQuenched && script.Error == null && script.Outcome == ScriptOutcome.Applied)
                     ReapplyModulePermissions(destCmd, script, captured);
@@ -2552,10 +2553,11 @@ SET NOCOUNT ON
                 var captured = CaptureModulePermissions(destCmd, script);
                 var signatures = CaptureModuleSignatures(destCmd, script);
                 QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
-                if (script.Error != null && TryClearSchemaBoundDependents(destCmd, script, out var droppedModuleScripts))
+                if (script.Error != null && TryClearSchemaBoundDependents(destCmd, script, out var droppedModuleScripts, out var policyGuard))
                 {
                     QuenchOneScript(destCmd, script, _runScriptsTwice, showErrors);
                     if (script.Error == null) RecreateDroppedModules(destCmd, droppedModuleScripts, showErrors);
+                    if (policyGuard != null) EndPolicyGuard(destCmd, script, droppedModuleScripts, policyGuard);
                 }
                 if (captured != null && script.HasBeenQuenched && script.Error == null && script.Outcome == ScriptOutcome.Applied)
                     ReapplyModulePermissions(destCmd, script, captured);
@@ -2662,9 +2664,10 @@ SET NOCOUNT ON
         return dependents.Count == 0 ? null : SchemaBoundDependents.Plan(dependents, DeclaredObjectsOfIteration());
     }
 
-    private bool TryClearSchemaBoundDependents(IDbCommand destCmd, SqlScript script, out List<SqlScript> droppedModuleScripts)
+    private bool TryClearSchemaBoundDependents(IDbCommand destCmd, SqlScript script, out List<SqlScript> droppedModuleScripts, out string policyGuard)
     {
         droppedModuleScripts = [];
+        policyGuard = null;
         if (!IsBlockedBySchemaBinding(script.Error)) return false;
         var plan = SchemaBoundPlanFor(destCmd, script);
         if (plan == null) return false;
@@ -2673,6 +2676,15 @@ SET NOCOUNT ON
         {
             script.Error = new Exception(SchemaBoundDependents.BlockedMessage(identity.Schema, identity.Name, plan), script.Error);
             return false;
+        }
+        // A dropped security policy leaves its table with no row-level security until it is back, so the drops, the change
+        // and the re-creates are one transaction: EndPolicyGuard commits them together, or rolls them back.
+        var policy = plan.Drops.FirstOrDefault(d => d.Dependent.Kind == SchemaBoundDependentKind.SecurityPolicy);
+        if (policy != null)
+        {
+            policyGuard = policy.Dependent.Display;
+            destCmd.CommandText = "BEGIN TRANSACTION";
+            destCmd.ExecuteNonQuery();
         }
         try
         {
@@ -2695,11 +2707,39 @@ SET NOCOUNT ON
         }
         catch (System.Data.Common.DbException ex)
         {
+            if (policyGuard != null) RollBackOpenTransaction(destCmd);
+            policyGuard = null;
             script.Error = new Exception($"Could not drop a schema-bound dependent of {identity.Schema}.{identity.Name}: {ex.Message}", ex);
             return false;
         }
         script.Error = null;
         return true;
+    }
+
+    // Commits the change and the dependents put back with it when all of them applied; otherwise rolls every one of them
+    // back, so the security policy keeps protecting its table, and fails the script naming the policy.
+    private void EndPolicyGuard(IDbCommand destCmd, SqlScript script, List<SqlScript> recreated, string policy)
+    {
+        var failure = script.Error ?? recreated.Select(r => r.Error).FirstOrDefault(e => e != null);
+        destCmd.CommandText = "SELECT @@TRANCOUNT";
+        var open = Convert.ToInt32(destCmd.ExecuteScalar()) > 0;
+        if (failure == null && open)
+        {
+            destCmd.CommandText = "COMMIT TRANSACTION";
+            destCmd.ExecuteNonQuery();
+            return;
+        }
+        if (failure == null) return;
+        if (open) RollBackOpenTransaction(destCmd);
+        SafeProgressLog($"    Rolled back {script.LogPath} and the objects dropped for it: {policy} could not be put back, so it stays as it was");
+        script.HasBeenQuenched = false;
+        script.Error = new Exception($"{script.LogPath} was rolled back so that {policy} keeps protecting its table: {failure.Message}", failure);
+    }
+
+    private static void RollBackOpenTransaction(IDbCommand destCmd)
+    {
+        destCmd.CommandText = "IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION";
+        destCmd.ExecuteNonQuery();
     }
 
     // Deepest-first was the drop order, so the scripts come back innermost-first. A script that already ran in this
