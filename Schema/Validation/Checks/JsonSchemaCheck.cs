@@ -439,6 +439,7 @@ public sealed class JsonSchemaCheck : ISchemaCheck
             ("domaintypes", Platform.PostgreSQL) => typeof(PostgreSqlDomainType),
             ("enumtypes", Platform.PostgreSQL) => typeof(PostgreSqlEnumType),
             ("sequences", Platform.PostgreSQL) => typeof(PostgreSqlSequence),
+            ("sequences", Platform.SqlServer) => typeof(SqlServerSequence),
             _ => throw new ArgumentException($"Unknown schema file mapping: {fileName} for platform {platform}")
         };
     }

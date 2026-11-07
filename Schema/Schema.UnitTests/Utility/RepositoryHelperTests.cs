@@ -72,11 +72,12 @@ public class RepositoryHelperTests
     {
         var names = RepositoryHelper.GetSchemaFileNames(Platform.SqlServer);
 
-        Assert.That(names, Has.Length.EqualTo(4));
+        Assert.That(names, Has.Length.EqualTo(5));
         Assert.That(names[0], Does.StartWith("products."));
         Assert.That(names[1], Does.StartWith("templates."));
         Assert.That(names[2], Does.StartWith("tables."));
         Assert.That(names[3], Is.EqualTo("indexedviews.sqlserver.schema"));
+        Assert.That(names[4], Is.EqualTo("sequences.sqlserver.schema"));
 
         var platformStr = Platform.SqlServer.ToCanonicalString().ToLower();
         foreach (var name in names)
@@ -244,9 +245,9 @@ public class RepositoryHelperTests
 
         var results = RepositoryHelper.WriteSchemaFilesWithResults("/fake/product", Platform.SqlServer);
 
-        Assert.That(results, Has.Count.EqualTo(4)); // products, templates, tables, indexedviews
+        Assert.That(results, Has.Count.EqualTo(5)); // products, templates, tables, indexedviews, sequences
         Assert.That(results, Has.All.Matches<SchemaFileResult>(r => r.WasCreated));
-        Assert.That(writtenFiles, Has.Count.EqualTo(4));
+        Assert.That(writtenFiles, Has.Count.EqualTo(5));
 
         // Verify each written file is valid JSON with schema structure
         foreach (var (_, content) in writtenFiles)

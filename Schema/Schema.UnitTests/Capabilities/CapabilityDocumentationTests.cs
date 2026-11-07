@@ -125,6 +125,7 @@ public class CapabilityDocumentationTests
         ["MariaDb/generated-column-collation"] = "**`COLLATE` on a generated column**",
         ["MariaDb/long-unique-key"] = "**Long unique key**",
         ["MariaDb/sequence"] = "**Declared sequence**",
+        ["SqlServer/sequence"] = "**Declared SQL Server sequence**",
         ["MariaDb/sequence-type"] = "**Sequence data type**",
         ["MariaDb/vector-index"] = "**Vector index**",
     };

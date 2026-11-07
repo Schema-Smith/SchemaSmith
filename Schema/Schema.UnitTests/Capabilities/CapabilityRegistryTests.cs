@@ -56,6 +56,7 @@ namespace Schema.UnitTests.Capabilities
             "table without its WITH SYSTEM VERSIONING clause",
             "column without its WITHOUT SYSTEM VERSIONING clause",
             "sequence (MariaDB 10.3)",
+            "sequence (SQL Server 2012)",
             "sequence type (MariaDB 11.5)",
             "INDEX (VECTOR, MariaDB 11.7)",
             "CDC (database not enabled)",

@@ -150,7 +150,8 @@ public partial class DatabaseQuench
             new(CheckpointNames.EnumTypeQuench, CheckpointNames.EnumTypeQuench,
                 () => _product.Platform == Platform.PostgreSQL && _template.EnumTypes.Count > 0, () => QuenchEnumTypes(tableCmd), StepPreview.SameCall),
             new(CheckpointNames.SequenceQuench, CheckpointNames.SequenceQuench,
-                () => (_product.Platform == Platform.PostgreSQL && _template.Sequences.Count > 0) || (_product.Platform == Platform.MariaDb && _template.MariaDbSequences.Count > 0),
+                () => (_product.Platform == Platform.PostgreSQL && _template.Sequences.Count > 0) || (_product.Platform == Platform.MariaDb && _template.MariaDbSequences.Count > 0)
+                      || (_product.Platform == Platform.SqlServer && _template.SqlServerSequences.Count > 0),
                 () => QuenchSequences(tableCmd), StepPreview.SameCall),
 
             // Not checkpointed: it parses the table JSON into the session's temp tables (#Tables, temp_tables,

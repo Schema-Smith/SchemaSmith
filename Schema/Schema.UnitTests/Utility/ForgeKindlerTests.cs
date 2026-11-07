@@ -356,7 +356,8 @@ public class ForgeKindlerTests
         // +1 on SQL Server = DropTablesRemovedFromProduct (called after the last refusal, so a refused deploy drops no table).
         // +2 on SQL Server = fn_PartitionCompression and fn_PartitionCompressionDrift (a partitioned index read once, not once per partition).
         // +1 on SQL Server = Kindling_RebuildSetAsideForeignKeys_Table (the inbound keys a rebuild sets aside until the foreign-key pass restores them).
-        Assert.That(sqlServer.Length, Is.EqualTo(84));
+        // +1 = SchemaSmith.SequenceQuench (declared sequences; XML ingest on every tier).
+        Assert.That(sqlServer.Length, Is.EqualTo(85));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns

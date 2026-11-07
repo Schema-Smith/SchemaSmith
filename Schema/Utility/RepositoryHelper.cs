@@ -415,6 +415,7 @@ public static class RepositoryHelper
             ("domaintypes", Platform.PostgreSQL) => typeof(PostgreSqlDomainType),
             ("enumtypes", Platform.PostgreSQL) => typeof(PostgreSqlEnumType),
             ("sequences", Platform.PostgreSQL) => typeof(PostgreSqlSequence),
+            ("sequences", Platform.SqlServer) => typeof(SqlServerSequence),
             _ => throw new ArgumentException($"Unknown schema file mapping: {fileName} for platform {platform}")
         };
     }
@@ -440,8 +441,8 @@ public static class RepositoryHelper
             files.Add($"domaintypes.{platformName}.schema");
         if (platform == Platform.PostgreSQL)
             files.Add($"enumtypes.{platformName}.schema");
-        // Sequences: PostgreSQL, and MariaDB (10.3+); MySQL has none at any version.
-        if (platform == Platform.PostgreSQL || platform == Platform.MariaDb)
+        // Sequences: PostgreSQL, SQL Server (2012+) and MariaDB (10.3+); MySQL has none at any version.
+        if (platform == Platform.PostgreSQL || platform == Platform.MariaDb || platform == Platform.SqlServer)
             files.Add($"sequences.{platformName}.schema");
         return files.ToArray();
     }

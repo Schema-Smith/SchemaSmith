@@ -35,6 +35,11 @@ namespace Schema.Capabilities
             rows.Add(new("temporal", "Temporal tables (system-versioning)", Platform.SqlServer,
                 13, "SQL Server 2016", null, DegradeKind.Skip, "temporal (SQL Server 2016)"));
 
+            // Declared sequences (Sequences/*.json): CREATE SEQUENCE arrived in SQL Server 2012; below it SequenceQuench
+            // skips each declared one.
+            rows.Add(new("sequence", "Declared sequence", Platform.SqlServer,
+                11, "SQL Server 2012", null, DegradeKind.Skip, "sequence (SQL Server 2012)"));
+
             // Reduced, not Skipped: without the graph clause the table still deploys with all its
             // declared columns -- only the node/edge semantics are lost.
             rows.Add(new("graph-table", "Graph tables (NODE/EDGE)", Platform.SqlServer,

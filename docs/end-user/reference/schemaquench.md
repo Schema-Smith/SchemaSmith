@@ -483,6 +483,7 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 | **Dynamic data masking** (`MASKED WITH`) | SQL Server 2016 | creates the column *unmasked* + records a downgrade |
 | **Always Encrypted** (`ENCRYPTED WITH`) | SQL Server 2016 | creates the column *unencrypted* + records a downgrade |
 | **Nonclustered columnstore index** | SQL Server 2012 | skips the index + records a downgrade |
+| **Declared SQL Server sequence** (`Sequences/*.json`) | SQL Server 2012 | skips the sequence + records a downgrade |
 | **Clustered columnstore index** | SQL Server 2014 | skips the index + records a downgrade |
 | **Writable nonclustered columnstore** | SQL Server 2016 | skips the index + records a downgrade. On 2012 and 2014 a nonclustered columnstore index makes its table read-only, so creating it would change what the application can do. An index already on the table is left in place |
 | **Clustered columnstore beside rowstore indexes** | SQL Server 2016 | skips the columnstore index and keeps the rowstore indexes, which carry keys and uniqueness + records a downgrade. SQL Server 2014 refuses the combination. An index already on the table is left in place |

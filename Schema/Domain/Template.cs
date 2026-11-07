@@ -299,6 +299,10 @@ namespace Schema.Domain
         [JsonIgnore]
         public List<MariaDbSequence> MariaDbSequences { get; } = [];
 
+        // Sequences, SQL Server (2012+). The same folder, read as SqlServerSequence.
+        [JsonIgnore]
+        public List<SqlServerSequence> SqlServerSequences { get; } = [];
+
         [JsonIgnore]
         public string SequenceSchema { get; set; } = "[]";
 
@@ -452,6 +456,7 @@ namespace Schema.Domain
             clone.EnumTypeSchema = EnumTypeSchema;
             clone.Sequences.AddRange(Sequences);
             clone.MariaDbSequences.AddRange(MariaDbSequences);
+            clone.SqlServerSequences.AddRange(SqlServerSequences);
             clone.SequenceSchema = SequenceSchema;
             clone.MaterializedViewSchema = MaterializedViewSchema;
             clone.EventSchema = EventSchema;
@@ -704,7 +709,9 @@ namespace Schema.Domain
             EnumTypeSchema = JArray.FromObject(EnumTypes).ToString();
             tokens.Add(new("EnumTypeSchema", EnumTypeSchema));
 
-            SequenceSchema = MariaDbSequences.Count > 0 ? JArray.FromObject(MariaDbSequences).ToString() : JArray.FromObject(Sequences).ToString();
+            SequenceSchema = MariaDbSequences.Count > 0 ? JArray.FromObject(MariaDbSequences).ToString()
+                : SqlServerSequences.Count > 0 ? JArray.FromObject(SqlServerSequences).ToString()
+                : JArray.FromObject(Sequences).ToString();
             tokens.Add(new("SequenceSchema", SequenceSchema));
 
             IndexedViewSchema = JArray.FromObject(IndexedViews).ToString();
@@ -899,7 +906,7 @@ namespace Schema.Domain
         /// <summary>Loads DECLARATIVE sequences from the Sequences/ folder; *.sql there still runs scripted.</summary>
         private void LoadSequences(Platform platform, bool tolerateComponentLoadErrors)
         {
-            if (platform != Platform.PostgreSQL && platform != Platform.MariaDb) return;
+            if (platform != Platform.PostgreSQL && platform != Platform.MariaDb && platform != Platform.SqlServer) return;
             var path = Path.Join(Path.GetDirectoryName(FilePath) ?? "", "Sequences");
             if (!ProductDirectoryWrapper.GetFromFactory().Exists(path)) return;
             var files = ProductDirectoryWrapper.GetFromFactory()
@@ -913,6 +920,9 @@ namespace Schema.Domain
                     if (platform == Platform.MariaDb)
                         MariaDbSequences.Add(JsonConvert.DeserializeObject<MariaDbSequence>(json, PlatformDeserializer.StrictSettings)
                                              ?? throw new JsonSerializationException("Failed to deserialize sequence"));
+                    else if (platform == Platform.SqlServer)
+                        SqlServerSequences.Add(JsonConvert.DeserializeObject<SqlServerSequence>(json, PlatformDeserializer.StrictSettings)
+                                               ?? throw new JsonSerializationException("Failed to deserialize sequence"));
                     else
                         Sequences.Add(JsonConvert.DeserializeObject<PostgreSqlSequence>(json, PlatformDeserializer.StrictSettings)
                                       ?? throw new JsonSerializationException("Failed to deserialize sequence"));

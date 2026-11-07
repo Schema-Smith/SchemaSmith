@@ -1925,11 +1925,21 @@ CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)
     /// </summary>
     internal void QuenchSequences(IDbCommand tableCommand)
     {
-        if (_product.Platform != Platform.PostgreSQL && _product.Platform != Platform.MariaDb) return;
+        if (_product.Platform != Platform.PostgreSQL && _product.Platform != Platform.MariaDb && _product.Platform != Platform.SqlServer) return;
         var sequences = IterationSequenceSchema;
         if (string.IsNullOrWhiteSpace(sequences) || sequences.Trim() == "[]") return;
 
         SafeProgressLog("  Quenching sequences");
+        if (_product.Platform == Platform.SqlServer)
+        {
+            // Always XML: sequences start at SQL Server 2012, and 2012-2016 cannot read JSON.
+            var xml = ModelXmlSerializer.ToIngestXml(sequences, "Sequences", "Sequence");
+            tableCommand.CommandText = $@"EXEC [SchemaSmith].[SequenceQuench] @ProductName = N'{EscapeSqlLiteral(_product.Name)}', @Sequences = N'{EscapeSqlLiteral(xml)}', @WhatIf = {SqlFlag(_whatIfOnly)};";
+            _debugFileLocation = LogSqlScript(GetDebugFileName("Quench Sequences"), tableCommand.CommandText);
+            ExecuteNonQueryHandlingMessages(tableCommand, retryOnDeadlock: true);
+            _debugFileLocation = "";
+            return;
+        }
         if (_product.Platform == Platform.MariaDb)
         {
             tableCommand.CommandText = $"CALL SchemaSmith_SequenceQuench('{EscapeMySqlLiteral(_databaseName)}', '{EscapeMySqlLiteral(sequences)}', {SqlFlag(_whatIfOnly)})";

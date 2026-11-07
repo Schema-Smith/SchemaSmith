@@ -832,6 +832,8 @@ public static class ForgeKindler
                 new("SchemaSmith.ValidateIndexedViewOwnership.sql"),
                 new("SchemaSmith.FixupIndexedViewOwnership.sql"),
                 new("SchemaSmith.IndexedViewQuench.sql"),
+                // Declared sequences (2012+). XML ingest on every tier, so one script and no XML twin.
+                new("SchemaSmith.SequenceQuench.sql"),
                 new("SchemaSmith.GenerateIndexedViewJson.sql"),
             ],
             Platform.PostgreSQL =>

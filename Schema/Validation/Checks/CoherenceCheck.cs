@@ -1818,7 +1818,8 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         foreach (var finding in CoexistenceFindings(
                      template, "Sequences", DuplicateSequenceCode, "Sequence",
-                     template.Sequences.Select(s => (s.Schema, s.Name)).Concat(template.MariaDbSequences.Select(s => ((string)null, s.Name))),
+                     template.Sequences.Select(s => (s.Schema, s.Name)).Concat(template.MariaDbSequences.Select(s => ((string)null, s.Name)))
+                         .Concat(template.SqlServerSequences.Select(s => (s.Schema, s.Name))),
                      "Two authoring paths for one object leave it ambiguous which one is in charge"))
             yield return finding;
     }

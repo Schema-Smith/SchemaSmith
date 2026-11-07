@@ -87,6 +87,12 @@ namespace Schema.Domain
             sequence.Schema = ResolveTableSchema(sequence.Schema, sequence.Name, "sequence", isSchemaTemplate, platform);
         }
 
+        public static void Resolve(SqlServerSequence sequence, bool isSchemaTemplate, Platform platform)
+        {
+            if (sequence == null) return;
+            sequence.Schema = ResolveTableSchema(sequence.Schema, sequence.Name, "sequence", isSchemaTemplate, platform);
+        }
+
         /// <summary>
         /// Resolves all platform-typed children of a template in one pass. Called from
         /// Template.Load after deserialization completes. Fails loud (throws) when the
@@ -148,6 +154,9 @@ namespace Schema.Domain
                     Resolve(domainType, isSchemaTemplate, platform);
 
                 foreach (var sequence in template.Sequences)
+                    Resolve(sequence, isSchemaTemplate, platform);
+
+                foreach (var sequence in template.SqlServerSequences)
                     Resolve(sequence, isSchemaTemplate, platform);
             }
             catch (PackageException inner)
