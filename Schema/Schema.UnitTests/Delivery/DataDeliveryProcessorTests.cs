@@ -1680,6 +1680,25 @@ public class DataDeliveryProcessorTests
         Assert.That(DataDeliveryProcessor.ResolveContentFilePath(null, "file.csv"), Is.Null);
     }
 
+    // A zipped package's template root is a path inside the zip ("Templates/Main"), read through the zip, not the disk:
+    // it must stay relative, or the content file is looked for under the working directory and never found.
+    [Test]
+    public void ResolveContentFilePath_RelativeRoot_StaysRelative()
+    {
+        var root = Path.Join("Templates", "Main");
+
+        var result = DataDeliveryProcessor.ResolveContentFilePath(root, "Tables/public.TestTable.tabledata");
+
+        Assert.That(result, Is.EqualTo(Path.Join("Templates", "Main", "Tables", "public.TestTable.tabledata")));
+    }
+
+    [Test]
+    public void ResolveContentFilePath_RelativeRoot_StillRefusesAnEscape()
+    {
+        Assert.That(DataDeliveryProcessor.ResolveContentFilePath(Path.Join("Templates", "Main"), "../Other/x.tabledata"), Is.Null);
+        Assert.That(DataDeliveryProcessor.ResolveContentFilePath(Path.Join("Templates", "Main"), "../../../outside.tabledata"), Is.Null);
+    }
+
     // ---------- ResolveContentFilePath path-traversal containment ----------
     //
     // ContentFile may come from an externally-authored template. A malicious value
