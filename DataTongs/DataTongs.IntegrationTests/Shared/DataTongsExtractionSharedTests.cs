@@ -455,8 +455,10 @@ INSERT INTO `{_testDb}`.`{tableName}` VALUES
         // Some rentals have null return_date
         var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, "rental", "`rental_id`", "return_date IS NULL AND rental_id <= 10");
 
-        Assert.That(json, Is.Not.Null);
-        // JSON should handle null values properly - return_date will be null in the output
+        var rows = Newtonsoft.Json.Linq.JArray.Parse(json);
+        Assert.That(rows, Is.Not.Empty, "the filter selects rentals with no return date");
+        Assert.That(rows.Select(r => r["return_date"]?.Type), Is.All.EqualTo(Newtonsoft.Json.Linq.JTokenType.Null),
+            "each one carries the column as a JSON null, not dropped and not a string");
     }
 
     [Test]

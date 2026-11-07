@@ -293,8 +293,10 @@ INSERT INTO public.""{parent}_c"" VALUES ('CHILD', 1);";
 
         var json = _dataTongs.GetTableDataJson(command, selectColumns, "public", "TestNullable", "\"Id\"", "\"OptionalText\" IS NULL");
 
-        Assert.That(json, Is.Not.Null);
-        // JSON should handle null values properly
+        var rows = Newtonsoft.Json.Linq.JArray.Parse(json);
+        Assert.That(rows, Is.Not.Empty, "the filter selects the rows with no OptionalText");
+        Assert.That(rows.Select(r => r["OptionalText"]?.Type), Is.All.EqualTo(Newtonsoft.Json.Linq.JTokenType.Null),
+            "each one carries the column as a JSON null, not dropped and not a string");
     }
 
     #endregion
