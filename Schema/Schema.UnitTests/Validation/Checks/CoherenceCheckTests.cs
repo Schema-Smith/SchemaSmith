@@ -3104,7 +3104,7 @@ public class CoherenceCheckTests
         });
     }
 
-    // ---- SS-IDENT-002: a PostgreSQL name longer than 63 bytes is stored truncated ----
+    // ---- SS-IDENT-002: a name longer than the engine takes -- PostgreSQL truncates it, the others refuse it ----
 
     [Test]
     public void APostgreSqlColumnNameOver63Bytes_IsAnError()
@@ -3139,9 +3139,9 @@ public class CoherenceCheckTests
         Assert.That(findings.Where(f => f.Code == "SS-IDENT-002"), Is.Not.Empty);
     }
 
-    // MariaDB allows 64 characters, and refuses a longer name itself rather than truncating it.
+    // MariaDB counts characters: 52 of them in 64 bytes fit.
     [Test]
-    public void ALongMariaDbSequenceName_IsNotThisCheck()
+    public void AMariaDbNameIsMeasuredInCharacters()
     {
         var template = new Template { Name = "Main" };
         template.MariaDbSequences.Add(new MariaDbSequence { Name = new string('s', 40) + new string('é', 12) });
@@ -3151,11 +3151,128 @@ public class CoherenceCheckTests
     }
 
     [Test]
-    public void ALongNameOnAnotherEngine_IsNotThisCheck()
+    public void ASqlServerNameWithinItsLimit_IsNotReported()
     {
         var table = new SqlServerTable { Name = new string('t', 100) };
         table.Columns.Add(new SqlServerColumn { Name = "id", DataType = "INT" });
         Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-002"), Is.Empty);
+    }
+
+    // MySQL (1059) and MariaDB (1103) refuse a name over 64 characters, so the deploy stops mid-run.
+    [TestCase(Platform.MySQL)]
+    [TestCase(Platform.MariaDb)]
+    public void AMySqlFamilyNameOver64Characters_IsAnError(Platform platform)
+    {
+        var name = new string('c', 65);
+        MySqlTable table = platform == Platform.MariaDb ? new MariaDbTable { Name = "invoice" } : new MySqlTable { Name = "invoice" };
+        table.Columns.Add(new MySqlColumn { Name = name, DataType = "INT" });
+        var finding = RunFor(table, platform).Single(f => f.Code == "SS-IDENT-002");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Error), "the deploy fails");
+            Assert.That(finding.Message, Does.StartWith($"Column '{name}'").And.Contain("65 characters").And.Contain("64"), finding.Message);
+        });
+    }
+
+    // Characters, not bytes: 64 two-byte characters deploy (probed on MySQL 8.0 and MariaDB 11).
+    [TestCase(64, false)]
+    [TestCase(65, true)]
+    public void TheMySqlFamilyLimitIsInCharacters(int characters, bool reported)
+    {
+        var table = new MySqlTable { Name = new string('\u00e9', characters) };
+        table.Columns.Add(new MySqlColumn { Name = "id", DataType = "INT" });
+        Assert.That(RunFor(table, Platform.MySQL).Where(f => f.Code == "SS-IDENT-002"), reported ? Is.Not.Empty : Is.Empty);
+    }
+
+    // SQL Server refuses a name over 128 characters (Msg 103). The brackets around a name are not part of it.
+    [TestCase(128, true, false)]
+    [TestCase(129, false, true)]
+    public void TheSqlServerLimitIs128Characters(int characters, bool bracketed, bool reported)
+    {
+        var name = bracketed ? "[" + new string('n', characters) + "]" : new string('n', characters);
+        var table = new SqlServerTable { Name = "Invoice" };
+        table.Columns.Add(new SqlServerColumn { Name = name, DataType = "INT" });
+        var findings = RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-002").ToList();
+        Assert.That(findings, reported ? Is.Not.Empty : Is.Empty);
+        if (reported)
+            Assert.That(findings[0].Message, Does.Contain("129 characters").And.Contain("128"), findings[0].Message);
+    }
+
+    // The kinds only the other engines have; the kinds every table has are the PostgreSQL population below.
+    private static System.Collections.Generic.IEnumerable<TestCaseData> OverlongEngineTableKinds()
+    {
+        var sql = new string('s', 129);
+        var my = new string('m', 65);
+
+        SqlServerTable Ss(System.Action<SqlServerTable> mutate)
+        {
+            var t = new SqlServerTable { Name = "Invoice", Columns = { new SqlServerColumn { Name = "Id", DataType = "INT" } } };
+            mutate(t);
+            return t;
+        }
+
+        yield return new TestCaseData(Ss(t => t.XmlIndexes.Add(new XmlIndex { Name = sql })), Platform.SqlServer, "XML index").SetName("SQL Server XML index");
+        yield return new TestCaseData(Ss(t => t.SpatialIndexes.Add(new SpatialIndex { Name = sql, Column = "Id" })), Platform.SqlServer, "Spatial index").SetName("SQL Server spatial index");
+        yield return new TestCaseData(Ss(t => t.JsonIndexes.Add(new JsonIndex { Name = sql })), Platform.SqlServer, "JSON index").SetName("SQL Server JSON index");
+        yield return new TestCaseData(Ss(t => t.Statistics.Add(new Schema.Domain.SqlServer.Statistic { Name = sql })), Platform.SqlServer, "Statistics").SetName("SQL Server statistics");
+        yield return new TestCaseData(Ss(t => t.EdgeConstraints.Add(new EdgeConstraint { Name = sql })), Platform.SqlServer, "Edge constraint").SetName("SQL Server edge constraint");
+        yield return new TestCaseData(Ss(t => t.ForeignKeys.Add(new SqlServerForeignKey { Name = "FK_1", Columns = "Id", RelatedTable = "Customer", RelatedColumns = "Id", RelatedTableSchema = sql })),
+            Platform.SqlServer, "Foreign key RelatedTableSchema").SetName("SQL Server FK RelatedTableSchema");
+
+        var partitioned = new MySqlTable { Name = "events", Columns = { new MySqlColumn { Name = "id", DataType = "INT" } } };
+        partitioned.Partitioning = new MySqlPartitioning { Partitions = { new MySqlPartition { Name = my } } };
+        yield return new TestCaseData(partitioned, Platform.MySQL, "Partition").SetName("MySQL partition");
+
+        var pg = new PostgreSqlTable { Name = "events", Schema = "public", Columns = { new PostgreSqlColumn { Name = "id", DataType = "integer" } } };
+        pg.Partitioning = new PostgreSqlPartitioning
+        {
+            Method = "LIST", Expression = "id",
+            Partitions = { new PostgreSqlPartition { Name = "events_a", Bound = "FOR VALUES IN (1)", Partitioning = new PostgreSqlPartitioning
+            {
+                Method = "LIST", Expression = "id", Partitions = { new PostgreSqlPartition { Name = Overlong, Bound = "FOR VALUES IN (1)" } }
+            } } }
+        };
+        yield return new TestCaseData(pg, Platform.PostgreSQL, "Partition").SetName("PostgreSQL nested partition");
+    }
+
+    [TestCaseSource(nameof(OverlongEngineTableKinds))]
+    public void EveryEngineTableNameKind_Overlong_IsAnError(Table table, Platform platform, string expectedKind)
+    {
+        var findings = RunFor(table, platform).Where(f => f.Code == "SS-IDENT-002").ToList();
+        Assert.That(findings.Select(f => f.Message).ToList(), Has.Some.StartsWith($"{expectedKind} '"),
+            $"no SS-IDENT-002 names the '{expectedKind}' kind on {platform}");
+    }
+
+    private static System.Collections.Generic.IEnumerable<TestCaseData> OverlongEngineModeledKinds()
+    {
+        var sql = new string('s', 129);
+        var my = new string('m', 65);
+
+        Template With(System.Action<Template> mutate)
+        {
+            var t = new Template { Name = "Main" };
+            mutate(t);
+            return t;
+        }
+
+        yield return new TestCaseData(With(t => t.SqlServerSequences.Add(new SqlServerSequence { Name = sql, Schema = "dbo" })), Platform.SqlServer, "Sequence").SetName("SQL Server sequence");
+        yield return new TestCaseData(With(t => t.SqlServerSequences.Add(new SqlServerSequence { Name = "Seq", Schema = sql })), Platform.SqlServer, "Sequence schema").SetName("SQL Server sequence schema");
+        yield return new TestCaseData(With(t => t.IndexedViews.Add(new SqlServerIndexedView { Name = sql, Schema = "dbo" })), Platform.SqlServer, "Indexed view").SetName("SQL Server indexed view");
+        yield return new TestCaseData(With(t => t.IndexedViews.Add(new SqlServerIndexedView { Name = "V", Schema = "dbo", Indexes = { new SqlServerIndex { Name = sql } } })),
+            Platform.SqlServer, "Indexed view index").SetName("SQL Server indexed view index");
+        yield return new TestCaseData(With(t => t.MariaDbSequences.Add(new MariaDbSequence { Name = my })), Platform.MariaDb, "Sequence").SetName("MariaDB sequence");
+        yield return new TestCaseData(With(t => t.Events.Add(new MySqlEvent { Name = my })), Platform.MySQL, "Event").SetName("MySQL event");
+    }
+
+    [TestCaseSource(nameof(OverlongEngineModeledKinds))]
+    public void EveryEngineModeledObjectKind_Overlong_IsAnError(Template template, Platform platform, string expectedKind)
+    {
+        var product = new Product { Name = "Acme", Platform = platform, TemplateOrder = [] };
+        var findings = new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg"))
+            .Where(f => f.Code == "SS-IDENT-002").ToList();
+        Assert.That(findings.Select(f => f.Message).ToList(), Has.Some.StartsWith($"{expectedKind} '"),
+            $"no SS-IDENT-002 names the '{expectedKind}' kind on {platform}");
     }
 
     // ---- SS-IDENT-002's POPULATION: one case per PostgreSQL name kind that reaches DDL ----
@@ -3515,6 +3632,40 @@ public class CoherenceCheckTests
             Assert.That(finding?.Severity, Is.EqualTo(expected ? Severity.Warning : (Severity?)null), defaultValue);
             if (expected) Assert.That(finding!.Message, Does.Contain("re-extract"));
         }
+    }
+
+    // The same mistake on the other engines, written by hand: PostgreSQL reads 'now()' once, at the deploy, and stores
+    // that timestamp as the default; SQL Server creates the table and then fails every insert into a datetime column
+    // (Msg 241). Both probed live.
+    [TestCase(Platform.PostgreSQL, "'now()'", "now()")]
+    [TestCase(Platform.PostgreSQL, "'gen_random_uuid()'", "gen_random_uuid()")]
+    [TestCase(Platform.SqlServer, "'GETDATE()'", "GETDATE()")]
+    [TestCase(Platform.SqlServer, "N'NEWID()'", "NEWID()")]
+    [TestCase(Platform.SqlServer, "('SYSUTCDATETIME()')", "SYSUTCDATETIME()")]
+    [TestCase(Platform.PostgreSQL, "now()", null)]
+    [TestCase(Platform.PostgreSQL, "'n/a (unknown)'", null)]
+    [TestCase(Platform.SqlServer, "getdate()", null)]
+    [TestCase(Platform.SqlServer, "N'Active'", null)]
+    [TestCase(Platform.SqlServer, "('x')", null)]
+    public void AQuotedFunctionCallDefault_OnEveryEngine_IsAWarning(Platform platform, string defaultValue, string unquoted)
+    {
+        Table table = platform == Platform.PostgreSQL
+            ? new PostgreSqlTable { Name = "t", Schema = "public", Columns = { new PostgreSqlColumn { Name = "c", DataType = "timestamptz", Default = defaultValue } } }
+            : new SqlServerTable { Name = "T", Columns = { new SqlServerColumn { Name = "C", DataType = "DATETIME", Default = defaultValue } } };
+        var finding = RunFor(table, platform).SingleOrDefault(f => f.Code == "SS-COL-007");
+
+        if (unquoted == null)
+        {
+            Assert.That(finding, Is.Null, defaultValue);
+            return;
+        }
+        if (finding is not { } reported)
+        {
+            Assert.Fail($"no SS-COL-007 for {defaultValue}");
+            return;
+        }
+        Assert.That(reported.Severity, Is.EqualTo(Severity.Warning), defaultValue);
+        Assert.That(reported.Message, Does.Contain($"({unquoted})").And.Not.Contain("re-extract"), reported.Message);
     }
 
     [Test]

@@ -77,6 +77,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string ReplicaIdentityIndexMissingCode = "SS-RI-001";
     private const string IdentifierTooLongCode = "SS-IDENT-002";
     private const int PostgreSqlMaxIdentifierBytes = 63;
+    private const int MySqlMaxIdentifierLength = 64;
+    private const int SqlServerMaxIdentifierLength = 128;
     private const string ReplicaIdentityIndexUnknownCode = "SS-RI-002";
     private const string ReplicaIdentityIndexNotUniqueCode = "SS-RI-003";
     private const string ReplicaIdentityIndexIgnoredCode = "SS-RI-004";
@@ -265,7 +267,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckModeledFolderObjectCoexistence(template));
 
         foreach (var template in ctx.Templates)
-            findings.AddRange(IdentifierLengthFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'"));
+            findings.AddRange(IdentifierLengthFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'", ctx.Product.Platform));
 
         foreach (var template in ctx.Templates)
         foreach (var table in template.Tables)
@@ -285,6 +287,7 @@ public sealed class CoherenceCheck : ISchemaCheck
                 findings.AddRange(CheckForeignKey(table, fk, location, template, tablesByTemplate, columnsAreOwnedElsewhere));
             findings.AddRange(CheckMySqlFamilyForeignKeys(table, location, tablesByKey, ctx.Product.Platform));
             findings.AddRange(CheckMySqlFamilyColumnTypes(table, location, ctx.Product.Platform));
+            findings.AddRange(CheckQuotedExpressionDefaults(table, location, ctx.Product.Platform));
 
             foreach (var index in table.Indexes)
                 findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
@@ -302,7 +305,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
             findings.AddRange(CheckRowLevelSecurity(table, location));
             findings.AddRange(CheckReplicaIdentity(table, location));
-            findings.AddRange(CheckPostgreSqlIdentifierLength(table, location));
+            findings.AddRange(IdentifierLengthFindings(NamedParts(table), location, ctx.Product.Platform));
             findings.AddRange(CheckSystemVersioningExclusions(table, location));
             findings.AddRange(CheckCdcFilegroup(table, location));
             findings.AddRange(CheckCdcSupportsNetChanges(table, location));
@@ -540,16 +543,32 @@ public sealed class CoherenceCheck : ISchemaCheck
             if (platform == Platform.MySQL && DeprecatedNumericForm.IsMatch(column.DataType ?? ""))
                 yield return new Finding(Severity.Warning, DeprecatedNumericFormCode, Category, location,
                     $"'{column.DataType}' uses a form MySQL 8.0.17 deprecated (FLOAT(M,D), UNSIGNED on FLOAT, DOUBLE or DECIMAL, or ZEROFILL), which a later release will remove.");
-            // D5: a package extracted before 2.8 wrote an expression default as a quoted string, which deploys as that text.
-            if (QuotedFunctionCall.IsMatch(column.Default ?? ""))
-                yield return new Finding(Severity.Warning, QuotedExpressionDefaultCode, Category, location,
-                    $"Default {column.Default.Trim()} is a quoted function call, so it deploys as that text, not as the expression. " +
-                    "A package extracted before 2.8 wrote expression defaults this way: re-extract it, or write the expression in parentheses.");
         }
     }
 
+    /// <summary>
+    /// A default written as a quoted function call deploys as that text, not as the expression. On the MySQL family a
+    /// package extracted before 2.8 wrote expression defaults this way (D5); anywhere, it is an easy hand-written slip,
+    /// and a quiet one: PostgreSQL reads <c>'now()'</c> once, at the deploy, and keeps that timestamp as the default, and
+    /// SQL Server creates the table and then fails every insert into a datetime column.
+    /// </summary>
+    private static IEnumerable<Finding> CheckQuotedExpressionDefaults(Table table, string tableLocation, Platform platform)
+    {
+        foreach (var column in table.Columns)
+        {
+            var match = QuotedFunctionCall.Match(column.Default ?? "");
+            if (!match.Success) continue;
+            var hint = platform is Platform.MySQL or Platform.MariaDb
+                ? "A package extracted before 2.8 wrote expression defaults this way: re-extract it, or write the expression in parentheses."
+                : $"Write it without the quotes ({match.Groups["call"].Value.Replace("''", "'")}).";
+            yield return new Finding(Severity.Warning, QuotedExpressionDefaultCode, Category, $"{tableLocation} / Column '{column.Name}'",
+                $"Default {column.Default.Trim()} is a quoted function call, so it deploys as that text, not as the expression. {hint}");
+        }
+    }
+
+    // Optionally wrapped in parentheses and N-prefixed, as a hand-written SQL Server default may be.
     private static readonly System.Text.RegularExpressions.Regex QuotedFunctionCall =
-        new(@"^\s*'\s*[A-Za-z_][A-Za-z0-9_$]*\s*\(.*\)\s*'\s*$", System.Text.RegularExpressions.RegexOptions.Singleline);
+        new(@"^\s*(?:\(\s*)?N?'\s*(?<call>[A-Za-z_][A-Za-z0-9_$]*\s*\(.*\))\s*'\s*(?:\)\s*)?$", System.Text.RegularExpressions.RegexOptions.Singleline);
 
     /// <summary>
     /// A declared <c>MinimumVersion</c> the engine cannot resolve aborts the deploy before any object is
@@ -1172,34 +1191,56 @@ public sealed class CoherenceCheck : ISchemaCheck
         return result;
     }
 
-    private static IEnumerable<Finding> CheckPostgreSqlIdentifierLength(Table table, string tableLocation) =>
-        table is PostgreSqlTable pgTable ? IdentifierLengthFindings(NamedParts(pgTable), tableLocation) : [];
-
     /// <summary>
-    /// PostgreSQL truncates an identifier longer than 63 bytes, with only a NOTICE. The object is created under the
-    /// shorter name, the next deploy looks for the declared one, misses it, and fails creating it again. The limit is
-    /// in bytes (NAMEDATALEN - 1), so a name in multi-byte characters reaches it sooner than its length suggests.
+    /// A name longer than the engine takes. PostgreSQL truncates one over 63 bytes with only a NOTICE: the object is
+    /// created under the shorter name, the next deploy looks for the declared one, misses it, and fails creating it
+    /// again. The limit is in bytes (NAMEDATALEN - 1), so a multi-byte name reaches it sooner than its length suggests.
+    /// MySQL and MariaDB refuse a name over 64 characters (1059 / 1103) and SQL Server one over 128 (Msg 103), so there
+    /// the deploy stops part-way through instead.
     /// </summary>
-    private static IEnumerable<Finding> IdentifierLengthFindings(IEnumerable<(string Kind, string Name)> parts, string location)
+    private static IEnumerable<Finding> IdentifierLengthFindings(IEnumerable<(string Kind, string Name)> parts, string location, Platform platform)
     {
         foreach (var (kind, name) in parts)
         {
             if (string.IsNullOrEmpty(name)) continue;
-            var bare = name.Length >= 2 && name[0] == '"' && name[^1] == '"' ? name[1..^1] : name;
-            var bytes = System.Text.Encoding.UTF8.GetByteCount(bare);
-            if (bytes <= PostgreSqlMaxIdentifierBytes) continue;
+            var bare = Unwrapped(name, platform);
+            if (platform == Platform.PostgreSQL)
+            {
+                var bytes = System.Text.Encoding.UTF8.GetByteCount(bare);
+                if (bytes <= PostgreSqlMaxIdentifierBytes) continue;
+                yield return new Finding(Severity.Error, IdentifierTooLongCode, Category, location,
+                    $"{kind} '{name}' is {bytes} bytes long. PostgreSQL truncates identifiers to {PostgreSqlMaxIdentifierBytes} " +
+                    "bytes, so it would be stored under a shorter name and the next deploy, not finding the declared one, " +
+                    $"would fail creating it again. Shorten it to {PostgreSqlMaxIdentifierBytes} bytes or fewer.");
+                continue;
+            }
+            // SQL Server's sysname counts UTF-16 code units; MySQL counts characters.
+            var limit = platform == Platform.SqlServer ? SqlServerMaxIdentifierLength : MySqlMaxIdentifierLength;
+            var length = platform == Platform.SqlServer ? bare.Length : bare.EnumerateRunes().Count();
+            if (length <= limit) continue;
             yield return new Finding(Severity.Error, IdentifierTooLongCode, Category, location,
-                $"{kind} '{name}' is {bytes} bytes long. PostgreSQL truncates identifiers to {PostgreSqlMaxIdentifierBytes} " +
-                "bytes, so it would be stored under a shorter name and the next deploy, not finding the declared one, " +
-                $"would fail creating it again. Shorten it to {PostgreSqlMaxIdentifierBytes} bytes or fewer.");
+                $"{kind} '{name}' is {length} characters long. {platform} refuses an identifier over {limit} characters, " +
+                $"so the deploy would stop at it. Shorten it to {limit} characters or fewer.");
         }
     }
 
+    private static string Unwrapped(string name, Platform platform)
+    {
+        if (name.Length < 2) return name;
+        return platform switch
+        {
+            Platform.PostgreSQL when name[0] == '"' && name[^1] == '"' => name[1..^1].Replace("\"\"", "\""),
+            Platform.SqlServer when name[0] == '[' && name[^1] == ']' => name[1..^1].Replace("]]", "]"),
+            Platform.MySQL or Platform.MariaDb when name[0] == '`' && name[^1] == '`' => name[1..^1].Replace("``", "`"),
+            _ => name
+        };
+    }
+
     /// <summary>
-    /// Every name on a table that reaches PostgreSQL DDL as an identifier, for the 63-byte limit (SS-IDENT-002). Column
-    /// <em>lists</em> are out (their items are checked as the columns they name), and <c>SchemaRef</c> is read by no script.
+    /// Every name on a table that reaches DDL as an identifier, for SS-IDENT-002. Column <em>lists</em> are out (their
+    /// items are checked as the columns they name), and <c>SchemaRef</c> is read by no script.
     /// </summary>
-    private static IEnumerable<(string Kind, string Name)> NamedParts(PostgreSqlTable table)
+    private static IEnumerable<(string Kind, string Name)> NamedParts(Table table)
     {
         yield return ("Table", table.Name);
         // Schema is resolved through IDeliverableTable, uniformly across platforms -- the same route
@@ -1220,20 +1261,49 @@ public sealed class CoherenceCheck : ISchemaCheck
             // local ones are, and are NOT covered by checking the related table's own declaration: a
             // package may reference a table it does not declare, and SS-FK-002 resolves the reference
             // without ever looking at whether the stored text can be emitted.
-            if (f is PostgreSqlForeignKey { RelatedTableSchema: { Length: > 0 } relatedSchema })
-                yield return ("Foreign key RelatedTableSchema", relatedSchema);
+            var relatedSchema = f switch
+            {
+                PostgreSqlForeignKey pg => pg.RelatedTableSchema,
+                SqlServerForeignKey ss => ss.RelatedTableSchema,
+                _ => null
+            };
+            if (!string.IsNullOrEmpty(relatedSchema)) yield return ("Foreign key RelatedTableSchema", relatedSchema);
             if (!string.IsNullOrEmpty(f.RelatedTable)) yield return ("Foreign key RelatedTable", f.RelatedTable);
         }
         foreach (var cc in table.CheckConstraints) yield return ("Check constraint", cc.Name);
+
+        var engineParts = table switch
+        {
+            PostgreSqlTable pg => PostgreSqlNamedParts(pg),
+            SqlServerTable ss => SqlServerNamedParts(ss),
+            MySqlTable my => (my.Partitioning?.Partitions ?? []).Select(p => ("Partition", p.Name)),
+            _ => []
+        };
+        foreach (var part in engineParts) yield return part;
+    }
+
+    private static IEnumerable<(string Kind, string Name)> PostgreSqlNamedParts(PostgreSqlTable table)
+    {
         foreach (var ec in table.ExcludeConstraints) yield return ("Exclude constraint", ec.Name);
         foreach (var st in table.Statistics) yield return ("Statistics", st.Name);
         // A pointer, not a declaration -- so it is its own kind. When it names a declared index the index
         // reports separately, which is honest: both the CREATE and the REPLICA IDENTITY clause break.
         if (!string.IsNullOrEmpty(table.ReplicaIdentityIndex))
             yield return ("ReplicaIdentityIndex", table.ReplicaIdentityIndex);
+        foreach (var name in PartitionNames(table.Partitioning)) yield return ("Partition", name);
     }
 
-    /// <summary>Every name on a modeled non-table object that reaches PostgreSQL DDL as a wrapped identifier.</summary>
+    private static IEnumerable<string> PartitionNames(PostgreSqlPartitioning partitioning) =>
+        (partitioning?.Partitions ?? []).SelectMany(p => PartitionNames(p.Partitioning).Prepend(p.Name));
+
+    private static IEnumerable<(string Kind, string Name)> SqlServerNamedParts(SqlServerTable table) =>
+        table.XmlIndexes.Select(i => ("XML index", i.Name))
+            .Concat(table.SpatialIndexes.Select(i => ("Spatial index", i.Name)))
+            .Concat(table.JsonIndexes.Select(i => ("JSON index", i.Name)))
+            .Concat(table.Statistics.Select(s => ("Statistics", s.Name)))
+            .Concat(table.EdgeConstraints.Select(e => ("Edge constraint", e.Name)));
+
+    /// <summary>Every name on a modeled non-table object that reaches DDL as an identifier.</summary>
     private static IEnumerable<(string Kind, string Name)> ModeledObjectNamedParts(Template template)
     {
         foreach (var view in template.MaterializedViews)
@@ -1264,6 +1334,22 @@ public sealed class CoherenceCheck : ISchemaCheck
             foreach (var check in domain.CheckConstraints)
                 yield return ("Domain type check constraint", check.Name);
         }
+
+        foreach (var sequence in template.SqlServerSequences)
+        {
+            yield return ("Sequence", sequence.Name);
+            if (!string.IsNullOrEmpty(sequence.Schema)) yield return ("Sequence schema", sequence.Schema);
+        }
+
+        foreach (var view in template.IndexedViews)
+        {
+            yield return ("Indexed view", view.Name);
+            if (!string.IsNullOrEmpty(view.Schema)) yield return ("Indexed view schema", view.Schema);
+            foreach (var index in view.Indexes) yield return ("Indexed view index", index.Name);
+        }
+
+        foreach (var sequence in template.MariaDbSequences) yield return ("Sequence", sequence.Name);
+        foreach (var evt in template.Events) yield return ("Event", evt.Name);
     }
 
     /// <summary>
