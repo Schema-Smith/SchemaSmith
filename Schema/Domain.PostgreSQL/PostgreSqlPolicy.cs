@@ -68,5 +68,9 @@ namespace Schema.Domain.PostgreSQL
         [SchemaProperty(MaxLength = 128, Description = "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied.")]
         [JsonProperty(Order = 8)]
         public string VariantName { get; set; }
+
+        [SchemaProperty(Description = "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it.")]
+        [JsonProperty(Order = 9, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
     }
 }

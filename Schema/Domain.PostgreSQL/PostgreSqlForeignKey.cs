@@ -42,5 +42,9 @@ namespace Schema.Domain.PostgreSQL
         [SchemaProperty(Description = "false creates the key NOT VALID, so the rows already in the table are not checked. true over a NOT VALID key validates it, which fails when any row violates it. Omitted leaves an existing key as it is, and a new one is validated.")]
         [JsonProperty(Order = 105, NullValueHandling = NullValueHandling.Ignore)]
         public bool? Validated { get; set; }
+
+        [SchemaProperty(Description = "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it.")]
+        [JsonProperty(Order = 107, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
     }
 }

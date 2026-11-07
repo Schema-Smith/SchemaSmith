@@ -179,7 +179,8 @@ BEGIN
     DROP TABLE IF EXISTS temp_statistics;
     CREATE TEMPORARY TABLE temp_statistics AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
-    SELECT elem ->> 'Schema' AS "TableSchema",
+    SELECT celem ->> 'Description' AS "Description",
+           elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
            NULLIF(celem ->> 'Schema', '') AS "StatisticsSchema",

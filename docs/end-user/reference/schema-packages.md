@@ -1233,6 +1233,7 @@ Referential integrity lives in the table JSON alongside columns and indexes, not
 | `SetNullColumns` | string | | **PostgreSQL 15+.** With `DeleteAction: "SET NULL"` or `"SET DEFAULT"`, the comma-separated subset of `Columns` set when the referenced row is deleted (`ON DELETE SET NULL (col, ...)`, `ON DELETE SET DEFAULT (col, ...)`); the other key columns keep their values. Omitted means every column. Below 15 the key is created with the plain action per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). `--Validate` stops it with any other action or naming a column outside the key (`SS-FK-007`). |
 | `ShouldApplyExpression` | string | | Conditional inclusion. |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
+| `Description` | string | `null` | **PostgreSQL only.** `COMMENT ON CONSTRAINT`. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | `null` | Custom metadata. |
 
 For composite foreign keys, list all columns in both `Columns` and `RelatedColumns` in matching order.
@@ -1466,6 +1467,7 @@ Table-level check constraints in the `CheckConstraints` array. Used when `CheckC
 | `NoInherit` | bool | omitted = not managed | **PostgreSQL only.** `NO INHERIT`: child tables do not inherit the constraint. Create-time state, so a change drops and re-creates it. Omitted, a new constraint is created inheritable and an existing one is left as it is. |
 | `ShouldApplyExpression` | string | | Conditional inclusion. |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
+| `Description` | string | `null` | **PostgreSQL only.** `COMMENT ON CONSTRAINT`. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | `null` | Custom metadata. |
 
 When `CheckConstraintStyle` is `"ColumnLevel"` (the default), single-column check constraints are written as `CheckExpression` on the column instead. Multi-column constraints always use the `CheckConstraints` array.
@@ -1639,6 +1641,7 @@ Custom statistics definitions in the `Statistics` array. SQL Server uses traditi
 | `StatisticsTarget` | int | The statistics target (`ALTER STATISTICS … SET STATISTICS n`, PostgreSQL 13+), the sample size `ANALYZE` uses for this object. Omit it and the target is unmanaged: whatever is set stays. Declared, it is applied when the object is created and converged in place when it changes, without re-creating the object. Below 13 it follows the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). SchemaTongs writes it only when someone set one. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. |
+| `Description` | string | **PostgreSQL only.** `COMMENT ON STATISTICS`. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 
 ---
 
@@ -1884,6 +1887,7 @@ PostgreSQL exclusion constraints are declared in the `ExcludeConstraints` array.
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `Deferrable` | bool | Whether the constraint is deferrable. |
 | `InitiallyDeferred` | bool | Whether the constraint defers by default. |
+| `Description` | string | `COMMENT ON CONSTRAINT`. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | Custom metadata. |
 
 ### Example -- non-overlapping reservation periods
@@ -1919,6 +1923,7 @@ table has `RowLevelSecurity` set, it needs at least one permissive policy to be 
 | `WithCheckExpression` | string | `null` | The `WITH CHECK` expression: which new or updated rows are allowed. When omitted on a policy that has `UsingExpression`, PostgreSQL applies the `USING` expression to writes as well. |
 | `ShouldApplyExpression` | string | `null` | Conditional inclusion. |
 | `VariantName` | string | `null` | Optional label for a conditional variant. Max 128 characters. |
+| `Description` | string | `null` | `COMMENT ON POLICY`. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | `{}` | Custom metadata. |
 
 **Policies are dropped when they leave the package**, and unlike indexes and statistics there is no opt-out
@@ -2386,12 +2391,12 @@ A materialized view that should be skipped for non-production environments is on
 
 ## Descriptions
 
-A table, column, index, indexed view, materialized view, sequence, enum type and domain type can carry a `Description`. It is one key on every engine, stored where the engine keeps such things:
+A table, column, index, indexed view, materialized view, sequence, enum type and domain type can carry a `Description`, and on PostgreSQL so can a foreign key, check or exclusion constraint, row-level security policy and statistics object. It is one key on every engine, stored where the engine keeps such things:
 
 | Engine | Where `Description` lives |
 |---|---|
 | SQL Server | The `MS_Description` extended property, the one SSMS and most documentation tools read. On an index that backs a primary key or unique constraint it sits on the constraint. |
-| PostgreSQL | `COMMENT ON TABLE` / `COLUMN` / `INDEX` / `MATERIALIZED VIEW` / `SEQUENCE` / `TYPE` / `DOMAIN`. |
+| PostgreSQL | `COMMENT ON TABLE` / `COLUMN` / `INDEX` / `MATERIALIZED VIEW` / `SEQUENCE` / `TYPE` / `DOMAIN` / `CONSTRAINT` / `POLICY` / `STATISTICS`. |
 | MySQL, MariaDB | The `COMMENT` clause of the table, column, index, full-text index, event or (MariaDB) sequence. |
 
 **Three states, and the engines differ on one of them.** A declared description is set, and a changed one is updated in place without rebuilding anything. `"Description": ""` removes it. An *omitted* `Description` means something different on SQL Server and PostgreSQL than on MySQL and MariaDB:

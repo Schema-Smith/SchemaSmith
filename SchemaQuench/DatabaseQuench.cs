@@ -1748,7 +1748,8 @@ CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{EscapeSqlLiteral
                 break;
             case Platform.PostgreSQL:
                 tableCommand.CommandText = $@"CALL ""SchemaSmith"".""ForeignKeyQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)}, p_OnlineApply := '{OnlineApply}');
-CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)}, p_OnlineApply := '{OnlineApply}');";
+CALL ""SchemaSmith"".""ConstraintStateQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)}, p_OnlineApply := '{OnlineApply}');
+CALL ""SchemaSmith"".""ConstraintDescriptionQuench""(p_WhatIf := {SqlFlag(_whatIfOnly)});";
                 break;
             case Platform.MySQL:
             {

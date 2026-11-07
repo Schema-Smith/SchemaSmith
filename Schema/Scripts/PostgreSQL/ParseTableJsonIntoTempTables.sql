@@ -411,6 +411,7 @@
     CREATE TEMPORARY TABLE temp_checks AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
     SELECT ROW_NUMBER() OVER () AS "_RowId",
+           celem ->> 'Description' AS "Description",
            elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
@@ -439,6 +440,7 @@
     CREATE TEMPORARY TABLE temp_fks AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
     SELECT ROW_NUMBER() OVER () AS "_RowId",
+           celem ->> 'Description' AS "Description",
            elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
@@ -481,6 +483,7 @@
     CREATE TEMPORARY TABLE temp_statistics AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
     SELECT ROW_NUMBER() OVER () AS "_RowId",
+           celem ->> 'Description' AS "Description",
            elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
@@ -505,6 +508,7 @@
     CREATE TEMPORARY TABLE temp_excludes AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
     SELECT ROW_NUMBER() OVER () AS "_RowId",
+           celem ->> 'Description' AS "Description",
            elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
@@ -535,6 +539,7 @@
     CREATE TEMPORARY TABLE temp_policies AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
     SELECT ROW_NUMBER() OVER () AS "_RowId",
+           pelem ->> 'Description' AS "Description",
            elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            pelem ->> 'Name' AS "Name",

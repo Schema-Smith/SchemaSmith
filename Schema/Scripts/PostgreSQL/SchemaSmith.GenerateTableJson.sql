@@ -202,7 +202,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                     WHEN 'p' THEN 'PARTIAL'
                                     WHEN 's' THEN 'SIMPLE'
                                     ELSE 'UNKNOWN'
-                                    END AS "MatchType"
+                                    END AS "MatchType",
+                               OBJ_DESCRIPTION(con.oid, 'pg_constraint') AS "Description"
                           FROM pg_catalog.pg_constraint con
                           JOIN pg_catalog.pg_class frel ON frel.oid = con.confrelid
                           JOIN pg_catalog.pg_namespace fnsp ON fnsp.oid = frel.relnamespace
@@ -217,7 +218,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                "SchemaSmith"."CheckPredicate"(con.oid) AS "Expression",
                                CASE WHEN NOT COALESCE(con.convalidated, TRUE) THEN FALSE END AS "Validated",
                                CASE WHEN con.connoinherit THEN TRUE END AS "NoInherit",
-                               CASE WHEN NOT "SchemaSmith"."ConstraintEnforced"(con.oid) THEN FALSE END AS "Enforced"
+                               CASE WHEN NOT "SchemaSmith"."ConstraintEnforced"(con.oid) THEN FALSE END AS "Enforced",
+                               OBJ_DESCRIPTION(con.oid, 'pg_constraint') AS "Description"
                         FROM pg_catalog.pg_constraint con
                           WHERE con.conrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
                             AND con.contype = 'c'
@@ -239,7 +241,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                                                               JOIN pg_attribute a ON a.attrelid = se.stxrelid AND a.attnum = t.attnum
                                                                               WHERE a.attnum > 0),
                                                                            ARRAY[]::text[]),
-                                                                  "SchemaSmith"."StatisticsExpressionColumns"(sn.nspname, se.stxname)), ','), '') AS "StatisticsColumns"
+                                                                  "SchemaSmith"."StatisticsExpressionColumns"(sn.nspname, se.stxname)), ','), '') AS "StatisticsColumns",
+                               OBJ_DESCRIPTION(se.oid, 'pg_statistic_ext') AS "Description"
                           FROM pg_statistic_ext se
                           JOIN pg_namespace sn ON sn.oid = se.stxnamespace
                           WHERE se.stxrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
@@ -270,7 +273,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                     AND a.attnum = u.element) AS "IncludeColumns",
                                (SELECT JSON_OBJECT_AGG(SPLIT_PART(opt, '=', 1), SPLIT_PART(opt, '=', 2))
                                   FROM UNNEST(i.reloptions) AS o(opt)) AS "StorageParameters",
-                               (SELECT its.spcname FROM pg_tablespace its WHERE its.oid = i.reltablespace AND i.reltablespace <> 0) AS "Tablespace"
+                               (SELECT its.spcname FROM pg_tablespace its WHERE its.oid = i.reltablespace AND i.reltablespace <> 0) AS "Tablespace",
+                               OBJ_DESCRIPTION(con.oid, 'pg_constraint') AS "Description"
                           FROM pg_index idx
                           JOIN pg_class i ON i.oid = idx.indexrelid
                           JOIN pg_catalog.pg_constraint con ON con.conrelid = idx.indrelid AND con.conname = i.relname AND con.contype = 'x'
@@ -286,7 +290,10 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                -- Quoted where a name needs it, so a mixed-case role deploys as itself rather than folded to lower case.
                                (SELECT STRING_AGG(QUOTE_IDENT(r), ',' ORDER BY o) FROM UNNEST(pol.roles) WITH ORDINALITY AS u(r, o)) AS "Roles",
                                COALESCE(pol.qual, '') AS "UsingExpression",
-                               COALESCE(pol.with_check, '') AS "WithCheckExpression"
+                               COALESCE(pol.with_check, '') AS "WithCheckExpression",
+                               OBJ_DESCRIPTION((SELECT p.oid FROM pg_policy p
+                                                 WHERE p.polname = pol.policyname
+                                                   AND p.polrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass), 'pg_policy') AS "Description"
                           FROM pg_policies pol
                           WHERE pol.schemaname = t.table_schema
                             AND pol.tablename = t.table_name) sub) AS "Policies",

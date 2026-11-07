@@ -29,5 +29,9 @@ namespace Schema.Domain.PostgreSQL
         [SchemaProperty(Description = "NO INHERIT: the constraint is not inherited by child tables. Create-time only, so a change drops and re-creates the constraint.")]
         [JsonProperty(Order = 104, NullValueHandling = NullValueHandling.Ignore)]
         public bool? NoInherit { get; set; }
+
+        [SchemaProperty(Description = "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it.")]
+        [JsonProperty(Order = 105, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
     }
 }

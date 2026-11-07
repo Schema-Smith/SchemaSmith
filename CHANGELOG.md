@@ -21,6 +21,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **`--Validate`: `SS-SEQ-003` reports a declared sequence every engine would refuse.** An `Increment` of 0, a `MinValue` not below its `MaxValue`, a `Start` outside the declared range, or a negative `Cache` stopped the deploy when it reached the sequence; it is now an error before the deploy starts.
 - **`--Validate`: `SS-IDENT-002` and `SS-COL-007` on every engine.** An object name longer than MySQL and MariaDB take (64 characters) or SQL Server takes (128) is an error before the deploy starts, as an over-long PostgreSQL name already was; the deploy used to stop part-way at it. A default written as a quoted function call (`'now()'`, `N'GETDATE()'`) is a warning on PostgreSQL and SQL Server too: it deploys as text, which PostgreSQL turns into the timestamp of the deploy and on which SQL Server fails every insert into a datetime column.
 - **MariaDB: a sequence's `Description`.** Stored as the sequence's `COMMENT`, set when it is created and converged after; `""` removes it, and an omitted one leaves an existing comment alone. SchemaTongs extracts it. Changing it on an existing sequence discards the values its sessions have cached, as any change to a sequence does.
+- **PostgreSQL: a `Description` on foreign keys, check and exclusion constraints, policies and statistics.** Stored with `COMMENT ON CONSTRAINT`, `POLICY` or `STATISTICS`, set and converged as a table's is: `""` removes it, and an omitted one leaves the comment alone. SchemaTongs extracts it.
 
 ### Changed
 
