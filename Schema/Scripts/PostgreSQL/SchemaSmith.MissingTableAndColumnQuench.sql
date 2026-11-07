@@ -2,7 +2,7 @@
 -- Licensed for use and modification with SchemaSmith products only.
 -- Redistribution outside of SchemaSmith product usage is prohibited.
 
-CREATE OR REPLACE PROCEDURE "SchemaSmith"."MissingTableAndColumnQuench"(p_WhatIf BOOLEAN = FALSE)
+CREATE OR REPLACE PROCEDURE "SchemaSmith"."MissingTableAndColumnQuench"(p_WhatIf BOOLEAN = FALSE, p_OnlineApply TEXT = 'OFF')
     LANGUAGE plpgsql
   -- JIT off: see the measurement in SchemaSmith.TableQuench.sql. Every procedure carries this, not just
   -- the ones that look like entry points -- the product CALLs ModifiedTableQuench and its siblings
@@ -14,6 +14,7 @@ DECLARE
   restore_candidates TEXT[];
   restored_table TEXT;
   saved_time_zone TEXT;
+  refused_partitions TEXT;
 BEGIN
   RAISE NOTICE 'Handle Table Renames';
   SELECT STRING_AGG('RAISE NOTICE ''  Rename Table %.% to %'', ''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."OldName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
@@ -138,6 +139,18 @@ BEGIN
   -- partition through the engine. Under UTC, so a timestamp with time zone written without an offset means the same
   -- instant on every deploy, as extraction writes it.
   RAISE NOTICE 'Add Missing Partitions';
+  -- Adding a partition to a table that already exists locks the partitioned table, and there is no lower-lock form, so
+  -- OnlineApply Require refuses it by name before anything is created (a table this run created is OFF: it is empty).
+  SELECT STRING_AGG(p."TableSchema" || '.' || p."Name" || ' (' || "SchemaSmith"."OnlineUnavailableReason"(p."TableSchema", p."TableName", 'partition') || ')', '; '
+                    ORDER BY p."TableSchema", p."Name")
+    INTO refused_partitions
+    FROM temp_partitions p
+   WHERE to_regclass("SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."Name")) IS NULL
+     AND "SchemaSmith"."OnlineApplyMode"(p_OnlineApply, p."TableSchema", p."TableName") = 'REQUIRE'
+     AND "SchemaSmith"."OnlineUnavailableReason"(p."TableSchema", p."TableName", 'partition') IS NOT NULL;
+  IF refused_partitions IS NOT NULL THEN
+    RAISE EXCEPTION 'OnlineApply is Require, and these cannot be built online: %. Set the table''s OnlineApply to Prefer to build them with the plain statement.', refused_partitions;
+  END IF;
   saved_time_zone := current_setting('TimeZone');
   PERFORM set_config('TimeZone', 'UTC', true);
   SELECT STRING_AGG('RAISE NOTICE ''  Create partition %.% of %'', ''' || REPLACE(p."TableSchema", '''', '''''') || ''', ''' || REPLACE(p."Name", '''', '''''') || ''', ''' || REPLACE(p."ParentName", '''', '''''') || ''';' || CHR(10) ||
@@ -145,16 +158,18 @@ BEGIN
                     ' PARTITION OF ' || "SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."ParentName") || ' ' || p."Bound" ||
                     CASE WHEN p."Method" <> '' THEN ' PARTITION BY ' || p."Method" || ' (' || p."Expression" || ')' ELSE '' END ||
                     CASE WHEN p."Tablespace" IS NOT NULL THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(p."Tablespace") ELSE '' END || ';' || CHR(10) ||
-                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''partition'', ''' ||
-                    REPLACE(p."TableSchema" || '.' || p."ParentName" || '.' || p."Name", '''', '''''') || ''', ''created'');', CHR(10)
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''partition'', ''' ||
+                    REPLACE(p."TableSchema" || '.' || p."ParentName" || '.' || p."Name", '''', '''''') || ''', ''created'', ' ||
+                    COALESCE('''' || REPLACE("SchemaSmith"."OnlineApplyForm"(p_OnlineApply, p."TableSchema", p."TableName", 'partition'), '''', '''''') || '''', 'NULL') || ');', CHR(10)
                     ORDER BY p."TableSchema", p."TableName", p."Depth", p."IsDefault", p."Position")
     INTO sql_script
     FROM temp_partitions p
     WHERE to_regclass("SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."Name")) IS NULL;
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
   IF p_WhatIf THEN
-    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
-      SELECT pg_backend_pid(), 'partition', p."TableSchema" || '.' || p."ParentName" || '.' || p."Name", 'wouldCreate'
+    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode")
+      SELECT pg_backend_pid(), 'partition', p."TableSchema" || '.' || p."ParentName" || '.' || p."Name", 'wouldCreate',
+             "SchemaSmith"."OnlineApplyForm"(p_OnlineApply, p."TableSchema", p."TableName", 'partition')
         FROM temp_partitions p
         WHERE to_regclass("SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."Name")) IS NULL;
   END IF;

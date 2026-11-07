@@ -115,7 +115,7 @@ The typical placement inside a schema package is `ScriptPath` pointing at `Templ
 | `Source:CommandTimeoutSeconds` | int | `0` | How long one extraction command may run; `0` is no limit. A large table's data is read in one command, so a limit shorter than that read fails the table. A command timeout set in `Source:ConnectionProperties` or a `--ConnectionString` takes precedence. |
 | `Source:CompatEncoding` | string | `auto` | SQL Server only. Forces the form of the catalog queries DataTongs builds its delivery script from — `legacy` uses the pre-`STRING_AGG` form a SQL Server 2008–2016 source needs, `modern` the current one. `auto` detects it. It changes how the script is built, not what it contains: the generated script and the content files come out the same either way. To produce a delivery a SQL Server 2008–2016 consumer can run, set `DeliveryEncoding` above to `Xml`. See [Forcing the encoding](schemaquench.md#forcing-the-encoding). |
 | `ShouldCast:DisableRules` | bool | `false` | **PostgreSQL only.** Wraps the delivery in `ALTER TABLE ... DISABLE RULE` / `ENABLE RULE`. |
-| `ShouldCast:UpdateDescendents` | bool | `true` | **PostgreSQL only.** When `false`, the generated `MERGE` uses `MERGE INTO ... ONLY` so partitioned-table writes do not propagate to descendant tables. |
+| `ShouldCast:UpdateDescendents` | bool | `true` | **PostgreSQL only.** When `false`, the generated `MERGE` uses `MERGE INTO ... ONLY`, which writes the table's own rows and not an inheritance child's. Leave it `true` for a partitioned table: it holds no rows of its own, so `ONLY` writes nothing there. Extraction reads a partitioned table's rows either way. |
 
 For environment variable mapping, see [Configuration Reference -- Environment Variables](configuration.md#environment-variables). The `Tables` array can't be configured via environment variables -- use the JSON configuration file for table definitions.
 
@@ -196,7 +196,7 @@ WHEN NOT MATCHED BY SOURCE THEN
 ;
 ```
 
-The `MERGE INTO ... ONLY` clause is used when partitioned tables should not propagate to descendants.
+The `MERGE INTO ... ONLY` clause, used when `UpdateDescendents` is `false`, writes the table's own rows and not an inheritance child's; on a partitioned table, which holds none of its own, leave `UpdateDescendents` at `true`.
 
 ### MySQL
 

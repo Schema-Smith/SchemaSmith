@@ -381,4 +381,40 @@ public class TableQuench_DeclarativePartitioningTests : BaseTableQuenchTests
             Drop(conn, t);
         }
     }
+
+    // Adding a partition locks the partitioned table, and there is no lower-lock form: OnlineApply Require refuses it by
+    // name before anything is created, and Prefer adds it and records its mode as unavailable.
+    [TestCase("Require")]
+    [TestCase("Prefer")]
+    public void AddingAPartition_UnderOnlineApply_IsRefusedByRequire_AndMarkedUnavailableByPrefer(string mode)
+    {
+        var t = "dpol_" + Guid.NewGuid().ToString("N")[..8];
+        using var conn = Open();
+        try
+        {
+            using (var cmd = conn.CreateCommand())
+                RunTableQuenchProc(cmd, Json(t), productName: "Dpol_" + t);
+            var withOnline = Json(t, with2027: true).Replace($"\"Name\": \"{t}\",", $"\"Name\": \"{t}\", \"OnlineApply\": \"{mode}\",");
+            Assert.That(withOnline, Does.Contain("\"OnlineApply\""), "setup");
+            ClearChanges(conn);
+            if (mode == "Require")
+            {
+                var ex = DeployFails(conn, withOnline, "Dpol_" + t);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(ex.Message, Does.Contain($"public.{t}_eu_2027 (adding a partition locks the partitioned table)"));
+                    Assert.That(Scalar(conn, $"SELECT to_regclass('public.{t}_eu_2027') IS NULL"), Is.EqualTo("True"));
+                });
+                return;
+            }
+            using (var cmd = conn.CreateCommand())
+                RunTableQuenchProc(cmd, withOnline, productName: "Dpol_" + t);
+            Assert.That(Scalar(conn, $"SELECT \"Mode\" FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() AND \"ObjectType\" = 'partition' AND \"ObjectName\" = 'public.{t}_eu.{t}_eu_2027'"),
+                Is.EqualTo("unavailable"));
+        }
+        finally
+        {
+            Drop(conn, t);
+        }
+    }
 }

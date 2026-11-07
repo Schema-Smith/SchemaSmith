@@ -647,6 +647,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | `ReplicaIdentityIndex` | string | `null` | Names the unique index backing `ReplicaIdentity: "INDEX"`. The index must be unique, non-partial and over `NOT NULL` columns. Applied after indexes are created, so it works on a table's first deploy. |
 | `UpdateFillFactor` | bool | `false` | Enables fill-factor reconciliation for this table. |
 | `FillFactor` | short (0--100) | `0` | Table fill factor. `0` means use the server default. |
+| `Partitioning` | object | `null` | Declarative partitioning: the key and the partitions. See [Partitioning (PostgreSQL)](#partitioning-postgresql). Leave it unset and SchemaSmith does not manage partitioning, so a table someone partitioned by hand is left as it is. |
 
 **A name with a double quote in it.** PostgreSQL allows `"` inside a name, and so does SchemaSmith: write the name as it is in a `Name` property (`"Name": "Or\"ders"` in JSON). Inside a comma-separated list (`IndexColumns`, a foreign key's `Columns` and `RelatedColumns`, `StatisticsColumns`), write such a name quoted, with its inner quotes doubled (`"\"La\"\"bel\""` for the column `La"bel`), because a bare quote there cannot be told from the start of a quoted name. Extraction writes it that way. Expressions (`FilterExpression`, check constraints, a materialized view's `Definition`) are SQL, and take the name the way PostgreSQL does.
 
@@ -2256,6 +2257,51 @@ MySQL and MariaDB carry a table's partition definition in the table DDL itself â
 **What each version accepts.** MariaDB 10.3 and 10.4 accept only a list that names every partition, with no `StartsAt`; a count or `StartsAt` needs 10.5, and `Auto` needs 10.9.1. On an older server the table is created without what it cannot have, and the loss is recorded as a downgrade: without its `SYSTEM_TIME` partitioning below 10.5, and without `Auto` below 10.9.1. See the [compatibility matrix](schemaquench.md#mysql--mariadb).
 
 ---
+
+## Partitioning (PostgreSQL)
+
+PostgreSQL declares a partitioned table with its key and each partition as a table of its own, so `Partitioning` names the key and lists the partitions, and a partition that is partitioned again carries its own `Partitioning` one level down. SchemaSmith **creates and appends, verifies, and never moves rows**:
+
+- A new table is created partitioned, with every declared partition. Partitions are created before any index or key, so the parent's primary key, unique keys and indexes reach every partition through the engine, as do foreign keys into the table.
+- A declared partition the table lacks is added. Adding one takes an `ACCESS EXCLUSIVE` lock on the partitioned table, so under [`OnlineApply`](configuration.md) `Require` it is refused by name, and under `Prefer` it is added and recorded with mode `unavailable`.
+- A key, a partition's bound, or a leaf partition's tablespace that differs from the deployed one is **refused by name before any change**, as is a declared partition that already exists as a standalone table or as a partition of another table. Changing any of them would move or re-check rows -- do it by hand, then correct the declaration.
+- A new partition whose range holds rows sitting in the `DEFAULT` partition is refused by name: adding it would move them.
+- A partition the package does not name is **reported and left alone**, never dropped or detached. Partition managers create partitions out of band, and a partition is data. `Partitions: []` is legal for such a table (`--Validate` warns, `SS-PART-023`).
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `Method` | string | *(required)* | `RANGE`, `LIST` or `HASH`. |
+| `Expression` | string | *(required)* | The key, as it goes inside `PARTITION BY <Method> ( ... )`: a column (`"created_at"`), several (`"y, m"`), an expression (`"lower(code)"`) or a collated column. |
+| `Partitions` | array | `[]` | The partitions, each in the table's schema. |
+
+Each partition:
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `Name` | string | *(required)* | The partition's table name. |
+| `Bound` | string | *(required)* | The whole bound clause, as `\d+` shows it: `FOR VALUES FROM (...) TO (...)`, `FOR VALUES IN (...)`, `FOR VALUES WITH (modulus n, remainder r)`, or `DEFAULT`. |
+| `Tablespace` | string | `null` | Where the partition is created. Create-time only: a leaf already on another tablespace is refused rather than moved. |
+| `Partitioning` | object | `null` | A partition that is itself partitioned: its key and partitions, one level down. |
+
+```json
+{
+  "Name": "events",
+  "Columns": [ { "Name": "region", "DataType": "text", "Nullable": false },
+               { "Name": "created_at", "DataType": "timestamp with time zone", "Nullable": false },
+               { "Name": "id", "DataType": "bigint", "Nullable": false } ],
+  "Indexes": [ { "Name": "pk_events", "PrimaryKey": true, "Unique": true, "IndexColumns": "region,created_at,id" } ],
+  "Partitioning": { "Method": "LIST", "Expression": "region", "Partitions": [
+    { "Name": "events_eu", "Bound": "FOR VALUES IN ('eu')",
+      "Partitioning": { "Method": "RANGE", "Expression": "created_at", "Partitions": [
+        { "Name": "events_eu_old", "Bound": "FOR VALUES FROM (MINVALUE) TO ('2026-01-01 00:00:00+00')" },
+        { "Name": "events_eu_2026", "Bound": "FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00')" } ] } },
+    { "Name": "events_rest", "Bound": "DEFAULT" } ] }
+}
+```
+
+**Bounds and keys compare as PostgreSQL renders them.** `0` and `'0'`, or `'2026-01-01'` and `'2026-01-01 00:00:00+00'`, are the same bound: a declaration that differs from the deployed text only in spelling is rendered by the engine on a temporary copy and matches. **A `timestamp with time zone` bound written without an offset means UTC**: SchemaSmith creates and compares partitions under the UTC time zone, whatever the connection's, and SchemaTongs writes bounds in UTC.
+
+**What PostgreSQL does not allow on a partitioned table**, which `--Validate` reports: a primary or unique key that does not hold every key column, or one on a key with an expression in it (`SS-PART-005`); a generated column in the key (`SS-PART-021`); an unlogged partitioned table (`SS-PART-022`); and, before PostgreSQL 17, an exclusion constraint (`SS-PART-022`, a warning) or an access method (created without one, and recorded as a downgrade). A partitioned table holds no rows, so `FillFactor` and `PersistenceType` do nothing on it and are not written by SchemaTongs. Indexes, checks, statistics and comments a partition has *of its own* are not modelled: SchemaTongs names each one in a warning. Permissions on the partitioned table are not copied to partitions created later (engine behaviour).
 
 ## Scheduled Event JSON Format (MySQL / MariaDB)
 

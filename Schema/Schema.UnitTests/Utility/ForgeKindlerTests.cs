@@ -1173,7 +1173,7 @@ public class ForgeKindlerTests
 
         ForgeKindler.DropSupersededPostgreSqlOverloads(mockCmd);
 
-        Assert.That(executed, Has.Count.EqualTo(14));
+        Assert.That(executed, Has.Count.EqualTo(15));
         Assert.That(executed, Has.All.StartsWith("DROP PROCEDURE IF EXISTS").Or.StartsWith("DROP FUNCTION IF EXISTS"));
         // The function took the column's schema, table and name in place of its sequence; the old one would sit unused.
         Assert.That(executed, Has.Some.Contains("\"IdentityOptionChanges\"(text, regclass)"));
@@ -1197,6 +1197,7 @@ public class ForgeKindlerTests
                      "\"MissingIndexesAndConstraintsQuench\"(boolean)",
                      "\"ForeignKeyQuench\"(boolean)",
                      "\"ConstraintStateQuench\"(boolean)",
+                     "\"MissingTableAndColumnQuench\"(boolean)",
                  })
             Assert.That(executed.Any(s => s.EndsWith(signature)), $"{signature} must be dropped, or its OnlineApply replacement is ambiguous with it.");
     }
