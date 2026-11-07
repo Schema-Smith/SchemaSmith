@@ -829,8 +829,12 @@ guessing:
   If a deploy stops before that step, the next one puts them back. A key your package does not declare can
   only be put back when the rebuilt table still has what it references (the same columns, unchanged, under a
   declared primary key or unique constraint); otherwise the rebuild is refused and names the key.
-- On SQL Server the rebuilt table stays where it was — its filegroup and large-object filegroup, declared or
-  not — and is created with its declared data compression, so it is written once.
+- The rebuilt table is created with the table's storage, so it is written once. On SQL Server that is its
+  filegroup and large-object filegroup, declared or not, and its declared data compression. On PostgreSQL it
+  is its tablespace, `UNLOGGED` persistence, access method and storage parameters (its TOAST table's too) —
+  each as the package declares it or, where it does not, as it was. A declared tablespace the table is not on
+  yet is where the rebuilt table is created: the move SchemaQuench refuses in place costs nothing extra in a
+  rebuild, which rewrites the table anyway.
 
 > **MySQL and MariaDB:** those engines cannot roll DDL back, so a rebuild there wants a quiesced table.
 > SchemaQuench makes the swap itself atomic and verifies the row count immediately before it, so the

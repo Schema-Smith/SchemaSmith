@@ -9,7 +9,7 @@
 -- testable before any decision path exists.
 --
 -- Deliberately NOT this procedure's job: indexes, primary keys, unique/exclude/check constraints, foreign
--- keys, and the table-level attributes (fillfactor, access method, LOGGED/UNLOGGED, row-level security).
+-- keys, and row-level security. The table's storage is the one exception: the shadow is created with it (step 6).
 -- The old table is dropped whole, which takes all of them with it, and the ordinary quench passes that
 -- follow re-add them from the same JSON that produced temp_columns -- ModifiedTableQuench's table-attribute
 -- pass converges persistence/access-method/RLS/fillfactor, MissingIndexesAndConstraintsQuench re-adds the
@@ -64,6 +64,8 @@ DECLARE
   v_LockSql TEXT;
   v_DropInboundFkSql TEXT;
   v_CreateShadowSql TEXT;
+  v_ShadowPersistence TEXT;
+  v_ShadowStorage TEXT;
   v_CopySql TEXT;
   v_SeqRestoreSql TEXT;
   v_SeqRenameSql TEXT;
@@ -478,7 +480,30 @@ BEGIN
     WHERE con.contype = 'f'
       AND con.confrelid = v_Oid;
 
-  v_CreateShadowSql := 'CREATE TABLE ' || v_ShadowQualified || ' (' || v_ShadowColumnList || ');';
+  -- STORAGE. The shadow is created where and how the table is stored -- declared where the package declares it, as
+  -- it is otherwise -- because what it is created with is what the table has afterwards. Created bare, an unlogged
+  -- table came back logged, a table on another tablespace came back on the default, and its storage parameters were
+  -- gone; a DECLARED tablespace then failed the placement check that follows, which refuses to move a table. The
+  -- declared fillfactor is written into the shadow rather than set afterwards, which would only apply to new pages;
+  -- 100 is the default, so it is written as nothing.
+  SELECT CASE WHEN LOWER(COALESCE(t."PersistenceType", '')) = 'unlogged'
+                OR (COALESCE(t."PersistenceType", '') = '' AND c.relpersistence = 'u') THEN 'UNLOGGED ' ELSE '' END,
+         ' USING ' || quote_ident(COALESCE(NULLIF(t."AccessMethod", ''), am.amname)) ||
+         COALESCE(' WITH (' || NULLIF(CONCAT_WS(', ',
+           CASE WHEN t."UpdateFillFactor" AND t."FillFactor" <> 100 THEN 'fillfactor=' || t."FillFactor" END,
+           (SELECT STRING_AGG(opt, ', ' ORDER BY opt) FROM UNNEST(c.reloptions) AS o(opt)
+             WHERE NOT (t."UpdateFillFactor" AND opt LIKE 'fillfactor=%')),
+           (SELECT STRING_AGG('toast.' || opt, ', ' ORDER BY opt) FROM pg_catalog.pg_class tc, UNNEST(tc.reloptions) AS o(opt)
+             WHERE tc.oid = c.reltoastrelid)), '') || ')', '') ||
+         COALESCE(' TABLESPACE ' || quote_ident(COALESCE(NULLIF(t."Tablespace", ''), ts.spcname)), '')
+    INTO v_ShadowPersistence, v_ShadowStorage
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_am am ON am.oid = c.relam
+    LEFT JOIN pg_catalog.pg_tablespace ts ON ts.oid = c.reltablespace
+    JOIN temp_tables t ON t."Schema" = v_SchemaRaw AND t."Name" = v_TableRaw
+   WHERE c.oid = v_Oid;
+
+  v_CreateShadowSql := 'CREATE ' || v_ShadowPersistence || 'TABLE ' || v_ShadowQualified || ' (' || v_ShadowColumnList || ')' || v_ShadowStorage || ';';
 
   v_CopySql := CASE WHEN v_CopyColumnList IS NULL THEN NULL
                     ELSE 'INSERT INTO ' || v_ShadowQualified || ' (' || v_CopyColumnList || ')' || CHR(10) ||
