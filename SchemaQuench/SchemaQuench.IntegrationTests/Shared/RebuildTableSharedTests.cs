@@ -431,8 +431,6 @@ INSERT INTO `{child}` (`Id`, `ParentId`) VALUES (10, 1), (11, 2);");
 
             var inboundKeyCount = "SELECT COUNT(DISTINCT CONSTRAINT_NAME) FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE "
                                   + $"WHERE REFERENCED_TABLE_SCHEMA = {Lit(_mainDb)} AND REFERENCED_TABLE_NAME = {Lit(parent)}";
-            var childKeyCount = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
-                                + $"WHERE TABLE_SCHEMA = {Lit(_mainDb)} AND TABLE_NAME = {Lit(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'";
 
             Assert.That(Int(cmd, inboundKeyCount), Is.EqualTo(1),
                 "Setup precondition: an inbound foreign key must exist, or this test proves nothing.");
@@ -461,18 +459,22 @@ INSERT INTO `{child}` (`Id`, `ParentId`) VALUES (10, 1), (11, 2);");
                 + "would have failed and this table would still be sitting there -- with the child "
                 + "constrained against it instead of against the replacement.");
 
-            Assert.That(Int(cmd, childKeyCount), Is.EqualTo(0),
-                "The procedure does not re-add the key -- the foreign-key pass does. What must never happen "
-                + "is the key surviving pointed at the renamed-away table.");
-
             Assert.That(AuditCount(cmd, $"{child}.{fkName}", "dropped"), Is.EqualTo(1),
                 "A key this rebuild removed has to appear in the run manifest.");
 
-            Assert.That(Scalar(cmd, "SELECT CONCAT(Declared, '|', Definition) FROM SchemaSmith_RebuildSetAsideForeignKeys "
-                                    + $"WHERE ChildTable = {Lit(child)} AND KeyName = {Lit(fkName)}")?.ToString(),
-                Does.StartWith($"0|FOREIGN KEY (`ParentId`) REFERENCES `{_mainDb}`.`{parent}` (`Id`) ON DELETE "),
-                "The key -- not declared by this package -- is set aside for the foreign-key pass to put back. "
-                + "Dropped and left to the child's JSON, a key no package declares was gone for good.");
+            // The key -- not declared by this package -- is set aside for the foreign-key pass to put back; dropped and
+            // left to the child's JSON, a key no package declares was gone for good. Any deploy in this database restores
+            // a set-aside key, and the suite deploys concurrently, so by now it is either still recorded or already back
+            // on the child against the replacement.
+            var recorded = Scalar(cmd, "SELECT CONCAT(Declared, '|', Definition) FROM SchemaSmith_RebuildSetAsideForeignKeys "
+                                       + $"WHERE ChildTable = {Lit(child)} AND KeyName = {Lit(fkName)}")?.ToString();
+            if (recorded != null)
+                Assert.That(recorded, Does.StartWith($"0|FOREIGN KEY (`ParentId`) REFERENCES `{_mainDb}`.`{parent}` (`Id`) ON DELETE "));
+            else
+                Assert.That(Int(cmd, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS "
+                                     + $"WHERE CONSTRAINT_SCHEMA = {Lit(_mainDb)} AND TABLE_NAME = {Lit(child)} "
+                                     + $"AND CONSTRAINT_NAME = {Lit(fkName)} AND REFERENCED_TABLE_NAME = {Lit(parent)}"), Is.EqualTo(1),
+                    "The key is neither set aside nor back on the child: it was lost.");
         }
         finally
         {

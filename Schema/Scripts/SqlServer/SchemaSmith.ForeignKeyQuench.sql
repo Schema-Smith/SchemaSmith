@@ -102,6 +102,11 @@ BEGIN TRY
             -- run that puts that key back.
             IF ERROR_NUMBER() IN (1776, 1750) AND NOT EXISTS (SELECT 1 FROM sys.foreign_keys sf WHERE sf.[parent_object_id] = OBJECT_ID(@v_RsChild) AND sf.[name] = @v_RsKey)
               RAISERROR('  Foreign key %s.%s waits: the table it references has no key for it yet', 10, 100, @v_RsChild, @v_RsKey) WITH NOWAIT
+            -- Another deploy in this database can restore the same key, or drop its table, between the look above and the
+            -- ADD. Either way there is nothing left to restore, and this deploy does not fail for it.
+            ELSE IF OBJECT_ID(@v_RsChild) IS NULL
+                 OR EXISTS (SELECT 1 FROM sys.foreign_keys sf WHERE sf.[parent_object_id] = OBJECT_ID(@v_RsChild) AND sf.[name] = @v_RsKey)
+              DELETE FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE [ChildSchema] = @v_RsSchema AND [ChildTable] = @v_RsTable AND [KeyName] = @v_RsKey
             ELSE
               SET @v_RsFailed = ISNULL(@v_RsFailed + '; ', '') + @v_RsChild + '.' + QUOTENAME(@v_RsKey) + ' (' + ERROR_MESSAGE() + ')'
           END CATCH

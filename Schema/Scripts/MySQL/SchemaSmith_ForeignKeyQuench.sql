@@ -46,6 +46,7 @@ BEGIN
     DECLARE v_SaKeyExists INT DEFAULT 0;
     DECLARE v_SaParentReady INT DEFAULT 0;
     DECLARE v_SaRemoved TINYINT DEFAULT 0;
+    DECLARE v_SaThisFailed TINYINT DEFAULT 0;
     DECLARE v_SavedChecks INT DEFAULT 1;
 
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_Done = TRUE;
@@ -408,12 +409,13 @@ BEGIN
                     INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
                     VALUES (CONNECTION_ID(), 'foreignKey', CONCAT(v_SaChildTable, '.', v_SaKeyName), 'wouldCreate');
                 ELSE
+                    SET v_SaThisFailed = 0;
                     BEGIN
                         DECLARE EXIT HANDLER FOR SQLEXCEPTION
                         BEGIN
                             GET DIAGNOSTICS CONDITION 1 v_SaError = MESSAGE_TEXT;
                             SET SESSION foreign_key_checks = v_SavedChecks;
-                            SET v_SaFailed = CONCAT_WS('; ', v_SaFailed, CONCAT(v_SaLabel, ' (', v_SaError, ')'));
+                            SET v_SaThisFailed = 1;
                         END;
                         SET SESSION foreign_key_checks = 0;
                         PREPARE stmt FROM @exec_sql;
@@ -424,6 +426,22 @@ BEGIN
                         VALUES (CONNECTION_ID(), 'foreignKey', CONCAT(v_SaChildTable, '.', v_SaKeyName), 'created');
                         DELETE FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE Id = v_SaId;
                     END;
+                    -- Another deploy in this database can restore the same key, or drop its table, between the look above
+                    -- and the ADD. Either way there is nothing left to restore, and this deploy does not fail for it.
+                    IF v_SaThisFailed = 1 THEN
+                        SELECT COUNT(*) INTO v_SaChildExists FROM INFORMATION_SCHEMA.TABLES t
+                         WHERE t.TABLE_SCHEMA = v_SaChildCi AND SchemaSmith_IdentifierKey(t.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(v_SaChildSchema)
+                           AND SchemaSmith_IdentifierKey(t.TABLE_NAME) = SchemaSmith_IdentifierKey(v_SaChildTable) AND t.TABLE_TYPE = 'BASE TABLE';
+                        SELECT COUNT(*) INTO v_SaKeyExists FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                         WHERE tc.TABLE_SCHEMA = v_SaChildCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(v_SaChildSchema)
+                           AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = SchemaSmith_IdentifierKey(v_SaChildTable)
+                           AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY' AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = SchemaSmith_NameKeyCI(v_SaKeyName);
+                        IF v_SaChildExists = 0 OR v_SaKeyExists > 0 THEN
+                            DELETE FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE Id = v_SaId;
+                        ELSE
+                            SET v_SaFailed = CONCAT_WS('; ', v_SaFailed, CONCAT(v_SaLabel, ' (', v_SaError, ')'));
+                        END IF;
+                    END IF;
                 END IF;
             END IF;
             SET v_SaId = (SELECT MIN(Id) FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE Id > v_SaId);

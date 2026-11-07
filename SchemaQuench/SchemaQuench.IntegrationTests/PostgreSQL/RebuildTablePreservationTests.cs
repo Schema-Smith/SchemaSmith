@@ -166,6 +166,45 @@ public class RebuildTablePreservationTests : BaseTableQuenchTests
     }
 
     [Test]
+    public void AKeyAnotherDeployRestoresFirst_DoesNotFailThisOne()
+    {
+        // Two deploys in one database both find the key missing and both add it: the second ADD fails on the name. Here
+        // the "other deploy" adds it in an open transaction, so this deploy's ADD waits on its lock and then fails.
+        using var r = Seeded();
+        r.Exec($@"CREATE TABLE ""{r.Other}"".""C"" (""Id"" INT NOT NULL, ""ParentId"" INT NULL CONSTRAINT fk_other REFERENCES ""{r.Schema}"".""Parent"" (""Id""));");
+        var parse = ForgeKindler.GetParseTableJsonScript(Platform.PostgreSQL);
+        r.Exec("DO $t$\nDECLARE\n  table_json TEXT = '" + r.Json("VARCHAR(60)").Replace("'", "''") + "';\n  sql_script TEXT = '';\n  p_UpdateFillFactor BOOLEAN = FALSE;\nBEGIN\n" + parse + "\nEND $t$;");
+        r.Exec($@"CALL ""SchemaSmith"".""RebuildTable""('{r.Schema}', 'Parent', FALSE);
+                  ALTER TABLE ""{r.Schema}"".""Parent"" ADD CONSTRAINT pk_parent PRIMARY KEY (""Id"");");
+        Assert.That(r.Scalar($@"SELECT COUNT(*) FROM ""SchemaSmith"".""RebuildSetAsideForeignKeys"" WHERE ""ChildSchema"" = '{r.Other}'"), Is.EqualTo("1"), "setup: the key is set aside");
+
+        using var other = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        other.Open();
+        other.ChangeDatabase(_mainDb);
+        using (var begin = other.CreateCommand())
+        {
+            begin.CommandText = $@"BEGIN; ALTER TABLE ""{r.Other}"".""C"" ADD CONSTRAINT fk_other FOREIGN KEY (""ParentId"") REFERENCES ""{r.Schema}"".""Parent"" (""Id"");";
+            begin.ExecuteNonQuery();
+        }
+        var deploy = System.Threading.Tasks.Task.Run(() => RunTableQuenchProc(r.Conn.CreateCommand(), $$"""
+[ { "Schema": "{{r.Other}}", "Name": "Unrelated", "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false } ] } ]
+""", productName: $"Unrelated_{r.Schema}"));
+        System.Threading.Thread.Sleep(3000);
+        using (var commit = other.CreateCommand())
+        {
+            commit.CommandText = "COMMIT";
+            commit.ExecuteNonQuery();
+        }
+
+        Assert.DoesNotThrow(() => deploy.Wait(TimeSpan.FromMinutes(2)), "the key is back, so there is nothing for this deploy to fail on");
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Key("fk_other"), Is.EqualTo("1|1"));
+            Assert.That(r.Scalar($@"SELECT COUNT(*) FROM ""SchemaSmith"".""RebuildSetAsideForeignKeys"" WHERE ""ChildSchema"" = '{r.Other}'"), Is.EqualTo("0"));
+        });
+    }
+
+    [Test]
     public void AKeySetAsideByARunThatStoppedBeforeTheForeignKeyPass_IsRestoredByTheNextRun()
     {
         using var r = Seeded();

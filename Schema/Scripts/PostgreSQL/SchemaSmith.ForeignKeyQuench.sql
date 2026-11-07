@@ -138,7 +138,17 @@ BEGIN
           WHEN invalid_foreign_key THEN
             RAISE NOTICE '  Foreign key %.%.% waits: %.% has no key for it to reference yet', v_Key."ChildSchema", v_Key."ChildTable", v_Key."KeyName", v_Key."ParentSchema", v_Key."ParentTable";
           WHEN OTHERS THEN
-            v_Failed := COALESCE(v_Failed || '; ', '') || v_Key."ChildSchema" || '.' || v_Key."ChildTable" || '.' || v_Key."KeyName" || ' (' || SQLERRM || ')';
+            -- Another deploy in this database can restore the same key, or drop its table, between the look above and
+            -- the ADD. Either way there is nothing left to restore, and this deploy does not fail for it.
+            IF to_regclass(quote_ident(v_Key."ChildSchema") || '.' || quote_ident(v_Key."ChildTable")) IS NULL
+               OR EXISTS (SELECT 1 FROM pg_constraint con
+                           WHERE con.contype = 'f' AND con.conname = v_Key."KeyName"
+                             AND con.conrelid = to_regclass(quote_ident(v_Key."ChildSchema") || '.' || quote_ident(v_Key."ChildTable"))) THEN
+              DELETE FROM "SchemaSmith"."RebuildSetAsideForeignKeys"
+               WHERE "ChildSchema" = v_Key."ChildSchema" AND "ChildTable" = v_Key."ChildTable" AND "KeyName" = v_Key."KeyName";
+            ELSE
+              v_Failed := COALESCE(v_Failed || '; ', '') || v_Key."ChildSchema" || '.' || v_Key."ChildTable" || '.' || v_Key."KeyName" || ' (' || SQLERRM || ')';
+            END IF;
         END;
       END IF;
     END LOOP;
