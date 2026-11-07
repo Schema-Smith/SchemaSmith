@@ -91,7 +91,7 @@ public class DeploymentSummaryJsonTests
             Instrumented: false,
             Created: new CreatedCounts(0, 0, 0, 0, 0, 0, 0, 0),
             Modified: new ModifiedCounts(0, 0),
-            Dropped: new DroppedCounts(0, 0, 0, 0),
+            Dropped: new DroppedCounts(0, 0, 0, 0, 0),
             ScriptsRan: 0,
             Details: new List<ObjectChangeDetail>());
 
@@ -328,7 +328,7 @@ public class DeploymentSummaryJsonTests
         var summary = BuildFullyPopulatedSummary() with
         {
             ObjectChanges = new ObjectChangeSummary(true, new CreatedCounts(0, 0, 2, 0, 0, 0, 0, 0), new ModifiedCounts(0, 0),
-                new DroppedCounts(0, 0, 0, 0), 0,
+                new DroppedCounts(0, 0, 0, 0, 0), 0,
                 [new ObjectChangeDetail("index", "[dbo].[T].[IX_A]", "created", "online"), new ObjectChangeDetail("index", "[dbo].[T].[IX_B]", "created")])
         };
         var details = (JArray)JObject.Parse(DeploymentSummaryJson.Serialize(summary)).SelectToken("objectChanges.details")!;
@@ -345,7 +345,7 @@ public class DeploymentSummaryJsonTests
         var summary = BuildFullyPopulatedSummary() with
         {
             ObjectChanges = new ObjectChangeSummary(true, new CreatedCounts(1, 0, 0, 0, 0, 0, 0, 0), new ModifiedCounts(0, 0),
-                new DroppedCounts(0, 0, 0, 0), 0,
+                new DroppedCounts(0, 0, 0, 0, 0), 0,
                 [new ObjectChangeDetail("table", "[dbo].[T]", "created", Server: "srv", Database: "tenant_003", Schema: "sales"),
                  new ObjectChangeDetail("table", "[dbo].[U]", "created")])
         };

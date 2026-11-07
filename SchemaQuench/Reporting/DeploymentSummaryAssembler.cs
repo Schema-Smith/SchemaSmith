@@ -196,7 +196,7 @@ public static class DeploymentSummaryAssembler
                 Instrumented: false,
                 Created: new CreatedCounts(0, 0, 0, 0, 0, 0, 0, 0),
                 Modified: new ModifiedCounts(0, 0),
-                Dropped: new DroppedCounts(0, 0, 0, 0),
+                Dropped: new DroppedCounts(0, 0, 0, 0, 0),
                 ScriptsRan: 0,
                 Details: Array.Empty<ObjectChangeDetail>());
 
@@ -227,6 +227,7 @@ public static class DeploymentSummaryAssembler
 
         var dropped = new DroppedCounts(
             Tables: Count2("table", "dropped", "wouldDrop"),
+            Columns: Count2("column", "dropped", "wouldDrop"),
             Indexes: Count2("index", "dropped", "wouldDrop"),
             Constraints: Count2("constraint", "dropped", "wouldDrop"),
             ForeignKeys: Count2("foreignKey", "dropped", "wouldDrop"));

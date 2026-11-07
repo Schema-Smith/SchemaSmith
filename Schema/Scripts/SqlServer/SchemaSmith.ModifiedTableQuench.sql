@@ -1442,6 +1442,16 @@ BEGIN TRY
                                          [Columns] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT, [FullTextCatalog] NVARCHAR(258) COLLATE DATABASE_DEFAULT,
                                          [KeyIndex] NVARCHAR(258) COLLATE DATABASE_DEFAULT, [ChangeTracking] NVARCHAR(60) COLLATE DATABASE_DEFAULT,
                                          [StopList] NVARCHAR(258) COLLATE DATABASE_DEFAULT)
+  -- A column with no collation (xml, varbinary, image) takes the server's default full-text language, so a declaration
+  -- without LANGUAGE is that language and must compare equal to it (#606); one that states a LANGUAGE is compared as stated.
+  DECLARE @v_DefaultFullTextLanguage INT = (SELECT CONVERT(INT, value_in_use) FROM sys.configurations WHERE [name] = 'default full-text language')
+  IF OBJECT_ID('tempdb..#FullTextDeclaredLanguage') IS NOT NULL DROP TABLE #FullTextDeclaredLanguage
+  SELECT DISTINCT d.[Schema], d.[TableName], [Entry] = LTRIM(RTRIM(s.[value])) COLLATE DATABASE_DEFAULT
+    INTO #FullTextDeclaredLanguage
+    FROM #FullTextIndexes d WITH (NOLOCK)
+    CROSS APPLY SchemaSmith.fn_SplitList(ISNULL(d.[Columns], ''), ',') s
+    WHERE s.[value] LIKE '% LANGUAGE [0-9]%'
+
   IF @v_HasFullTextIndexes = 1
   BEGIN
   RAISERROR('Collect Existing FullText Indexes', 10, 100) WITH NOWAIT
@@ -1460,7 +1470,8 @@ BEGIN TRY
                             -- including the JOIN (not subquery) form -- the two rendering forms must never
                             -- be allowed to diverge again. NULL collation (non-character column) has no
                             -- default to compare against, so LANGUAGE is always emitted for it.
-                            CASE WHEN c.collation_name IS NULL OR fc.language_id <> COLLATIONPROPERTY(c.collation_name, 'LCID')
+                            CASE WHEN (c.collation_name IS NULL AND (fc.language_id <> ISNULL(@v_DefaultFullTextLanguage, -1) OR dl.[Entry] IS NOT NULL))
+                                   OR fc.language_id <> COLLATIONPROPERTY(c.collation_name, 'LCID')
                                  THEN ' LANGUAGE ' + CAST(fc.language_id AS NVARCHAR(10))
                                  ELSE '' END +
                             -- Mirrors the extractor's render exactly -- drift compares these as strings,
@@ -1470,6 +1481,8 @@ BEGIN TRY
                                  THEN ' STATISTICAL_SEMANTICS' ELSE '' END
             FROM sys.fulltext_index_columns fc
             JOIN sys.columns c ON c.[object_id] = fc.[object_id] AND c.column_id = fc.column_id
+            LEFT JOIN #FullTextDeclaredLanguage dl WITH (NOLOCK) ON dl.[Schema] = t.[Schema] AND dl.[TableName] = t.[Name]
+                  AND dl.[Entry] LIKE REPLACE(REPLACE(REPLACE(QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)), '[', '[[]'), '%', '[%]'), '_', '[_]') + ' %' COLLATE DATABASE_DEFAULT
             WHERE fi.[object_id] = fc.[object_id]
             ORDER BY COL_NAME(fc.[object_id], fc.column_id) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS [Columns],
          FullTextCatalog = QUOTENAME((SELECT c.[name] COLLATE DATABASE_DEFAULT FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
@@ -1551,6 +1564,9 @@ BEGIN TRY
                                               ELSE i.[CompressionType] END AS NVARCHAR(60))) dz
     CROSS APPLY SchemaSmith.fn_PartitionCompressionDrift(si.[object_id], si.index_id, dz.[Desired]) dr
     WHERE ISNULL(i.[CompressionType], '') <> 'MIXED' AND dr.[Differing] > 0
+      -- A rowstore index declared columnstore, or the reverse, is replaced below; rebuilding it to the other kind's
+      -- compression first is refused by the engine (#611).
+      AND CASE WHEN si.[type] IN (5, 6) THEN 1 ELSE 0 END = ISNULL(CONVERT(INT, i.[ColumnStore]), 0)
 
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering index compression for ' + REPLACE(REPLACE(f.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(f.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(f.[IndexName], '''', ''''''), '%', '%%') + ' TO ' + REPLACE(REPLACE(f.[Desired], '''', ''''''), '%', '%%') +
                                   REPLACE(REPLACE(CASE WHEN f.[Whole] = 1 THEN '' ELSE ' (partitions ' + f.[List] + ' of ' + CAST(f.[Total] AS NVARCHAR(10)) + ')' END, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
@@ -1681,7 +1697,12 @@ BEGIN TRY
                                                      JOIN #GraphKeyParts g ON g.[object_id] = gic.[object_id] AND g.column_id = gic.column_id
                                                     WHERE gic.[object_id] = si.[object_id] AND gic.index_id = si.index_id AND g.graph_type = 1)
     -- One row per index: a partitioned index's compression is the value its partitions share, or MIXED.
-    CROSS APPLY (SELECT [data_compression_desc] = SchemaSmith.fn_PartitionCompression(si.[object_id], si.index_id)) p
+    -- A preview has not run the compression fix-up above, so it reads what the fix-up would leave; otherwise a
+    -- compression-only change also predicted the index's drop and re-create (#614).
+    CROSS APPLY (SELECT [data_compression_desc] = COALESCE((SELECT TOP 1 f.[Desired] FROM #IndexCompressionFixups f WITH (NOLOCK)
+                                                             WHERE @WhatIf = 1 AND f.[Schema] = t.[Schema] AND f.[TableName] = t.[Name]
+                                                               AND SchemaSmith.fn_StripBracketWrapping(f.[IndexName]) = si.[name] COLLATE DATABASE_DEFAULT),
+                                                            SchemaSmith.fn_PartitionCompression(si.[object_id], si.index_id))) p
     CROSS APPLY (SELECT [WithOptions] =
                    CASE WHEN (si.[type] NOT IN (5, 6) AND ISNULL(p.[data_compression_desc], 'NONE') COLLATE DATABASE_DEFAULT IN ('NONE', 'ROW', 'PAGE'))
                              OR (si.[type] IN (5, 6) AND ISNULL(p.[data_compression_desc], 'NONE') COLLATE DATABASE_DEFAULT IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
@@ -2409,6 +2430,15 @@ BEGIN TRY
                                      AND EXISTS (SELECT * FROM #ColumnChanges cc WITH (NOLOCK) WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.DropOnly = 1)) t
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  -- The column and its data are gone, so the deployment summary says so (#607), as on the other engines.
+  IF @DropColumnsRemovedFromProduct = 1
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+      SELECT @@SPID, 'column', cc.[Schema] + '.' + cc.[TableName] + '.' + cc.[ColumnName], CASE WHEN @WhatIf = 1 THEN 'wouldDrop' ELSE 'dropped' END
+        FROM #ColumnChanges cc WITH (NOLOCK)
+        JOIN #Tables t WITH (NOLOCK) ON t.[Schema] = cc.[Schema] AND t.[Name] = cc.[TableName]
+        WHERE cc.DropOnly = 1
+          AND t.NewTable = 0
+          AND ISNULL(t.[DropColumnsRemovedFromProduct], 1) = 1
 
   RAISERROR('Detect Default Changes', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#DefaultChanges') IS NOT NULL DROP TABLE #DefaultChanges

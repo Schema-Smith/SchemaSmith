@@ -88,7 +88,7 @@ public class DeploymentSummaryTextTests
             Instrumented: false,
             Created: new CreatedCounts(0, 0, 0, 0, 0, 0, 0, 0),
             Modified: new ModifiedCounts(0, 0),
-            Dropped: new DroppedCounts(0, 0, 0, 0),
+            Dropped: new DroppedCounts(0, 0, 0, 0, 0),
             ScriptsRan: 0,
             Details: new List<ObjectChangeDetail>());
 

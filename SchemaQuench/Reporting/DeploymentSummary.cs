@@ -131,7 +131,7 @@ public sealed record CreatedCounts(
 
 public sealed record ModifiedCounts(int Tables, int Columns);
 
-public sealed record DroppedCounts(int Tables, int Indexes, int Constraints, int ForeignKeys);
+public sealed record DroppedCounts(int Tables, int Columns, int Indexes, int Constraints, int ForeignKeys);
 
 // Mode is left out of the report when null, so a deploy without OnlineApply reports exactly what it did before. Server,
 // Database and Schema name where the change was made: a fleet run makes the same change in many places.

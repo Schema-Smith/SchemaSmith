@@ -105,6 +105,7 @@ public class DeploymentSummaryAssemblerTests
         cap.Record("column", "dbo.Existing.Name", "wouldModify");
         cap.Record("foreignKey", "dbo.Existing.FK_Old", "wouldDrop");
         cap.Record("constraint", "dbo.Existing.CK_Old", "wouldDrop");
+        cap.Record("column", "dbo.Existing.Phone", "wouldDrop");
         cap.MarkInstrumented();
 
         var oc = AssembleWith(changeAudit: cap, protectedModeEnabled: false).ObjectChanges;
@@ -114,9 +115,10 @@ public class DeploymentSummaryAssemblerTests
         Assert.That(oc.Modified.Columns, Is.EqualTo(1), "wouldModify column maps into modified.columns");
         Assert.That(oc.Dropped.ForeignKeys, Is.EqualTo(1), "wouldDrop FK maps into dropped.foreignKeys");
         Assert.That(oc.Dropped.Constraints, Is.EqualTo(1), "wouldDrop constraint maps into dropped.constraints");
+        Assert.That(oc.Dropped.Columns, Is.EqualTo(1), "wouldDrop column maps into dropped.columns (#607)");
         // WhatIf previews ARE changes — they stay in the detail (unlike protection-suppressed dropSuppressed).
         Assert.That(oc.Details.Select(d => d.Action),
-            Is.EquivalentTo(new[] { "wouldCreate", "wouldCreate", "wouldModify", "wouldDrop", "wouldDrop" }));
+            Is.EquivalentTo(new[] { "wouldCreate", "wouldCreate", "wouldModify", "wouldDrop", "wouldDrop", "wouldDrop" }));
     }
 
     [Test]
@@ -427,7 +429,7 @@ public class DeploymentSummaryAssemblerTests
         Assert.That(summary.ObjectChanges.Instrumented, Is.False);
         Assert.That(summary.ObjectChanges.Created, Is.EqualTo(new CreatedCounts(0, 0, 0, 0, 0, 0, 0, 0)));
         Assert.That(summary.ObjectChanges.Modified, Is.EqualTo(new ModifiedCounts(0, 0)));
-        Assert.That(summary.ObjectChanges.Dropped, Is.EqualTo(new DroppedCounts(0, 0, 0, 0)));
+        Assert.That(summary.ObjectChanges.Dropped, Is.EqualTo(new DroppedCounts(0, 0, 0, 0, 0)));
         Assert.That(summary.ObjectChanges.Details, Is.Empty);
     }
 
