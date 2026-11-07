@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -107,6 +108,13 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string SystemTimeAutoAloneCode = "SS-PART-014";
     private const string SystemTimePartitionShapeCode = "SS-PART-015";
     private const string PartitioningValueInertCode = "SS-PART-016";
+    private const string PgPartitionBoundShapeCode = "SS-PART-017";
+    private const string PgPartitionDefaultTwiceCode = "SS-PART-018";
+    private const string PgPartitionHashCode = "SS-PART-019";
+    private const string PgPartitionNameCode = "SS-PART-020";
+    private const string PgPartitionKeyColumnCode = "SS-PART-021";
+    private const string PgPartitionedTableUnsupportedCode = "SS-PART-022";
+    private const string PgPartitionNoPartitionsCode = "SS-PART-023";
     private const string PeriodColumnMissingCode = "SS-PER-001";
     private const string SecondPeriodCode = "SS-PER-002";
     private const string MemoryOptimizedPlacementCode = "SS-XTP-001";
@@ -204,6 +212,13 @@ public sealed class CoherenceCheck : ISchemaCheck
         [SystemTimeAutoAloneCode] = ErrorLevel,
         [SystemTimePartitionShapeCode] = ErrorLevel,
         [PartitioningValueInertCode] = WarningLevel,
+        [PgPartitionBoundShapeCode] = ErrorLevel,
+        [PgPartitionDefaultTwiceCode] = ErrorLevel,
+        [PgPartitionHashCode] = ErrorLevel,
+        [PgPartitionNameCode] = ErrorLevel,
+        [PgPartitionKeyColumnCode] = ErrorLevel,
+        [PgPartitionedTableUnsupportedCode] = ErrorOrWarningLevel,
+        [PgPartitionNoPartitionsCode] = WarningLevel,
         [PeriodColumnMissingCode] = ErrorLevel,
         [SecondPeriodCode] = ErrorLevel,
         [MemoryOptimizedPlacementCode] = ErrorLevel,
@@ -296,6 +311,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckCompressionOptions(table, location));
             findings.AddRange(CheckPartitionPlacement(table, location));
             findings.AddRange(CheckMyPartitioning(table, location, ctx.Product));
+            findings.AddRange(CheckPgPartitioning(table, location, template));
             findings.AddRange(CheckMariaDbPeriods(table, location));
             findings.AddRange(CheckPartitionedForeignKeys(table, location, tablesByKey));
             findings.AddRange(CheckMemoryOptimizedPlacement(table, location));
@@ -1528,6 +1544,139 @@ public sealed class CoherenceCheck : ISchemaCheck
                     $"Table '{table.Name}' is MemoryOptimized but also declares {prop} '{value}'. A " +
                     "memory-optimized table lives in the MEMORY_OPTIMIZED_DATA filegroup and cannot be placed " +
                     "on a regular/FILESTREAM filegroup or partitioned — drop the placement, or drop MemoryOptimized.");
+    }
+
+    /// <summary>
+    /// PostgreSQL declarative partitioning: what the engine refuses, or what would deploy other than as written, caught
+    /// before the deploy. Every level of a nested tree is checked as the top one is.
+    /// </summary>
+    private static IEnumerable<Finding> CheckPgPartitioning(Table table, string location, Template template)
+    {
+        if (table is not PostgreSqlTable pg || pg.Partitioning == null) yield break;
+        var columns = pg.Columns.OfType<PostgreSqlColumn>().ToDictionary(c => NormalizeIdentifier(c.Name ?? ""), StringComparer.Ordinal);
+
+        if (string.Equals(pg.PersistenceType?.Trim(), "unlogged", StringComparison.OrdinalIgnoreCase))
+            yield return new Finding(Severity.Error, PgPartitionedTableUnsupportedCode, Category, location,
+                $"Table '{table.Name}' is partitioned and declares PersistenceType Unlogged: PostgreSQL 18 refuses an unlogged partitioned table, and 12 to 17 ignore it. Declare it on no partitioned table.");
+        if (pg.ExcludeConstraints.Count > 0)
+            yield return new Finding(Severity.Warning, PgPartitionedTableUnsupportedCode, Category, location,
+                $"Table '{table.Name}' is partitioned and declares an exclusion constraint, which PostgreSQL accepts on a partitioned table from 17; below that the deploy fails creating it.");
+        if (pg.UpdateFillFactor || pg.FillFactor is not (0 or 100))
+            yield return new Finding(Severity.Warning, PartitioningValueInertCode, Category, location,
+                $"Table '{table.Name}' is partitioned, and a partitioned table holds no rows: its FillFactor is not applied. Declare it on no partitioned table.");
+
+        var names = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var finding in CheckPgPartitioningLevel(table.Name, pg.Partitioning, location, columns, names, isTable: true, pg))
+            yield return finding;
+
+        var declaredTables = template.Tables.Select(t => (Schema: NormalizeIdentifier((t as IDeliverableTable)?.Schema ?? ""), Name: NormalizeIdentifier(t.Name ?? ""))).ToHashSet();
+        var schema = NormalizeIdentifier(pg.Schema ?? "");
+        foreach (var (name, count) in names)
+        {
+            if (count > 1)
+                yield return new Finding(Severity.Error, PgPartitionNameCode, Category, location,
+                    $"Table '{table.Name}' names partition '{name}' {count} times; each partition is a table of its own and needs its own name.");
+            if (declaredTables.Contains((schema, name)))
+                yield return new Finding(Severity.Error, PgPartitionNameCode, Category, location,
+                    $"Partition '{name}' of table '{table.Name}' is also declared as a table. A partition is declared in its parent's Partitioning only.");
+        }
+    }
+
+    private static IEnumerable<Finding> CheckPgPartitioningLevel(string parent, PostgreSqlPartitioning p, string location,
+        Dictionary<string, PostgreSqlColumn> columns, Dictionary<string, int> names, bool isTable, PostgreSqlTable table)
+    {
+        var method = (p.Method ?? "").Trim().ToUpperInvariant();
+        var keyParts = SplitNames(p.Expression ?? "").Select(k => k.Trim()).Where(k => k.Length > 0).ToList();
+        if (keyParts.Count == 0)
+            yield return new Finding(Severity.Error, PartitionExpressionMissingCode, Category, location,
+                $"'{parent}' partitions by {method} with no Expression: PARTITION BY needs the key.");
+
+        // The key's plain columns: declared, and not generated (the engine refuses a generated column in a partition key).
+        var keyColumns = keyParts.Select(PostgreSqlKeyColumn).ToList();
+        foreach (var column in keyColumns.Where(c => c != null).Select(NormalizeIdentifier))
+            if (!columns.TryGetValue(column, out var declared))
+                yield return new Finding(Severity.Error, PgPartitionKeyColumnCode, Category, location,
+                    $"'{parent}' partitions by {method} ({p.Expression}), but the table declares no column '{column}'.");
+            else if (!string.IsNullOrWhiteSpace(declared.GenerationExpression))
+                yield return new Finding(Severity.Error, PgPartitionKeyColumnCode, Category, location,
+                    $"'{parent}' partitions by {method} ({p.Expression}), but '{column}' is a generated column, which PostgreSQL refuses in a partition key.");
+
+        // A primary key or unique constraint on the partitioned table must hold every key column, and none can stand
+        // on a key with an expression in it.
+        if (isTable)
+            foreach (var key in table.Indexes.Where(i => i.PrimaryKey || i.UniqueConstraint || i.Unique))
+            {
+                var held = KeyColumns(table, key).Select(c => NormalizeIdentifier(c.Name ?? "")).ToHashSet(StringComparer.Ordinal);
+                if (keyColumns.Any(c => c == null))
+                    yield return new Finding(Severity.Error, MyPartitionKeyMissesColumnCode, Category, location,
+                        $"'{key.Name}' is a primary or unique key on '{parent}', whose partition key ({p.Expression}) has an expression in it: PostgreSQL refuses a primary or unique key there.");
+                else if (keyColumns.Select(NormalizeIdentifier).FirstOrDefault(c => !held.Contains(c)) is { } missing)
+                    yield return new Finding(Severity.Error, MyPartitionKeyMissesColumnCode, Category, location,
+                        $"'{key.Name}' is a primary or unique key on '{parent}' that does not hold the partition key column '{missing}': PostgreSQL refuses it on a partitioned table.");
+            }
+
+        if (p.Partitions.Count == 0 && method is "RANGE" or "LIST")
+            yield return new Finding(Severity.Warning, PgPartitionNoPartitionsCode, Category, location,
+                $"'{parent}' partitions by {method} and declares no partitions, so every insert fails until one exists (expected only when a partition manager creates them).");
+
+        var defaults = p.Partitions.Count(x => string.Equals((x.Bound ?? "").Trim(), "DEFAULT", StringComparison.OrdinalIgnoreCase));
+        if (defaults > 1)
+            yield return new Finding(Severity.Error, PgPartitionDefaultTwiceCode, Category, location,
+                $"'{parent}' declares {defaults} DEFAULT partitions; a partitioned table takes one.");
+
+        var hash = new List<(string Name, int Modulus, int Remainder)>();
+        foreach (var part in p.Partitions)
+        {
+            var name = NormalizeIdentifier(part.Name ?? "");
+            names[name] = names.GetValueOrDefault(name) + 1;
+            var bound = Regex.Replace((part.Bound ?? "").Trim(), @"\s+", " ");
+            var isDefault = string.Equals(bound, "DEFAULT", StringComparison.OrdinalIgnoreCase);
+            var shapeOk = isDefault
+                ? method != "HASH"
+                : method switch
+                {
+                    "RANGE" => Regex.IsMatch(bound, @"^FOR VALUES FROM \(.*\) TO \(.*\)$", RegexOptions.IgnoreCase | RegexOptions.Singleline),
+                    "LIST" => Regex.IsMatch(bound, @"^FOR VALUES IN \(.*\)$", RegexOptions.IgnoreCase | RegexOptions.Singleline),
+                    "HASH" => Regex.IsMatch(bound, @"^FOR VALUES WITH \(\s*MODULUS\s+\d+\s*,\s*REMAINDER\s+\d+\s*\)$", RegexOptions.IgnoreCase),
+                    _ => true
+                };
+            if (!shapeOk)
+                yield return new Finding(Severity.Error, PgPartitionBoundShapeCode, Category, location,
+                    $"Partition '{part.Name}' of '{parent}' declares '{part.Bound}', which is not a {method} bound: " + method switch
+                    {
+                        "RANGE" => "FOR VALUES FROM (...) TO (...), or DEFAULT.",
+                        "LIST" => "FOR VALUES IN (...), or DEFAULT.",
+                        _ => "FOR VALUES WITH (MODULUS n, REMAINDER r); a HASH partitioned table has no DEFAULT partition."
+                    });
+            else if (method == "HASH" && !isDefault)
+            {
+                var m = Regex.Match(bound, @"MODULUS\s+(\d+)\s*,\s*REMAINDER\s+(\d+)", RegexOptions.IgnoreCase);
+                hash.Add((part.Name, int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture), int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture)));
+            }
+            else if (method == "RANGE" && !isDefault && keyParts.Count > 1)
+            {
+                var m = Regex.Match(bound, @"^FOR VALUES FROM \((.*)\) TO \((.*)\)$", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                if (m.Success && (SplitNames(m.Groups[1].Value).Count != keyParts.Count || SplitNames(m.Groups[2].Value).Count != keyParts.Count))
+                    yield return new Finding(Severity.Error, PgPartitionBoundShapeCode, Category, location,
+                        $"Partition '{part.Name}' of '{parent}' declares '{part.Bound}', but the key has {keyParts.Count} columns: FROM and TO each take one value per key column.");
+            }
+
+            if (part.Partitioning != null)
+                foreach (var finding in CheckPgPartitioningLevel(part.Name, part.Partitioning, location, columns, names, isTable: false, table))
+                    yield return finding;
+        }
+
+        foreach (var h in hash.Where(h => h.Remainder >= h.Modulus || h.Modulus < 1))
+            yield return new Finding(Severity.Error, PgPartitionHashCode, Category, location,
+                $"Partition '{h.Name}' of '{parent}' has REMAINDER {h.Remainder} for MODULUS {h.Modulus}: the remainder must be below the modulus.");
+        foreach (var dup in hash.GroupBy(h => (h.Modulus, h.Remainder)).Where(g => g.Count() > 1))
+            yield return new Finding(Severity.Error, PgPartitionHashCode, Category, location,
+                $"'{parent}' declares MODULUS {dup.Key.Modulus}, REMAINDER {dup.Key.Remainder} more than once ({string.Join(", ", dup.Select(d => d.Name))}).");
+        var moduli = hash.Select(h => h.Modulus).Where(m => m > 0).Distinct().OrderBy(m => m).ToList();
+        for (var i = 0; i + 1 < moduli.Count; i++)
+            if (moduli[i + 1] % moduli[i] != 0)
+                yield return new Finding(Severity.Error, PgPartitionHashCode, Category, location,
+                    $"'{parent}' mixes MODULUS {moduli[i]} and {moduli[i + 1]}: each modulus must be a factor of the next larger one.");
     }
 
     /// <summary>

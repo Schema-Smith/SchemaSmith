@@ -111,6 +111,132 @@ public class CoherenceCheckTests
         Assert.That(findings.Select(f => f.Message), Has.One.Contains($"'{reported}'"));
     }
 
+    // ---- PostgreSQL declarative partitioning (G1) ----
+
+    private static Schema.Domain.PostgreSQL.PostgreSqlTable PgPartitioned(string method, string expression, params (string Name, string Bound)[] parts)
+    {
+        var table = new Schema.Domain.PostgreSQL.PostgreSqlTable
+        {
+            Name = "events",
+            Schema = "public",
+            Columns =
+            {
+                new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" },
+                new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "d", DataType = "date" },
+                new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "g", DataType = "integer", GenerationExpression = "id * 2" }
+            },
+            Partitioning = new Schema.Domain.PostgreSQL.PostgreSqlPartitioning { Method = method, Expression = expression }
+        };
+        foreach (var (name, bound) in parts)
+            table.Partitioning.Partitions.Add(new Schema.Domain.PostgreSQL.PostgreSqlPartition { Name = name, Bound = bound });
+        return table;
+    }
+
+    private static string[] PgPartCodes(Schema.Domain.PostgreSQL.PostgreSqlTable table) =>
+        RunOnPgTable(table).Where(f => f.Code.StartsWith("SS-PART")).Select(f => f.Code).ToArray();
+
+    [Test]
+    public void PgPartitioning_ASoundNestedDeclaration_HasNoFinding()
+    {
+        var table = PgPartitioned("RANGE", "d", ("e_2026", "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')"), ("e_rest", "DEFAULT"));
+        table.Partitioning.Partitions[0].Partitioning = new Schema.Domain.PostgreSQL.PostgreSqlPartitioning
+        {
+            Method = "HASH", Expression = "id",
+            Partitions = { new() { Name = "e_2026_h0", Bound = "FOR VALUES WITH (modulus 2, remainder 0)" }, new() { Name = "e_2026_h1", Bound = "FOR VALUES WITH (modulus 2, remainder 1)" } }
+        };
+        table.Indexes.Add(new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "pk_events", PrimaryKey = true, IndexColumns = "id,d" });
+        Assert.That(PgPartCodes(table), Is.Empty);
+    }
+
+    [TestCase("RANGE", "FOR VALUES IN ('a')")]
+    [TestCase("LIST", "FOR VALUES FROM (1) TO (2)")]
+    [TestCase("HASH", "DEFAULT")]
+    [TestCase("HASH", "FOR VALUES IN (1)")]
+    public void PgPartitioning_ABoundOfTheWrongShape_IsSS_PART_017(string method, string bound)
+    {
+        Assert.That(PgPartCodes(PgPartitioned(method, "id", ("p1", bound))), Does.Contain("SS-PART-017"));
+    }
+
+    [Test]
+    public void PgPartitioning_ARangeBoundWithTheWrongArity_IsSS_PART_017()
+    {
+        Assert.That(PgPartCodes(PgPartitioned("RANGE", "id, d", ("p1", "FOR VALUES FROM (1) TO (2)"))), Does.Contain("SS-PART-017"));
+    }
+
+    [Test]
+    public void PgPartitioning_TwoDefaults_IsSS_PART_018()
+    {
+        Assert.That(PgPartCodes(PgPartitioned("LIST", "id", ("a", "DEFAULT"), ("b", "DEFAULT"))), Does.Contain("SS-PART-018"));
+    }
+
+    [TestCase("FOR VALUES WITH (modulus 2, remainder 2)", "FOR VALUES WITH (modulus 4, remainder 1)")]
+    [TestCase("FOR VALUES WITH (modulus 2, remainder 0)", "FOR VALUES WITH (modulus 2, remainder 0)")]
+    [TestCase("FOR VALUES WITH (modulus 2, remainder 0)", "FOR VALUES WITH (modulus 3, remainder 1)")]
+    public void PgPartitioning_IncoherentHash_IsSS_PART_019(string first, string second)
+    {
+        Assert.That(PgPartCodes(PgPartitioned("HASH", "id", ("h1", first), ("h2", second))), Does.Contain("SS-PART-019"));
+    }
+
+    [Test]
+    public void PgPartitioning_ARepeatedPartitionName_OrOneDeclaredAsATable_IsSS_PART_020()
+    {
+        Assert.That(PgPartCodes(PgPartitioned("LIST", "id", ("p", "FOR VALUES IN (1)"), ("p", "FOR VALUES IN (2)"))), Does.Contain("SS-PART-020"));
+
+        var parent = PgPartitioned("LIST", "id", ("orders_1", "FOR VALUES IN (1)"));
+        var template = new Template { Name = "T" };
+        template.Tables.Add(parent);
+        template.Tables.Add(new Schema.Domain.PostgreSQL.PostgreSqlTable { Name = "orders_1", Schema = "public", Columns = { new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" } } });
+        var product = new Product { Name = "Acme", Platform = Platform.PostgreSQL, TemplateOrder = new System.Collections.Generic.List<string>() };
+        var codes = new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).Select(f => f.Code);
+        Assert.That(codes, Does.Contain("SS-PART-020"));
+    }
+
+    [TestCase("missing")]
+    [TestCase("g")]
+    public void PgPartitioning_AKeyColumnNotDeclaredOrGenerated_IsSS_PART_021(string key)
+    {
+        Assert.That(PgPartCodes(PgPartitioned("LIST", key, ("p", "FOR VALUES IN (1)"))), Does.Contain("SS-PART-021"));
+    }
+
+    [Test]
+    public void PgPartitioning_UnloggedIsAnError_AndAnExclusionConstraintAWarning_SS_PART_022()
+    {
+        var table = PgPartitioned("LIST", "id", ("p", "FOR VALUES IN (1)"));
+        table.PersistenceType = "Unlogged";
+        table.ExcludeConstraints.Add(new ExcludeConstraint { Name = "ex" });
+        var findings = RunOnPgTable(table).Where(f => f.Code == "SS-PART-022").ToArray();
+        Assert.That(findings.Select(f => f.Severity), Is.EquivalentTo(new[] { Severity.Error, Severity.Warning }));
+    }
+
+    [Test]
+    public void PgPartitioning_RangeWithNoPartitions_IsAWarning_SS_PART_023()
+    {
+        var finding = RunOnPgTable(PgPartitioned("RANGE", "d")).Single(f => f.Code == "SS-PART-023");
+        Assert.That(finding.Severity, Is.EqualTo(Severity.Warning));
+    }
+
+    [Test]
+    public void PgPartitioning_AKeyThatDoesNotHoldThePartitionKey_IsSS_PART_005_AndNoExpression_IsSS_PART_007()
+    {
+        var table = PgPartitioned("RANGE", "d", ("p", "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')"));
+        table.Indexes.Add(new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "pk_events", PrimaryKey = true, IndexColumns = "id" });
+        Assert.That(PgPartCodes(table), Does.Contain("SS-PART-005"));
+
+        var expressionKey = PgPartitioned("LIST", "lower(id::text)", ("p", "FOR VALUES IN ('1')"));
+        expressionKey.Indexes.Add(new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "pk_events", PrimaryKey = true, IndexColumns = "id" });
+        Assert.That(PgPartCodes(expressionKey), Does.Contain("SS-PART-005"), "no primary key stands on an expression partition key");
+
+        Assert.That(PgPartCodes(PgPartitioned("LIST", "", ("p", "FOR VALUES IN (1)"))), Does.Contain("SS-PART-007"));
+    }
+
+    [Test]
+    public void PgPartitioning_AFillFactorOnAPartitionedTable_IsInert_SS_PART_016()
+    {
+        var table = PgPartitioned("LIST", "id", ("p", "FOR VALUES IN (1)"));
+        table.FillFactor = 80;
+        Assert.That(RunOnPgTable(table).Single(f => f.Code == "SS-PART-016").Severity, Is.EqualTo(Severity.Warning));
+    }
+
     // ---- PostgreSQL names compare exactly ----
     //
     // SchemaSmith deploys every PostgreSQL name quoted, so a key to `Customer` where the table is `customer` fails the
