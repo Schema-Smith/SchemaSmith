@@ -3,7 +3,7 @@
 -- Redistribution outside of SchemaSmith product usage is prohibited.
 
 -- Replaces one table with a table built to the DECLARED definition, carrying its rows across:
--- refuse-if-blocked, capture the identity counter, drop inbound foreign keys, create a shadow, copy,
+-- refuse-if-blocked, capture the identity counter, set inbound foreign keys aside, create a shadow, copy,
 -- reseed, swap, drop the old one. Nothing in here decides WHEN a rebuild should happen -- the caller
 -- decides that and calls this; the procedure is also directly callable, which is what makes it testable
 -- before any decision path exists.
@@ -54,7 +54,11 @@ BEGIN
   DECLARE @v_BlockedReason NVARCHAR(4000) = SchemaSmith.fn_RebuildBlockedReason(@v_SchemaRaw, @v_TableRaw)
   IF @v_BlockedReason IS NOT NULL
   BEGIN
-    RAISERROR('Table rebuild refused for %s.%s: %s. A rebuild replaces the table with a shadow copy, and that state lives outside the schema package -- the copy discards it and no re-deploy can put it back. Move this table with Before/After migration scripts, or clear the blocking state first and re-run.', 16, 1, @v_SchemaBr, @v_TableBr, @v_BlockedReason)
+    -- These three are declared in the package; what the copy cannot do is build them.
+    IF @v_BlockedReason IN ('the table is memory-optimized', 'the table is a graph node table', 'the table is a graph edge table', 'the table stores FILESTREAM data')
+      RAISERROR('Table rebuild refused for %s.%s: %s. A rebuild replaces the table with a shadow copy built as an ordinary disk table, which cannot carry that -- the copy would discard it and no re-deploy could put it back. Move this table with Before/After migration scripts.', 16, 1, @v_SchemaBr, @v_TableBr, @v_BlockedReason)
+    ELSE
+      RAISERROR('Table rebuild refused for %s.%s: %s. A rebuild replaces the table with a shadow copy, and that state lives outside the schema package -- the copy discards it and no re-deploy can put it back. Move this table with Before/After migration scripts, or clear the blocking state first and re-run.', 16, 1, @v_SchemaBr, @v_TableBr, @v_BlockedReason)
     RETURN
   END
 
@@ -117,6 +121,145 @@ BEGIN
   BEGIN
     RAISERROR('Table rebuild refused for %s: the declared definition contains Always Encrypted columns, and a shadow copy would have to move ciphertext server-side on a standard (non-enclave) server. Use Before/After migration scripts to rebuild this table and copy the data client-side over a Column Encryption Setting=Enabled connection.', 16, 1, @v_Qualified)
     RETURN
+  END
+
+  -- INBOUND FOREIGN KEYS. Every key another table holds against this one comes off before the swap (step 6 says why)
+  -- and is set aside in SchemaSmith.RebuildSetAsideForeignKeys, which ForeignKeyQuench reads to put each one back in the
+  -- state it was in. A key this package declares comes back from its declaration. One it does not declare -- another
+  -- product's, or one a DBA added -- comes back from what was captured here, which needs the rebuilt table to still
+  -- have what it references: the columns, unchanged, under a declared primary key or unique constraint over exactly
+  -- those columns. When it would not, the rebuild is refused here, naming the key, before anything is dropped.
+  IF OBJECT_ID('tempdb..#RebuildInboundKeys') IS NOT NULL DROP TABLE #RebuildInboundKeys
+  SELECT [ChildSchema] = OBJECT_SCHEMA_NAME(fk.parent_object_id) COLLATE DATABASE_DEFAULT,
+         [ChildTable] = OBJECT_NAME(fk.parent_object_id) COLLATE DATABASE_DEFAULT,
+         [KeyName] = fk.[name] COLLATE DATABASE_DEFAULT,
+         [Definition] = CAST('FOREIGN KEY (' + STUFF((SELECT ',' + QUOTENAME(COL_NAME(fkc.parent_object_id, fkc.parent_column_id))
+                                                       FROM sys.foreign_key_columns fkc WHERE fkc.constraint_object_id = fk.[object_id]
+                                                      ORDER BY fkc.constraint_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') +
+                             ') REFERENCES ' + @v_SchemaBr + '.' + @v_TableBr + ' (' +
+                             STUFF((SELECT ',' + QUOTENAME(COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id))
+                                      FROM sys.foreign_key_columns fkc WHERE fkc.constraint_object_id = fk.[object_id]
+                                     ORDER BY fkc.constraint_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') +
+                             ') ON DELETE ' + REPLACE(fk.delete_referential_action_desc, '_', ' ') + ' ON UPDATE ' + REPLACE(fk.update_referential_action_desc, '_', ' ') +
+                             CASE WHEN fk.is_not_for_replication = 1 THEN ' NOT FOR REPLICATION' ELSE '' END AS NVARCHAR(MAX)),
+         [ReferencedColumns] = CAST(STUFF((SELECT ', ' + QUOTENAME(COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id))
+                                             FROM sys.foreign_key_columns fkc WHERE fkc.constraint_object_id = fk.[object_id]
+                                            ORDER BY fkc.constraint_column_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '') AS NVARCHAR(MAX)),
+         [WasTrusted] = CAST(CASE WHEN fk.is_not_trusted = 1 THEN 0 ELSE 1 END AS BIT),
+         [WasEnabled] = CAST(CASE WHEN fk.is_disabled = 1 THEN 0 ELSE 1 END AS BIT),
+         [Declared] = CAST(0 AS BIT),
+         [Need] = CAST(NULL AS NVARCHAR(400))
+    INTO #RebuildInboundKeys
+    FROM sys.foreign_keys fk
+    WHERE fk.referenced_object_id = @v_ObjectId
+
+  IF EXISTS (SELECT 1 FROM #RebuildInboundKeys)
+  BEGIN
+    IF OBJECT_ID('tempdb..#ForeignKeys') IS NOT NULL
+      UPDATE k SET [Declared] = 1
+        FROM #RebuildInboundKeys k
+       WHERE EXISTS (SELECT 1 FROM #ForeignKeys f WITH (NOLOCK)
+                      WHERE SchemaSmith.fn_StripBracketWrapping(f.[Schema]) = k.[ChildSchema]
+                        AND SchemaSmith.fn_StripBracketWrapping(f.[TableName]) = k.[ChildTable]
+                        AND SchemaSmith.fn_StripBracketWrapping(f.[KeyName]) = k.[KeyName])
+
+    IF OBJECT_ID('tempdb..#RebuildInboundKeyColumns') IS NOT NULL DROP TABLE #RebuildInboundKeyColumns
+    SELECT [ChildSchema] = OBJECT_SCHEMA_NAME(fk.parent_object_id) COLLATE DATABASE_DEFAULT,
+           [ChildTable] = OBJECT_NAME(fk.parent_object_id) COLLATE DATABASE_DEFAULT,
+           [KeyName] = fk.[name] COLLATE DATABASE_DEFAULT,
+           [ColumnName] = COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) COLLATE DATABASE_DEFAULT
+      INTO #RebuildInboundKeyColumns
+      FROM sys.foreign_keys fk
+      JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.[object_id]
+     WHERE fk.referenced_object_id = @v_ObjectId
+
+    -- The declared keys the rebuilt table will have, as column sets: the primary key and the unfiltered unique ones.
+    IF OBJECT_ID('tempdb..#RebuildDeclaredKeyColumns') IS NOT NULL DROP TABLE #RebuildDeclaredKeyColumns
+    CREATE TABLE #RebuildDeclaredKeyColumns ([IndexName] NVARCHAR(500) COLLATE DATABASE_DEFAULT, [ColumnName] NVARCHAR(500) COLLATE DATABASE_DEFAULT)
+    IF OBJECT_ID('tempdb..#Indexes') IS NOT NULL
+      INSERT INTO #RebuildDeclaredKeyColumns ([IndexName], [ColumnName])
+        SELECT i.[IndexName],
+               SchemaSmith.fn_StripBracketWrapping(CASE WHEN UPPER(v.[Item]) LIKE '% DESC' THEN RTRIM(LEFT(v.[Item], LEN(v.[Item]) - 5))
+                                                        WHEN UPPER(v.[Item]) LIKE '% ASC' THEN RTRIM(LEFT(v.[Item], LEN(v.[Item]) - 4))
+                                                        ELSE v.[Item] END)
+          FROM #Indexes i WITH (NOLOCK)
+          CROSS APPLY SchemaSmith.fn_SplitList(i.[IndexColumns], ',') l
+          CROSS APPLY (SELECT [Item] = LTRIM(RTRIM(l.[value]))) v
+         WHERE i.[Schema] = @v_SchemaBr AND i.[TableName] = @v_TableBr
+           AND (ISNULL(i.[PrimaryKey], 0) = 1 OR ISNULL(i.[Unique], 0) = 1 OR ISNULL(i.[UniqueConstraint], 0) = 1)
+           AND RTRIM(ISNULL(i.[FilterExpression], '')) = ''
+
+    UPDATE k SET [Need] = 'every referenced column to stay declared'
+      FROM #RebuildInboundKeys k
+     WHERE k.[Declared] = 0
+       AND EXISTS (SELECT 1 FROM #RebuildInboundKeyColumns kc
+                    WHERE kc.[ChildSchema] = k.[ChildSchema] AND kc.[ChildTable] = k.[ChildTable] AND kc.[KeyName] = k.[KeyName]
+                      AND NOT EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
+                                       WHERE c.[Schema] = @v_SchemaBr AND c.[TableName] = @v_TableBr
+                                         AND SchemaSmith.fn_StripBracketWrapping(c.[ColumnName]) = kc.[ColumnName]))
+
+    UPDATE k SET [Need] = 'a declared primary key or unique constraint over exactly (' + k.[ReferencedColumns] + ')'
+      FROM #RebuildInboundKeys k
+     WHERE k.[Declared] = 0 AND k.[Need] IS NULL
+       AND NOT EXISTS (SELECT 1 FROM (SELECT DISTINCT [IndexName] FROM #RebuildDeclaredKeyColumns) d
+                        WHERE (SELECT COUNT(*) FROM #RebuildDeclaredKeyColumns dc WHERE dc.[IndexName] = d.[IndexName])
+                            = (SELECT COUNT(*) FROM #RebuildInboundKeyColumns kc
+                                WHERE kc.[ChildSchema] = k.[ChildSchema] AND kc.[ChildTable] = k.[ChildTable] AND kc.[KeyName] = k.[KeyName])
+                          AND NOT EXISTS (SELECT 1 FROM #RebuildInboundKeyColumns kc
+                                           WHERE kc.[ChildSchema] = k.[ChildSchema] AND kc.[ChildTable] = k.[ChildTable] AND kc.[KeyName] = k.[KeyName]
+                                             AND NOT EXISTS (SELECT 1 FROM #RebuildDeclaredKeyColumns dc
+                                                              WHERE dc.[IndexName] = d.[IndexName] AND dc.[ColumnName] = kc.[ColumnName])))
+
+    IF OBJECT_ID('tempdb..#ColumnChanges') IS NOT NULL
+      UPDATE k SET [Need] = 'the referenced columns to keep their current definition'
+        FROM #RebuildInboundKeys k
+       WHERE k.[Declared] = 0 AND k.[Need] IS NULL
+         AND EXISTS (SELECT 1 FROM #RebuildInboundKeyColumns kc
+                      JOIN #ColumnChanges cc WITH (NOLOCK) ON cc.[Schema] = @v_SchemaBr AND cc.[TableName] = @v_TableBr
+                                                          AND SchemaSmith.fn_StripBracketWrapping(cc.[ColumnName]) = kc.[ColumnName]
+                                                          AND cc.[DefinitionChanged] = 1
+                      WHERE kc.[ChildSchema] = k.[ChildSchema] AND kc.[ChildTable] = k.[ChildTable] AND kc.[KeyName] = k.[KeyName])
+
+    DECLARE @v_UnrestorableKey NVARCHAR(300), @v_UnrestorableChild NVARCHAR(600), @v_UnrestorableNeed NVARCHAR(400)
+    SELECT TOP 1 @v_UnrestorableKey = QUOTENAME(k.[KeyName]), @v_UnrestorableChild = QUOTENAME(k.[ChildSchema]) + '.' + QUOTENAME(k.[ChildTable]), @v_UnrestorableNeed = k.[Need]
+      FROM #RebuildInboundKeys k
+     WHERE k.[Need] IS NOT NULL
+     ORDER BY k.[ChildSchema], k.[ChildTable], k.[KeyName]
+    IF @v_UnrestorableKey IS NOT NULL
+    BEGIN
+      RAISERROR('Table rebuild refused for %s: foreign key %s on %s references it and is not declared in this package. A rebuild sets such keys aside and restores them afterwards, which needs %s. Declare the key in the package that owns %s, or change this table with Before/After migration scripts.', 16, 1, @v_Qualified, @v_UnrestorableKey, @v_UnrestorableChild, @v_UnrestorableNeed, @v_UnrestorableChild)
+      RETURN
+    END
+  END
+
+  -- A DECLARED FILESTREAM COLUMN. The create path withholds one until its ROWGUIDCOL unique key exists
+  -- (FileStreamColumnQuench); a shadow created with it fails, so the rebuild is refused before it starts.
+  IF EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
+               WHERE c.[Schema] = @v_SchemaBr AND c.[TableName] = @v_TableBr AND ISNULL(c.[FileStream], 0) = 1)
+  BEGIN
+    RAISERROR('Table rebuild refused for %s: the declared definition has a FILESTREAM column. The shadow copy cannot be created with one -- SQL Server needs the ROWGUIDCOL unique key to exist first. Change this table with Before/After migration scripts.', 16, 1, @v_Qualified)
+    RETURN
+  END
+
+  -- AN INDEX PLACED APART FROM ITS TABLE. The rebuild re-creates indexes from the package, so one on another filegroup
+  -- whose FileGroup the package does not declare would come back beside the table.
+  IF OBJECT_ID('tempdb..#Indexes') IS NOT NULL
+  BEGIN
+    DECLARE @v_ApartIndex NVARCHAR(300), @v_ApartSpace NVARCHAR(300)
+    SELECT TOP 1 @v_ApartIndex = QUOTENAME(si.[name]), @v_ApartSpace = QUOTENAME(ds.[name])
+      FROM sys.indexes si
+      JOIN sys.data_spaces ds ON ds.data_space_id = si.data_space_id
+      JOIN #Indexes i WITH (NOLOCK) ON i.[Schema] = @v_SchemaBr AND i.[TableName] = @v_TableBr
+                                   AND SchemaSmith.fn_StripBracketWrapping(i.[IndexName]) = si.[name] COLLATE DATABASE_DEFAULT
+     WHERE si.[object_id] = @v_ObjectId AND si.index_id > 1
+       AND si.data_space_id <> (SELECT h.data_space_id FROM sys.indexes h WHERE h.[object_id] = @v_ObjectId AND h.index_id < 2)
+       AND RTRIM(ISNULL(i.[FileGroup], '')) = ''
+     ORDER BY si.[name]
+    IF @v_ApartIndex IS NOT NULL
+    BEGIN
+      RAISERROR('Table rebuild refused for %s: index %s lives on %s, apart from the table, and the package does not declare its FileGroup. The rebuild re-creates indexes from the package, so that index would move to the table''s filegroup. Declare the index''s FileGroup, or change this table with Before/After migration scripts.', 16, 1, @v_Qualified, @v_ApartIndex, @v_ApartSpace)
+      RETURN
+    END
   END
 
   ----------------------------------------------------------------------------------------------------
@@ -255,9 +398,8 @@ BEGIN
   -- makes that visible -- if the drop were ever permitted (a CASCADE convenience, a future engine), the
   -- rebuild would silently sever the child's referential integrity instead of failing loudly.
   --
-  -- They are NOT re-added here. Each one is defined in its OWNING table's JSON, so that table's
-  -- foreign-key quench pass sees it missing and re-creates it from the package. Re-adding them inside
-  -- this procedure would mean maintaining FK construction against a second source of truth.
+  -- They are not re-added here: the shadow has no key for them to reference until the index pass runs. They are set
+  -- aside instead (step 2), and ForeignKeyQuench puts each one back.
   DECLARE @v_DropInboundFkSql NVARCHAR(MAX)
   SELECT @v_DropInboundFkSql = STUFF((SELECT @v_CrLf + CAST(
              'RAISERROR(''  Dropping inbound foreign key ' + REPLACE(REPLACE(QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)), '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(QUOTENAME(OBJECT_NAME(fk.parent_object_id)), '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(QUOTENAME(fk.[name]), '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + @v_CrLf +
@@ -287,9 +429,33 @@ BEGIN
                                  ORDER BY c.[_RowId]
                                  FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
 
+  -- The shadow goes where the table is, compressed as it is to be: the declared filegroup, or the live one when none is
+  -- declared (an undeclared placement is the user's, and a rebuild must not move it); the same for large-object data,
+  -- named only when a declared column is one (TEXTIMAGE_ON without one is error 1709). Created on the default filegroup
+  -- instead, a declared placement failed every later deploy's placement check, and the compression fixup rewrote the
+  -- table a second time. Indexes created later with no ON clause follow the table.
+  DECLARE @v_ShadowOn NVARCHAR(300), @v_ShadowTextImage NVARCHAR(300), @v_ShadowWith NVARCHAR(200)
+  SELECT @v_ShadowOn = COALESCE(t.[FileGroup], (SELECT QUOTENAME(ds.[name]) FROM sys.indexes h JOIN sys.data_spaces ds ON ds.data_space_id = h.data_space_id
+                                                 WHERE h.[object_id] = @v_ObjectId AND h.index_id < 2 AND ds.[type] = 'FG')),
+         @v_ShadowTextImage = CASE WHEN EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
+                                                 WHERE c.[Schema] = @v_SchemaBr AND c.[TableName] = @v_TableBr AND ISNULL(c.[FileStream], 0) = 0
+                                                   AND (UPPER(REPLACE(c.[DataType], ' ', '')) LIKE '%(MAX)%'
+                                                        OR UPPER(c.[DataType]) IN ('TEXT', 'NTEXT', 'IMAGE', 'XML') OR UPPER(c.[DataType]) LIKE 'XML(%'))
+                                   THEN COALESCE(t.[TextImageFileGroup], (SELECT QUOTENAME(ds.[name]) FROM sys.tables st JOIN sys.data_spaces ds ON ds.data_space_id = st.lob_data_space_id
+                                                                           WHERE st.[object_id] = @v_ObjectId AND st.lob_data_space_id <> 0
+                                                                             AND st.lob_data_space_id <> (SELECT h.data_space_id FROM sys.indexes h WHERE h.[object_id] = @v_ObjectId AND h.index_id < 2))) END,
+         @v_ShadowWith = CASE WHEN t.[CompressionType] IN ('ROW', 'PAGE')
+                                   AND NOT EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK)
+                                                    WHERE c.[Schema] = @v_SchemaBr AND c.[TableName] = @v_TableBr
+                                                      AND (ISNULL(c.[Sparse], 0) = 1 OR ISNULL(c.[IsColumnSet], 0) = 1))
+                              THEN ' WITH (DATA_COMPRESSION = ' + t.[CompressionType] + ')' END
+    FROM #Tables t WITH (NOLOCK)
+    WHERE t.[Schema] = @v_SchemaBr AND t.[Name] = @v_TableBr
+
   DECLARE @v_CreateShadowSql NVARCHAR(MAX) =
     CASE WHEN @v_HasPaddingOff = 1 THEN 'SET ANSI_PADDING OFF; ' ELSE '' END +
-    'CREATE TABLE ' + @v_ShadowQualified + ' (' + @v_ShadowColumnList + ');' +
+    'CREATE TABLE ' + @v_ShadowQualified + ' (' + @v_ShadowColumnList + ')' + ISNULL(' ON ' + @v_ShadowOn, '') +
+    ISNULL(' TEXTIMAGE_ON ' + @v_ShadowTextImage, '') + ISNULL(@v_ShadowWith, '') + ';' +
     CASE WHEN @v_HasPaddingOff = 1 THEN ' SET ANSI_PADDING ON;' + ISNULL(' ' + @v_RepadSql + ';', '') ELSE '' END
 
   -- TABLOCKX on the source, held for the life of the transaction: without it a row inserted by another
@@ -347,6 +513,10 @@ BEGIN
       SELECT @@SPID, 'foreignKey', '' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.' + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + '', 'wouldDrop'
         FROM sys.foreign_keys fk
         WHERE fk.referenced_object_id = @v_ObjectId
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+      SELECT @@SPID, 'foreignKey', QUOTENAME(k.[ChildSchema]) + '.' + QUOTENAME(k.[ChildTable]) + '.' + QUOTENAME(k.[KeyName]), 'wouldCreate'
+        FROM #RebuildInboundKeys k
+        WHERE k.[Declared] = 0
     RETURN
   END
 
@@ -385,6 +555,22 @@ BEGIN
     DECLARE @v_RowsBefore BIGINT, @v_RowsAfter BIGINT, @v_CountSql NVARCHAR(MAX)
     SET @v_CountSql = N'SELECT @p_Count = COUNT_BIG(*) FROM ' + @v_Qualified + N' WITH (TABLOCKX)'
     EXEC sp_executesql @v_CountSql, N'@p_Count BIGINT OUTPUT', @p_Count = @v_RowsBefore OUTPUT
+
+    -- The counter again, now that the table is locked: a row another session inserted after the first read and
+    -- before the lock is copied across, and a reseed to the earlier value would hand its identity out again.
+    IF @v_IdentityInCopy = 1 AND EXISTS (SELECT 1 FROM sys.identity_columns WHERE [object_id] = @v_ObjectId AND last_value IS NOT NULL)
+    BEGIN
+      SET @v_CapturedIdentity = CONVERT(DECIMAL(38, 0), IDENT_CURRENT(@v_Qualified))
+      SET @v_ReseedSql = 'DBCC CHECKIDENT(''' + REPLACE(@v_ShadowQualified, '''', '''''') + ''', RESEED, ' + CONVERT(NVARCHAR(40), @v_CapturedIdentity) + ') WITH NO_INFOMSGS;'
+    END
+
+    -- Recorded in this transaction, so a rollback takes the record with the keys it would have restored.
+    DELETE s FROM SchemaSmith.RebuildSetAsideForeignKeys s
+     WHERE EXISTS (SELECT 1 FROM #RebuildInboundKeys k
+                    WHERE k.[ChildSchema] = s.[ChildSchema] AND k.[ChildTable] = s.[ChildTable] AND k.[KeyName] = s.[KeyName])
+    INSERT INTO SchemaSmith.RebuildSetAsideForeignKeys ([ChildSchema], [ChildTable], [KeyName], [ParentSchema], [ParentTable], [Definition], [WasTrusted], [WasEnabled], [Declared])
+      SELECT k.[ChildSchema], k.[ChildTable], k.[KeyName], @v_SchemaRaw, @v_TableRaw, k.[Definition], k.[WasTrusted], k.[WasEnabled], k.[Declared]
+        FROM #RebuildInboundKeys k
 
     IF @v_DropInboundFkSql IS NOT NULL EXEC(@v_DropInboundFkSql)
 

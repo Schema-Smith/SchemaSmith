@@ -46,6 +46,20 @@ IF SchemaSmith.fn_ServerMajorVersion() >= 16
   IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = @v_ObjectId AND ledger_type <> 0)
     RETURN ''the table is a ledger table''
 '
+-- The shadow copy is an ordinary disk table, so a memory-optimized table (2014) or a graph table (2017) would come back
+-- as something else. Both columns are version-gated the same way.
+IF SchemaSmith.fn_ServerMajorVersion() >= 12
+  SET @v_TemporalCheck = @v_TemporalCheck + '
+  IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = @v_ObjectId AND is_memory_optimized = 1)
+    RETURN ''the table is memory-optimized''
+'
+IF SchemaSmith.fn_ServerMajorVersion() >= 14
+  SET @v_TemporalCheck = @v_TemporalCheck + '
+  IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = @v_ObjectId AND is_node = 1)
+    RETURN ''the table is a graph node table''
+  IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = @v_ObjectId AND is_edge = 1)
+    RETURN ''the table is a graph edge table''
+'
 
 DECLARE @v_Create NVARCHAR(MAX) = '
 CREATE FUNCTION SchemaSmith.fn_RebuildBlockedReason(@p_Schema NVARCHAR(128), @p_Table NVARCHAR(128))
@@ -65,6 +79,10 @@ BEGIN
 
   IF EXISTS (SELECT 1 FROM sys.change_tracking_tables WHERE [object_id] = @v_ObjectId)
     RETURN ''Change Tracking is enabled''
+
+  -- FILESTREAM data predates the 2008 floor, so it is read statically.
+  IF EXISTS (SELECT 1 FROM sys.tables WHERE [object_id] = @v_ObjectId AND filestream_data_space_id IS NOT NULL)
+    RETURN ''the table stores FILESTREAM data''
 
   -- Partitioning, checked across EVERY index rather than only the table''s own data space. A rebuild is a
   -- shadow copy, and the shadow CREATE TABLE carries no placement clause at all -- so the copy lands on the

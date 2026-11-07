@@ -819,9 +819,17 @@ guessing:
 
 - It needs roughly **twice the table’s space** while the copy exists.
 - It **holds a lock for the duration of the copy**. On a large table that is not a short operation.
-- Objects SchemaSmith does not manage — manual grants, triggers you did not declare — live on the old
+- Objects SchemaSmith does not manage — triggers and indexes you did not declare — live on the old
   table and do **not** survive. An in-place alter would have preserved them. Declared objects are
-  rebuilt normally.
+  rebuilt normally. On SQL Server and PostgreSQL the table's grants, owner and comments or extended properties are carried across.
+- **Foreign keys other tables hold against it** come off for the swap. On SQL Server each one is set aside
+  and put back by the same deploy's foreign-key step, trusted or untrusted, enabled or disabled, as it was
+  — including keys your package does not declare, such as another product's. If a deploy stops before that
+  step, the next one puts them back. A key your package does not declare can only be put back when the
+  rebuilt table still has what it references (the same columns, unchanged, under a declared primary key or
+  unique constraint); otherwise the rebuild is refused and names the key.
+- On SQL Server the rebuilt table stays where it was — its filegroup and large-object filegroup, declared or
+  not — and is created with its declared data compression, so it is written once.
 
 > **MySQL and MariaDB:** those engines cannot roll DDL back, so a rebuild there wants a quiesced table.
 > SchemaQuench makes the swap itself atomic and verifies the row count immediately before it, so the
@@ -836,7 +844,7 @@ scripts for these.
 
 | Engine | Refused when the table… |
 |---|---|
-| SQL Server | is system-versioned (temporal), is a ledger table, has Change Data Capture or Change Tracking, is published for replication, or is partitioned (the table itself or any of its indexes on a partition scheme) |
+| SQL Server | is system-versioned (temporal), is a ledger table, has Change Data Capture or Change Tracking, is published for replication, is partitioned (the table itself or any of its indexes on a partition scheme), is memory-optimized, is a graph node or edge table, stores FILESTREAM data or declares a FILESTREAM column, has an index on another filegroup whose `FileGroup` the package does not declare, or is referenced by a foreign key the package does not declare and the rebuild could not put back |
 | PostgreSQL | is a partitioned table or a partition of one, inherits from or is inherited by another table, or is a member of a logical replication publication |
 | MySQL | is partitioned |
 | MariaDB | is system-versioned, has an application-time period (seen from MariaDB 11.4, where the catalog first reports periods), or is partitioned |

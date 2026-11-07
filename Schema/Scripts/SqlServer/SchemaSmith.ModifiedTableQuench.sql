@@ -1375,6 +1375,17 @@ BEGIN TRY
       AND @DropForeignKeysRemovedFromProduct = 1
       AND ISNULL(t.[DropForeignKeysRemovedFromProduct], 1) = 1
 
+  -- A table rebuild above set aside the keys that reference it (RebuildTable). One on this product's own table that the
+  -- package does not declare would be dropped here had the rebuild not taken it first, so it is not put back.
+  IF @WhatIf = 0 AND @DropForeignKeysRemovedFromProduct = 1
+    DELETE sa FROM SchemaSmith.RebuildSetAsideForeignKeys sa
+      JOIN #Tables t WITH (NOLOCK) ON SchemaSmith.fn_StripBracketWrapping(t.[Schema]) = sa.[ChildSchema] COLLATE DATABASE_DEFAULT
+                                  AND SchemaSmith.fn_StripBracketWrapping(t.[Name]) = sa.[ChildTable] COLLATE DATABASE_DEFAULT
+     WHERE ISNULL(t.[DropForeignKeysRemovedFromProduct], 1) = 1
+       AND NOT EXISTS (SELECT 1 FROM #ForeignKeys fk2 WITH (NOLOCK)
+                        WHERE fk2.[Schema] = t.[Schema] AND fk2.[TableName] = t.[Name]
+                          AND SchemaSmith.fn_StripBracketWrapping(fk2.[KeyName]) = sa.[KeyName] COLLATE DATABASE_DEFAULT)
+
   -- WhatIf drops nothing, so a key an earlier step would drop is still in the catalog here; preview it once.
   IF @WhatIf = 1
     DELETE df FROM #FKsToDrop df

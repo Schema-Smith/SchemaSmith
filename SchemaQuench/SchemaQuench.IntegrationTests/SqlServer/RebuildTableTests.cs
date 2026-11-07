@@ -369,7 +369,7 @@ INSERT INTO dbo.RebuildColumnOrder (Alpha, Bravo, Charlie) VALUES (1, 2, 3);");
         // Proven live on all four engines: sp_rename of the parent SUCCEEDS and the inbound FK FOLLOWS it
         // onto the renamed-away table, so after a naive swap the child would be constrained against the
         // wrong table. The drop then failing is merely what surfaces that. The engine drops inbound keys
-        // before the swap and leaves the re-add to the owning table's foreign-key pass.
+        // before the swap and sets each one aside for the foreign-key pass to restore.
         using var conn = OpenMainDb();
         using var cmd = conn.CreateCommand();
 
@@ -392,7 +392,8 @@ INSERT INTO dbo.RebuildFkChild (Id, ParentId) VALUES (10, 1), (11, 2);");
                 "Columns": [
                     {"Name": "[Id]", "DataType": "INT", "Nullable": false},
                     {"Name": "[Val]", "DataType": "NVARCHAR(50)", "Nullable": true}
-                ]
+                ],
+                "Indexes": [ {"Name": "[PK_RebuildFkParent]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]"} ]
             }
             """;
         Rebuild(cmd, json, "RebuildFkParent");
@@ -408,13 +409,18 @@ INSERT INTO dbo.RebuildFkChild (Id, ParentId) VALUES (10, 1), (11, 2);");
 
         Assert.That(Int(cmd, "SELECT COUNT(*) FROM sys.foreign_keys WHERE parent_object_id = OBJECT_ID('dbo.RebuildFkChild')"),
             Is.EqualTo(0),
-            "The inbound key is deliberately NOT re-added here: it is declared in the CHILD's JSON, so the "
-            + "child's foreign-key quench pass re-creates it. What must never happen is the key surviving "
-            + "pointed at the renamed-away table.");
+            "The inbound key is off the child until the foreign-key pass restores it: the rebuilt parent has no key "
+            + "for it to reference before the index pass runs. What must never happen is the key surviving pointed "
+            + "at the renamed-away table.");
+        Assert.That(Int(cmd, "SELECT COUNT(*) FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE ChildTable = 'RebuildFkChild' AND KeyName = 'FK_RebuildFkChild_Parent' AND WasTrusted = 1 AND WasEnabled = 1"),
+            Is.EqualTo(1),
+            "and it is recorded, trusted and enabled as it was, for the foreign-key pass to put back -- before this, "
+            + "a key the package did not declare was simply gone.");
 
         Exec(cmd, @"
 IF OBJECT_ID('dbo.RebuildFkChild', 'U') IS NOT NULL DROP TABLE dbo.RebuildFkChild;
-IF OBJECT_ID('dbo.RebuildFkParent', 'U') IS NOT NULL DROP TABLE dbo.RebuildFkParent;");
+IF OBJECT_ID('dbo.RebuildFkParent', 'U') IS NOT NULL DROP TABLE dbo.RebuildFkParent;
+DELETE FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE ChildTable = 'RebuildFkChild';");
         conn.Close();
     }
 

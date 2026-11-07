@@ -231,6 +231,75 @@ CREATE TABLE dbo.TemporalRebuildGuard (
             $"The refusal must name Change Tracking, and must not be confused with Change Data Capture -- they "
             + $"are disabled differently. Got: '{reason}'.");
     }
+    // ---- states a shadow copy cannot be built with ----------------------------
+    //
+    // The shadow is an ordinary disk table, so a memory-optimized, graph or FILESTREAM table would come back as
+    // something else. These are declared in the package, unlike the states above, but the copy cannot carry them.
+
+    [Test]
+    public void MemoryOptimizedTable_IsBlocked()
+    {
+        if (ServerMajorVersion() < 12) Assert.Ignore("Memory-optimized tables are SQL Server 2014+.");
+        using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT CONVERT(INT, ISNULL(SERVERPROPERTY('IsXTPSupported'), 0))";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) != 1) Assert.Ignore("This edition does not support memory-optimized tables.");
+        }
+        _connection.ChangeDatabase("master");
+        Exec($@"
+DECLARE @v_Path NVARCHAR(500) = (SELECT LEFT(physical_name, LEN(physical_name) - CHARINDEX('\', REVERSE(physical_name)) + 1) FROM sys.master_files WHERE database_id = DB_ID('{_db}') AND file_id = 1);
+IF NOT EXISTS (SELECT 1 FROM [{_db}].sys.filegroups WHERE [type] = 'FX')
+BEGIN
+  ALTER DATABASE [{_db}] ADD FILEGROUP [MOD_fg] CONTAINS MEMORY_OPTIMIZED_DATA;
+  EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' + @v_Path + '{_db}_MOD'') TO FILEGROUP [MOD_fg]');
+END");
+        _connection.ChangeDatabase(_db);
+        Exec("CREATE TABLE dbo.MoRebuildGuard (Id INT NOT NULL PRIMARY KEY NONCLUSTERED, Val INT NULL) WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_ONLY)");
+
+        var reason = BlockedReason("MoRebuildGuard");
+
+        Assert.That(reason, Is.Not.Null, "a memory-optimized table must be refused a rebuild: the shadow copy is a disk table");
+        Assert.That(reason, Does.Contain("memory-optimized"), reason);
+    }
+
+    [TestCase("NODE", "node")]
+    [TestCase("EDGE", "edge")]
+    public void GraphTable_IsBlocked(string kind, string word)
+    {
+        if (ServerMajorVersion() < 14) Assert.Ignore("Graph tables are SQL Server 2017+.");
+        Exec($"CREATE TABLE dbo.Graph{kind}RebuildGuard (Id INT NULL) AS {kind}");
+
+        var reason = BlockedReason($"Graph{kind}RebuildGuard");
+
+        Assert.That(reason, Is.Not.Null, $"a graph {word} table must be refused a rebuild: the shadow copy is an ordinary table");
+        Assert.That(reason, Does.Contain($"graph {word} table"), reason);
+    }
+
+    [Test]
+    public void FileStreamTable_IsBlocked()
+    {
+        using (var cmd = _connection.CreateCommand())
+        {
+            cmd.CommandText = "SELECT CONVERT(INT, ISNULL(SERVERPROPERTY('FilestreamEffectiveLevel'), 0))";
+            if (Convert.ToInt32(cmd.ExecuteScalar()) < 2) Assert.Ignore("FILESTREAM is not enabled for Transact-SQL access on this server.");
+        }
+        _connection.ChangeDatabase("master");
+        Exec($@"
+DECLARE @v_Path NVARCHAR(500) = (SELECT LEFT(physical_name, LEN(physical_name) - CHARINDEX('\', REVERSE(physical_name)) + 1) FROM sys.master_files WHERE database_id = DB_ID('{_db}') AND file_id = 1);
+IF NOT EXISTS (SELECT 1 FROM [{_db}].sys.filegroups WHERE [type] = 'FD')
+BEGIN
+  ALTER DATABASE [{_db}] ADD FILEGROUP [FS_fg] CONTAINS FILESTREAM;
+  EXEC('ALTER DATABASE [{_db}] ADD FILE (NAME = ''FS_container'', FILENAME = ''' + @v_Path + '{_db}_FS'') TO FILEGROUP [FS_fg]');
+END");
+        _connection.ChangeDatabase(_db);
+        Exec("CREATE TABLE dbo.FsRebuildGuard (Id UNIQUEIDENTIFIER ROWGUIDCOL NOT NULL UNIQUE DEFAULT NEWID(), Doc VARBINARY(MAX) FILESTREAM NULL)");
+
+        var reason = BlockedReason("FsRebuildGuard");
+
+        Assert.That(reason, Is.Not.Null, "a FILESTREAM table must be refused a rebuild");
+        Assert.That(reason, Does.Contain("FILESTREAM"), reason);
+    }
+
     // ---- partitioning -------------------------------------------------------
 
     [Test]
