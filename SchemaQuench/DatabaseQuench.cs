@@ -2303,7 +2303,8 @@ SET NOCOUNT ON
                 var sessionId = Convert.ToInt64(sessionCmd.ExecuteScalar());
                 _statusMonitor = new StatusMessageMonitor(connectionString, sessionId, msg => LogServerMessage($"    {msg}"),
                     sessionConnection: connection, warn: msg => _progressLog.Warn(msg),
-                    table: _driftHelperDatabase == null ? "SchemaSmith_StatusMessages" : DriftHelperDatabase.Qualify("SchemaSmith_StatusMessages", _driftHelperDatabase));
+                    table: _driftHelperDatabase == null ? "SchemaSmith_StatusMessages" : DriftHelperDatabase.Qualify("SchemaSmith_StatusMessages", _driftHelperDatabase),
+                    commandTimeoutSeconds: Timeouts.CommandTimeoutSeconds);
             }
             catch (DbException e)
             {

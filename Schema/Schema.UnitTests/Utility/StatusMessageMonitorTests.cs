@@ -1,5 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System.Data;
+using NSubstitute;
 using Schema.Utility;
 
 namespace Schema.UnitTests.Utility;
@@ -23,6 +25,26 @@ public class StatusMessageMonitorTests
     {
         var method = typeof(StatusMessageMonitor).GetMethod("Flush");
         Assert.That(method, Is.Not.Null);
+    }
+
+    // The deploy's command timeout (Target:CommandTimeoutSeconds) reaches the monitor's reads too; before, they always took
+    // the provider's 30 s. Its own connection cannot open here, so it reads through the session's, as it does on a flush.
+    [TestCase(0)]
+    [TestCase(45)]
+    public void StatusMessageMonitor_CommandsTakeTheDeploysCommandTimeout(int seconds)
+    {
+        var session = Substitute.For<IDbConnection>();
+        session.State.Returns(ConnectionState.Open);
+        var command = Substitute.For<IDbCommand>();
+        command.CreateParameter().Returns(_ => Substitute.For<IDbDataParameter>());
+        command.ExecuteReader().Returns(_ => Substitute.For<IDataReader>());
+        session.CreateCommand().Returns(command);
+
+        using var monitor = new StatusMessageMonitor("Server=127.0.0.1;Port=1;User ID=x;Password=x;Connection Timeout=1", 1, _ => { },
+            sessionConnection: session, warn: _ => { }, commandTimeoutSeconds: seconds);
+        monitor.PollOnce();
+
+        command.Received().CommandTimeout = seconds;
     }
 
     [Test]
