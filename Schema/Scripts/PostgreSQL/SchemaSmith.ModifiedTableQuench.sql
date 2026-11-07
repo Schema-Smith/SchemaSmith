@@ -100,10 +100,10 @@ BEGIN
     END IF;
     IF p_DropTablesRemovedFromProduct THEN
       -- Data-loss guard: a partitioned table spreads data across multiple physical partitions
-      -- that DROP TABLE destroys outright. SchemaSmith has no partitioning support -- partitioning
-      -- only happens by hand, typically once a table has grown -- so an ordinary product-owned
-      -- table can be partitioned after deployment and later look like an ordinary drop-by-absence
-      -- candidate. Fail closed before any DDL below, in both live and WhatIf mode, mirroring the
+      -- that DROP TABLE destroys outright. Whether the package declared the partitioning or a DBA
+      -- added it once the table had grown, a product-owned table removed from the package can
+      -- look like an ordinary drop-by-absence candidate (a partition the package declares is owned
+      -- through its parent and never is one). Fail closed before any DDL below, in both live and WhatIf mode, mirroring the
       -- version-gated 'fail' branches elsewhere in this proc. relispartition also catches a table
       -- ATTACHed as a child partition of another parent -- the realistic "converted in place" path,
       -- since PostgreSQL cannot ALTER an existing plain table into a partitioned parent; relkind =

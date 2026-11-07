@@ -79,4 +79,9 @@ BEGIN
                          WHERE n.nspname = tp."Schema" AND c.relname = tp."TableName" AND c.relkind IN ('r', 'p'))
         AND NOT EXISTS (SELECT 1 FROM pg_matviews mv WHERE mv.schemaname = tp."Schema" AND mv.matviewname = tp."TableName");
 
+    -- A table this package now declares as a partition is owned through its parent, not as a table of its own: left
+    -- here it read as a table removed from the product, which the partition data-loss guard refuses on every deploy.
+    DELETE FROM temp_product_ownership tp
+      WHERE EXISTS (SELECT 1 FROM temp_partitions p WHERE p."TableSchema" = tp."Schema" AND p."Name" = tp."TableName");
+
 END $$;

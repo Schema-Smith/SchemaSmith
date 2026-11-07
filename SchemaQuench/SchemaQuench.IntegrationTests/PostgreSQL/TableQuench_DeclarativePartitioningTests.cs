@@ -247,4 +247,49 @@ public class TableQuench_DeclarativePartitioningTests : BaseTableQuenchTests
             Drop(conn, t);
         }
     }
+
+    // A package that declared a hand-made partition as a table of its own, then declares it under its parent's
+    // Partitioning: the partition is no longer a table the product owns, so it is not dropped by absence (which the
+    // data-loss guard would refuse on every deploy) and its ownership row goes.
+    [Test]
+    public void APartitionOnceDeclaredAsATable_MovesUnderPartitioning_WithoutADrop()
+    {
+        var t = "dpo_" + Guid.NewGuid().ToString("N")[..8];
+        var product = "Dpo_" + t;
+        using var conn = Open();
+        try
+        {
+            Exec(conn, $"CREATE TABLE public.{t} (id integer NOT NULL, d date NOT NULL) PARTITION BY RANGE (d); " +
+                       $"CREATE TABLE public.{t}_2026 PARTITION OF public.{t} FOR VALUES FROM ('2026-01-01') TO ('2027-01-01'); " +
+                       $"INSERT INTO public.{t} VALUES (1, '2026-05-01');");
+            var asTable = $$"""
+                [{ "Schema": "public", "Name": "{{t}}_2026",
+                   "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false }, { "Name": "d", "DataType": "date", "Nullable": false } ] }]
+                """;
+            using (var cmd = conn.CreateCommand())
+                RunTableQuenchProc(cmd, asTable, productName: product);
+            Assert.That(Scalar(conn, $"SELECT COUNT(*) FROM \"SchemaSmith\".\"ProductOwnership\" WHERE \"ProductName\" = '{product}' AND \"TableName\" = '{t}_2026' AND \"IndexName\" IS NULL"),
+                Is.EqualTo("1"), "setup: owned as a table");
+
+            var asPartition = $$"""
+                [{ "Schema": "public", "Name": "{{t}}",
+                   "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false }, { "Name": "d", "DataType": "date", "Nullable": false } ],
+                   "Partitioning": { "Method": "RANGE", "Expression": "d", "Partitions": [
+                     { "Name": "{{t}}_2026", "Bound": "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')" } ] } }]
+                """;
+            using (var cmd = conn.CreateCommand())
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, asPartition, dropTablesRemovedFromProduct: true, productName: product));
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar(conn, $"SELECT COUNT(*) FROM public.{t}_2026"), Is.EqualTo("1"), "the partition and its row are still there");
+                Assert.That(Scalar(conn, $"SELECT COUNT(*) FROM \"SchemaSmith\".\"ProductOwnership\" WHERE \"ProductName\" = '{product}' AND \"TableName\" = '{t}_2026'"),
+                    Is.EqualTo("0"), "it is owned through its parent now");
+            });
+        }
+        finally
+        {
+            Exec(conn, $"DROP TABLE IF EXISTS public.{t} CASCADE");
+            Exec(conn, $"DELETE FROM \"SchemaSmith\".\"ProductOwnership\" WHERE \"ProductName\" = '{product}'");
+        }
+    }
 }
