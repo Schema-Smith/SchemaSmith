@@ -2053,7 +2053,7 @@ Sequences live in the `Sequences/` directory of each template, which accepts bot
 | `MaxValue` | long | `null` | Omit for the type's natural maximum. |
 | `Cache` | long | `1` | Values pre-allocated per session. Higher is faster but leaves larger gaps after a crash. |
 | `Cycle` | bool | `false` | Wrap to `MinValue` after `MaxValue` instead of erroring. |
-| `Description` | string | `null` | **PostgreSQL.** `COMMENT ON SEQUENCE`. A MariaDB sequence has no comment, so the key is not offered there. See [Descriptions](#descriptions). |
+| `Description` | string | `null` | `COMMENT ON SEQUENCE` on PostgreSQL; the sequence's `COMMENT` on MariaDB. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `PersistenceType` | string | `null` | **PostgreSQL 15+.** `Unlogged` for a sequence that skips the write-ahead log, or `Logged`. Left out, a new sequence is created logged and an existing one's persistence is not changed. Below 15 the clause is dropped under the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). |
 | `ShouldApplyExpression` | string | `null` | Conditional inclusion: a sequence whose predicate is false on the target is left out of that deploy. See [Conditional Application](#conditional-application). |
 | `VariantName` | string | `null` | Optional label for a conditional variant. Max 128 characters. |
@@ -2075,7 +2075,7 @@ Sequences live in the `Sequences/` directory of each template, which accepts bot
 }
 ```
 
-**MariaDB** (10.3 and later; MySQL has no sequence at any version) declares the same properties with these differences: there is no `Schema`, because a MariaDB schema is the database; `DataType` is an integer type (`tinyint`, `smallint`, `mediumint`, `int` or `bigint`, optionally `unsigned`) and needs MariaDB 11.5, below which every sequence is a signed `bigint` and another type is recorded as a downgrade; `Cache` defaults to `1000`, as it does in MariaDB; and an omitted `Start`, `MinValue` or `MaxValue` is left to the engine at creation and never compared afterwards. `ShouldApplyExpression`, `VariantName` and `Extensions` work as they do on PostgreSQL. Lowering `MaxValue` below the position a running sequence has already reserved (its cache, 1000 values by default) is the one attribute change the engine does not take quietly: a cycling sequence wraps to `MinValue` on its next value and a non-cycling one errors, which is MariaDB's rule rather than SchemaSmith's. A column that defaults to a sequence is declared with the bare name, `nextval(`invoice_number_seq`)`, which is how SchemaTongs writes it: the catalog qualifies it with the database, and a package has to deploy to any database.
+**MariaDB** (10.3 and later; MySQL has no sequence at any version) declares the same properties with these differences: there is no `Schema`, because a MariaDB schema is the database; `DataType` is an integer type (`tinyint`, `smallint`, `mediumint`, `int` or `bigint`, optionally `unsigned`) and needs MariaDB 11.5, below which every sequence is a signed `bigint` and another type is recorded as a downgrade; `Cache` defaults to `1000`, as it does in MariaDB; and an omitted `Start`, `MinValue` or `MaxValue` is left to the engine at creation and never compared afterwards. `ShouldApplyExpression`, `VariantName`, `Description` and `Extensions` work as they do on PostgreSQL; changing the `Description` of an existing sequence, like any change to it, discards the values its sessions have cached, so the next value skips ahead. Lowering `MaxValue` below the position a running sequence has already reserved (its cache, 1000 values by default) is the one attribute change the engine does not take quietly: a cycling sequence wraps to `MinValue` on its next value and a non-cycling one errors, which is MariaDB's rule rather than SchemaSmith's. A column that defaults to a sequence is declared with the bare name, `nextval(`invoice_number_seq`)`, which is how SchemaTongs writes it: the catalog qualifies it with the database, and a package has to deploy to any database.
 
 **SQL Server** (2012 and later) declares the same properties with these differences. `Schema` defaults to `dbo`.
 `DataType` is `tinyint`, `smallint`, `int`, `bigint`, or `decimal(p)` / `numeric(p)` with up to 38 digits; a
@@ -2392,12 +2392,12 @@ A table, column, index, indexed view, materialized view, sequence, enum type and
 |---|---|
 | SQL Server | The `MS_Description` extended property, the one SSMS and most documentation tools read. On an index that backs a primary key or unique constraint it sits on the constraint. |
 | PostgreSQL | `COMMENT ON TABLE` / `COLUMN` / `INDEX` / `MATERIALIZED VIEW` / `SEQUENCE` / `TYPE` / `DOMAIN`. |
-| MySQL, MariaDB | The `COMMENT` clause of the table, column, index, full-text index or event. |
+| MySQL, MariaDB | The `COMMENT` clause of the table, column, index, full-text index, event or (MariaDB) sequence. |
 
 **Three states, and the engines differ on one of them.** A declared description is set, and a changed one is updated in place without rebuilding anything. `"Description": ""` removes it. An *omitted* `Description` means something different on SQL Server and PostgreSQL than on MySQL and MariaDB:
 
 - **SQL Server and PostgreSQL:** an omitted `Description` is not managed. Whatever the database has stays, so a package that never mentions descriptions never touches the ones a DBA wrote, and a re-created indexed or materialized view keeps the comment it had.
-- **MySQL and MariaDB:** the comment is part of the object's definition, so an omitted `Description` clears a comment the server has, exactly as the engine's own `CREATE TABLE` would. This is how `Comment` has always behaved there.
+- **MySQL and MariaDB:** the comment is part of the object's definition, so an omitted `Description` clears a comment the server has, exactly as the engine's own `CREATE TABLE` would. This is how `Comment` has always behaved there. A MariaDB sequence is the exception: its comment was not managed before 2.9, so an omitted `Description` leaves it alone, as on PostgreSQL, rather than clearing comments every existing package was written without.
 
 **Extraction writes `Description`.** SchemaTongs reads the description back under that key on every engine. On SQL Server, `MS_Description` is the one extended property with a key of its own; every other extended property is recorded under `Extensions.ExtendedProperties` and deploys from there (below).
 

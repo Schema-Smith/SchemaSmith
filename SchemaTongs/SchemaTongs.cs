@@ -4291,17 +4291,21 @@ SELECT p.ROUTINE_NAME,
     {
         _progressLog.Info("Casting Sequences");
         command.CommandText = $@"
-SELECT TABLE_NAME
+SELECT TABLE_NAME, TABLE_COMMENT
   FROM INFORMATION_SCHEMA.TABLES
  WHERE TABLE_SCHEMA = {MySqlLiteral(targetSchema)}
    AND TABLE_TYPE = 'SEQUENCE'
  ORDER BY TABLE_NAME";
 
         var sequenceNames = new List<string>();
+        var comments = new Dictionary<string, string>(StringComparer.Ordinal);
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
+            {
                 sequenceNames.Add(reader.GetString(0));
+                if (!reader.IsDBNull(1) && reader.GetString(1).Length > 0) comments[reader.GetString(0)] = reader.GetString(1);
+            }
         }
 
         if (sequenceNames.Count == 0) return; // lazy folder creation, matching PerformMySqlCasting's convention
@@ -4322,6 +4326,7 @@ SELECT TABLE_NAME
             }
 
             var sequence = ParseMariaDbSequence(name, createStatement);
+            sequence.Description = comments.GetValueOrDefault(name);
             var file = ResolveOutputPath(castPath, EncodeFullName(name, ".json"));
             _progressLog.Info($"  Cast Json for sequence {name}");
             WritePackageObject(file, sequence, "sequences");

@@ -55,5 +55,9 @@ namespace Schema.Domain.MySQL
         [SchemaProperty(MaxLength = 128, Description = "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deploy log messages when the variant applies.")]
         [JsonProperty(Order = 10, NullValueHandling = NullValueHandling.Ignore)]
         public string VariantName { get; set; }
+
+        [SchemaProperty(MaxLength = 2048, Description = "Optional. Stored as the sequence's COMMENT. An omitted value leaves an existing comment alone; \"\" removes it. Changing it on an existing sequence discards the values already cached, as any change to a sequence does.")]
+        [JsonProperty(Order = 11, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
     }
 }

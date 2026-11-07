@@ -31,6 +31,9 @@ BEGIN
     DECLARE v_MaxValue BIGINT;
     DECLARE v_Cache BIGINT;
     DECLARE v_Cycle TINYINT;
+    DECLARE v_Description TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_LiveComment TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_CommentSql TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_Exists INT;
     DECLARE v_Qualified VARCHAR(140) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_TypeClause VARCHAR(40) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -56,6 +59,8 @@ BEGIN
         SET v_Cache = IF(@ss_seq_raw IS NULL, 1000, CAST(@ss_seq_raw AS SIGNED));
         SET v_Cycle = IF(LOWER(TRIM(COALESCE(JSON_EXTRACT(p_Sequences, CONCAT('$[', v_idx, '].Cycle')), 'false'))) = 'true', 1, 0);
         SET v_Apply = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_Sequences, CONCAT('$[', v_idx, '].ShouldApplyExpression')));
+        -- NULL when omitted (leave the comment alone); '' removes it.
+        SET v_Description = SchemaSmith_JsonScalarStr(NULLIF(JSON_EXTRACT(p_Sequences, CONCAT('$[', v_idx, '].Description')), 'null'));
         SET v_idx = v_idx + 1;
 
         SET @ss_seq_apply = 1;
@@ -94,7 +99,7 @@ BEGIN
                     END IF;
                 END IF;
 
-                SELECT COUNT(*) INTO v_Exists
+                SELECT COUNT(*), MAX(TABLE_COMMENT) INTO v_Exists, v_LiveComment
                   FROM INFORMATION_SCHEMA.TABLES
                  WHERE CONVERT(TABLE_SCHEMA USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_general_ci
                    AND CONVERT(TABLE_NAME USING utf8mb4) COLLATE utf8mb4_general_ci = CONVERT(v_Name USING utf8mb4) COLLATE utf8mb4_general_ci
@@ -107,7 +112,8 @@ BEGIN
                                        IF(v_MinValue IS NULL, '', CONCAT(' MINVALUE ', v_MinValue)),
                                        IF(v_MaxValue IS NULL, '', CONCAT(' MAXVALUE ', v_MaxValue)),
                                        ' CACHE ', v_Cache,
-                                       IF(v_Cycle = 1, ' CYCLE', ' NOCYCLE'));
+                                       IF(v_Cycle = 1, ' CYCLE', ' NOCYCLE'),
+                                       IF(COALESCE(v_Description, '') = '', '', CONCAT(' COMMENT=', QUOTE(v_Description))));
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Create sequence ', v_Name));
                     IF p_WhatIf = 1 THEN
                         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), v_Sql);
@@ -150,18 +156,36 @@ BEGIN
                     IF @ss_seq_cache <> v_Cache THEN SET v_Clauses = CONCAT(v_Clauses, ' CACHE ', v_Cache); END IF;
                     IF @ss_seq_cycle <> v_Cycle THEN SET v_Clauses = CONCAT(v_Clauses, IF(v_Cycle = 1, ' CYCLE', ' NOCYCLE')); END IF;
 
-                    IF v_Clauses <> '' THEN
-                        SET v_Sql = CONCAT('ALTER SEQUENCE ', v_Qualified, v_Clauses);
+                    -- ALTER SEQUENCE takes no table options; the comment is the sequence table's, set with ALTER TABLE.
+                    SET v_CommentSql = IF(v_Description IS NOT NULL
+                                            AND CONVERT(v_Description USING utf8mb4) COLLATE utf8mb4_bin <> CONVERT(COALESCE(v_LiveComment, '') USING utf8mb4) COLLATE utf8mb4_bin,
+                                          CONCAT('ALTER TABLE ', v_Qualified, ' COMMENT=', QUOTE(v_Description)), NULL);
+
+                    IF v_Clauses <> '' OR v_CommentSql IS NOT NULL THEN
+                        SET v_Sql = IF(v_Clauses <> '', CONCAT('ALTER SEQUENCE ', v_Qualified, v_Clauses), NULL);
                         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Alter sequence ', v_Name));
                         IF p_WhatIf = 1 THEN
-                            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), v_Sql);
+                            IF v_Sql IS NOT NULL THEN
+                                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), v_Sql);
+                            END IF;
+                            IF v_CommentSql IS NOT NULL THEN
+                                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), v_CommentSql);
+                            END IF;
                             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
                             VALUES (CONNECTION_ID(), 'sequence', v_Name, 'wouldModify');
                         ELSE
-                            SET @ss_seq_sql = v_Sql;
-                            PREPARE ss_seq FROM @ss_seq_sql;
-                            EXECUTE ss_seq;
-                            DEALLOCATE PREPARE ss_seq;
+                            IF v_Sql IS NOT NULL THEN
+                                SET @ss_seq_sql = v_Sql;
+                                PREPARE ss_seq FROM @ss_seq_sql;
+                                EXECUTE ss_seq;
+                                DEALLOCATE PREPARE ss_seq;
+                            END IF;
+                            IF v_CommentSql IS NOT NULL THEN
+                                SET @ss_seq_sql = v_CommentSql;
+                                PREPARE ss_seq FROM @ss_seq_sql;
+                                EXECUTE ss_seq;
+                                DEALLOCATE PREPARE ss_seq;
+                            END IF;
                             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
                             VALUES (CONNECTION_ID(), 'sequence', v_Name, 'modified');
                         END IF;
