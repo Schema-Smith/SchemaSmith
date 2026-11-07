@@ -121,6 +121,46 @@ public class OrphanHandlerTests
         _file.Received().Delete(orphanFile);
     }
 
+    // A re-extraction that switches an object to its declared form writes X.json beside the X.sql it used to write.
+    // The .sql is not written this run, so it read as an orphan, and the cleanup script dropped an object that is
+    // still declared -- in X.json.
+    [TestCase(OrphanHandlingMode.DetectWithCleanupScripts)]
+    [TestCase(OrphanHandlingMode.DetectDeleteAndCleanup)]
+    public void AScriptSupersededByItsDeclaredForm_IsNeverDropped(OrphanHandlingMode mode)
+    {
+        var path = Path.Join("C:", "pkg", "template", "Sequences");
+        var script = Path.Join(path, "dbo.S.sql");
+        var declared = Path.Join(path, "dbo.S.json");
+        var index = CreateIndexWithOrphans(path, [script, declared], [declared]);
+
+        new OrphanHandler().ProcessOrphans(new Dictionary<string, ExtractionFileIndex> { ["Sequences"] = index }, Platform.SqlServer, mode,
+            new HashSet<string> { "Sequences" }, "C:\\logs", new Dictionary<string, ScriptObjectType> { ["Sequences"] = ScriptObjectType.Sequences });
+
+        _file.DidNotReceive().WriteAllText(Arg.Any<string>(), Arg.Is<string>(t => t.Contains("DROP")));
+        _progressLog.Received().Info(Arg.Is<string>(m => m.Contains("dbo.S.sql") && m.Contains("superseded by the declared form")));
+        if (mode == OrphanHandlingMode.DetectDeleteAndCleanup)
+            _file.Received().Delete(script);
+        else
+            _file.DidNotReceive().Delete(Arg.Any<string>());
+    }
+
+    [Test]
+    public void AScriptWhoseObjectIsGone_IsStillDropped_BesideASupersededOne()
+    {
+        var path = Path.Join("C:", "pkg", "template", "Sequences");
+        var superseded = Path.Join(path, "dbo.S.sql");
+        var declared = Path.Join(path, "dbo.S.json");
+        var gone = Path.Join(path, "dbo.Gone.sql");
+        var index = CreateIndexWithOrphans(path, [superseded, declared, gone], [declared]);
+
+        new OrphanHandler().ProcessOrphans(new Dictionary<string, ExtractionFileIndex> { ["Sequences"] = index }, Platform.SqlServer,
+            OrphanHandlingMode.DetectWithCleanupScripts, new HashSet<string> { "Sequences" }, "C:\\logs",
+            new Dictionary<string, ScriptObjectType> { ["Sequences"] = ScriptObjectType.Sequences });
+
+        _file.Received().WriteAllText(Arg.Is<string>(p => p.Contains("_OrphanCleanup_Sequences.sql")),
+            Arg.Is<string>(t => t.Contains("[dbo].[Gone]") && !t.Contains("[dbo].[S]")));
+    }
+
     [Test]
     public void ProcessOrphans_FolderNotInFullyExtracted_IsSkipped()
     {

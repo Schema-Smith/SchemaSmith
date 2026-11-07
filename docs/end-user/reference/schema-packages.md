@@ -495,6 +495,7 @@ MyProduct/
     indexedviews.sqlserver.schema             SQL Server packages
     materializedviews.postgresql.schema       PostgreSQL packages
     sequences.postgresql.schema               PostgreSQL packages
+    sequences.sqlserver.schema                SQL Server packages
     enumtypes.postgresql.schema               PostgreSQL packages
     domaintypes.postgresql.schema             PostgreSQL packages
     events.mysql.schema                       MySQL packages
@@ -2008,7 +2009,7 @@ supported, both can live in one package, and existing scripted packages need no 
 
 | Object type | Folder | Engine |
 |---|---|---|
-| Sequences | `Sequences/` | PostgreSQL / MariaDB |
+| Sequences | `Sequences/` | PostgreSQL / SQL Server / MariaDB |
 | Domain types | `Domain Types/` | PostgreSQL |
 | Enum types | `Enum Types/` | PostgreSQL |
 | Scheduled events | `Events/` | MySQL / MariaDB |
@@ -2031,12 +2032,12 @@ engine. Each is documented in full in its own section below.
 
 | Object | Converged | Where it stops, and why |
 |---|---|---|
-| Sequence | type, increment, bounds, cache | **The current position is never managed** — it records which numbers were handed out, so it is data, not schema |
+| Sequence | type, increment, bounds, cache | **The current position is never managed** — it records which numbers were handed out, so it is data, not schema. On SQL Server the type and the start cannot be altered: a changed type, or a range that leaves out the start or current value, is refused, and `Start` applies at creation |
 | Domain type | `CHECK`, default, nullability | **A base-type or collation change is refused** — PostgreSQL has no `ALTER DOMAIN … TYPE` or `… COLLATE`; it is a syntax error, not an unsupported operation |
 | Enum type | added values, ordering | **Removing a value is reported, never performed** — PostgreSQL cannot remove one without recreating the type, which would drop every column using it |
 | Scheduled event | schedule, body, status | **Removal reaches only events SchemaSmith created**, and only with `DropEventsRemovedFromProduct` on — one made by hand is never touched |
 
-## Sequence JSON Format (PostgreSQL, MariaDB)
+## Sequence JSON Format (PostgreSQL, SQL Server, MariaDB)
 
 Sequences live in the `Sequences/` directory of each template, which accepts both `.json` (declared and converged) and `.sql` (scripted, exactly as before). The PostgreSQL form is below; MariaDB's differences follow it.
 
@@ -2074,6 +2075,29 @@ Sequences live in the `Sequences/` directory of each template, which accepts bot
 ```
 
 **MariaDB** (10.3 and later; MySQL has no sequence at any version) declares the same properties with these differences: there is no `Schema`, because a MariaDB schema is the database; `DataType` is an integer type (`tinyint`, `smallint`, `mediumint`, `int` or `bigint`, optionally `unsigned`) and needs MariaDB 11.5, below which every sequence is a signed `bigint` and another type is recorded as a downgrade; `Cache` defaults to `1000`, as it does in MariaDB; and an omitted `Start`, `MinValue` or `MaxValue` is left to the engine at creation and never compared afterwards. `ShouldApplyExpression`, `VariantName` and `Extensions` work as they do on PostgreSQL. Lowering `MaxValue` below the position a running sequence has already reserved (its cache, 1000 values by default) is the one attribute change the engine does not take quietly: a cycling sequence wraps to `MinValue` on its next value and a non-cycling one errors, which is MariaDB's rule rather than SchemaSmith's. A column that defaults to a sequence is declared with the bare name, `nextval(`invoice_number_seq`)`, which is how SchemaTongs writes it: the catalog qualifies it with the database, and a package has to deploy to any database.
+
+**SQL Server** (2012 and later) declares the same properties with these differences. `Schema` defaults to `dbo`.
+`DataType` is `tinyint`, `smallint`, `int`, `bigint`, or `decimal(p)` / `numeric(p)` with up to 38 digits; a
+user-defined alias type is accepted and compared as its base type, which is what SQL Server records for a sequence,
+so extraction writes the base type. `Start`, `MinValue` and `MaxValue` take any whole number the type holds, 38 digits
+included. An omitted `MinValue` or `MaxValue` is the type's bound, an omitted `Cache` is SQL Server's default cache,
+and `0` means `NO CACHE`; each is converged back to that. `Description` is the `MS_Description` extended property.
+Two attributes cannot be changed after creation, because `ALTER SEQUENCE` has no `AS` and no `START WITH`: a changed
+`DataType` is refused, naming the sequence, and a different `Start` is reported and left as it is. SQL Server also
+keeps a sequence's start value inside its range for life, so a `MinValue` above the start, or a range that leaves out
+the current value, is refused before anything is altered; change such a sequence with a migration script. Below SQL
+Server 2012 a declared sequence is skipped under the unsupported-feature policy.
+
+```json
+{
+  "Schema": "billing",
+  "Name": "InvoiceNumbers",
+  "DataType": "decimal(18)",
+  "Start": 100000,
+  "Increment": 1,
+  "Cache": 50
+}
+```
 
 ```json
 {
@@ -2406,6 +2430,7 @@ Each file carries a platform infix matching the package's platform -- `<platform
 | `indexedviews.sqlserver.schema` | Indexed view JSON files (SQL Server packages) |
 | `materializedviews.postgresql.schema` | Materialized view JSON files (PostgreSQL packages) |
 | `sequences.postgresql.schema` | Sequence JSON files (PostgreSQL packages) |
+| `sequences.sqlserver.schema` | Sequence JSON files (SQL Server packages) |
 | `enumtypes.postgresql.schema` | Enum type JSON files (PostgreSQL packages) |
 | `domaintypes.postgresql.schema` | Domain type JSON files (PostgreSQL packages) |
 | `events.mysql.schema` | Scheduled event JSON files (MySQL packages) |

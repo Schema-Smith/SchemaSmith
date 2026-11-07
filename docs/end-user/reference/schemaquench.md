@@ -324,7 +324,7 @@ This list is the authoritative order. A step named for a procedure (`ModifiedTab
 5. **Validate baseline** -- Executes `Template.BaselineValidationScript` if configured; a falsy result or an error stops the deploy. Checkpointed as `ValidateBaseline`.
 6. **Setup scripts** -- Executes scripts from any folder in the `Setup` slot, before any object or table is touched. Sequential, run on every deploy, and the first error stops the deploy. See [The Setup slot](#the-setup-slot).
 7. **Objects, first pass** -- Executes the `Objects`-slot scripts whose text holds no `{{…}}` token (a script that needs a query token is held back), using the dependency retry loop. If `RunScriptsTwice` is enabled, runs a complete second pass to verify idempotency.
-8. **Types and sequences** -- PostgreSQL deploys the template's declared domain types, enum types and sequences; MariaDB its sequences. Before the tables, because a column can be of a domain or enum type and a default can call `nextval()`. Checkpointed as `DomainTypeQuench`, `EnumTypeQuench` and `SequenceQuench`.
+8. **Types and sequences** -- PostgreSQL deploys the template's declared domain types, enum types and sequences; SQL Server and MariaDB their sequences. Before the tables, because a column can be of a domain or enum type and a default can call `nextval()` or `NEXT VALUE FOR`. Checkpointed as `DomainTypeQuench`, `EnumTypeQuench` and `SequenceQuench`.
 9. **Add tables and columns** -- Parses `Tables/*.json` into session working tables for every later table step, then, in this order: refuses the deploy if another product owns a declared table (see [Table Ownership](#table-ownership)); on SQL Server neutralizes or refuses what the detected version cannot support (`DegradeUnsupportedFeatures`) and refuses a CDC change the capture-instance limit would block (`CdcPreflight`); checks each expression SchemaSmith has not recorded on a scratch copy (`ExpressionMapAdopt`, see [Expression change detection](#expression-change-detection)); and runs `MissingTableAndColumnQuench`, which renames tables and columns by `OldName`, creates missing tables and adds missing columns. Never checkpointed -- a resumed run repeats it to rebuild the session working tables. Skipped when `UpdateTables` is `false` or the template is index-only.
 10. **Objects, second pass** -- Retries the token-free `Objects`-slot scripts, now that missing tables exist, then resolves the template's query tokens into every slot's scripts.
 11. **Before scripts** -- Executes migration scripts from any folder in the `Before` slot. Sequential and tracked.
@@ -1152,6 +1152,7 @@ The table quench is broken into modular stored procedures, each handling a speci
 | **ConstraintStateQuench** | The `Enforced` and `Validated` state of declared foreign keys and check constraints, once they exist. |
 | **ExtendedPropertyQuench** | The declared extended properties and descriptions of tables, columns, indexes, foreign keys and check constraints, once they exist. |
 | **IndexedViewQuench** | Deploys indexed views with diff-based change detection. |
+| **SequenceQuench** | Declared sequences on SQL Server 2012 and later: created, and each attribute `ALTER SEQUENCE` can change converged in place; a changed data type is refused, `Start` applies at creation, and the current value is never touched. |
 
 **PostgreSQL:**
 
@@ -2035,7 +2036,7 @@ resumed run enters every template again and each database continues from its own
 | `ValidateBaseline` | Baseline validation script. |
 | `DomainTypeQuench` | PostgreSQL domain type deployment. |
 | `EnumTypeQuench` | PostgreSQL enum type deployment. |
-| `SequenceQuench` | PostgreSQL and MariaDB sequence deployment. |
+| `SequenceQuench` | PostgreSQL, SQL Server and MariaDB sequence deployment. |
 | `ModifiedTables` | Altering existing columns, computed / generated columns, dropping tables. |
 | `IndexesAndConstraints` | Creating missing indexes, check constraints, defaults, statistics. |
 | `TableFeatures` | SQL Server table features: Change Data Capture, Change Tracking, FILESTREAM. |

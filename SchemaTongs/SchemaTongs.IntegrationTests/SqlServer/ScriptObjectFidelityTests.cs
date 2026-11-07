@@ -7,6 +7,7 @@ using System.Linq;
 using log4net;
 using Microsoft.Extensions.Configuration;
 using NSubstitute;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -124,23 +125,50 @@ SELECT CONVERT(VARCHAR(1), tt.is_memory_optimized) + ':' + i.type_desc COLLATE D
     [Test]
     public void Sequence_WideDecimalAliasTypeAndCache_RoundTrip()
     {
+        // Extracted as declared JSON, deployed through SequenceQuench, and compared attribute by attribute with the source.
+        // An alias type comes back as its base type: SQL Server records the base for a sequence, so that is all there is.
         using var conn = Open(_targetDb);
         using var cmd = conn.CreateCommand();
-        foreach (var name in new[] { "SqBig", "SqNoCache", "SqAlias" })
-            Deploy(cmd, Script("Sequences", $"dbo.{name}"));
-
-        cmd.CommandText = @"
-SELECT sq.name COLLATE DATABASE_DEFAULT + ':' + TYPE_NAME(sq.user_type_id) COLLATE DATABASE_DEFAULT + ':' + CONVERT(VARCHAR(3), sq.precision) + ':' + CONVERT(VARCHAR(1), sq.is_cached) + ':' + ISNULL(CONVERT(VARCHAR(10), sq.cache_size), '-') + ':' + CONVERT(VARCHAR(50), sq.maximum_value)
-  FROM sys.sequences sq ORDER BY sq.name";
-        var sequences = new List<string>();
-        using (var reader = cmd.ExecuteReader())
-            while (reader.Read()) sequences.Add(reader.GetString(0));
-        Assert.That(sequences, Is.EqualTo(new[]
+        cmd.CommandTimeout = 300;
+        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
+        var declared = new JArray(new[] { "SqBig", "SqNoCache", "SqAlias" }.Select(n => JObject.Parse(Script("Sequences", $"dbo.{n}")))).ToString();
+        void Quench()
         {
-            "SqAlias:MyInt:10:1:-:2147483647",
-            "SqBig:decimal:38:1:50:99999999999999999999999999999999999999",
-            "SqNoCache:int:10:0:-:100"
-        }), "the wide type, the alias type or CACHE was lost");
+            cmd.CommandText = "EXEC [SchemaSmith].[SequenceQuench] @ProductName = N'Fidelity', @Sequences = @x";
+            cmd.Parameters.Clear();
+            var x = cmd.CreateParameter(); x.ParameterName = "@x"; x.Value = ModelXmlSerializer.ToIngestXml(declared, "Sequences", "Sequence"); cmd.Parameters.Add(x);
+            cmd.ExecuteNonQuery();
+            cmd.Parameters.Clear();
+        }
+        Quench();
+
+        const string state = @"
+SELECT sq.name COLLATE DATABASE_DEFAULT + ':' + TYPE_NAME(sq.system_type_id) COLLATE DATABASE_DEFAULT + ':' + CONVERT(VARCHAR(3), sq.precision) + ':' + CONVERT(VARCHAR(1), sq.is_cached) + ':' + ISNULL(CONVERT(VARCHAR(10), sq.cache_size), '-')
+       + ':' + CONVERT(VARCHAR(50), sq.minimum_value) + ':' + CONVERT(VARCHAR(50), sq.maximum_value) + ':' + CONVERT(VARCHAR(50), sq.start_value) + ':' + CONVERT(VARCHAR(50), sq.increment) + ':' + CONVERT(VARCHAR(1), sq.is_cycling)
+  FROM sys.sequences sq ORDER BY sq.name";
+        List<string> Read(IDbCommand c)
+        {
+            c.CommandText = state;
+            var rows = new List<string>();
+            using var reader = c.ExecuteReader();
+            while (reader.Read()) rows.Add(reader.GetString(0));
+            return rows;
+        }
+        using var source = Open(_sourceDb);
+        using var sourceCmd = source.CreateCommand();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Read(cmd), Is.EqualTo(Read(sourceCmd)), "the wide type, a bound, CACHE, CYCLE or the start was lost on the way through");
+            Assert.That(JObject.Parse(Script("Sequences", "dbo.SqBig")).ContainsKey("MaxValue"), Is.False, "a bound equal to the type's is not written");
+            Assert.That(JObject.Parse(Script("Sequences", "dbo.SqAlias"))["DataType"]?.ToString(), Is.EqualTo("int"));
+        });
+
+        cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+        cmd.ExecuteNonQuery();
+        Quench();
+        cmd.CommandText = "SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero, "a redeploy of what was extracted changes nothing");
     }
 
     // ---- full-text catalogs ----------------------------------------------------------------------------------

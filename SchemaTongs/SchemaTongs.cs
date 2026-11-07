@@ -4,7 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.Numerics;
 using System.Linq;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -1527,23 +1529,32 @@ SELECT cc.definition
         var castPath = GetCastPath(ScriptObjectType.Sequences, "Sequences");
         DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
 
-        // The values are sql_variant and a DECIMAL(38, 0) sequence's bounds overflow the driver's decimal, so they are
-        // converted to text on the server. The type keeps its precision and an alias type keeps its name; CACHE is
-        // written when it is explicit (NO CACHE, or a size), and the server default otherwise.
+        // Written as declared JSON (SqlServerSequence), which the deploy converges in place; the scripted form's guarded
+        // CREATE skipped every later change. The values are sql_variant and a DECIMAL(38, 0) bound overflows the driver's
+        // decimal, so they come back as text. A bound equal to the type's is left out, as is a default cache, so the
+        // file says only what was chosen. SQL Server records an alias type as its base type, so the base is what is written.
         command.CommandText = @"
 SELECT s.name AS SchemaName, sq.name AS SequenceName,
-       CASE WHEN t.is_user_defined = 1 THEN QUOTENAME(SCHEMA_NAME(t.schema_id)) + '.' + QUOTENAME(t.name)
-            WHEN TYPE_NAME(sq.system_type_id) IN ('decimal', 'numeric') THEN TYPE_NAME(sq.system_type_id) + '(' + CONVERT(VARCHAR(5), sq.precision) + ')'
+       CASE WHEN TYPE_NAME(sq.system_type_id) IN ('decimal', 'numeric') THEN TYPE_NAME(sq.system_type_id) + '(' + CONVERT(VARCHAR(5), sq.precision) + ')'
             ELSE TYPE_NAME(sq.system_type_id) END AS DataType,
        CONVERT(VARCHAR(50), sq.start_value) AS StartValue, CONVERT(VARCHAR(50), sq.increment) AS Increment,
        CONVERT(VARCHAR(50), sq.minimum_value) AS MinValue, CONVERT(VARCHAR(50), sq.maximum_value) AS MaxValue,
-       sq.is_cycling, sq.is_cached, sq.cache_size
+       sq.is_cycling, sq.is_cached, sq.cache_size,
+       CASE WHEN CAST(sq.minimum_value AS DECIMAL(38, 0)) =
+                 CASE TYPE_NAME(sq.system_type_id) WHEN 'tinyint' THEN 0 WHEN 'smallint' THEN -32768 WHEN 'int' THEN -2147483648
+                      WHEN 'bigint' THEN -9223372036854775808 ELSE -CAST(REPLICATE('9', sq.precision) AS DECIMAL(38, 0)) END
+            THEN 1 ELSE 0 END AS MinIsTheTypes,
+       CASE WHEN CAST(sq.maximum_value AS DECIMAL(38, 0)) =
+                 CASE TYPE_NAME(sq.system_type_id) WHEN 'tinyint' THEN 255 WHEN 'smallint' THEN 32767 WHEN 'int' THEN 2147483647
+                      WHEN 'bigint' THEN 9223372036854775807 ELSE CAST(REPLICATE('9', sq.precision) AS DECIMAL(38, 0)) END
+            THEN 1 ELSE 0 END AS MaxIsTheTypes,
+       CONVERT(NVARCHAR(MAX), ep.value) AS Description
   FROM sys.sequences sq
   JOIN sys.schemas s ON sq.schema_id = s.schema_id
-  JOIN sys.types t ON t.user_type_id = sq.user_type_id
+  LEFT JOIN sys.extended_properties ep ON ep.class = 1 AND ep.minor_id = 0 AND ep.major_id = sq.object_id AND ep.name = 'MS_Description'
  ORDER BY s.name, sq.name";
 
-        var sequences = new List<(string Schema, string Name, string DataType, string StartValue, string Increment, string MinValue, string MaxValue, bool IsCycling, bool IsCached, int? CacheSize)>();
+        var sequences = new List<(string Schema, SqlServerSequence Sequence)>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
@@ -1552,32 +1563,29 @@ SELECT s.name AS SchemaName, sq.name AS SequenceName,
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
                 if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
-                sequences.Add((schema, name, reader.GetString(2), reader.GetString(3), reader.GetString(4), reader.GetString(5), reader.GetString(6),
-                    reader.GetBoolean(7), reader.GetBoolean(8), reader.IsDBNull(9) ? null : reader.GetInt32(9)));
+                var isCached = reader.GetBoolean(8);
+                int? cacheSize = reader.IsDBNull(9) ? null : reader.GetInt32(9);
+                sequences.Add((schema, new SqlServerSequence
+                {
+                    Schema = _isSchemaTemplate ? null : schema,
+                    Name = name,
+                    DataType = reader.GetString(2),
+                    Start = BigInteger.Parse(reader.GetString(3), CultureInfo.InvariantCulture),
+                    Increment = long.Parse(reader.GetString(4), CultureInfo.InvariantCulture),
+                    MinValue = reader.GetInt32(10) == 1 ? null : BigInteger.Parse(reader.GetString(5), CultureInfo.InvariantCulture),
+                    MaxValue = reader.GetInt32(11) == 1 ? null : BigInteger.Parse(reader.GetString(6), CultureInfo.InvariantCulture),
+                    Cycle = reader.GetBoolean(7),
+                    Cache = !isCached ? 0 : cacheSize,
+                    Description = reader.IsDBNull(12) ? null : reader.GetString(12)
+                }));
             }
         }
 
-        foreach (var (schema, name, dataType, startValue, increment, minValue, maxValue, isCycling, isCached, cacheSize) in sequences)
+        foreach (var (schema, sequence) in sequences)
         {
-            var cache = !isCached ? "\r\n\tNO CACHE" : cacheSize is > 0 ? $"\r\n\tCACHE {cacheSize}" : "";
-            var createScript =
-                $"CREATE SEQUENCE [{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(name, Platform.SqlServer)}]\r\n" +
-                $"\tAS {dataType}\r\n" +
-                $"\tSTART WITH {startValue}\r\n" +
-                $"\tINCREMENT BY {increment}\r\n" +
-                $"\tMINVALUE {minValue}\r\n" +
-                $"\tMAXVALUE {maxValue}\r\n" +
-                $"\t{(isCycling ? "CYCLE" : "NO CYCLE")}{cache}";
-
-            // CREATE SEQUENCE has no IF NOT EXISTS form on SQL Server (unlike PostgreSQL); guard with the
-            // same catalog-existence check the Schemas/DataTypes folders use above.
-            var script = $"IF NOT EXISTS (SELECT * FROM sys.sequences sq JOIN sys.schemas ss ON sq.schema_id = ss.schema_id WHERE sq.name = N'{EscapeSql(name)}' AND ss.name = N'{EscapeSql(schema)}')\r\n" +
-                         createScript;
-
-            var fileName = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".sql"));
-            script = RewriteSqlBodyForSchemaTemplate(script, fileName);
+            var fileName = ResolveOutputPath(castPath, EncodeObjectFileName(schema, sequence.Name, ".json"));
             _progressLog.Info($"  Casting {fileName}");
-            FileWrapper.GetFromFactory().WriteAllText(fileName, script);
+            WritePackageObject(fileName, sequence, "sequences");
             _stats.Sequences++;
         }
     }
