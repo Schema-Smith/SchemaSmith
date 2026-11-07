@@ -342,6 +342,14 @@ BEGIN
                                               AND i."TableName" = ei."TableName"
                                               AND i."Name" = ei."IndexName"))));
 
+    -- A partition's index attached to its parent's index belongs to that one ("cannot drop index ... because index ...
+    -- requires it"), so it is never a drop candidate here, whatever the package says about the partition.
+    DELETE FROM temp_indexes_to_drop d
+      WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_inherits ih
+                      JOIN pg_catalog.pg_class ic ON ic.oid = ih.inhrelid
+                      JOIN pg_catalog.pg_namespace n ON n.oid = ic.relnamespace
+                     WHERE n.nspname = d."TableSchema" AND ic.relname = d."IndexName" AND ic.relkind = 'i');
+
     -- No-drop protection tier (#270): under protected mode the caller forces p_DropUnknownIndexes and
     -- p_DropIndexesRemovedFromProduct to FALSE, so the by-absence branches of temp_indexes_to_drop above
     -- stay empty and the drop pass below skips them. Record the indexes that WOULD be dropped by absence
@@ -388,7 +396,7 @@ BEGIN
              fkn.nspname || '.' || fkr.relname || '.' || fkc.conname AS "KeyName"
         FROM temp_indexes_to_drop ti
         JOIN pg_namespace icn ON icn.nspname = ti."TableSchema"
-        JOIN pg_class ic ON ic.relnamespace = icn.oid AND ic.relname = ti."IndexName" AND ic.relkind = 'i'
+        JOIN pg_class ic ON ic.relnamespace = icn.oid AND ic.relname = ti."IndexName" AND ic.relkind IN ('i', 'I')
         JOIN pg_constraint fkc ON fkc.contype = 'f' AND fkc.conindid = ic.oid
         JOIN pg_class fkr ON fkr.oid = fkc.conrelid
         JOIN pg_namespace fkn ON fkn.oid = fkr.relnamespace
@@ -534,7 +542,7 @@ BEGIN
       WHERE NOT EXISTS (SELECT *
                           FROM pg_index idx
                           JOIN pg_class tc ON tc.oid = idx.indrelid
-                                          AND tc.relkind = 'r'
+                                          AND tc.relkind IN ('r', 'p')
                                           AND tc.relname = ti."TableName"
                                           AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                           JOIN pg_class i ON i.oid = idx.indexrelid

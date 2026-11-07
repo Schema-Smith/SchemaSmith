@@ -46,7 +46,7 @@ BEGIN
                                  JOIN pg_namespace n ON n.oid = ic.relnamespace
                                 WHERE ic.relname = t."ReplicaIdentityIndex"
                                   AND n.nspname = t."Schema"
-                                  AND ic.relkind = 'i')
+                                  AND ic.relkind IN ('i', 'I'))
                -- OnlineApply: an index built concurrently arrives after this procedure, and the identity with it.
                AND NOT "SchemaSmith"."OnlineBuildQueued"(t."Schema", t."ReplicaIdentityIndex")
         LOOP
@@ -68,7 +68,7 @@ BEGIN
       FROM temp_tables t
       JOIN pg_class c ON c.relname = t."Name"
                      AND c.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = t."Schema")
-                     AND c.relkind = 'r'
+                     AND c.relkind IN ('r', 'p')
      WHERE t."ReplicaIdentity" != ''
        -- Compare the MODE, and for INDEX also the index actually carrying the identity: switching the
        -- identity from one unique index to another leaves relreplident at 'i' and would otherwise look

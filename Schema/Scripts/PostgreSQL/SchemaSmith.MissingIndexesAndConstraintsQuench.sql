@@ -208,7 +208,7 @@ BEGIN
     WHERE NOT EXISTS (SELECT * 
                         FROM pg_index idx
                         JOIN pg_class tc ON tc.oid = idx.indrelid
-                                        AND tc.relkind = 'r'
+                                        AND tc.relkind IN ('r', 'p')
                                         AND tc.relname = ti."TableName"
                                         AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                         JOIN pg_class i ON i.oid = idx.indexrelid
@@ -231,7 +231,7 @@ BEGIN
         WHERE NOT EXISTS (SELECT *
                             FROM pg_index idx
                             JOIN pg_class tc ON tc.oid = idx.indrelid
-                                            AND tc.relkind = 'r'
+                                            AND tc.relkind IN ('r', 'p')
                                             AND tc.relname = ti."TableName"
                                             AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                             JOIN pg_class i ON i.oid = idx.indexrelid

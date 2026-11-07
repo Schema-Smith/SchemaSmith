@@ -630,7 +630,7 @@ BEGIN
       SELECT t."Schema" AS "TableSchema",
              t."Name" AS "TableName",
              i.relname AS "ExcludeName",
-             (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') AS "AccessMethod",
+             (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind IN ('i', 'I')) AS "AccessMethod",
              -- Each key in the engine's canonical form, paired with its exclusion operator (ExcludeKeyForms); the
              -- declared side is read to the same form by ExcludeKeysDeclared.
              "SchemaSmith"."ExcludeKeyList"(con.oid) AS "ExcludeColumns",
@@ -1190,6 +1190,14 @@ BEGIN
                                               AND i."TableName" = ei."TableName"
                                               AND i."Name" = ei."IndexName"))));
 
+    -- A partition's index attached to its parent's index belongs to that one ("cannot drop index ... because index ...
+    -- requires it"), so it is never a drop candidate here, whatever the package says about the partition.
+    DELETE FROM temp_indexes_to_drop d
+      WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_inherits ih
+                      JOIN pg_catalog.pg_class ic ON ic.oid = ih.inhrelid
+                      JOIN pg_catalog.pg_namespace n ON n.oid = ic.relnamespace
+                     WHERE n.nspname = d."TableSchema" AND ic.relname = d."IndexName" AND ic.relkind = 'i');
+
     -- No-drop protection tier (#270): under protected mode the caller forces p_DropUnknownIndexes and
     -- p_DropIndexesRemovedFromProduct to FALSE, so the by-absence branches of temp_indexes_to_drop above
     -- stay empty and the drop pass below skips them. Record the indexes that WOULD be dropped by absence
@@ -1235,7 +1243,7 @@ BEGIN
              fkn.nspname || '.' || fkr.relname || '.' || fkc.conname AS "KeyName"
         FROM temp_indexes_to_drop ti
         JOIN pg_namespace icn ON icn.nspname = ti."TableSchema"
-        JOIN pg_class ic ON ic.relnamespace = icn.oid AND ic.relname = ti."IndexName" AND ic.relkind = 'i'
+        JOIN pg_class ic ON ic.relnamespace = icn.oid AND ic.relname = ti."IndexName" AND ic.relkind IN ('i', 'I')
         JOIN pg_constraint fkc ON fkc.contype = 'f' AND fkc.conindid = ic.oid
         JOIN pg_class fkr ON fkr.oid = fkc.conrelid
         JOIN pg_namespace fkn ON fkn.oid = fkr.relnamespace
@@ -2051,16 +2059,36 @@ BEGIN
         RAISE EXCEPTION '% %.% declares tablespace %, but is currently deployed on %. SchemaSmith does not move an existing object to a different tablespace (that is a rewrite) -- migrate it manually, or correct the declared tablespace to match.',
           v_move.kind, v_move.sch, v_move.obj, v_move.declared, v_move.live;
       END LOOP;
+
+      -- A partitioned table or index holds no rows: its tablespace is only where new partitions go, so a declared one
+      -- is set, never refused, and the partitions already there stay where they are.
+      SELECT STRING_AGG('RAISE NOTICE ''  Setting the tablespace of partitioned % %.% to % (existing partitions are not moved)'', ''' ||
+                        p.kind || ''', ''' || REPLACE(p.sch, '''', '''''') || ''', ''' || REPLACE(p.obj, '''', '''''') || ''', ''' || REPLACE(p.declared, '''', '''''') || ''';' || CHR(10) ||
+                        'ALTER ' || UPPER(p.kind) || ' ' || "SchemaSmith"."QuoteName"(p.sch) || '.' || "SchemaSmith"."QuoteName"(p.obj) || ' SET TABLESPACE ' || "SchemaSmith"."QuoteName"(p.declared) || ';' || CHR(10) ||
+                        'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || p.kind || ''', ''' ||
+                        REPLACE(p.sch || '.' || CASE WHEN p.kind = 'index' THEN p.tbl || '.' ELSE '' END || p.obj, '''', '''''') || ''', ''modified'');', CHR(10))
+        INTO sql_script
+        FROM (SELECT t."Schema" AS sch, t."Name" AS tbl, t."Name" AS obj, 'table' AS kind, t."Tablespace" AS declared, COALESCE(ts.spcname, v_default_tablespace) AS live
+                FROM temp_tables t
+                JOIN pg_class c ON c.relname = t."Name" AND c.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = t."Schema") AND c.relkind = 'p'
+                LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace
+              UNION ALL
+              SELECT ti."TableSchema", ti."TableName", ti."Name", 'index', ti."Tablespace", COALESCE(ts.spcname, v_default_tablespace)
+                FROM temp_indexes ti
+                JOIN pg_class c ON c.relname = ti."Name" AND c.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema") AND c.relkind = 'I'
+                LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace) p
+       WHERE COALESCE(p.declared, '') <> '' AND p.declared IS DISTINCT FROM p.live;
+      CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
     END;
 
     RAISE NOTICE 'Fixup Table Attributes';
     SELECT STRING_AGG('RAISE NOTICE ''  Fixing up attributes for %.%'', ''' || REPLACE((t."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                       'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
                       TRIM(TRAILING ',' FROM
-                           CASE WHEN t."PersistenceType" != '' AND LOWER(t."PersistenceType") != CASE rls.relpersistence WHEN 'p' THEN 'logged' WHEN 'u' THEN 'unlogged' END
+                           CASE WHEN rls.relkind = 'r' AND t."PersistenceType" != '' AND LOWER(t."PersistenceType") != CASE rls.relpersistence WHEN 'p' THEN 'logged' WHEN 'u' THEN 'unlogged' END
                                 THEN 'SET ' || UPPER(t."PersistenceType") || ','
                                 ELSE '' END ||
-                           CASE WHEN t."AccessMethod" != '' AND t."AccessMethod" != am.amname AND "SchemaSmith"."ServerVersionNum"() >= 15
+                           CASE WHEN t."AccessMethod" != '' AND t."AccessMethod" IS DISTINCT FROM am.amname AND "SchemaSmith"."ServerVersionNum"() >= CASE rls.relkind WHEN 'p' THEN 17 ELSE 15 END
                                 THEN ' SET ACCESS METHOD ' || t."AccessMethod" || ','
                                 ELSE '' END ||
                            CASE WHEN t."RowLevelSecurity" != rls.relrowsecurity
@@ -2069,19 +2097,19 @@ BEGIN
                            CASE WHEN t."ForceRowLevelSecurity" != rls.relforcerowsecurity
                                 THEN ' ' || CASE WHEN t."ForceRowLevelSecurity" THEN '' ELSE 'NO ' END || 'FORCE ROW LEVEL SECURITY,'
                                 ELSE '' END ||
-                           CASE WHEN t."UpdateFillFactor" AND t."FillFactor" != COALESCE((SELECT SPLIT_PART(opt, '=', 2) FROM UNNEST(rls.reloptions) AS opts(opt) WHERE opt LIKE 'fillfactor=%'), '100')::INT2
+                           CASE WHEN rls.relkind = 'r' AND t."UpdateFillFactor" AND t."FillFactor" != COALESCE((SELECT SPLIT_PART(opt, '=', 2) FROM UNNEST(rls.reloptions) AS opts(opt) WHERE opt LIKE 'fillfactor=%'), '100')::INT2
                                 THEN ' SET (FILLFACTOR = ' || t."FillFactor" || '),'
                                 ELSE '' END), ';' || CHR(10)) || ';'
       INTO sql_script
       FROM temp_tables t
       JOIN pg_class rls ON rls.relname = t."Name"
                        AND rls.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = t."Schema")
-                       AND rls.relkind = 'r'
-      JOIN pg_am am ON rls.relam = am.oid
-      WHERE (t."PersistenceType" != '' AND LOWER(t."PersistenceType") != CASE rls.relpersistence WHEN 'p' THEN 'logged' WHEN 'u' THEN 'unlogged' END)
-         OR (t."AccessMethod" != '' AND t."AccessMethod" != am.amname AND "SchemaSmith"."ServerVersionNum"() >= 15)
+                       AND rls.relkind IN ('r', 'p')
+      LEFT JOIN pg_am am ON rls.relam = am.oid
+      WHERE (rls.relkind = 'r' AND t."PersistenceType" != '' AND LOWER(t."PersistenceType") != CASE rls.relpersistence WHEN 'p' THEN 'logged' WHEN 'u' THEN 'unlogged' END)
+         OR (t."AccessMethod" != '' AND t."AccessMethod" IS DISTINCT FROM am.amname AND "SchemaSmith"."ServerVersionNum"() >= CASE rls.relkind WHEN 'p' THEN 17 ELSE 15 END)
          OR t."RowLevelSecurity" != rls.relrowsecurity
          OR t."ForceRowLevelSecurity" != rls.relforcerowsecurity
-         OR (t."UpdateFillFactor" AND t."FillFactor" != COALESCE((SELECT SPLIT_PART(opt, '=', 2) FROM UNNEST(rls.reloptions) AS opts(opt) WHERE opt LIKE 'fillfactor=%'), '100')::INT2);
+         OR (rls.relkind = 'r' AND t."UpdateFillFactor" AND t."FillFactor" != COALESCE((SELECT SPLIT_PART(opt, '=', 2) FROM UNNEST(rls.reloptions) AS opts(opt) WHERE opt LIKE 'fillfactor=%'), '100')::INT2);
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 END $$;

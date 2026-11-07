@@ -66,7 +66,7 @@ BEGIN
            idx.indisprimary AS "PrimaryKey",
            idx.indisclustered AS "Clustered",
            COALESCE(PG_GET_EXPR(idx.indpred, idx.indrelid), '') AS "FilterExpression",
-           (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') AS "AccessMethod",
+           (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind IN ('i', 'I')) AS "AccessMethod",
            -- The option when set, else the engine's default for the access method (NULL where it has none), which
            -- is what the declared side resolves an undeclared FillFactor to.
            COALESCE((regexp_match(array_to_string(i.reloptions, ','), 'fillfactor=(\d+)'))[1]::int2,

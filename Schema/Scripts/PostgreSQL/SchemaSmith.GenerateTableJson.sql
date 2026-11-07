@@ -145,7 +145,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                     AND idx > idx.indnkeyatts
                                     AND a.attnum = element) AS "IncludeColumns",
                                CASE WHEN "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid) THEN NULL
-                                    ELSE (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') END AS "AccessMethod",
+                                    ELSE (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind IN ('i', 'I')) END AS "AccessMethod",
                                "SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)) AS "FilterExpression",
                                -- Only a fill factor someone set is declared; an index without the option is on the
                                -- engine's default for its access method, which is not an authored value and would
@@ -246,7 +246,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                           ORDER BY se.stxname) sub) AS "Statistics",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))
                   FROM (SELECT i.relname AS "Name",
-                               (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') AS "AccessMethod",
+                               (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind IN ('i', 'I')) AS "AccessMethod",
                                -- Each key as the engine writes it (operator class, COLLATE, parameters; IndexKeyForms)
                                -- paired with its exclusion operator by position.
                                (SELECT JSON_AGG(ROW_TO_JSON(cols))
