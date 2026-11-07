@@ -71,4 +71,12 @@ BEGIN
           AND template_name = p_TemplateName
           AND (p_SchemaName = '' OR "Schema" = p_SchemaName);
 
+    -- A table replaced by a same-named view (or dropped) out of band is no longer the product's table: leaving its row
+    -- made drop-by-absence drop the view as a table. FixupTableOwnership prunes the persistent row by the same test.
+    DELETE FROM temp_product_ownership tp
+      WHERE tp."IndexName" IS NULL
+        AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                         WHERE n.nspname = tp."Schema" AND c.relname = tp."TableName" AND c.relkind IN ('r', 'p'))
+        AND NOT EXISTS (SELECT 1 FROM pg_matviews mv WHERE mv.schemaname = tp."Schema" AND mv.matviewname = tp."TableName");
+
 END $$;

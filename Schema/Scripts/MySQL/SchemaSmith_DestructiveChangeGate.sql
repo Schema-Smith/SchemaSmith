@@ -48,7 +48,7 @@ gate: BEGIN
           AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
           AND po.ObjectType = 'TABLE'
           AND COALESCE(po.PreventDrop, 0) = 0
-          AND EXISTS (SELECT 1 FROM _SchemaSmith_ExistingTables ist
+          AND EXISTS (SELECT 1 FROM _SchemaSmith_ExistingBaseTables ist
                        WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin)
           AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Tables t
                            WHERE SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(po.ObjectName));

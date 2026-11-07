@@ -697,6 +697,16 @@ BEGIN
     INSERT IGNORE INTO _SchemaSmith_ExistingTables (TableKey)
     SELECT TableKey FROM _SchemaSmith_CatTables;
 
+    -- Drop by absence counts only what is still a table: an owned table replaced by a same-named view keeps its
+    -- ownership row, and treating the view as the table failed every deploy dropping it.
+    DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingBaseTables;
+    CREATE TEMPORARY TABLE _SchemaSmith_ExistingBaseTables (
+        TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
+        PRIMARY KEY (TableKey)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+    INSERT IGNORE INTO _SchemaSmith_ExistingBaseTables (TableKey)
+    SELECT TableKey FROM _SchemaSmith_CatTables WHERE TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED');
+
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ExistingTablesN;
     CREATE TEMPORARY TABLE _SchemaSmith_ExistingTablesN (
         TableKey VARCHAR(260) COLLATE utf8mb4_bin NOT NULL,
@@ -3295,7 +3305,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           AND po.ObjectType = 'TABLE'
           AND COALESCE(po.PreventDrop, 0) = 0
           AND EXISTS (
-              SELECT 1 FROM _SchemaSmith_ExistingTables ist
+              SELECT 1 FROM _SchemaSmith_ExistingBaseTables ist
               WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
           )
           AND NOT EXISTS (
@@ -3336,7 +3346,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           AND po.ObjectType = 'TABLE'
           AND COALESCE(po.PreventDrop, 0) = 0
           AND EXISTS (
-              SELECT 1 FROM _SchemaSmith_ExistingTables ist
+              SELECT 1 FROM _SchemaSmith_ExistingBaseTables ist
               WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
           )
           AND NOT EXISTS (
@@ -3379,7 +3389,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           AND po.ObjectType = 'TABLE'
           AND COALESCE(po.PreventDrop, 0) = 0
           AND EXISTS (
-              SELECT 1 FROM _SchemaSmith_ExistingTables ist
+              SELECT 1 FROM _SchemaSmith_ExistingBaseTables ist
               WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
           )
           AND NOT EXISTS (
@@ -3451,7 +3461,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
               AND COALESCE(po.PreventDrop, 0) = 0
               -- Table exists
               AND EXISTS (
-                  SELECT 1 FROM _SchemaSmith_ExistingTables ist
+                  SELECT 1 FROM _SchemaSmith_ExistingBaseTables ist
                   WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
               )
               -- Not in current definition
@@ -3470,7 +3480,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
               AND po.ObjectType = 'TABLE'
               AND COALESCE(po.PreventDrop, 0) = 0
               AND EXISTS (
-                  SELECT 1 FROM _SchemaSmith_ExistingTables ist
+                  SELECT 1 FROM _SchemaSmith_ExistingBaseTables ist
                   WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
               )
               AND NOT EXISTS (
@@ -3501,7 +3511,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
               AND COALESCE(po.PreventDrop, 0) = 0
               -- Table exists
               AND EXISTS (
-                  SELECT 1 FROM _SchemaSmith_ExistingTables ist
+                  SELECT 1 FROM _SchemaSmith_ExistingBaseTables ist
                   WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin
               )
               -- Not in current definition
@@ -3585,7 +3595,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
           AND po.ObjectType = 'TABLE'
           AND COALESCE(po.PreventDrop, 0) = 1
-          AND EXISTS (SELECT 1 FROM _SchemaSmith_ExistingTables ist
+          AND EXISTS (SELECT 1 FROM _SchemaSmith_ExistingBaseTables ist
                        WHERE ist.TableKey = CONVERT(IF(@@lower_case_table_names = 0, po.ObjectName, LOWER(po.ObjectName)) USING utf8mb4) COLLATE utf8mb4_bin)
           AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Tables t
                             WHERE SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(po.ObjectName));
@@ -3610,7 +3620,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT IGNORE INTO _SchemaSmith_ExistingTables (TableKey)
-        SELECT TableKey FROM _SchemaSmith_CatTables;
+        SELECT TableKey FROM _SchemaSmith_CatTables WHERE TABLE_TYPE IN ('BASE TABLE', 'SYSTEM VERSIONED');
 
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_OrphanedOwnership;
         CREATE TEMPORARY TABLE _SchemaSmith_OrphanedOwnership (Id INT PRIMARY KEY)
