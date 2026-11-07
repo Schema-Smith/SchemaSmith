@@ -516,7 +516,7 @@ public class DataTongsTests
         cmd.ExecuteScalar().Returns("[]");
 
         dt.GetTableDataJson(cmd, "\"id\"", "public", "users", "\"id\"", "active = true");
-        Assert.That(cmd.CommandText, Does.Contain("WHERE active = true"));
+        Assert.That(cmd.CommandText, Does.Contain("AND (active = true)"), "the filter is added to the table's own-rows condition");
     }
 
     [Test]

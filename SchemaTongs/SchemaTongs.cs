@@ -558,6 +558,51 @@ public class SchemaTongs
     /// are emitted; cross-schema objects are skipped (they belong on a regular template
     /// earlier in <c>TemplateOrder</c>). Outside schema-template mode this is always true.
     /// </summary>
+    // A partition tree the package cannot express -- a partition in another schema, or a foreign table -- skips the table
+    // with a warning, as any skip does. What it can express but does not model (an index, check, comment or statistics a
+    // partition has of its own) is named in a warning and the table is still extracted.
+    private bool PostgreSqlPartitionTreeExtractable(IDbCommand command, string schema, string table)
+    {
+        const string tree = @"
+WITH RECURSIVE tree AS (
+  SELECT c.oid, c.relnamespace AS root_ns FROM pg_class c WHERE c.oid = to_regclass(@t)
+  UNION ALL
+  SELECT ih.inhrelid, tree.root_ns FROM tree JOIN pg_inherits ih ON ih.inhparent = tree.oid)";
+        command.CommandText = tree + @"
+SELECT STRING_AGG(c.oid::regclass::text, ', ' ORDER BY c.relname)
+  FROM tree JOIN pg_class c ON c.oid = tree.oid
+ WHERE c.relnamespace <> tree.root_ns OR c.relkind = 'f'";
+        AddTableParameter(command, schema, table);
+        var unexpressible = command.ExecuteScalar() as string;
+        if (unexpressible != null)
+        {
+            _progressLog.Warn($"    WARNING: {schema}.{table} is partitioned with partitions a package cannot declare (in another schema, or foreign tables): {unexpressible}; skipped.");
+            _stats.SkippedObjects++;
+            command.Parameters.Clear();
+            return false;
+        }
+        command.CommandText = tree + @"
+SELECT STRING_AGG(i.indexrelid::regclass::text, ', ' ORDER BY 1)
+  FROM tree JOIN pg_index i ON i.indrelid = tree.oid
+ WHERE tree.oid <> to_regclass(@t) AND NOT EXISTS (SELECT 1 FROM pg_inherits ih WHERE ih.inhrelid = i.indexrelid)";
+        var local = command.ExecuteScalar() as string;
+        command.Parameters.Clear();
+        if (local != null)
+            _progressLog.Warn($"    WARNING: {schema}.{table} has partitions with indexes of their own, which a package does not declare: {local}. The table is extracted without them.");
+        return true;
+    }
+
+    private static void AddTableParameter(IDbCommand command, string schema, string table)
+    {
+        command.Parameters.Clear();
+        var p = command.CreateParameter();
+        p.ParameterName = "@t";
+        p.Value = QuoteIdentifierForRegclass(schema) + "." + QuoteIdentifierForRegclass(table);
+        command.Parameters.Add(p);
+    }
+
+    private static string QuoteIdentifierForRegclass(string name) => "\"" + name.Replace("\"", "\"\"") + "\"";
+
     private bool ShouldExtractFromSchema(string schema)
         => !_isSchemaTemplate
            || string.Equals(
@@ -2928,21 +2973,9 @@ SELECT t.schemaname, t.tablename, c.relkind, c.relispartition,
                 continue;
             }
 
-            // SchemaSmith does not model PostgreSQL declarative partitioning (see the growth-up spike
-            // findings) and the generator query cannot see a partitioned parent at all (relkind = 'p'
-            // matches neither its relkind = 'r' nor its relam join). Left unhandled, the parent
-            // silently disappears while each partition extracts as an ordinary standalone table --
-            // the package looks complete but no longer means what the database means. Failing both
-            // the parent and its partitions through the same per-table skip used for any other
-            // unextractable table keeps that misrepresentation from reaching disk at all.
-            if (relKind == "p" || isPartitionChild)
-            {
-                _progressLog.Error(relKind == "p"
-                    ? $"    ERROR: {schema}.{table} is a partitioned table — PostgreSQL partitioning is not modeled; skipped rather than emitted as a table with no partitions."
-                    : $"    ERROR: {schema}.{table} is a partition of a partitioned table — PostgreSQL partitioning is not modeled; skipped rather than emitted as an unrelated standalone table.");
-                _stats.TableErrors++;
-                continue;
-            }
+            // A partition is written in its parent's file, under Partitioning; a partitioned table carries its whole tree.
+            if (isPartitionChild) continue;
+            if (relKind == "p" && !PostgreSqlPartitionTreeExtractable(command, schema, table)) continue;
 
             _progressLog.Info($"  Cast Json for {schema}.{table}");
             try
@@ -3688,10 +3721,8 @@ SELECT 'Triggers' AS Folder,
     AND ns.nspname NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
     AND ns.nspname NOT LIKE 'pg_temp_%'
     AND ns.nspname NOT LIKE 'pg_toast_temp_%'
-    -- A partitioned table and its partitions are refused at extraction (partitioning is not modelled), so a trigger
-    -- on either -- including the copies the engine clones onto each partition -- would name a table the package
-    -- does not contain.
-    AND tbl.relkind <> 'p'
+    -- A partitioned table's trigger is extracted; the copies the engine clones onto each partition are not (a partition
+    -- is written in its parent's file, and on 12 the clones are tgisinternal as well).
     AND NOT tbl.relispartition
     AND tbl.reloftype = 0
     AND NOT EXISTS (SELECT 1 FROM pg_inherits i WHERE i.inhrelid = tbl.oid)

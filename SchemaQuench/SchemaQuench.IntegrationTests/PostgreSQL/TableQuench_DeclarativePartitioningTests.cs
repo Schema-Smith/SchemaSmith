@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using Newtonsoft.Json.Linq;
 using Npgsql;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -290,6 +291,52 @@ public class TableQuench_DeclarativePartitioningTests : BaseTableQuenchTests
         {
             Exec(conn, $"DROP TABLE IF EXISTS public.{t} CASCADE");
             Exec(conn, $"DELETE FROM \"SchemaSmith\".\"ProductOwnership\" WHERE \"ProductName\" = '{product}'");
+        }
+    }
+
+    // Extraction writes the tree (bounds in UTC, whatever the session's zone), and what it writes deploys to the same
+    // tree: extracted again it is identical, and deployed again it changes nothing.
+    [Test]
+    public void APartitionTree_RoundTripsThroughExtraction()
+    {
+        var t = "dpr_" + Guid.NewGuid().ToString("N")[..8];
+        using var conn = Open();
+        try
+        {
+            using (var cmd = conn.CreateCommand())
+                RunTableQuenchProc(cmd, Json(t), productName: "Dpr_" + t);
+            Exec(conn, "SET TimeZone = 'America/Chicago'");
+            string Extract() => Scalar(conn, $"SELECT \"SchemaSmith\".\"GenerateTableJSON\"('public', '{t}')");
+            var first = Extract();
+            var partitioning = JObject.Parse(first)["Partitioning"];
+            Assert.Multiple(() =>
+            {
+                Assert.That((string)partitioning?["Method"], Is.EqualTo("LIST"));
+                Assert.That((string)partitioning?["Expression"], Is.EqualTo("region"));
+                Assert.That((string)partitioning?["Partitions"]?[0]?["Name"], Is.EqualTo($"{t}_eu"));
+                Assert.That((string)partitioning?["Partitions"]?[0]?["Partitioning"]?["Partitions"]?[0]?["Bound"],
+                    Is.EqualTo("FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00')"), "bounds in UTC, partitions in name order");
+                Assert.That((string)partitioning?["Partitions"]?[1]?["Bound"], Is.EqualTo("DEFAULT"), "DEFAULT last");
+                Assert.That(JObject.Parse(first)["FillFactor"], Is.Null, "inert on a partitioned table, so not written");
+                Assert.That(Scalar(conn, $"SELECT \"SchemaSmith\".\"GenerateTableJSON\"('public', '{t}_eu_2026')"), Is.Null,
+                    "a partition is written in its parent's file, never as a table of its own");
+            });
+
+            Exec(conn, $"DROP TABLE public.{t} CASCADE");
+            var redeploy = "[" + first + "]";
+            using (var cmd = conn.CreateCommand())
+                RunTableQuenchProc(cmd, redeploy, productName: "Dpr_" + t);
+            Assert.That(Extract(), Is.EqualTo(first), "extracted again, identical");
+
+            ClearChanges(conn);
+            using (var cmd = conn.CreateCommand())
+                RunTableQuenchProc(cmd, redeploy, productName: "Dpr_" + t);
+            Assert.That(Changes(conn), Is.Empty, "and deployed again, nothing changes");
+        }
+        finally
+        {
+            Exec(conn, "RESET TimeZone");
+            Drop(conn, t);
         }
     }
 }

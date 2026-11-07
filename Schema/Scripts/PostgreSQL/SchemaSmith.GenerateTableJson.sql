@@ -300,11 +300,14 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                        AND po."TableName" = t.table_name
                                        AND po."IndexName" IS NULL), FALSE)
                     THEN TRUE END AS "PreventDrop",
+               -- A partitioned table has no access method of its own before 17 (relam 0), and its persistence and fill factor
+               -- are inert, so they are left out for one.
                am.amname AS "AccessMethod",
-               CASE rls.relpersistence WHEN 'p' THEN 'Logged' WHEN 'u' THEN 'Unlogged' WHEN 't' THEN 'Temporary' END AS "PersistenceType",
-               COALESCE((SELECT SPLIT_PART(opt, '=', 2)
+               CASE WHEN rls.relkind = 'r' THEN CASE rls.relpersistence WHEN 'p' THEN 'Logged' WHEN 'u' THEN 'Unlogged' WHEN 't' THEN 'Temporary' END END AS "PersistenceType",
+               CASE WHEN rls.relkind = 'r' THEN COALESCE((SELECT SPLIT_PART(opt, '=', 2)
                            FROM UNNEST(rls.reloptions) AS opts(opt)
-                           WHERE opt LIKE 'fillfactor=%'), '100')::INT2 AS "FillFactor",
+                           WHERE opt LIKE 'fillfactor=%'), '100')::INT2 END AS "FillFactor",
+               "SchemaSmith"."PartitionTreeJson"(rls.oid) AS "Partitioning",
                -- 'd' (the default) deliberately yields NULL so FormatJson strips the key: a table that
                -- never touched replica identity extracts exactly as it did before this shipped. #407
                CASE rls.relreplident WHEN 'f' THEN 'FULL' WHEN 'n' THEN 'NOTHING' WHEN 'i' THEN 'INDEX' END AS "ReplicaIdentity",
@@ -322,8 +325,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
           FROM information_schema.tables t
           JOIN pg_class rls ON rls.relname = t.table_name
                            AND rls.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = t.table_schema)
-                           AND rls.relkind = 'r'
-          JOIN pg_am am ON rls.relam = am.oid
+                           AND rls.relkind IN ('r', 'p') AND NOT rls.relispartition
+          LEFT JOIN pg_am am ON rls.relam = am.oid
           WHERE t.table_type = 'BASE TABLE'
             AND t.table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
             AND p_Schema = t.table_schema

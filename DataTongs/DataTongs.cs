@@ -899,8 +899,12 @@ SELECT {selectColumns}
         cmd.CommandText = $@"
 SELECT JSON_AGG(ROW_TO_JSON(tbl))
   FROM(SELECT {selectColumns}
-         FROM ONLY ""{Identifier.EscapeDelimited(tableSchema, Platform.PostgreSQL)}"".""{Identifier.EscapeDelimited(tableName, Platform.PostgreSQL)}""
-{(string.IsNullOrWhiteSpace(filter) ? "" : $"         WHERE {filter}")}
+         FROM ""{Identifier.EscapeDelimited(tableSchema, Platform.PostgreSQL)}"".""{Identifier.EscapeDelimited(tableName, Platform.PostgreSQL)}""
+         -- The table's own rows, not an inheritance child's -- what ONLY read -- except that a partitioned table holds none
+         -- of its own: every row is in a partition, and ONLY read nothing at all.
+        WHERE (tableoid = '""{Identifier.EscapeDelimited(tableSchema, Platform.PostgreSQL).Replace("'", "''")}"".""{Identifier.EscapeDelimited(tableName, Platform.PostgreSQL).Replace("'", "''")}""'::regclass
+               OR (SELECT c.relkind FROM pg_class c WHERE c.oid = '""{Identifier.EscapeDelimited(tableSchema, Platform.PostgreSQL).Replace("'", "''")}"".""{Identifier.EscapeDelimited(tableName, Platform.PostgreSQL).Replace("'", "''")}""'::regclass) = 'p')
+{(string.IsNullOrWhiteSpace(filter) ? "" : $"          AND ({filter})")}
          ORDER BY {orderColumns}) tbl
 ";
         return FormatJsonResult(cmd.ExecuteScalar()?.ToString() ?? "");

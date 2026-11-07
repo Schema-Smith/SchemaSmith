@@ -313,8 +313,10 @@ public class TableExtractionFailureIsolationTests
         }
     }
 
+    // A partitioned table is extracted with its partitions under Partitioning (the generator writes the tree); each
+    // partition is skipped, since it is in its parent's file and written alone it would read as a standalone table.
     [Test]
-    public void CastPostgreSqlTableDefinitions_PartitionedTable_SkipsParentAndChild_NoStandaloneEmit()
+    public void CastPostgreSqlTableDefinitions_PartitionedTable_ExtractsTheParent_AndNotThePartition()
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -330,30 +332,23 @@ public class TableExtractionFailureIsolationTests
             _command.ExecuteReader().Returns(_ =>
                 (_command.CommandText ?? "").Contains("pg_tables") ? tableListReader : EmptyReader());
 
-            var normalJson = $"{{\"Name\":\"{normal}\",\"Schema\":\"{schema}\",\"OldName\":\"\",\"Columns\":[],\"ForeignKeys\":[]}}";
             _command.ExecuteScalar().Returns(_ =>
             {
                 if (KindleGateTestHelpers.IsReadOnlyProbe(_command.CommandText)) return (object)0;
                 var cmdText = _command.CommandText ?? "";
                 if (!cmdText.Contains("GenerateTableJSON")) return null;
-                return normalJson;
+                var name = cmdText.Contains($"'{parent}'") ? parent : cmdText.Contains($"'{child}'") ? child : normal;
+                return $"{{\"Name\":\"{name}\",\"Schema\":\"{schema}\",\"OldName\":\"\",\"Columns\":[],\"ForeignKeys\":[]}}";
             });
 
             var tongs = new SchemaTongs(Platform.PostgreSQL);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
-            // The parent and its partition must never reach disk as table files — extracting the
-            // partition as an ordinary standalone table is exactly the silent misrepresentation
-            // this task exists to close off.
-            _fileWrapper.DidNotReceive().WriteAllText(Arg.Is<string>(s => s.Contains($"{parent}.json")), Arg.Any<string>());
+            _fileWrapper.Received(1).WriteAllText(Arg.Is<string>(s => s.EndsWith($"{parent}.json")), Arg.Any<string>());
             _fileWrapper.DidNotReceive().WriteAllText(Arg.Is<string>(s => s.Contains($"{child}.json")), Arg.Any<string>());
             _fileWrapper.Received(1).WriteAllText(Arg.Is<string>(s => s.Contains($"{normal}.json")), Arg.Any<string>());
-
-            _progressLog.Received().Error(Arg.Is<string>(s => s.Contains($"{schema}.{parent} is a partitioned table")));
-            _progressLog.Received().Error(Arg.Is<string>(s => s.Contains($"{schema}.{child} is a partition of a partitioned table")));
-            _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Completed with Errors")));
-            Assert.That(tongs.Failed, Is.True,
-                "a partitioned table must surface through the same per-table failure channel as any other unextractable table");
+            _progressLog.DidNotReceive().Error(Arg.Any<string>());
+            Assert.That(tongs.Failed, Is.False, "a partitioned table extracts; it is no longer a failure");
 
             FactoryContainer.Clear();
             LogFactory.Clear();

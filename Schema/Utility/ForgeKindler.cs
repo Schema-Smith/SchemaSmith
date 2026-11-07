@@ -961,6 +961,8 @@ public static class ForgeKindler
                 new("SchemaSmith.ParseTableJson.sql", ReplaceParseJson: true),
                 new("SchemaSmith.IndexOnlyQuench.sql"),
                 new("SchemaSmith.FormatJson.sql"),
+                // A partitioned table's tree, written by GenerateTableJson.
+                new("SchemaSmith.PartitionTreeJson.sql"),
                 new("SchemaSmith.GenerateTableJson.sql"),
                 new("SchemaSmith.ValidateMaterializedViewOwnership.sql"),
                 new("SchemaSmith.FixupMaterializedViewOwnership.sql"),
