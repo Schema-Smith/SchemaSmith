@@ -234,6 +234,22 @@ public class SchemaGeneratorTests
     }
 
     [Test]
+    public void SettingsSchema_RequiresEveryDeclaredPart_AndNamesTheDriftLevels()
+    {
+        var schema = SchemaGenerator.GenerateSchema(typeof(Schema.Domain.Settings.SettingsFile));
+        var setting = schema["properties"]?["Settings"]?["items"];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(schema["properties"]?["$schema"], Is.Not.Null, "an editor-facing $schema key is allowed");
+            Assert.That(schema["properties"]?["FilePath"], Is.Null, "FilePath is JsonIgnore");
+            Assert.That(setting?["required"]?.ToObject<List<string>>(), Is.EquivalentTo(new[] { "Kind", "Name", "Value", "Fix", "OnDrift" }));
+            Assert.That(setting?["properties"]?["OnDrift"]?["type"]?.ToString(), Is.EqualTo("string"), "written as a name, not a number");
+            Assert.That(setting?["properties"]?["Display"], Is.Null, "Display is derived, not authored");
+        });
+    }
+
+    [Test]
     public void ShouldGenerateTemplateSchemaExcludingIgnoredProperties()
     {
         var schema = SchemaGenerator.GenerateSchema(typeof(Template));

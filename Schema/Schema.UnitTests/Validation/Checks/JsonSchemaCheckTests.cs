@@ -481,6 +481,17 @@ public class JsonSchemaCheckTests
     }
 
     [Test]
+    public void SettingsFiles_MapToTheirSchemas()
+    {
+        var package = Path.Join("C:", "pkg");
+
+        Assert.That(JsonSchemaCheck.MapFileToType(package, Path.Join(package, "ServerSettings.json")), Is.EqualTo("serversettings"));
+        Assert.That(JsonSchemaCheck.MapFileToType(package, Path.Join(package, "Templates", "Main", "DatabaseSettings.json")), Is.EqualTo("databasesettings"));
+        Assert.That(JsonSchemaCheck.MapFileToType(package, Path.Join(package, "Templates", "Main", "Tables", "ServerSettings.json")), Is.EqualTo("tables"),
+            "a table that happens to share the name is still a table");
+    }
+
+    [Test]
     public void RealRootProductJson_StillClassifiesAsProductManifest()
     {
         CommitProductsSchema(FreshProductsSchema());

@@ -179,6 +179,17 @@ Related-table resolution honors the same schema defaulting a real deployment use
 
 This check is deliberately structural only -- it confirms columns exist, not that their types agree, and it doesn't validate `DeleteAction`/`UpdateAction` values. See [Data types](#data-types) below for why type agreement is left to deployment.
 
+### Server and database settings
+
+`ServerSettings.json` and `DatabaseSettings.json` are checked for the declarations a deploy would refuse. Setting names are not checked: which names a server has depends on its version, and `--Validate` runs without one.
+
+| Code | Severity | What it means |
+|---|---|---|
+| `SS-SET-001` | Error | A setting's `Kind` is not one the platform has for that file: SQL Server `Configuration` or `TraceFlag` in `ServerSettings.json`, `Option` or `ScopedConfiguration` in `DatabaseSettings.json`; PostgreSQL `Parameter` in both; MySQL and MariaDB `Variable` for the server, `Option` for a database. |
+| `SS-SET-002` | Error | A setting has no `Name`, or leaves out `Fix` or `OnDrift`. Both are required so a policy is never assumed; SchemaTongs writes them on every setting it captures. |
+| `SS-SET-003` | Error | One setting (the same `Kind` and `Name`) is declared more than once and at least one declaration has no `ShouldApplyExpression`, so more than one could apply. Gate each variant, or keep one declaration. |
+| `SS-SET-004` | Error | A schema template has a `DatabaseSettings.json`. Database settings run once per database and cannot fan out per schema; move the file to a regular template that targets the same databases. |
+
 ### Token validation
 
 `{{Token}}` references are resolved at deploy time, which means a typo or a forgotten definition normally surfaces only when SchemaQuench actually runs -- deep into a deployment, possibly against a production target. `--Validate` scans every script and JSON file in the package as raw text (the same way `Template.Load` itself resolves tokens) and catches the problem before that ever happens:

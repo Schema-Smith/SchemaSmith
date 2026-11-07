@@ -25,6 +25,7 @@ public static class ValidationCheckRegistry
         new ModuleSyntaxCheck(),
         new DescriptionCheck(),
         new ConstraintAttributeCheck(),
+        new SettingsCheck(),
         new JsonSchemaCheck()
     };
 }

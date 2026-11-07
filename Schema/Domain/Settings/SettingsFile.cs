@@ -16,6 +16,10 @@ public sealed class SettingsFile
     public const string ServerFileName = "ServerSettings.json";
     public const string DatabaseFileName = "DatabaseSettings.json";
 
+    // Lets an editor-facing "$schema" key load under MissingMemberHandling.Error, as on Product.json.
+    [JsonProperty("$schema", Order = 0, NullValueHandling = NullValueHandling.Ignore)]
+    public string SchemaRef { get; set; }
+
     public List<Setting> Settings { get; set; } = [];
 
     [JsonIgnore] public string FilePath { get; set; }
