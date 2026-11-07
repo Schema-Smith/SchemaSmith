@@ -70,6 +70,27 @@ BEGIN
                         WHERE a.attrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
                           AND a.attname = c."Name" AND a.attnum > 0 AND NOT a.attisdropped);
 
+  -- Unsupported-feature policy: a partitioned table takes an access method from PostgreSQL 17 (the default for its new
+  -- partitions). Below it the create leaves USING out; 'fail' aborts naming the table, 'warn' records a downgrade.
+  IF "SchemaSmith"."ServerVersionNum"() < 17
+     AND EXISTS (SELECT 1 FROM temp_tables tt
+                  WHERE tt."PartitionMethod" <> '' AND COALESCE(tt."AccessMethod", '') <> ''
+                    AND NOT EXISTS (SELECT * FROM information_schema.tables t WHERE t.table_schema = tt."Schema" AND t.table_name = tt."Name")) THEN
+    IF "SchemaSmith"."UnsupportedFeaturePolicy"() = 'fail' THEN
+      RAISE EXCEPTION 'A table access method on a partitioned table requires PostgreSQL 17 (detected major %); table(s): %',
+        "SchemaSmith"."ServerVersionNum"(),
+        (SELECT STRING_AGG(tt."Schema" || '.' || tt."Name", ', ')
+           FROM temp_tables tt
+          WHERE tt."PartitionMethod" <> '' AND COALESCE(tt."AccessMethod", '') <> ''
+            AND NOT EXISTS (SELECT * FROM information_schema.tables t WHERE t.table_schema = tt."Schema" AND t.table_name = tt."Name"));
+    END IF;
+    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+      SELECT pg_backend_pid(), 'table access method on a partitioned table (PG17)', tt."Schema" || '.' || tt."Name", 'downgraded'
+        FROM temp_tables tt
+       WHERE tt."PartitionMethod" <> '' AND COALESCE(tt."AccessMethod", '') <> ''
+         AND NOT EXISTS (SELECT * FROM information_schema.tables t WHERE t.table_schema = tt."Schema" AND t.table_name = tt."Name");
+  END IF;
+
   RAISE NOTICE 'Add New Tables';
   SELECT STRING_AGG('RAISE NOTICE ''  Create new table %.%'', ''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name" || CASE WHEN COALESCE(tt."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tt."VariantName", '''', '''''') || ')' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'CREATE TABLE ' || "SchemaSmith"."QuoteName"(tt."Schema") || '.' || "SchemaSmith"."QuoteName"(tt."Name") || ' (' ||

@@ -51,6 +51,7 @@ namespace Schema.UnitTests.Capabilities
             "table access method (PG15)",
             "un-generated column, values not kept (PG13)",
             "VIRTUAL generated column (PG18)",
+            "table access method on a partitioned table (PG17)",
             "table without its PERIOD FOR clause",
             "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)",
             "table without its WITH SYSTEM VERSIONING clause",

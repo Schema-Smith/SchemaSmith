@@ -93,6 +93,7 @@ public class CapabilityDocumentationTests
         ["PostgreSQL/table-access-method"] = "**Table access method**",
         ["PostgreSQL/drop-expression"] = "**Removing a column's generation**",
         ["PostgreSQL/virtual-generated-column"] = "**`VIRTUAL` generated columns**",
+        ["PostgreSQL/partitioned-table-access-method"] = "**Table access method on a partitioned table**",
         ["PostgreSQL/not-enforced-constraint"] = "**`NOT ENFORCED` constraints**",
 
         // ---- MySQL ----

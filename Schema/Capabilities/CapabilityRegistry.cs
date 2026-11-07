@@ -145,6 +145,9 @@ namespace Schema.Capabilities
             // Gated inline in MissingIndexesAndConstraintsQuench rather than by a Supports*.sql function,
             // which is exactly why the completeness guard could not see it: it shipped in v2.5.0 as a real
             // policy-routed degrade with no row here, invisible to every consumer that drives off this list.
+            // A partitioned table is created without USING below 17; its partitions take the database's default.
+            rows.Add(new("partitioned-table-access-method", "Table access method on a partitioned table", Platform.PostgreSQL,
+                17, "PostgreSQL 17", null, DegradeKind.Skip, "table access method on a partitioned table (PG17)"));
             rows.Add(new("virtual-generated-column", "VIRTUAL generated columns", Platform.PostgreSQL,
                 18, "PostgreSQL 18", null, DegradeKind.Skip, "VIRTUAL generated column (PG18)"));
             // A CHECK or foreign key declared Enforced: false. Below 18 the constraint deploys enforced -- the object is

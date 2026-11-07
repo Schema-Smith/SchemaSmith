@@ -339,4 +339,46 @@ public class TableQuench_DeclarativePartitioningTests : BaseTableQuenchTests
             Drop(conn, t);
         }
     }
+
+    // Below 17 a partitioned table cannot take an access method: under the default policy it is created without one and
+    // the downgrade is recorded; under 'fail' the deploy stops naming the table and creates nothing.
+    [TestCase("warn")]
+    [TestCase("fail")]
+    public void AnAccessMethodOnANewPartitionedTable_Below17_FollowsTheUnsupportedFeaturePolicy(string policy)
+    {
+        var t = "dpam_" + Guid.NewGuid().ToString("N")[..8];
+        var json = $$"""
+            [{ "Schema": "public", "Name": "{{t}}", "AccessMethod": "heap",
+               "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false } ],
+               "Partitioning": { "Method": "RANGE", "Expression": "id", "Partitions": [ { "Name": "{{t}}_1", "Bound": "FOR VALUES FROM (0) TO (10)" } ] } }]
+            """;
+        using var conn = Open();
+        try
+        {
+            Exec(conn, $"SET schemasmith.version_override = '16'; SET schemasmith.unsupported_policy = '{policy}'");
+            ClearChanges(conn);
+            if (policy == "fail")
+            {
+                var ex = DeployFails(conn, json, "Dpam_" + t);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(ex.Message, Does.Contain("requires PostgreSQL 17").And.Contain($"public.{t}"));
+                    Assert.That(Scalar(conn, $"SELECT to_regclass('public.{t}') IS NULL"), Is.EqualTo("True"));
+                });
+                return;
+            }
+            using (var cmd = conn.CreateCommand())
+                RunTableQuenchProc(cmd, json, productName: "Dpam_" + t);
+            Assert.Multiple(() =>
+            {
+                Assert.That(Changes(conn), Does.Contain($"table access method on a partitioned table (PG17) public.{t} downgraded"));
+                Assert.That(Scalar(conn, $"SELECT relkind::text FROM pg_class WHERE oid = 'public.{t}'::regclass"), Is.EqualTo("p"), "created without it");
+            });
+        }
+        finally
+        {
+            Exec(conn, "RESET schemasmith.version_override; RESET schemasmith.unsupported_policy");
+            Drop(conn, t);
+        }
+    }
 }
