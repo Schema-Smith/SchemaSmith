@@ -153,6 +153,7 @@ public class XmlCompressionTests
                    .Replace("'", "''");
 
         Assert.DoesNotThrow(() => Exec($"EXEC SchemaSmith.TableQuench @ProductName = 'XmlCompProduct', @TableDefinitions = '{json}'"));
+        Assert.That(Convert.ToInt32(Scalar($"SELECT COUNT(*) FROM sys.tables WHERE object_id = OBJECT_ID('dbo.{TableName}')")), Is.EqualTo(1), "the table is deployed");
     }
 
     [Test]

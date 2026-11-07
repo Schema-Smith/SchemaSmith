@@ -114,10 +114,13 @@ public abstract class DatabaseCollationMismatchSharedTests
         // path, which is where the degraded comparison lives. Without this the fixture could pass while
         // the actual broken step never ran.
         RunTableQuench(TableJson());
+        Exec("DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()");
 
         Assert.DoesNotThrow(() => RunTableQuench(TableJson()),
             "the modified-table pass runs on redeploy -- that is the step whose encryption comparison "
             + "degraded, so an unchanged redeploy has to survive it too.");
+        Assert.That(ScalarStr("SELECT COALESCE(GROUP_CONCAT(CONCAT(ObjectType, ' ', ObjectName, ' ', ActionType) SEPARATOR '; '), '') FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()"), Is.Empty,
+            "and change nothing: a comparison that degraded to an unreadable option would alter the table every time");
     }
 
     private void RunTableQuench(string json)

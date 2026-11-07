@@ -300,7 +300,12 @@ public class TablespaceTests
         OnDb(cmd =>
         {
             Deploy(cmd, Package("ts_pgdef_late"));
+            cmd.CommandText = "DELETE FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid()";
+            cmd.ExecuteNonQuery();
             Assert.DoesNotThrow(() => Deploy(cmd, Package("ts_pgdef_late", tableTablespace: "pg_default", indexTablespace: "pg_default")));
+            Assert.That(Placement(cmd, "ts_pgdef_late") + "|" + Placement(cmd, "ix_ts_pgdef_late"), Is.EqualTo("|"), "still on the default");
+            cmd.CommandText = "SELECT COUNT(*) FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() AND \"ObjectName\" LIKE '%ts_pgdef_late%'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero, "and nothing was moved or changed");
         });
     }
 
