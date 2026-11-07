@@ -33,7 +33,8 @@ BEGIN
     DROP TABLE IF EXISTS temp_tables;
     CREATE TEMPORARY TABLE temp_tables AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
-    SELECT elem ->> 'Schema' AS "Schema",
+    SELECT te.ord AS "_RowId",
+           elem ->> 'Schema' AS "Schema",
            elem ->> 'Name' AS "Name",
            COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(elem ->> 'OldName', '') AS "OldName",
@@ -53,9 +54,9 @@ BEGIN
            CASE WHEN p_UpdateFillFactor THEN true ELSE COALESCE((elem ->> 'UpdateFillFactor')::BOOLEAN, false) END AS "UpdateFillFactor",
            (elem ->> 'DropIndexesRemovedFromProduct')::BOOLEAN AS "DropIndexesRemovedFromProduct",
            UPPER(NULLIF(TRIM(elem ->> 'OnlineApply'), '')) AS "OnlineApply"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem;
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord);
 
-    SELECT STRING_AGG('DELETE FROM temp_tables WHERE "Schema" = ''' || REPLACE(("Schema")::TEXT, '''', '''''') || ''' AND "Name" = ''' || REPLACE(("Name")::TEXT, '''', '''''') || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+    SELECT STRING_AGG('DELETE FROM temp_tables WHERE "_RowId" = ' || "_RowId"::TEXT || ' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
       INTO sql_script
       FROM temp_tables
       WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
@@ -110,8 +111,9 @@ BEGIN
            COALESCE((SELECT STRING_AGG(sp.k || '=' || sp.v, ',' ORDER BY sp.k)
                        FROM JSON_EACH_TEXT(COALESCE(celem -> 'StorageParameters', '{}'::JSON)) AS sp(k, v)
                       WHERE sp.k <> 'fillfactor'), '') AS "StorageParameters"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
-      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Indexes')::JSON) AS celem(value);
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Indexes')::JSON) AS celem(value)
+     WHERE te.ord IN (SELECT "_RowId" FROM temp_tables);
 
     UPDATE temp_indexes -- Table-level setting overrides index-level setting when true
        SET "UpdateFillFactor" = true
@@ -187,8 +189,9 @@ BEGIN
            COALESCE(celem ->> 'StatisticsColumns', '') AS "StatisticsColumns",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
-      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Statistics')::JSON) AS celem(value);
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Statistics')::JSON) AS celem(value)
+     WHERE te.ord IN (SELECT "_RowId" FROM temp_tables);
 
     SELECT STRING_AGG('DELETE FROM temp_statistics WHERE "TableSchema" = ''' || REPLACE(("TableSchema")::TEXT, '''', '''''') || ''' AND "TableName" = ''' || REPLACE(("TableName")::TEXT, '''', '''''') || ''' AND "Name" = ''' || REPLACE(("Name")::TEXT, '''', '''''') || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
       INTO sql_script
