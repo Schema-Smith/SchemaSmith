@@ -13,6 +13,9 @@ CREATE OR REPLACE PROCEDURE "SchemaSmith"."ForeignKeyQuench"(p_WhatIf BOOLEAN = 
 AS $$
 DECLARE
   sql_script TEXT = '';
+  v_Key RECORD;
+  v_Sql TEXT;
+  v_Failed TEXT;
 BEGIN
   -- Unsupported-feature policy: ON DELETE SET NULL (columns) is PostgreSQL 15. Below it the key is created with a plain
   -- SET NULL, which sets every key column; 'fail' aborts before anything is created, 'warn' (default) records one
@@ -51,7 +54,7 @@ BEGIN
                     -- NOT ENFORCED is PostgreSQL 18 (below it the key deploys enforced, see MissingIndexesAndConstraintsQuench);
                     -- NOT VALID leaves the existing rows unchecked, and a NOT ENFORCED key is not validated by definition.
                     CASE WHEN NOT fk."Enforced" AND "SchemaSmith"."ServerVersionNum"() >= 18 THEN ' NOT ENFORCED' ELSE '' END ||
-                    CASE WHEN NOT fk."Validated" AND NOT (NOT fk."Enforced" AND "SchemaSmith"."ServerVersionNum"() >= 18) THEN ' NOT VALID'
+                    CASE WHEN NOT COALESCE(fk."ValidatedDeclared", sa."WasTrusted", TRUE) AND NOT (NOT fk."Enforced" AND "SchemaSmith"."ServerVersionNum"() >= 18) THEN ' NOT VALID'
                          WHEN v."Online" THEN ' NOT VALID' ELSE '' END || ';' || CHR(10) ||
                     CASE WHEN v."Online" AND p_WhatIf THEN v."Validate" || CHR(10)
                          WHEN v."Online" THEN 'CALL "SchemaSmith"."DeferOnlineWork"(' || quote_literal('Validating foreign key ' || fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name") || ', ' || quote_literal(v."Validate") || ', NULL, NULL);' || CHR(10)
@@ -61,8 +64,10 @@ BEGIN
                          ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''foreignKey'', ''' || REPLACE((fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name")::TEXT, '''', '''''') || ''', ''created'', ''' || REPLACE((v."Form")::TEXT, '''', '''''') || ''');' END, CHR(10))
     INTO sql_script
     FROM temp_fks fk
+    -- A key a table rebuild set aside (RebuildTable) keeps the trust it had, where the package does not declare Validated.
+    LEFT JOIN "SchemaSmith"."RebuildSetAsideForeignKeys" sa ON sa."ChildSchema" = fk."TableSchema" AND sa."ChildTable" = fk."TableName" AND sa."KeyName" = fk."Name"
     -- Online needs a validation to defer: a key declared not validated, or not enforced, is already the light form.
-    CROSS JOIN LATERAL (SELECT f."Form", f."Form" = 'online' AND fk."Validated" AND fk."Enforced" AS "Online",
+    CROSS JOIN LATERAL (SELECT f."Form", f."Form" = 'online' AND COALESCE(fk."ValidatedDeclared", sa."WasTrusted", TRUE) AND fk."Enforced" AS "Online",
                                'ALTER TABLE ' || "SchemaSmith"."QuoteName"(fk."TableSchema") || '.' || "SchemaSmith"."QuoteName"(fk."TableName") ||
                                ' VALIDATE CONSTRAINT ' || "SchemaSmith"."QuoteName"(fk."Name") || ';' AS "Validate"
                           FROM (SELECT "SchemaSmith"."OnlineApplyForm"(p_OnlineApply, fk."TableSchema", fk."TableName", 'foreignKey') AS "Form") f) v
@@ -90,6 +95,56 @@ BEGIN
                                                  AND rel.relname = fk."TableName"
                             WHERE con.contype = 'f'
                               AND con.conname = fk."Name");
+  END IF;
+
+  -- The inbound keys a table rebuild set aside (RebuildTable). A key back on its table -- declared and added above, or
+  -- re-created by hand -- is done with; one whose table is gone cannot come back. Every other one is added again from
+  -- its captured definition, NOT VALID if it was. Any run restores any of them, and one that fails stays recorded,
+  -- named in the error, for the next run.
+  IF EXISTS (SELECT 1 FROM "SchemaSmith"."RebuildSetAsideForeignKeys") THEN
+    RAISE NOTICE 'Restore Foreign Keys Set Aside By A Table Rebuild';
+    FOR v_Key IN SELECT * FROM "SchemaSmith"."RebuildSetAsideForeignKeys" ORDER BY "ChildSchema", "ChildTable", "KeyName" LOOP
+      IF to_regclass(quote_ident(v_Key."ChildSchema") || '.' || quote_ident(v_Key."ChildTable")) IS NULL
+         OR EXISTS (SELECT 1 FROM pg_constraint con
+                     WHERE con.contype = 'f' AND con.conname = v_Key."KeyName"
+                       AND con.conrelid = to_regclass(quote_ident(v_Key."ChildSchema") || '.' || quote_ident(v_Key."ChildTable"))) THEN
+        IF to_regclass(quote_ident(v_Key."ChildSchema") || '.' || quote_ident(v_Key."ChildTable")) IS NULL THEN
+          RAISE NOTICE '  Not restoring foreign key % on %.%: the table no longer exists', v_Key."KeyName", v_Key."ChildSchema", v_Key."ChildTable";
+        END IF;
+        IF NOT p_WhatIf THEN
+          DELETE FROM "SchemaSmith"."RebuildSetAsideForeignKeys"
+           WHERE "ChildSchema" = v_Key."ChildSchema" AND "ChildTable" = v_Key."ChildTable" AND "KeyName" = v_Key."KeyName";
+        END IF;
+        CONTINUE;
+      END IF;
+      v_Sql := 'ALTER TABLE ' || quote_ident(v_Key."ChildSchema") || '.' || quote_ident(v_Key."ChildTable") ||
+               ' ADD CONSTRAINT ' || quote_ident(v_Key."KeyName") || ' ' || v_Key."Definition" ||
+               CASE WHEN v_Key."WasTrusted" THEN '' ELSE ' NOT VALID' END || ';';
+      RAISE NOTICE '  Restoring foreign key %.%.%', v_Key."ChildSchema", v_Key."ChildTable", v_Key."KeyName";
+      IF p_WhatIf THEN
+        RAISE NOTICE '%', v_Sql;
+        INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+          VALUES (pg_backend_pid(), 'foreignKey', v_Key."ChildSchema" || '.' || v_Key."ChildTable" || '.' || v_Key."KeyName", 'wouldCreate');
+      ELSE
+        BEGIN
+          EXECUTE v_Sql;
+          INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+            VALUES (pg_backend_pid(), 'foreignKey', v_Key."ChildSchema" || '.' || v_Key."ChildTable" || '.' || v_Key."KeyName", 'created');
+          DELETE FROM "SchemaSmith"."RebuildSetAsideForeignKeys"
+           WHERE "ChildSchema" = v_Key."ChildSchema" AND "ChildTable" = v_Key."ChildTable" AND "KeyName" = v_Key."KeyName";
+        EXCEPTION
+          -- The rebuilt table does not have the key this one references yet: the run that set it aside stopped before
+          -- its index pass, and this may be another product's deploy. Its record waits for the run that puts that key back.
+          WHEN invalid_foreign_key THEN
+            RAISE NOTICE '  Foreign key %.%.% waits: %.% has no key for it to reference yet', v_Key."ChildSchema", v_Key."ChildTable", v_Key."KeyName", v_Key."ParentSchema", v_Key."ParentTable";
+          WHEN OTHERS THEN
+            v_Failed := COALESCE(v_Failed || '; ', '') || v_Key."ChildSchema" || '.' || v_Key."ChildTable" || '.' || v_Key."KeyName" || ' (' || SQLERRM || ')';
+        END;
+      END IF;
+    END LOOP;
+    IF v_Failed IS NOT NULL THEN
+      RAISE EXCEPTION 'Foreign keys set aside by a table rebuild could not be restored, and stay recorded for the next run: %', v_Failed;
+    END IF;
   END IF;
 END
 $$;

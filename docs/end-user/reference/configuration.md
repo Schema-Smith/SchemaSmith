@@ -822,8 +822,8 @@ guessing:
 - Objects SchemaSmith does not manage — triggers and indexes you did not declare — live on the old
   table and do **not** survive. An in-place alter would have preserved them. Declared objects are
   rebuilt normally. On SQL Server and PostgreSQL the table's grants, owner and comments or extended properties are carried across.
-- **Foreign keys other tables hold against it** come off for the swap. On SQL Server each one is set aside
-  and put back by the same deploy's foreign-key step, trusted or untrusted, enabled or disabled, as it was
+- **Foreign keys other tables hold against it** come off for the swap. On SQL Server and PostgreSQL each one is set aside
+  and put back by the same deploy's foreign-key step as it was — trusted or not (`NOT VALID` on PostgreSQL), enabled or disabled
   — including keys your package does not declare, such as another product's. If a deploy stops before that
   step, the next one puts them back. A key your package does not declare can only be put back when the
   rebuilt table still has what it references (the same columns, unchanged, under a declared primary key or

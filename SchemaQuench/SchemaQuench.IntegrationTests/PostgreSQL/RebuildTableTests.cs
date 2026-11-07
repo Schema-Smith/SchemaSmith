@@ -448,8 +448,8 @@ INSERT INTO ""{schema}"".""ColumnOrder"" (""Alpha"", ""Bravo"", ""Charlie"") VAL
     {
         // An inbound foreign key FOLLOWS a table rename on PostgreSQL, so after a naive swap the child would
         // be constrained against the table that was moved aside instead of the one that replaced it. The DROP
-        // then failing is merely what surfaces that. The engine drops inbound keys before the swap and leaves
-        // the re-add to the owning table's foreign-key pass.
+        // then failing is merely what surfaces that. The engine drops inbound keys before the swap and sets each
+        // one aside for the foreign-key pass to restore.
         var schema = NewSchema("RbFk");
         using var conn = OpenMainDb();
         using var cmd = conn.CreateCommand();
@@ -478,7 +478,8 @@ INSERT INTO ""{schema}"".""FkChild"" (""Id"", ""ParentId"") VALUES (10, 1), (11,
                 "Columns": [
                     {"Name": "Id", "DataType": "INT", "Nullable": false},
                     {"Name": "Val", "DataType": "TEXT", "Nullable": true}
-                ]
+                ],
+                "Indexes": [ {"Name": "pk_fkparent", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id"} ]
             }
             """;
         Rebuild(cmd, json, schema, "FkParent");
@@ -493,9 +494,14 @@ INSERT INTO ""{schema}"".""FkChild"" (""Id"", ""ParentId"") VALUES (10, 1), (11,
             + "would have failed and this table would still be sitting there -- with the child pointing at it.");
 
         Assert.That(Int(cmd, childKeyCount), Is.EqualTo(0),
-            "The inbound key is deliberately NOT re-added here: it is declared in the CHILD's JSON, so the "
-            + "child's foreign-key quench pass re-creates it. What must never happen is the key surviving "
+            "The inbound key is off the child until the foreign-key pass restores it: the rebuilt parent has no "
+            + "key for it to reference before the index pass runs. What must never happen is the key surviving "
             + "pointed at the renamed-away table.");
+        Assert.That(Int(cmd, $"SELECT COUNT(*) FROM \"SchemaSmith\".\"RebuildSetAsideForeignKeys\" WHERE \"ChildSchema\" = '{schema}' AND \"KeyName\" = 'fk_fkchild_parent' AND \"WasTrusted\""),
+            Is.EqualTo(1),
+            "and it is recorded, validated as it was, for the foreign-key pass to put back -- before this, a key "
+            + "the package did not declare was simply gone.");
+        Exec(cmd, $"DELETE FROM \"SchemaSmith\".\"RebuildSetAsideForeignKeys\" WHERE \"ChildSchema\" = '{schema}';");
 
         Assert.That(AuditCount(cmd, $"{schema}.FkChild.fk_fkchild_parent", "dropped"), Is.EqualTo(1),
             "A key this rebuild removed and does not put back has to appear in the run manifest, or the "

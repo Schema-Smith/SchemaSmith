@@ -696,6 +696,17 @@ BEGIN
                                             AND a."ObjectName" = ek."TableSchema" || '.' || ek."TableName" || '.' || ek."KeyName"));
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
+    -- A table rebuild above set aside the keys that reference it (RebuildTable). One on this product's own table that the
+    -- package does not declare would be dropped here had the rebuild not taken it first, so it is not put back.
+    IF NOT p_WhatIf AND p_DropForeignKeysRemovedFromProduct THEN
+      DELETE FROM "SchemaSmith"."RebuildSetAsideForeignKeys" sa
+       USING temp_tables tt
+       WHERE tt."Schema" = sa."ChildSchema" AND tt."Name" = sa."ChildTable"
+         AND COALESCE(tt."DropForeignKeysRemovedFromProduct", TRUE)
+         AND NOT EXISTS (SELECT 1 FROM temp_fks fk2
+                          WHERE fk2."TableSchema" = tt."Schema" AND fk2."TableName" = tt."Name" AND fk2."Name" = sa."KeyName");
+    END IF;
+
     -- #363: WhatIf twin of the embedded 'foreignKey'/'dropped' audit above; same source/predicate.
     IF p_WhatIf THEN
       INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
