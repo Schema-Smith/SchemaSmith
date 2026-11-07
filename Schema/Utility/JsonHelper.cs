@@ -83,7 +83,7 @@ public static class JsonHelper
     // Every JsonHelper load path funnels through here so a JSON parse/member failure — including
     // the MissingMemberHandling.Error rejection above — always names the file it came from, not
     // just the in-document property path Newtonsoft reports on its own.
-    private static T WithFileContext<T>(string filePath, Func<T> deserialize)
+    internal static T WithFileContext<T>(string filePath, Func<T> deserialize)
     {
         try
         {

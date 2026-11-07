@@ -11,6 +11,7 @@ using Newtonsoft.Json.Converters;
 using Schema.Isolators;
 using Schema.Utility;
 using Schema.Configuration;
+using Schema.Domain.Settings;
 
 namespace Schema.Domain
 {
@@ -45,6 +46,10 @@ namespace Schema.Domain
 
         [JsonProperty(Order = 5)]
         public List<ProductFolder> ScriptFolders { get; set; } = [];
+
+        // ServerSettings.json beside Product.json; null when the package has none, and then no server setting is read.
+        [JsonIgnore]
+        public SettingsFile ServerSettings { get; set; }
 
         [JsonProperty(Order = 6)]
         [DefaultValue("{{repo_path}}/.git/HEAD")]
@@ -197,6 +202,8 @@ namespace Schema.Domain
             product.ScriptTokens.Add("ProductName", product.Name);
 
             product.InstanceLoad();
+            product.ServerSettings = SettingsFile.LoadIfPresent(Path.Join(schemaPackagePath, SettingsFile.ServerFileName), product.Platform,
+                SettingScope.Server, missingMemberHandling, tolerateDeclarationErrors: tolerateFileTokenErrors);
 
             return product;
         }

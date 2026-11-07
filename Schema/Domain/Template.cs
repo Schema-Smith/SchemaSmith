@@ -10,6 +10,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Schema.Domain.MySQL;
 using Schema.Domain.PostgreSQL;
+using Schema.Domain.Settings;
 using Schema.Domain.SqlServer;
 using Schema.Isolators;
 using Schema.Utility;
@@ -75,6 +76,10 @@ namespace Schema.Domain
         /// </summary>
         [JsonIgnore]
         public bool IsSchemaTemplate => !string.IsNullOrWhiteSpace(SchemaIdentificationScript);
+
+        // DatabaseSettings.json in the template folder; null when there is none, and then no database setting is read.
+        [JsonIgnore]
+        public SettingsFile DatabaseSettings { get; set; }
 
         [JsonProperty(Order = 3)]
         public string VersionStampScript { get; set; }
@@ -569,6 +574,7 @@ namespace Schema.Domain
             // expensive load work — fail fast with a clear error rather than after Table.Load
             // has parsed half a dozen JSON files.
             template.ValidateSchemaTemplateRules(templatePath);
+            template.LoadDatabaseSettings(templatePath, missingMemberHandling, tolerateFileTokenErrors);
 
             foreach (var token in template.ScriptTokens)
                 template.LoggableTokens.Add(token.Key, token.Value);
@@ -1200,6 +1206,17 @@ namespace Schema.Domain
         /// rejection is handled by <see cref="SchemaDefaultResolver"/> (slice 1) and bubbles up
         /// with file context via that resolver's outer wrap.
         /// </summary>
+        private void LoadDatabaseSettings(string templateDir, MissingMemberHandling missingMemberHandling, bool tolerateDeclarationErrors)
+        {
+            var path = Path.Join(templateDir, SettingsFile.DatabaseFileName);
+            DatabaseSettings = SettingsFile.LoadIfPresent(path, Product.Platform, SettingScope.Database, missingMemberHandling, tolerateDeclarationErrors);
+            if (DatabaseSettings != null && IsSchemaTemplate && !tolerateDeclarationErrors)
+                throw new PackageException(
+                    $"Template '{Name}' (file: {FilePath}) is a schema template but has {SettingsFile.DatabaseFileName} ({path}). " +
+                    "Database settings are database-scoped and cannot fan out per schema: a setting runs once per database. " +
+                    "Move the file to a regular template that targets the same databases.");
+        }
+
         private void ValidateSchemaTemplateRules(string templateDir)
         {
             // Rule 5 applies regardless of platform / SchemaIdentificationScript presence:
