@@ -463,7 +463,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                STUFF((SELECT ',' + CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) COLLATE DATABASE_DEFAULT ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                   FROM sys.index_columns ic
                   LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
-                  WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0
+                  WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0 AND (ic.key_ordinal > 0 OR si.[type] NOT IN (1, 2))
                   ORDER BY key_ordinal FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS [IndexColumns],
                STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id))
                   FROM sys.index_columns ic

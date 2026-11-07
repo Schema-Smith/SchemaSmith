@@ -746,6 +746,8 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_SafeBracketWrapFullTextColumn.sql"),
                 new("SchemaSmith.fn_SplitList.sql"),
                 new("SchemaSmith.fn_ServerMajorVersion.sql"),
+                new("SchemaSmith.fn_PartitionCompression.sql"),
+                new("SchemaSmith.fn_PartitionCompressionDrift.sql"),
                 new("SchemaSmith.fn_NormalizeTemporalRetentionPeriod.sql"),
                 // Must follow fn_ServerMajorVersion: its CREATE is version-gated at kindle time and calls it.
                 new("SchemaSmith.fn_RebuildBlockedReason.sql"),

@@ -642,6 +642,43 @@ WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSum
             + "freshly created one");
     }
 
+    // The live compression was read from partition 1 only, so on a partitioned view index a declared PAGE compared equal
+    // while the other partitions stayed uncompressed.
+    [Test]
+    public void ACompressionDeclaredOnAPartitionedIndex_ReachesEveryPartition()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        var pf = $"pf_{_schema}";
+        var ps = $"ps_{_schema}";
+        EnsureViewDropped(cmd);
+        try
+        {
+            var json = @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]"",""CompressionType"":""PAGE""}]}]";
+            RunIndexedViewQuench(cmd, json);
+            cmd.CommandText = $"CREATE PARTITION FUNCTION [{pf}] (INT) AS RANGE RIGHT FOR VALUES (10); " +
+                              $"CREATE PARTITION SCHEME [{ps}] AS PARTITION [{pf}] ALL TO ([PRIMARY]);";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"CREATE UNIQUE CLUSTERED INDEX [IX_vTestSummary_Id] ON [{_schema}].[vTestSummary] ([Id]) " +
+                              $"WITH (DROP_EXISTING = ON, DATA_COMPRESSION = PAGE ON PARTITIONS (1)) ON [{ps}]([Id])";
+            cmd.ExecuteNonQuery();
+
+            RunIndexedViewQuench(cmd, json);
+
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.partitions WHERE [object_id] = OBJECT_ID('[{_schema}].[vTestSummary]') AND index_id = 1 AND data_compression_desc <> 'PAGE'";
+            Assert.That((int)cmd.ExecuteScalar()!, Is.Zero, "every partition of the index is compressed as declared");
+        }
+        finally
+        {
+            EnsureViewDropped(cmd);
+            cmd.CommandText = $"IF EXISTS (SELECT 1 FROM sys.partition_schemes WHERE [name] = '{ps}') DROP PARTITION SCHEME [{ps}]; " +
+                              $"IF EXISTS (SELECT 1 FROM sys.partition_functions WHERE [name] = '{pf}') DROP PARTITION FUNCTION [{pf}];";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     private static string ViewDefinitionWithPadIndex(bool padIndex) =>
         @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]"",""FillFactor"":70,""PadIndex"":"
         + (padIndex ? "true" : "false") + @"}]}]";

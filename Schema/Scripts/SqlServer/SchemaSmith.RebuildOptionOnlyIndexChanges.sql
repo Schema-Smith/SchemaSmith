@@ -18,7 +18,7 @@ BEGIN
   DECLARE @v_SQL NVARCHAR(MAX)
   RAISERROR('Rebuild Indexes Whose Only Change Is An Option', 10, 100) WITH NOWAIT
   IF OBJECT_ID('tempdb..#IndexOptionRebuilds') IS NOT NULL DROP TABLE #IndexOptionRebuilds
-  SELECT ic.[Schema], ic.[TableName], ic.[IndexName], ic.[IsConstraint], ic.[PadIndex], ic.[IgnoreDuplicateKey]
+  SELECT DISTINCT ic.[Schema], ic.[TableName], ic.[IndexName], ic.[IsConstraint], ic.[PadIndex], ic.[IgnoreDuplicateKey]
     INTO #IndexOptionRebuilds
     FROM #IndexChanges ic WITH (NOLOCK)
     WHERE ic.[ColumnStore] = 0

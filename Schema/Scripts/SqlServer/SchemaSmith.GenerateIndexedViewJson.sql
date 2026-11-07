@@ -53,7 +53,7 @@ BEGIN
                     CAST(CASE WHEN i.type = 1 THEN 1 ELSE 0 END AS BIT) AS [Clustered],
                     CAST(CASE WHEN i.type IN (5, 6) THEN 1 ELSE 0 END AS BIT) AS [ColumnStore],
                     STRING_AGG(
-                        CASE WHEN ic.is_included_column = 0
+                        CASE WHEN ic.is_included_column = 0 AND (ic.key_ordinal > 0 OR i.[type] NOT IN (1, 2))
                             THEN [SchemaSmith].[fn_SafeBracketWrap](c.name) +
                                 CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                             ELSE NULL

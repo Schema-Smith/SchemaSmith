@@ -56,6 +56,8 @@ public class PartitioningExtractionTests
         // Partitioned table, clustered index aligned to the same scheme.
         Exec($"CREATE TABLE [{_p}].PartTable (Id INT NOT NULL, Val NVARCHAR(50) NULL) ON [{PartitionScheme}](Id)");
         Exec($"CREATE CLUSTERED INDEX ixPartTable ON [{_p}].PartTable(Id) ON [{PartitionScheme}](Id)");
+        // Aligned on Id without keying it: SQL Server adds Id to the index itself, as a key_ordinal 0 column.
+        Exec($"CREATE NONCLUSTERED INDEX ixPartTableVal ON [{_p}].PartTable(Val) ON [{PartitionScheme}](Id)");
 
         // Ordinary table, ordinary index -- the control that proves nothing is emitted when nothing is
         // partitioned. Without it a bug that emitted the scheme unconditionally would look like a pass.
@@ -148,6 +150,21 @@ public class PartitioningExtractionTests
     }
 
     [Test]
+    public void AnAlignedIndex_ExtractsTheKeyItWasDeclaredWith_NotThePartitionColumnTheEngineAdded()
+    {
+        var json = Extract(_p, "PartTable");
+        using var doc = System.Text.Json.JsonDocument.Parse(json);
+        var columns = "";
+        foreach (var ix in doc.RootElement.GetProperty("Indexes").EnumerateArray())
+            if (ix.GetProperty("Name").GetString()!.Contains("ixPartTableVal"))
+                columns = ix.GetProperty("IndexColumns").GetString();
+
+        Assert.That(columns, Is.EqualTo("[Val]"),
+            "the engine carries the partitioning column in an aligned index as a key_ordinal 0 column; extracted as a key "
+            + "it declares a different index, keyed on Id first\n" + json);
+    }
+
+    [Test]
     public void APartitionedIndexOnAnUnpartitionedTable_EmitsTheIndexPlacementOnly()
     {
         var json = Extract(_p, "PartIndexOnly");
@@ -198,6 +215,7 @@ public class PartitioningExtractionTests
             Exec("CREATE PARTITION SCHEME psExtractXml AS PARTITION pfExtractXml ALL TO ([PRIMARY])");
             Exec("CREATE TABLE dbo.PartTable (Id INT NOT NULL, Val NVARCHAR(50) NULL) ON psExtractXml(Id)");
             Exec("CREATE CLUSTERED INDEX ixPartTable ON dbo.PartTable(Id) ON psExtractXml(Id)");
+            Exec("CREATE NONCLUSTERED INDEX ixPartTableVal ON dbo.PartTable(Val) ON psExtractXml(Id)");
 
             var xml = Extract("dbo", "PartTable", xml: true);
 
@@ -206,6 +224,8 @@ public class PartitioningExtractionTests
                 Assert.That(xml, Does.Contain("PartitionScheme"), xml);
                 Assert.That(xml, Does.Contain("psExtractXml"), xml);
                 Assert.That(xml, Does.Contain("PartitionColumn"), xml);
+                Assert.That(System.Text.RegularExpressions.Regex.Match(xml, @"ixPartTableVal.*?<IndexColumns>(.*?)</IndexColumns>").Groups[1].Value,
+                    Is.EqualTo("[Val]"), xml);
             });
         }
         finally

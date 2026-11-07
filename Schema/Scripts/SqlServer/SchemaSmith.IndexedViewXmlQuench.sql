@@ -339,7 +339,7 @@ BEGIN
                     i.name,
                     i.is_unique,
                     CAST(CASE WHEN i.type = 1 THEN 1 ELSE 0 END AS BIT),
-                    STUFF((SELECT ',' + CASE WHEN ic.is_included_column = 0
+                    STUFF((SELECT ',' + CASE WHEN ic.is_included_column = 0 AND (ic.key_ordinal > 0 OR i.[type] NOT IN (1, 2))
                             THEN QUOTENAME(c.name) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                             ELSE NULL END
                        FROM sys.index_columns ic
@@ -355,7 +355,8 @@ BEGIN
                     i.fill_factor,
                     i.is_padded
                 FROM sys.indexes i
-                LEFT JOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id AND p.partition_number = 1
+                -- Every partition, not the first: MIXED when they differ.
+                CROSS APPLY (SELECT [data_compression_desc] = SchemaSmith.fn_PartitionCompression(i.object_id, i.index_id)) p
                 WHERE i.object_id = @existingObjectId AND i.type > 0;
 
                 -- Parse desired indexes from JSON

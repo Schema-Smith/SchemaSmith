@@ -64,7 +64,7 @@ BEGIN
                                         CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                              FROM sys.index_columns ic
                             INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-                            WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0
+                            WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 0 AND (ic.key_ordinal > 0 OR i.[type] NOT IN (1, 2))
                             ORDER BY ic.key_ordinal FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '') AS [IndexColumns],
                     STUFF((SELECT ', ' + [SchemaSmith].[fn_SafeBracketWrap](c2.name)
                              FROM sys.index_columns ic2

@@ -336,7 +336,7 @@ BEGIN
                     i.is_unique,
                     CAST(CASE WHEN i.type = 1 THEN 1 ELSE 0 END AS BIT),
                     STRING_AGG(
-                        CASE WHEN ic.is_included_column = 0
+                        CASE WHEN ic.is_included_column = 0 AND (ic.key_ordinal > 0 OR i.[type] NOT IN (1, 2))
                             THEN QUOTENAME(c.name) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                             ELSE NULL END, ','
                     ) WITHIN GROUP (ORDER BY ic.key_ordinal),
@@ -350,7 +350,8 @@ BEGIN
                 FROM sys.indexes i
                 INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
                 INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-                LEFT JOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id AND p.partition_number = 1
+                -- Every partition, not the first: MIXED when they differ.
+                CROSS APPLY (SELECT [data_compression_desc] = SchemaSmith.fn_PartitionCompression(i.object_id, i.index_id)) p
                 WHERE i.object_id = @existingObjectId AND i.type > 0
                 GROUP BY i.name, i.index_id, i.is_unique, i.type, i.fill_factor, i.is_padded, p.data_compression_desc, i.object_id;
 

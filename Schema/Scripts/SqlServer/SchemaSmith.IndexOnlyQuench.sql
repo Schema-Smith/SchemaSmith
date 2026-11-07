@@ -365,18 +365,37 @@ BEGIN TRY
   RAISERROR('Fixup Index Compression', 10, 100) WITH NOWAIT
   -- A columnstore index reports COLUMNSTORE (or COLUMNSTORE_ARCHIVE); a declaration that names neither means COLUMNSTORE.
   -- Compared raw, the declared default NONE differed on every run and the rebuild to NONE was refused by the engine.
-  SELECT @v_SQL = STRING_AGG(CAST('RAISERROR(''  Altering index compression for ' + REPLACE(REPLACE(i.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(i.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(i.[IndexName], '''', ''''''), '%', '%%') + ' TO ' + REPLACE(REPLACE(CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                                  'ALTER INDEX ' + i.[IndexName] + ' ON ' + i.[Schema] + '.' + i.[TableName] + ' REBUILD PARTITION=ALL WITH (DATA_COMPRESSION=' + CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END +
-                                  CASE WHEN ol.[Form] IN ('online', 'resumable') THEN ', ONLINE = ON' ELSE '' END + ');' AS NVARCHAR(MAX)), CHAR(13) + CHAR(10))
-    FROM #Indexes i WITH (NOLOCK) 
+  -- One rebuild per index, of only the partitions that differ: the whole index in one statement when every partition
+  -- does (and below 2014, where an online rebuild cannot name one partition), otherwise one statement per partition.
+  IF OBJECT_ID('tempdb..#IndexCompressionFixups') IS NOT NULL DROP TABLE #IndexCompressionFixups
+  SELECT i.[Schema], i.[TableName], i.[IndexName], dz.[Desired], dr.[Total], dr.[List],
+         [Whole] = CASE WHEN dr.[Differing] = dr.[Total] OR (ol.[Form] IN ('online', 'resumable') AND SchemaSmith.fn_ServerMajorVersion() < 12) THEN 1 ELSE 0 END,
+         [With] = ' WITH (DATA_COMPRESSION=' + dz.[Desired] + CASE WHEN ol.[Form] IN ('online', 'resumable') THEN ', ONLINE = ON' ELSE '' END + ')'
+    INTO #IndexCompressionFixups
+    FROM #Indexes i WITH (NOLOCK)
     JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName])
-                                     AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
+                       AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
     LEFT JOIN #OnlineForms ol WITH (NOLOCK) ON ol.[Kind] = 'index' AND ol.[Schema] = i.[Schema] AND ol.[TableName] = i.[TableName]
-                                       AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
-    LEFT JOIN sys.partitions p ON p.[object_id] = si.[object_id]
-                                            AND p.index_id = si.index_id
-    WHERE ISNULL(i.[CompressionType], '') <> 'MIXED' AND COALESCE(p.data_compression_desc COLLATE DATABASE_DEFAULT, 'NONE') <> CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END ELSE i.[CompressionType] END
+                                           AND ol.[IndexName] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName])
+    CROSS APPLY (SELECT [Desired] = CAST(CASE WHEN i.[ColumnStore] = 1 THEN CASE WHEN i.[CompressionType] = 'COLUMNSTORE_ARCHIVE' THEN 'COLUMNSTORE_ARCHIVE' ELSE 'COLUMNSTORE' END
+                                              ELSE i.[CompressionType] END AS NVARCHAR(60))) dz
+    CROSS APPLY SchemaSmith.fn_PartitionCompressionDrift(si.[object_id], si.index_id, dz.[Desired]) dr
+    WHERE ISNULL(i.[CompressionType], '') <> 'MIXED' AND dr.[Differing] > 0
+
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Altering index compression for ' + REPLACE(REPLACE(f.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(f.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(f.[IndexName], '''', ''''''), '%', '%%') + ' TO ' + REPLACE(REPLACE(f.[Desired], '''', ''''''), '%', '%%') +
+                                  REPLACE(REPLACE(CASE WHEN f.[Whole] = 1 THEN '' ELSE ' (partitions ' + f.[List] + ' of ' + CAST(f.[Total] AS NVARCHAR(10)) + ')' END, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                  'ALTER INDEX ' + f.[IndexName] + ' ON ' + f.[Schema] + '.' + f.[TableName] + ' REBUILD PARTITION=' +
+                                  CASE WHEN f.[Whole] = 1 THEN 'ALL'
+                                       ELSE REPLACE(f.[List], ', ', f.[With] + ';' + CHAR(13) + CHAR(10) + 'ALTER INDEX ' + f.[IndexName] + ' ON ' + f.[Schema] + '.' + f.[TableName] + ' REBUILD PARTITION=') END +
+                                  f.[With] + ';' + CHAR(13) + CHAR(10) +
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''index'', N''' + REPLACE((f.[Schema] + '.' + f.[TableName] + '.' + f.[IndexName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''modified'');' AS NVARCHAR(MAX))
+                           FROM #IndexCompressionFixups f WITH (NOLOCK)
+                           FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
+  IF @WhatIf = 1
+    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+      SELECT @@SPID, 'index', f.[Schema] + '.' + f.[TableName] + '.' + f.[IndexName], 'wouldModify'
+        FROM #IndexCompressionFixups f WITH (NOLOCK)
 
   RAISERROR('Collect Existing Index Definitions', 10, 100) WITH NOWAIT
   DROP TABLE IF EXISTS #ExistingIndexes
@@ -408,7 +427,7 @@ BEGIN TRY
                             THEN ' (' + (SELECT STRING_AGG(CAST(CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) COLLATE DATABASE_DEFAULT ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
                                            FROM sys.index_columns ic
                                            LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
-                                           WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0) + ')' +
+                                           WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0 AND (ic.key_ordinal > 0 OR si.[type] NOT IN (1, 2))) + ')' +
                                  CASE WHEN EXISTS (SELECT * FROM sys.index_columns ic WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1)
                                       THEN ' INCLUDE (' +
                                            (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY COL_NAME(ic.[object_id], ic.column_id))
@@ -437,8 +456,8 @@ BEGIN TRY
                                      AND NOT EXISTS (SELECT 1 FROM sys.index_columns gic
                                                      JOIN #GraphKeyParts g ON g.[object_id] = gic.[object_id] AND g.column_id = gic.column_id
                                                     WHERE gic.[object_id] = si.[object_id] AND gic.index_id = si.index_id AND g.graph_type = 1)
-    LEFT JOIN sys.partitions p  ON p.[object_id] = si.[object_id]
-                                             AND p.index_id = si.index_id
+    -- One row per index: a partitioned index's compression is the value its partitions share, or MIXED.
+    CROSS APPLY (SELECT [data_compression_desc] = SchemaSmith.fn_PartitionCompression(si.[object_id], si.index_id)) p
     CROSS APPLY (SELECT [WithOptions] =
                    CASE WHEN (si.[type] NOT IN (5, 6) AND ISNULL(p.[data_compression_desc], 'NONE') COLLATE DATABASE_DEFAULT IN ('NONE', 'ROW', 'PAGE'))
                              OR (si.[type] IN (5, 6) AND ISNULL(p.[data_compression_desc], 'NONE') COLLATE DATABASE_DEFAULT IN ('COLUMNSTORE', 'COLUMNSTORE_ARCHIVE'))
