@@ -860,6 +860,7 @@ public static class ForgeKindler
                 // One reading of an index key's expression, COLLATE, operator class and parameters, behind the
                 // declared-side normaliser and quoter and the live-side rendering.
                 new("SchemaSmith.IndexKeyForms.sql"),
+                new("SchemaSmith.ExcludeKeyForms.sql"),
                 new("SchemaSmith.NormalizeIndexColumnList.sql"),
                 new("SchemaSmith.StripParenWrapping.sql"),
                 new("SchemaSmith.StatisticsDefinitionForms.sql"),

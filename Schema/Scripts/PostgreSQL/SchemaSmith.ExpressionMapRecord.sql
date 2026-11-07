@@ -117,6 +117,40 @@ BEGIN
       JOIN pg_catalog.pg_class ic
         ON ic.oid = idx.indexrelid AND ic.relname = i."Name" AND ic.relkind IN ('i', 'I')
      WHERE COALESCE(i."FilterExpression", '') != '';
+
+  -- Expression index keys: the declared list as the compare consumes it, against IndexKeyList, as the snapshot reads it.
+  -- A list of plain columns already compares equal and needs no row.
+  INSERT INTO temp_expression_map_declared
+    SELECT i."TableSchema", i."TableName", 'INDEX', i."Name", 'keys',
+           "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"),
+           "SchemaSmith"."IndexKeyList"(idx.indexrelid)
+      FROM temp_indexes i
+      JOIN pg_catalog.pg_index idx
+        ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(i."TableSchema") || '.' || "SchemaSmith"."QuoteName"(i."TableName"))
+      JOIN pg_catalog.pg_class ic
+        ON ic.oid = idx.indexrelid AND ic.relname = i."Name" AND ic.relkind IN ('i', 'I')
+     WHERE i."IndexColumns" LIKE '%(%';
+  END IF;
+
+  -- Exclusion constraints, keys and predicate, read as ModifiedTableQuench's snapshot reads them.
+  IF to_regclass('pg_temp.temp_excludes') IS NOT NULL THEN
+    INSERT INTO temp_expression_map_declared
+      SELECT c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'keys',
+             "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns"),
+             "SchemaSmith"."ExcludeKeyList"(con.oid)
+        FROM temp_excludes c
+        JOIN pg_catalog.pg_constraint con
+          ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
+         AND con.conname = c."Name" AND con.contype = 'x';
+    INSERT INTO temp_expression_map_declared
+      SELECT c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'filter', c."FilterExpression",
+             COALESCE("SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)), '')
+        FROM temp_excludes c
+        JOIN pg_catalog.pg_constraint con
+          ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
+         AND con.conname = c."Name" AND con.contype = 'x'
+        JOIN pg_catalog.pg_index idx ON idx.indexrelid = con.conindid
+       WHERE COALESCE(c."FilterExpression", '') != '';
   END IF;
 
   -- Extended statistics carrying an expression: the whole column list, in the normalised live form the

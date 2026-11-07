@@ -545,6 +545,19 @@ BEGIN
        AND "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX', i."Name", 'filter',
              i."FilterExpression", COALESCE(ei."FilterExpression", ''));
 
+    -- Expression index keys, the same way: PostgreSQL stores lower(email) on a varchar column as lower((email)::text),
+    -- so the declared list (as NormalizeIndexColumnList gives it) is taken where the map vouches for the pair.
+    UPDATE temp_existing_indexes ei
+       SET "IndexColumns" = "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns")
+      FROM temp_indexes i
+     WHERE i."TableSchema" = ei."TableSchema"
+       AND i."TableName" = ei."TableName"
+       AND i."Name" = ei."IndexName"
+       AND i."IndexColumns" LIKE '%(%'
+       AND "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") != COALESCE(ei."IndexColumns", '')
+       AND "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX', i."Name", 'keys',
+             "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"), COALESCE(ei."IndexColumns", ''));
+
     RAISE NOTICE 'Collect Existing Foreign Key Definitions';
     DROP TABLE IF EXISTS temp_existing_foreignkeys;
     CREATE TEMPORARY TABLE temp_existing_foreignkeys AS
@@ -604,13 +617,9 @@ BEGIN
              t."Name" AS "TableName",
              i.relname AS "ExcludeName",
              (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') AS "AccessMethod",
-             -- Each key in the engine's canonical form (operator class, COLLATE, parameters; IndexKeyForms), paired
-             -- with its exclusion operator by position; the declared side is normalised to the same form below.
-             (SELECT STRING_AGG(k.item || ' WITH ' || COALESCE(nsp.nspname || '.' || o.oprname, o.oprname), ',' ORDER BY k.idx)
-                FROM UNNEST("SchemaSmith"."IndexKeyItems"(idx.indexrelid)) WITH ORDINALITY AS k(item, idx)
-                LEFT JOIN LATERAL (SELECT (con.conexclop::oid[])[k.idx] AS opr_oid) co ON TRUE
-                LEFT JOIN pg_operator o ON o.oid = co.opr_oid
-                LEFT JOIN pg_namespace nsp ON nsp.oid = o.oprnamespace AND nsp.nspname != 'pg_catalog') AS "ExcludeColumns",
+             -- Each key in the engine's canonical form, paired with its exclusion operator (ExcludeKeyForms); the
+             -- declared side is read to the same form by ExcludeKeysDeclared.
+             "SchemaSmith"."ExcludeKeyList"(con.oid) AS "ExcludeColumns",
              COALESCE("SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)), '') AS "FilterExpression",
              COALESCE(con.condeferrable, FALSE) AS "Deferrable",
              COALESCE(con.condeferred, FALSE) AS "InitiallyDeferred",
@@ -624,6 +633,24 @@ BEGIN
         JOIN pg_index idx ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name"))
         JOIN pg_class i ON i.oid = idx.indexrelid
         JOIN pg_catalog.pg_constraint con ON con.conrelid = idx.indrelid AND con.conname = i.relname AND con.contype = 'x';
+
+    -- An exclusion's keys and predicate, the way partial-index predicates are: PostgreSQL stores status = 'open' on a
+    -- varchar column as (status)::text = 'open'::text, so the snapshot takes the declared text where the map vouches.
+    UPDATE temp_existing_excludes ec
+       SET "ExcludeColumns" = "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns")
+      FROM temp_excludes c
+     WHERE c."TableSchema" = ec."TableSchema" AND c."TableName" = ec."TableName" AND c."Name" = ec."ExcludeName"
+       AND "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns") != COALESCE(ec."ExcludeColumns", '')
+       AND "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'keys',
+             "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns"), COALESCE(ec."ExcludeColumns", ''));
+    UPDATE temp_existing_excludes ec
+       SET "FilterExpression" = c."FilterExpression"
+      FROM temp_excludes c
+     WHERE c."TableSchema" = ec."TableSchema" AND c."TableName" = ec."TableName" AND c."Name" = ec."ExcludeName"
+       AND COALESCE(c."FilterExpression", '') != ''
+       AND c."FilterExpression" != ec."FilterExpression"
+       AND "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'filter',
+             c."FilterExpression", ec."FilterExpression");
 
     RAISE NOTICE 'Collect Existing Statistics Definitions';
     DROP TABLE IF EXISTS temp_existing_statistics;
@@ -999,8 +1026,7 @@ BEGIN
                                 AND ec."TableName" = c."TableName"
                                 AND ec."ExcludeName" = c."Name"
                                 AND (ec."AccessMethod" = c."AccessMethod" OR c."AccessMethod" = '')
-                                AND ec."ExcludeColumns" = (SELECT STRING_AGG("SchemaSmith"."IndexKeyDeclared"(c."TableSchema", c."TableName", c."AccessMethod", (celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',')
-                                                             FROM JSON_ARRAY_ELEMENTS(c."ExcludeColumns"::JSON) AS celem)
+                                AND ec."ExcludeColumns" = "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns")
                                 AND ec."IncludeColumns" = "SchemaSmith"."NormalizeIndexColumnList"(c."IncludeColumns")
                                 AND ec."StorageParameters" = c."StorageParameters"
                                 AND ec."FilterExpression" = c."FilterExpression"
@@ -1026,8 +1052,7 @@ BEGIN
                             AND ec."TableName" = c."TableName"
                             AND ec."ExcludeName" = c."Name"
                             AND (ec."AccessMethod" = c."AccessMethod" OR c."AccessMethod" = '')
-                            AND ec."ExcludeColumns" = (SELECT STRING_AGG("SchemaSmith"."IndexKeyDeclared"(c."TableSchema", c."TableName", c."AccessMethod", (celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',')
-                                                         FROM JSON_ARRAY_ELEMENTS(c."ExcludeColumns"::JSON) AS celem)
+                            AND ec."ExcludeColumns" = "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns")
                             AND ec."IncludeColumns" = "SchemaSmith"."NormalizeIndexColumnList"(c."IncludeColumns")
                             AND ec."StorageParameters" = c."StorageParameters"
                             AND ec."FilterExpression" = c."FilterExpression"
@@ -1060,7 +1085,10 @@ BEGIN
                          -- The declared lists are compared through NormalizeIndexColumnList: the snapshot reads
                          -- columns back unquoted with only non-default sort options, so "status" or status ASC
                          -- never matched and the index was rebuilt on every deploy.
-                         AND "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") = ei."IndexColumns"
+                         AND ("SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") = ei."IndexColumns"
+                              -- Keyed on the OLD name, as the predicate is below: the snapshot substitution matches by name.
+                              OR "SchemaSmith"."ExpressionMapUnchanged"(ei."TableSchema", ei."TableName", 'INDEX', ei."IndexName", 'keys',
+                                   "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"), ei."IndexColumns"))
                          AND "SchemaSmith"."NormalizeIndexColumnList"(i."IncludeColumns") = COALESCE(ei."IncludeColumns", '')
                          -- #285: a PRIMARY KEY is unique in the catalog whether or not the package
                          -- says so, so a naturally-authored PK (PrimaryKey: true, no Unique) failed

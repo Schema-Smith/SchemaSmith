@@ -217,6 +217,19 @@ BEGIN
        AND "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX', i."Name", 'filter',
              i."FilterExpression", COALESCE(ei."FilterExpression", ''));
 
+    -- Expression index keys, the same way: PostgreSQL stores lower(email) on a varchar column as lower((email)::text),
+    -- so the declared list (as NormalizeIndexColumnList gives it) is taken where the map vouches for the pair.
+    UPDATE temp_existing_indexes ei
+       SET "IndexColumns" = "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns")
+      FROM temp_indexes i
+     WHERE i."TableSchema" = ei."TableSchema"
+       AND i."TableName" = ei."TableName"
+       AND i."Name" = ei."IndexName"
+       AND i."IndexColumns" LIKE '%(%'
+       AND "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") != COALESCE(ei."IndexColumns", '')
+       AND "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX', i."Name", 'keys',
+             "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"), COALESCE(ei."IndexColumns", ''));
+
     RAISE NOTICE 'Handle Renamed Indexes And Unique Constraints';
     -- The rename pairs are materialised, not just rendered to SQL: the drop election below starts from the
     -- PRE-rename snapshot, where a renamed index still carries its old name and is absent from the package --
@@ -233,7 +246,10 @@ BEGIN
                          -- The declared lists are compared through NormalizeIndexColumnList: the snapshot reads
                          -- columns back unquoted with only non-default sort options, so "status" or status ASC
                          -- never matched and the index was rebuilt on every deploy.
-                         AND "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") = ei."IndexColumns"
+                         AND ("SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") = ei."IndexColumns"
+                              -- Keyed on the OLD name, as the predicate is below: the snapshot substitution matches by name.
+                              OR "SchemaSmith"."ExpressionMapUnchanged"(ei."TableSchema", ei."TableName", 'INDEX', ei."IndexName", 'keys',
+                                   "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"), ei."IndexColumns"))
                          AND "SchemaSmith"."NormalizeIndexColumnList"(i."IncludeColumns") = COALESCE(ei."IncludeColumns", '')
                          -- #285: a PRIMARY KEY is unique in the catalog whether or not the package
                          -- says so, so a naturally-authored PK (PrimaryKey: true, no Unique) failed

@@ -56,7 +56,7 @@ public class TableQuench_DropExcludeAndStatisticsTests : BaseTableQuenchTests
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
 
-        cmd.CommandText = "CREATE EXTENSION IF NOT EXISTS btree_gist";
+        cmd.CommandText = "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS btree_gist; EXCEPTION WHEN unique_violation THEN NULL; END $$";
         cmd.ExecuteNonQuery();
 
         cmd.CommandText = @"

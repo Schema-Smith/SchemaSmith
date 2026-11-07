@@ -106,6 +106,58 @@ BEGIN
        WHERE COALESCE(i."FilterExpression", '') != '' AND idx.indpred IS NOT NULL
          AND i."FilterExpression" != PG_GET_EXPR(idx.indpred, idx.indrelid)
          AND NOT "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX', i."Name", 'filter', i."FilterExpression", PG_GET_EXPR(idx.indpred, idx.indrelid));
+
+    -- Expression index keys: the copy's only index, built on the declared keys with the declared access method.
+    INSERT INTO temp_expression_map_candidates
+      SELECT i."TableSchema", i."TableName", 'INDEX', i."Name", 'keys',
+             "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"),
+             "SchemaSmith"."IndexKeyList"(idx.indexrelid),
+             'CREATE INDEX ON {probe} USING ' || COALESCE(NULLIF(i."AccessMethod", ''), 'btree') || ' (' || "SchemaSmith"."QuoteIndexColumnList"(i."IndexColumns") || ')',
+             'SELECT "SchemaSmith"."IndexKeyList"(indexrelid) FROM pg_catalog.pg_index WHERE indrelid = ''pg_temp.schemasmith_probe''::regclass'
+        FROM temp_indexes i
+        JOIN pg_catalog.pg_index idx ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(i."TableSchema") || '.' || "SchemaSmith"."QuoteName"(i."TableName"))
+        JOIN pg_catalog.pg_class ic ON ic.oid = idx.indexrelid AND ic.relname = i."Name" AND ic.relkind IN ('i', 'I')
+       WHERE i."IndexColumns" LIKE '%(%'
+         AND "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") != "SchemaSmith"."IndexKeyList"(idx.indexrelid)
+         AND NOT "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX', i."Name", 'keys',
+               "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"), "SchemaSmith"."IndexKeyList"(idx.indexrelid));
+  END IF;
+
+  -- Exclusion constraints: the copy gets the declared constraint, and each slot is read back from it.
+  IF to_regclass('pg_temp.temp_excludes') IS NOT NULL THEN
+    INSERT INTO temp_expression_map_candidates
+      SELECT c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'keys',
+             "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns"),
+             "SchemaSmith"."ExcludeKeyList"(con.oid),
+             'ALTER TABLE {probe} ADD EXCLUDE' || CASE WHEN NULLIF(TRIM(c."AccessMethod"), '') IS NOT NULL THEN ' USING ' || c."AccessMethod" ELSE '' END ||
+             ' (' || (SELECT STRING_AGG("SchemaSmith"."QuoteIndexColumnList"((celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',' ORDER BY n)
+                        FROM JSON_ARRAY_ELEMENTS(c."ExcludeColumns"::JSON) WITH ORDINALITY AS e(celem, n)) || ')' ||
+             CASE WHEN NULLIF(TRIM(c."FilterExpression"), '') IS NOT NULL THEN ' WHERE (' || c."FilterExpression" || ')' ELSE '' END,
+             'SELECT "SchemaSmith"."ExcludeKeyList"(oid) FROM pg_catalog.pg_constraint WHERE conrelid = ''pg_temp.schemasmith_probe''::regclass AND contype = ''x'''
+        FROM temp_excludes c
+        JOIN pg_catalog.pg_constraint con
+          ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
+         AND con.conname = c."Name" AND con.contype = 'x'
+       WHERE "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns") != "SchemaSmith"."ExcludeKeyList"(con.oid)
+         AND NOT "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'keys',
+               "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns"), "SchemaSmith"."ExcludeKeyList"(con.oid));
+    INSERT INTO temp_expression_map_candidates
+      SELECT c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'filter', c."FilterExpression",
+             COALESCE("SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)), ''),
+             'ALTER TABLE {probe} ADD EXCLUDE' || CASE WHEN NULLIF(TRIM(c."AccessMethod"), '') IS NOT NULL THEN ' USING ' || c."AccessMethod" ELSE '' END ||
+             ' (' || (SELECT STRING_AGG("SchemaSmith"."QuoteIndexColumnList"((celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',' ORDER BY n)
+                        FROM JSON_ARRAY_ELEMENTS(c."ExcludeColumns"::JSON) WITH ORDINALITY AS e(celem, n)) || ')' ||
+             CASE WHEN NULLIF(TRIM(c."FilterExpression"), '') IS NOT NULL THEN ' WHERE (' || c."FilterExpression" || ')' ELSE '' END,
+             'SELECT COALESCE("SchemaSmith"."StripParenWrapping"(pg_catalog.pg_get_expr(i.indpred, i.indrelid)), '''') FROM pg_catalog.pg_constraint x JOIN pg_catalog.pg_index i ON i.indexrelid = x.conindid WHERE x.conrelid = ''pg_temp.schemasmith_probe''::regclass AND x.contype = ''x'''
+        FROM temp_excludes c
+        JOIN pg_catalog.pg_constraint con
+          ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
+         AND con.conname = c."Name" AND con.contype = 'x'
+        JOIN pg_catalog.pg_index idx ON idx.indexrelid = con.conindid
+       WHERE COALESCE(c."FilterExpression", '') != ''
+         AND c."FilterExpression" != COALESCE("SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)), '')
+         AND NOT "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'filter',
+               c."FilterExpression", COALESCE("SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)), ''));
   END IF;
 
   FOR r IN SELECT * FROM temp_expression_map_candidates LOOP

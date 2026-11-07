@@ -654,6 +654,76 @@ END $$;";
         return rows;
     }
 
+    // An index on a materialized view compared its keys and predicate as text, and PostgreSQL stores lower(name) on a
+    // varchar column as lower((name)::text) and amount > 0 as (amount > (0)::numeric) -- so the index was dropped and
+    // rebuilt on every deploy. Both now go through the expression map, keyed on the view.
+    private static string ExpressionIndexView(string view) =>
+        BuildViewJson(view, "public", "SELECT id, name, amount FROM public.test_source", true,
+            $@"[{{""Name"":""ix_{view}"",""Unique"":false,""IndexColumns"":""lower(name)"",""AccessMethod"":""btree"",""FilterExpression"":""amount > 0""}}]");
+
+    private static string IndexOid(IDbCommand cmd, string view)
+    {
+        cmd.CommandText = $"SELECT COALESCE(to_regclass('public.\"ix_{view}\"')::oid::text, 'none')";
+        return Convert.ToString(cmd.ExecuteScalar());
+    }
+
+    [Test]
+    public void AnExpressionIndexOnAMaterializedView_IsCreatedOnce_AndLeftAlone()
+    {
+        var view = $"mvx_{Guid.NewGuid():N}"[..16];
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            RunMaterializedViewQuench(cmd, ExpressionIndexView(view));
+            var oid = IndexOid(cmd, view);
+            Assert.That(oid, Is.Not.EqualTo("none"), "setup");
+            var messages = new System.Collections.Generic.List<string>();
+            ((Npgsql.NpgsqlConnection)conn).Notice += (_, e) => messages.Add(e.Notice.MessageText);
+
+            RunMaterializedViewQuench(cmd, ExpressionIndexView(view));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(IndexOid(cmd, view), Is.EqualTo(oid), "the index was not rebuilt");
+                Assert.That(messages, Has.None.Contains("on a scratch copy"), "the run that created it recorded it");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP MATERIALIZED VIEW IF EXISTS public.\"{view}\"";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    [Test]
+    public void AMaterializedViewIndexBuiltElsewhere_IsRecorded_NotRebuilt()
+    {
+        var view = $"mvy_{Guid.NewGuid():N}"[..16];
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            RunMaterializedViewQuench(cmd, BuildViewJson(view, "public", "SELECT id, name, amount FROM public.test_source", true, "[]"));
+            cmd.CommandText = $"CREATE INDEX \"ix_{view}\" ON public.\"{view}\" (lower(name)) WHERE amount > 0";
+            cmd.ExecuteNonQuery();
+            var oid = IndexOid(cmd, view);
+
+            RunMaterializedViewQuench(cmd, ExpressionIndexView(view));
+
+            Assert.That(IndexOid(cmd, view), Is.EqualTo(oid), "verified on a copy, not rebuilt");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP MATERIALIZED VIEW IF EXISTS public.\"{view}\"";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     private void RunMaterializedViewQuench(IDbCommand cmd, string viewDefinitionsJson, bool whatIf = false, string productName = null)
     {
         cmd.CommandTimeout = 300;

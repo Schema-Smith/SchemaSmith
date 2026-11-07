@@ -357,6 +357,119 @@ public class DomainTypeQuenchTests : BaseTableQuenchTests
 ]
 """;
 
+    // ---- defaults through the expression map --------------------------------------
+
+    // A domain default was compared raw against pg_get_expr, and PostgreSQL stores 'N' on a varchar domain as
+    // 'N'::character varying -- so the default was set again on every deploy, the one that created the domain included.
+    private void WithDomainDefault(Action<IDbCommand, string, System.Collections.Generic.List<string>> body)
+    {
+        var domain = $"domdef_{Guid.NewGuid().ToString("N")[..8]}";
+        using var conn = (Npgsql.NpgsqlConnection)DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        var messages = new System.Collections.Generic.List<string>();
+        conn.Notice += (_, e) => messages.Add(e.Notice.MessageText);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        void Clean()
+        {
+            DropDomain(cmd, domain);
+            cmd.CommandText = $"""DELETE FROM "SchemaSmith"."ExpressionMap" WHERE "ObjectName" = '{domain}'; DELETE FROM "SchemaSmith"."ChangeAudit" WHERE "SessionId" = pg_backend_pid();""";
+            cmd.ExecuteNonQuery();
+        }
+        Clean();
+        try { body(cmd, domain, messages); }
+        finally { Clean(); }
+    }
+
+    private static string DomainWithDefault(string name, string dflt) => $$"""
+[
+  { "Schema": "public", "Name": "{{name}}", "DataType": "varchar(10)", "NotNull": false, "Default": "{{dflt}}" }
+]
+""";
+
+    private static string DomainAudits(IDbCommand cmd, string name)
+    {
+        cmd.CommandText = $"""SELECT COUNT(*) FROM "SchemaSmith"."ChangeAudit" WHERE "SessionId" = pg_backend_pid() AND "ObjectName" LIKE '%{name}' AND "ActionType" = 'modified'""";
+        return Convert.ToString(cmd.ExecuteScalar());
+    }
+
+    private static string DomainDefault(IDbCommand cmd, string name)
+    {
+        cmd.CommandText = $"SELECT pg_get_expr(typdefaultbin, 0) FROM pg_type WHERE typname = '{name}' AND typtype = 'd'";
+        return Convert.ToString(cmd.ExecuteScalar());
+    }
+
+    private static string DomainMapRows(IDbCommand cmd, string name)
+    {
+        cmd.CommandText = $"""SELECT COUNT(*) FROM "SchemaSmith"."ExpressionMap" WHERE "ObjectKind" = 'DOMAIN' AND "ObjectName" = '{name}'""";
+        return Convert.ToString(cmd.ExecuteScalar());
+    }
+
+    [Test]
+    public void ADomainDefault_IsSetOnce_AndLeftAlone()
+    {
+        WithDomainDefault((cmd, domain, messages) =>
+        {
+            RunDomainTypeQuench(cmd, DomainWithDefault(domain, "'N'"));
+            Assert.That(DomainAudits(cmd, domain), Is.EqualTo("0"), "the run that creates the domain does not then set its default again");
+
+            messages.Clear();
+            RunDomainTypeQuench(cmd, DomainWithDefault(domain, "'N'"));
+            Assert.That(DomainAudits(cmd, domain), Is.EqualTo("0"), "nor does the next one");
+            Assert.That(messages, Has.None.Contains("on a scratch copy"), "the first run recorded it, so nothing is probed");
+        });
+    }
+
+    [Test]
+    public void AChangedDomainDefault_IsApplied()
+    {
+        WithDomainDefault((cmd, domain, messages) =>
+        {
+            RunDomainTypeQuench(cmd, DomainWithDefault(domain, "'N'"));
+            RunDomainTypeQuench(cmd, DomainWithDefault(domain, "'Y'"));
+            Assert.That(DomainDefault(cmd, domain), Does.StartWith("'Y'"));
+        });
+    }
+
+    [Test]
+    public void ADomainBuiltElsewhere_HasItsDefaultRecorded_NotReSet()
+    {
+        WithDomainDefault((cmd, domain, messages) =>
+        {
+            cmd.CommandText = $"""CREATE DOMAIN public."{domain}" AS VARCHAR(10) DEFAULT 'N'""";
+            cmd.ExecuteNonQuery();
+
+            RunDomainTypeQuench(cmd, DomainWithDefault(domain, "'N'"));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(DomainAudits(cmd, domain), Is.EqualTo("0"));
+                Assert.That(DomainMapRows(cmd, domain), Is.EqualTo("1"));
+            });
+        });
+    }
+
+    [Test]
+    public void APreviewOfADomainBuiltElsewhere_ReportsNoChange_AndRecordsNothing()
+    {
+        WithDomainDefault((cmd, domain, messages) =>
+        {
+            cmd.CommandText = $"""CREATE DOMAIN public."{domain}" AS VARCHAR(10) DEFAULT 'N'""";
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = $@"CALL ""SchemaSmith"".""DomainTypeQuench""('{_productName}', '{DomainWithDefault(domain, "'N'").Replace("'", "''")}', true);";
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = $"""SELECT COUNT(*) FROM "SchemaSmith"."ChangeAudit" WHERE "SessionId" = pg_backend_pid() AND "ObjectName" LIKE '%{domain}'""";
+            Assert.Multiple(() =>
+            {
+                Assert.That(Convert.ToString(cmd.ExecuteScalar()), Is.EqualTo("0"), "nothing would change");
+                Assert.That(DomainMapRows(cmd, domain), Is.EqualTo("0"));
+            });
+        });
+    }
+
     // ---- fixtures -------------------------------------------------------------
 
     // Keys are the ones DomainTypeQuench actually reads: Schema, Name, DataType, NotNull, Default,

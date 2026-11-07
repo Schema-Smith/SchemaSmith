@@ -17,6 +17,7 @@ DECLARE
   bad RECORD;
   declared_canonical TEXT;
   dom RECORD;
+  v_rendered TEXT;
 BEGIN
   -- Converges declared domain types.
   --
@@ -185,6 +186,39 @@ BEGIN
       bad."Schema", bad."Name", bad.declared, COALESCE(bad.deployed, 'the base type''s');
   END LOOP;
 
+  -- A domain default through the expression map, compare and verify both here: domains run before tables, whatever
+  -- UpdateTables says. PostgreSQL stores 'N' on a varchar domain as 'N'::character varying, so a declared default that
+  -- reads differently is left alone when the map vouches for the pair, or when the declared text set on a scratch
+  -- domain (in pg_temp, always rolled back) is stored as exactly the live text. Anything else is set.
+  DROP TABLE IF EXISTS temp_domain_default_vouched;
+  CREATE TEMPORARY TABLE temp_domain_default_vouched ("Schema" TEXT, "Name" TEXT);
+  FOR dom IN SELECT t."Schema", t."Name", t."Default", PG_GET_EXPR(ty.typdefaultbin, 0) AS "Live",
+                    FORMAT_TYPE(ty.typbasetype, ty.typtypmod) AS "Base"
+               FROM temp_domain_types t
+               JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
+               JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
+              WHERE COALESCE(t."Default", '') <> '' AND ty.typdefaultbin IS NOT NULL
+                AND t."Default" <> PG_GET_EXPR(ty.typdefaultbin, 0) LOOP
+    IF "SchemaSmith"."ExpressionMapUnchanged"(dom."Schema", dom."Name", 'DOMAIN', dom."Name", 'default', dom."Default", dom."Live") THEN
+      INSERT INTO temp_domain_default_vouched VALUES (dom."Schema", dom."Name");
+      CONTINUE;
+    END IF;
+    v_rendered := NULL;
+    BEGIN
+      EXECUTE 'CREATE DOMAIN pg_temp.schemasmith_probe_domain AS ' || dom."Base" || ' DEFAULT ' || dom."Default";
+      SELECT PG_GET_EXPR(typdefaultbin, 0) INTO v_rendered
+        FROM pg_type WHERE typname = 'schemasmith_probe_domain' AND typnamespace = pg_my_temp_schema();
+      RAISE EXCEPTION USING ERRCODE = 'SSPRB';
+    EXCEPTION
+      WHEN SQLSTATE 'SSPRB' THEN NULL;
+      WHEN OTHERS THEN v_rendered := NULL;
+    END;
+    IF v_rendered COLLATE "C" = dom."Live" COLLATE "C" THEN
+      INSERT INTO temp_domain_default_vouched VALUES (dom."Schema", dom."Name");
+      RAISE NOTICE '  Verified the default of domain %.% on a scratch copy: the declared text renders to exactly what the database holds.', dom."Schema", dom."Name";
+    END IF;
+  END LOOP;
+
   -- NOT NULL and DEFAULT, each emitted only when it actually differs so an unchanged domain produces no
   -- statement at all. Both are in-place and touch no dependent column.
   RAISE NOTICE 'Fixup Modified Domain Types';
@@ -210,7 +244,8 @@ BEGIN
             FROM temp_domain_types t
             JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
             JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
-           WHERE COALESCE(t."Default", '') <> COALESCE(PG_GET_EXPR(ty.typdefaultbin, 0), '')) s;
+           WHERE COALESCE(t."Default", '') <> COALESCE(PG_GET_EXPR(ty.typdefaultbin, 0), '')
+             AND NOT EXISTS (SELECT 1 FROM temp_domain_default_vouched v WHERE v."Schema" = t."Schema" AND v."Name" = t."Name")) s;
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
   IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
@@ -364,4 +399,23 @@ BEGIN
      AND COALESCE(OBJ_DESCRIPTION(ty.oid, 'pg_type'), '') IS DISTINCT FROM t."Description";
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
   IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
+
+  -- Record each declared default against what the domain now stores, as ExpressionMapRecord does for tables. Not in
+  -- a preview: it changed nothing, so there is nothing new to vouch for.
+  IF NOT p_WhatIf THEN
+    INSERT INTO "SchemaSmith"."ExpressionMap" AS em
+      ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot", "AuthoredText", "CanonicalText",
+       "PlatformName", "EngineVersion", "CompatLevel", "UpdatedUtc")
+    SELECT t."Schema", t."Name", 'DOMAIN', t."Name", 'default', t."Default", PG_GET_EXPR(ty.typdefaultbin, 0),
+           'PostgreSQL', current_setting('server_version'), NULL, now()
+      FROM temp_domain_types t
+      JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
+      JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
+     WHERE COALESCE(t."Default", '') <> '' AND ty.typdefaultbin IS NOT NULL
+    ON CONFLICT ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot")
+    DO UPDATE SET "AuthoredText" = EXCLUDED."AuthoredText", "CanonicalText" = EXCLUDED."CanonicalText",
+                  "EngineVersion" = EXCLUDED."EngineVersion", "UpdatedUtc" = now()
+      WHERE em."AuthoredText" IS DISTINCT FROM EXCLUDED."AuthoredText" OR em."CanonicalText" IS DISTINCT FROM EXCLUDED."CanonicalText"
+         OR em."EngineVersion" IS DISTINCT FROM EXCLUDED."EngineVersion";
+  END IF;
 END $$;

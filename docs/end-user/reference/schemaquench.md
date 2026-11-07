@@ -1106,12 +1106,13 @@ version -- `Re-baselined 3 recorded expression(s) ... No object was changed.` --
 the first deploy after it.
 
 **Covered surfaces:** check constraints, computed columns, column defaults, and filtered-index and
-filtered-statistic predicates (SQL Server); check constraints, generated columns, column defaults, partial-index predicates,
+filtered-statistic predicates (SQL Server); check constraints, generated columns, column and domain defaults, index key
+expressions, partial-index predicates (on tables and materialized views), exclusion-constraint keys and predicates,
 extended-statistics expressions, row-level security `USING` / `WITH CHECK` expressions and materialized view
-bodies (PostgreSQL); check constraints, generated columns and expression defaults (MySQL, MariaDB). Index and statistic predicates
-are covered by `IndexOnlyTableQuenches` too, which compares indexes separately from the full table quench.
+bodies (PostgreSQL); check constraints, generated columns and expression defaults (MySQL, MariaDB). Index keys and predicates and statistic
+predicates are covered by `IndexOnlyTableQuenches` too, which compares indexes separately from the full table quench.
 The engine check on a copy covers the same surfaces except PostgreSQL's extended statistics, policies and
-materialized views, which are re-applied once and then recorded, as before.
+materialized view bodies, which are re-applied once and then recorded, as before.
 
 Some surfaces never had this problem and are unchanged: SQL Server indexed view bodies and literal column
 defaults already compared equal after the engine's own rewrite.

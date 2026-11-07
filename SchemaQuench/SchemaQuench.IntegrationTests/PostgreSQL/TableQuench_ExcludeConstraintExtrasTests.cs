@@ -50,7 +50,8 @@ public class TableQuench_ExcludeConstraintExtrasTests : BaseTableQuenchTests
         conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
-        cmd.CommandText = "CREATE EXTENSION IF NOT EXISTS btree_gist";
+        // Two fixtures creating the extension at once collide on its unique name; the loser finds it created.
+        cmd.CommandText = "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS btree_gist; EXCEPTION WHEN unique_violation THEN NULL; END $$";
         cmd.ExecuteNonQuery();
         try
         {

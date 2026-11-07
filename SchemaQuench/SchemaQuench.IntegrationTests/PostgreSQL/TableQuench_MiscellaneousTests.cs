@@ -722,7 +722,7 @@ INSERT INTO public.{tableName} (id, old_col) VALUES (1, 99);
         using var cmd = conn.CreateCommand();
 
         // Ensure btree_gist extension exists (required for exclude constraints on scalar types)
-        cmd.CommandText = "CREATE EXTENSION IF NOT EXISTS btree_gist";
+        cmd.CommandText = "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS btree_gist; EXCEPTION WHEN unique_violation THEN NULL; END $$";
         cmd.CommandTimeout = 300;
         cmd.ExecuteNonQuery();
 
