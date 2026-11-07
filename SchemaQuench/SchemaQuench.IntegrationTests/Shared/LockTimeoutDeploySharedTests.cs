@@ -61,6 +61,28 @@ public abstract class LockTimeoutDeploySharedTests : ObjectScriptDeployFixture
         return (connection, transaction);
     }
 
+    private string SessionId((IDbConnection Connection, IDbTransaction Transaction) blocker)
+    {
+        using var cmd = blocker.Connection.CreateCommand();
+        cmd.Transaction = blocker.Transaction;
+        cmd.CommandText = Platform.GetBasePlatform() switch
+        {
+            Platform.SqlServer => "SELECT @@SPID",
+            Platform.PostgreSQL => "SELECT pg_backend_pid()",
+            _ => "SELECT CONNECTION_ID()",
+        };
+        return Convert.ToString(cmd.ExecuteScalar(), System.Globalization.CultureInfo.InvariantCulture);
+    }
+
+    // How many sessions are waiting on the blocker's lock. MySQL's process list names no blocker, so there it is any
+    // session of this database waiting for a metadata lock; the fixture runs alone.
+    private string WaitingOn(string blockerId) => Platform.GetBasePlatform() switch
+    {
+        Platform.SqlServer => $"SELECT COUNT(*) FROM sys.dm_exec_requests WHERE blocking_session_id = {blockerId}",
+        Platform.PostgreSQL => $"SELECT COUNT(*) FROM pg_stat_activity WHERE {blockerId} = ANY(pg_blocking_pids(pid))",
+        _ => $"SELECT COUNT(*) FROM information_schema.PROCESSLIST WHERE STATE LIKE 'Waiting for table metadata lock%' AND DB = '{MainDb}'",
+    };
+
     private static void Release((IDbConnection Connection, IDbTransaction Transaction) blocker)
     {
         try { blocker.Transaction.Rollback(); }
@@ -101,9 +123,16 @@ public abstract class LockTimeoutDeploySharedTests : ObjectScriptDeployFixture
     {
         WriteFile("Tables", TableFileName, TableJson(BigType));
         var blocker = Block();
+        var blockerId = SessionId(blocker);
+        // Released once the deploy is seen waiting on it, and one lock timeout later, so at least one attempt has timed
+        // out. A fixed delay from the start raced the deploy: on a loaded server it reached the table after the release,
+        // never waited, and the retry this test is about never happened.
         var release = Task.Run(() =>
         {
-            Thread.Sleep(TimeSpan.FromSeconds(LockTimeoutSeconds + 2));
+            var deadline = Stopwatch.StartNew();
+            while (deadline.Elapsed < TimeSpan.FromSeconds(90) && Convert.ToInt64(Scalar(WaitingOn(blockerId))) == 0)
+                Thread.Sleep(100);
+            Thread.Sleep(TimeSpan.FromSeconds(LockTimeoutSeconds + 1));
             Release(blocker);
         });
         DeployResult result;
