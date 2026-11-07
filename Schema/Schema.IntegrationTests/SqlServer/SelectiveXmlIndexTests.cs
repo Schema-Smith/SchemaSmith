@@ -186,12 +186,16 @@ public class SelectiveXmlIndexTests
     {
         Deploy(xmlTier, indexOnly, Selective(Paths + ", " + NotePath));
         var primary = RowsetOf(xmlTier, $"sxi_{TableName}");
+        var conn = Connection(xmlTier);
+        Exec(conn, "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID");
 
         Deploy(xmlTier, indexOnly, Selective(Paths + ", " + NotePath.Replace("nvarchar(40)", "nvarchar(60)")));
 
-        var conn = Connection(xmlTier);
         Assert.Multiple(() =>
         {
+            // SQL Server drops the secondary with its selective index; the manifest says so, as it says the selective one went.
+            Assert.That(Scalar(conn, $"SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND ActionType = 'dropped' AND ObjectName LIKE '%aux_{TableName}%'"),
+                Is.EqualTo(1), "the secondary is recorded dropped");
             Assert.That(RowsetOf(xmlTier, $"sxi_{TableName}"), Is.Not.EqualTo(primary), "a path's changed type re-creates the index");
             Assert.That(Scalar(conn, $"SELECT max_length FROM sys.selective_xml_index_paths WHERE [object_id] = OBJECT_ID('dbo.{TableName}') AND [name] = 'pNote'"),
                 Is.EqualTo(120), "with the new type");

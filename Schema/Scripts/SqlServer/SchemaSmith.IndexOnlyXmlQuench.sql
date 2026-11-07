@@ -994,6 +994,15 @@ BEGIN TRY
       FROM #ExistingJsonIndexes ei WITH (NOLOCK)
       WHERE EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND id.[IsClustered] = 1)
         AND NOT EXISTS (SELECT * FROM #IndexesToDrop id WITH (NOLOCK) WHERE [xSchema] = [Schema] AND [xTableName] = [TableName] AND [xIndexName] = [IndexName])
+  -- A secondary XML index goes with the index it is built on: SQL Server drops it implicitly, so it is listed here and
+  -- the manifest records it dropped beside the one that took it (whichever drop runs first, the other finds it gone).
+  INSERT #IndexesToDrop ([Schema], [TableName], [IndexName], [IsConstraint], [IsUnique], [IsClustered])
+    SELECT DISTINCT id.[Schema], id.[TableName], CAST(sec.[name] COLLATE DATABASE_DEFAULT AS NVARCHAR(500)), 0, 0, 0
+      FROM #IndexesToDrop id WITH (NOLOCK)
+      JOIN sys.xml_indexes pri ON pri.[object_id] = OBJECT_ID(id.[Schema] + '.' + id.[TableName]) AND pri.[name] COLLATE DATABASE_DEFAULT = id.[IndexName]
+      JOIN sys.xml_indexes sec ON sec.[object_id] = pri.[object_id] AND sec.using_xml_index_id = pri.index_id
+     WHERE NOT EXISTS (SELECT * FROM #IndexesToDrop x WITH (NOLOCK)
+                        WHERE x.[Schema] = id.[Schema] AND x.[TableName] = id.[TableName] AND x.[IndexName] = sec.[name] COLLATE DATABASE_DEFAULT)
 
   
   -- OnlineApply REQUIRE: refused before any index is dropped.

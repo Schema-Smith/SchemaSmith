@@ -30,6 +30,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Fixed
 
+- **SQL Server: a secondary XML index dropped with its selective index is reported dropped.** Changing a selective XML index's paths drops its secondary with it; the deployment summary recorded the secondary only as created again.
 - **SchemaTongs keeps the descriptions of scripted objects (SQL Server, PostgreSQL).** A PostgreSQL comment on a function, procedure, aggregate, view, trigger, rule, type, collation, publication, text search configuration, operator, cast, event trigger or schema, and a SQL Server extended property on a user-defined or table type, a synonym or a partition function or scheme, were not in the extracted script, so a deploy to a new database lost them. Each script now ends with its `COMMENT ON` or `sp_addextendedproperty` statement.
 - **A WhatIf of a table rebuild lists only the rebuild (MySQL, MariaDB).** When a `RebuildPolicy` elected a table, the preview also printed the in-place `MODIFY COLUMN` statements and `wouldModify` rows the rebuild replaces, which the real run never makes. The preview now shows what the deploy does, as on SQL Server and PostgreSQL.
 - **DataTongs: a PostgreSQL partitioned table's rows are extracted.** DataTongs read a table with `FROM ONLY`, which on a partitioned table returns nothing, because every row lives in a partition, so such a table was extracted as empty. It now reads the partitioned table's rows; a table with inheritance children still reads only its own.
