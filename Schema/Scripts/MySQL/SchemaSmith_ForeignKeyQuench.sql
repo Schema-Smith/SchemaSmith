@@ -388,7 +388,12 @@ BEGIN
                AND (CHAR_LENGTH(x.Cols) = CHAR_LENGTH(v_SaRefColumns)
                     OR CAST(SUBSTRING(x.Cols, CHAR_LENGTH(v_SaRefColumns) + 1, 1) AS BINARY) = CAST(',' AS BINARY));
 
-            IF v_SaChildExists = 0 OR v_SaKeyExists > 0 OR v_SaRemoved = 1 THEN
+            -- Another session's rebuild still between recording its keys and dropping them: the key it is about to drop
+            -- would read as already back, so the record is left for a pass after that rebuild has finished.
+            IF COALESCE(IS_USED_LOCK(CONCAT('ss_rbfk_', MD5(CONCAT(v_SaParentSchema, '.', v_SaParentTable)))), CONNECTION_ID()) <> CONNECTION_ID() THEN
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('  Foreign key ', v_SaLabel, ' waits: another deploy is still rebuilding ', v_SaParentSchema, '.', v_SaParentTable));
+            ELSEIF v_SaChildExists = 0 OR v_SaKeyExists > 0 OR v_SaRemoved = 1 THEN
                 IF v_SaChildExists = 0 THEN
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
                     VALUES (CONNECTION_ID(), CONCAT('  Not restoring foreign key ', v_SaLabel, ': the table no longer exists'));

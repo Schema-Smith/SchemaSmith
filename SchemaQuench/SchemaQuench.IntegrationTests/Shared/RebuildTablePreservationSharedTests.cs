@@ -279,4 +279,45 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
             Assert.That(r.SetAside(r.Other), Is.EqualTo("0"));
         });
     }
+
+    // MySQL and MariaDB DDL is not transactional, so another deploy's foreign-key pass can run while a rebuild sits between
+    // recording its keys and dropping them. That pass saw each key still on its table, cleared the record as done with,
+    // and the rebuild then dropped the key with nothing left to restore it. The rebuild holds this lock for that span.
+    [Test]
+    public void AKeyStillOnItsTableMidRebuild_IsLeftRecorded_UntilTheRebuildFinishes()
+    {
+        using var r = Seeded();
+        r.Exec($@"CREATE TABLE `{r.Other}` (`Id` INT NOT NULL PRIMARY KEY, `ParentId` INT NULL,
+                    CONSTRAINT `fk_mid_{r.Uid}` FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`));");
+        r.Exec($@"INSERT INTO SchemaSmith_RebuildSetAsideForeignKeys (ChildSchema, ChildTable, KeyName, ParentSchema, ParentTable, ReferencedColumns, Definition, Declared)
+                  VALUES ('{r.Db}', '{r.Other}', 'fk_mid_{r.Uid}', '{r.Db}', '{r.Parent}', '`Id`',
+                          'FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`)', 0)");
+
+        using var rebuilding = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        rebuilding.Open();
+        using var lockCmd = rebuilding.CreateCommand();
+        lockCmd.CommandText = $"SELECT GET_LOCK(CONCAT('ss_rbfk_', MD5(CONCAT('{r.Db}', '.', '{r.Parent}'))), 5)";
+        Assert.That(Convert.ToInt32(lockCmd.ExecuteScalar()), Is.EqualTo(1), "setup: the rebuild's lock is held");
+
+        r.Exec("DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
+        Deploy(r, $$"""
+[ { "Name": "unrel_{{r.Uid}}", "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false } ] } ]
+""", productName: $"Unrelated_{r.Uid}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.SetAside(r.Other), Is.EqualTo("1"), "the record waits for the rebuild");
+            Assert.That(r.Log(), Does.Contain("another deploy is still rebuilding"));
+        });
+
+        lockCmd.CommandText = $"SELECT RELEASE_LOCK(CONCAT('ss_rbfk_', MD5(CONCAT('{r.Db}', '.', '{r.Parent}'))))";
+        lockCmd.ExecuteScalar();
+        Deploy(r, $$"""
+[ { "Name": "unrel_{{r.Uid}}", "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false } ] } ]
+""", productName: $"Unrelated_{r.Uid}");
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.SetAside(r.Other), Is.EqualTo("0"), "once it has finished, a key on its table is done with");
+            Assert.That(r.Key(r.Other, $"fk_mid_{r.Uid}"), Is.Not.Null);
+        });
+    }
 }

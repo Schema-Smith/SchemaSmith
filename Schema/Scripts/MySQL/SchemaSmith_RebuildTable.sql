@@ -975,7 +975,17 @@ BEGIN
         END IF;
 
         -- Recorded before the swap, so there is no point at which a key is off its table with no record to restore it
-        -- from. One still on its table when the next foreign-key pass looks is simply cleared.
+        -- from. One still on its table when the next foreign-key pass looks is simply cleared -- so from here until the
+        -- keys are dropped this session holds a lock another deploy's foreign-key pass waits on: without it, a pass in
+        -- between saw the key still there, cleared the record, and the drop below then lost the key for good.
+        SET @ss_rebuild_fk_lock = CONCAT('ss_rbfk_', MD5(CONCAT(v_SchemaRaw, '.', v_TableRaw)));
+        DO GET_LOCK(@ss_rebuild_fk_lock, 60);
+        BEGIN
+        DECLARE EXIT HANDLER FOR SQLEXCEPTION
+        BEGIN
+            DO RELEASE_LOCK(@ss_rebuild_fk_lock);
+            RESIGNAL;
+        END;
         REPLACE INTO SchemaSmith_RebuildSetAsideForeignKeys (ChildSchema, ChildTable, KeyName, ParentSchema, ParentTable,
                                                              ReferencedColumns, Definition, Declared)
         SELECT f.ChildSchema, f.ChildTable, f.ConstraintName, v_SchemaRaw, v_TableRaw, f.ReferencedColumns, f.Definition, f.Declared
@@ -1009,6 +1019,8 @@ BEGIN
         PREPARE stmt FROM @exec_sql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
+        END;
+        DO RELEASE_LOCK(@ss_rebuild_fk_lock);
 
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         VALUES (CONNECTION_ID(), 'table', v_TableRaw, 'rebuilt');
