@@ -54,7 +54,7 @@ BEGIN
         v.query('Indexes'),
         v.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
         v.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
-        v.value('(Description/text())[1]', 'NVARCHAR(MAX)')
+        CASE WHEN v.exist('Description') = 1 THEN ISNULL(v.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') END
     FROM @IndexedViewSchema.nodes('/IndexedViews/IndexedView') AS X(v);
 
     -- Evaluate ShouldApplyExpression per-target: remove views whose expression is false.

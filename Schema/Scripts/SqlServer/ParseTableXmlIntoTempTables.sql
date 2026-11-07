@@ -74,9 +74,10 @@
          [RebuildPolicySpecified] = CONVERT(BIT, t.exist('RebuildPolicy/*/text()')),
          [PreventDrop] = ISNULL(CONVERT(BIT, CASE LOWER(t.value('(PreventDrop/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END), 0),
          [OnlineApply] = CONVERT(VARCHAR(10), UPPER(NULLIF(LTRIM(RTRIM(t.value('(OnlineApply/text())[1]', 'NVARCHAR(20)'))), ''))),
-         -- Omitted stays NULL (leave the database's description alone), '' stays '' (remove it); an MS_Description
+         -- Omitted stays NULL (leave the database's description alone), '' stays '' (remove it): an empty element has
+         -- no text node, so its presence is what says '', not its text. An MS_Description
          -- left inside Extensions.ExtendedProperties, where extraction used to put it, still counts.
-         [Description] = COALESCE(t.value('(Description/text())[1]', 'NVARCHAR(MAX)'), t.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)')),
+         [Description] = CASE WHEN t.exist('Description') = 1 THEN ISNULL(t.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') WHEN t.exist('Extensions/ExtendedProperties/p[@n="MS_Description"]') = 1 THEN ISNULL(t.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'), '') END,
          [LedgerViewSchema] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/Schema/text())[1]', 'NVARCHAR(500)')), '')),
          [LedgerViewName] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/Name/text())[1]', 'NVARCHAR(500)')), '')),
          [LedgerTransactionIdColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/TransactionIdColumn/text())[1]', 'NVARCHAR(500)')), '')),
@@ -188,7 +189,7 @@
       [ShouldApplyExpression] = col.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = col.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
       [OldName] = col.value('(OldName/text())[1]', 'NVARCHAR(500)'),
-      [Description] = COALESCE(col.value('(Description/text())[1]', 'NVARCHAR(MAX)'), col.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'))
+      [Description] = CASE WHEN col.exist('Description') = 1 THEN ISNULL(col.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') WHEN col.exist('Extensions/ExtendedProperties/p[@n="MS_Description"]') = 1 THEN ISNULL(col.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'), '') END
       ) c;
 
   -- Identify Columns to skip based on ShouldApply expression (scoped by [_RowId]) — identical to JSON twin.
@@ -271,7 +272,7 @@
       [UpdateFillFactor] = CONVERT(BIT, CASE LOWER(idx.value('(UpdateFillFactor/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [ShouldApplyExpression] = idx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = idx.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
-      [Description] = COALESCE(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), idx.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'))
+      [Description] = CASE WHEN idx.exist('Description') = 1 THEN ISNULL(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') WHEN idx.exist('Extensions/ExtendedProperties/p[@n="MS_Description"]') = 1 THEN ISNULL(idx.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'), '') END
       ) i;
 
   -- A nonclustered columnstore index has no key: its columns are included columns, which is how they are read back. Declared

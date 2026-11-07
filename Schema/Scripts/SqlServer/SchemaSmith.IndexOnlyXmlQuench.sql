@@ -113,7 +113,7 @@ BEGIN TRY
       [UpdateFillFactor] = CONVERT(BIT, CASE LOWER(idx.value('(UpdateFillFactor/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [ShouldApplyExpression] = idx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = idx.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
-      [Description] = COALESCE(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), idx.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'))
+      [Description] = CASE WHEN idx.exist('Description') = 1 THEN ISNULL(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') WHEN idx.exist('Extensions/ExtendedProperties/p[@n="MS_Description"]') = 1 THEN ISNULL(idx.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'), '') END
       ) i;
 
   -- Each index's Extensions.ExtendedProperties bag, one row per name, for ExtendedPropertyQuench.

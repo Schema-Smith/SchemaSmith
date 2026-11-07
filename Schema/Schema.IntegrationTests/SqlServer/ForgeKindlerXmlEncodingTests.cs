@@ -557,6 +557,57 @@ EXEC sys.sp_addextendedproperty @name=N'IdxNote', @value=N'hot', @level0type=N'S
     }
 
     [Test]
+    public void TableQuench_XmlTier_AnEmptyDescription_RemovesIt_AndAnOmittedOneLeavesItAlone()
+    {
+        // An empty element has no text node, so reading Description/text() made "" look omitted and left the
+        // description in place: on this tier a description could be set but never removed.
+        var db = SharedCompat100XmlDb();
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(DbConnectionString(db));
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            void Deploy(string table, string id, string v, string pk, string ix)
+            {
+                static string D(string d) => d == null ? "" : $", \"Description\": \"{d}\"";
+                var json = "[{\"Schema\": \"[dbo]\", \"Name\": \"[XmlDescRm]\"" + D(table) + ","
+                    + "\"Columns\": ["
+                    + "{\"Name\": \"[Id]\", \"DataType\": \"INT\", \"Nullable\": false" + D(id) + "},"
+                    + "{\"Name\": \"[V]\", \"DataType\": \"INT\", \"Nullable\": true" + D(v) + "}"
+                    + "],"
+                    + "\"Indexes\": [{\"Name\": \"[PK_XmlDescRm]\", \"PrimaryKey\": true, \"Unique\": true, \"Clustered\": true, \"IndexColumns\": \"[Id]\"" + D(pk) + "},"
+                    + "{\"Name\": \"[IX_XmlDescRm_V]\", \"IndexColumns\": \"[V]\"" + D(ix) + "}]"
+                    + "}]";
+                var xml = ModelXmlSerializer.ToIngestXml(json, "Tables", "Table");
+                cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = 'XmlDescRm', @TableDefinitions = N'{xml.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0";
+                cmd.ExecuteNonQuery();
+            }
+            string Ep(string level2)
+            {
+                cmd.CommandText = "SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'SCHEMA', N'dbo', N'TABLE', N'XmlDescRm'" + level2 + ")";
+                return cmd.ExecuteScalar() as string;
+            }
+
+            Deploy("t", "id", "v", "pk", "ix");
+            Deploy("", "", null, "", "");
+            Assert.Multiple(() =>
+            {
+                Assert.That(Ep(", default, default"), Is.Null, "table");
+                Assert.That(Ep(", N'COLUMN', N'Id'"), Is.Null, "column");
+                Assert.That(Ep(", N'COLUMN', N'V'"), Is.EqualTo("v"), "an omitted description is not managed");
+                Assert.That(Ep(", N'CONSTRAINT', N'PK_XmlDescRm'"), Is.Null, "key index");
+                Assert.That(Ep(", N'INDEX', N'IX_XmlDescRm_V'"), Is.Null, "index");
+            });
+        }
+        finally
+        {
+            DropTables(cmd, "dbo.XmlDescRm");
+        }
+
+        conn.Close();
+    }
+
+    [Test]
     public void TableQuench_XmlTier_AppliesExtendedPropertyBags_IncludingASpacedName()
     {
         // The ingest XML carries each bag as <ExtendedProperties><p n="Name">Value</p></ExtendedProperties>, because
