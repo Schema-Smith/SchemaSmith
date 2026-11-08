@@ -283,15 +283,15 @@ public class DatabaseQuenchTests
         var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
         var zipped = new DatabaseQuench(product, new Template { Name = "Main", FilePath = "Templates/Main/Template.json" },
             new DatabaseQuenchOptions { Server = "server", DatabaseName = "db", UpdateTables = false, DeliverData = false }, null);
-        var folderDir = System.IO.Path.Combine("C:", "products", "P", "Templates", "Main");
-        var folder = new DatabaseQuench(product, new Template { Name = "Main", FilePath = System.IO.Path.Combine(folderDir, "Template.json") },
+        var folderDir = System.IO.Path.Join("C:", "products", "P", "Templates", "Main");
+        var folder = new DatabaseQuench(product, new Template { Name = "Main", FilePath = System.IO.Path.Join(folderDir, "Template.json") },
             new DatabaseQuenchOptions { Server = "server", DatabaseName = "db", UpdateTables = false, DeliverData = false }, null);
 
         Assert.Multiple(() =>
         {
             Assert.That(zipped.GetPreZipFixScriptPath("Templates/Main/Before Scripts/00-Init.sql"),
                 System.IO.Path.DirectorySeparatorChar == '\\' ? Is.EqualTo("Templates/Main/Before Scripts/00-Init.sql") : Is.Null);
-            Assert.That(folder.GetPreZipFixScriptPath(System.IO.Path.Combine(folderDir, "Before Scripts", "00-Init.sql")), Is.Null, "a folder's key never changed");
+            Assert.That(folder.GetPreZipFixScriptPath(System.IO.Path.Join(folderDir, "Before Scripts", "00-Init.sql")), Is.Null, "a folder's key never changed");
         });
     }
 
@@ -299,12 +299,12 @@ public class DatabaseQuenchTests
     public void GetRelativeScriptPath_NormalizesBackslashes()
     {
         var product = new Product { Name = "Test", Platform = Platform.SqlServer };
-        var templateDir = System.IO.Path.Combine("C:", "products", "MyProduct", "Templates", "Core");
-        var templateFilePath = System.IO.Path.Combine(templateDir, "Template.json");
+        var templateDir = System.IO.Path.Join("C:", "products", "MyProduct", "Templates", "Core");
+        var templateFilePath = System.IO.Path.Join(templateDir, "Template.json");
         var template = new Template { Name = "T", FilePath = templateFilePath };
         var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", UpdateTables = false, DeliverData = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, null);
 
-        var scriptPath = System.IO.Path.Combine(templateDir, "After Scripts", "cleanup.sql");
+        var scriptPath = System.IO.Path.Join(templateDir, "After Scripts", "cleanup.sql");
         var result = quench.GetRelativeScriptPath(scriptPath);
         Assert.That(result, Is.EqualTo("After Scripts/cleanup.sql"));
     }
