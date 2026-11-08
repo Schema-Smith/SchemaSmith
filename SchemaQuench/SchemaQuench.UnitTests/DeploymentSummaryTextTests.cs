@@ -39,6 +39,21 @@ public class DeploymentSummaryTextTests
         Assert.That(DeploymentSummaryText.Render(BuildFullyPopulatedSummary() with { SettingOutcomes = null }), Does.Not.Contain("## Settings"));
     }
 
+    // A scope whose only rows count for nothing here (a setting that matched, say) has no line, not an empty one.
+    [Test]
+    public void Render_AScopeWithNothingToCount_HasNoLine()
+    {
+        var text = DeploymentSummaryText.Render(BuildFullyPopulatedSummary() with
+        {
+            SettingOutcomes = new SettingsSummary(new SettingsScopeCounts(0, 0, 0, 0, 0, 0), new SettingsScopeCounts(1, 0, 0, 0, 0, 0))
+        });
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Not.Contain("- Server:"));
+            Assert.That(text, Does.Contain("- Database: 1 changed"));
+        });
+    }
+
     private static DeploymentSummary BuildFullyPopulatedSummary()
     {
         var run = new RunInfo(

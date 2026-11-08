@@ -266,8 +266,8 @@ public static class DeploymentSummaryText
             {
                 (counts.Changed, "changed"), (counts.PendingRestart, "waiting for a restart"), (counts.Drift, "drifted (not fixed)"),
                 (counts.FixFailed, "fix failed"), (counts.Unfixable, "cannot be fixed"), (counts.WouldChange, "would change")
-            }.Where(p => p.Item1 > 0).Select(p => $"{p.Item1} {p.Item2}");
-            lines.Add($"- {label}: {string.Join(", ", parts)}");
+            }.Where(p => p.Item1 > 0).Select(p => $"{p.Item1} {p.Item2}").ToList();
+            if (parts.Count > 0) lines.Add($"- {label}: {string.Join(", ", parts)}");
         }
     }
 
