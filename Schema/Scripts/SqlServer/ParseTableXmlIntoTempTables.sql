@@ -297,7 +297,7 @@
          t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), i.[IsPrimary],
          [Column] = SchemaSmith.fn_SafeBracketWrap(i.[Column]), [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap(i.[PrimaryIndex]),
          i.[SecondaryIndexType], [XmlCompression] = ISNULL(i.[XmlCompression], 0), i.[ShouldApplyExpression], i.[VariantName],
-         i.[Selective], i.[ForPath], [KindPrefix] = CAST(NULL AS NVARCHAR(20)), [KindSuffix] = CAST(NULL AS NVARCHAR(MAX)), i.[Description]
+         i.[Description], i.[Selective], i.[ForPath], [KindPrefix] = CAST(NULL AS NVARCHAR(20)), [KindSuffix] = CAST(NULL AS NVARCHAR(MAX))
     INTO #XmlIndexes
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/XmlIndexes') AS Y(xi)
