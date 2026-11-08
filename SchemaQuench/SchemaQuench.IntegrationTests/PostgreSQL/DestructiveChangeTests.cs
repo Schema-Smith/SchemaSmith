@@ -34,6 +34,39 @@ public class DestructiveChangeTests : DestructiveChangeSharedTests
     protected override long SumOf(string table, string column) => Convert.ToInt64(Scalar($"SELECT SUM({column}) FROM public.{table}"));
     protected override long RowCount(string table) => Count($"SELECT COUNT(*) FROM public.{table}");
 
+    // The rows a column drop on a partitioned table takes are every leaf's, at any depth.
+    [Test]
+    public void AColumnDropOnASubPartitionedTable_CountsTheRowsInEveryLeaf()
+    {
+        const string part = "dc_part";
+        string Json(string extra) => $$"""
+            { "Schema": "public", "Name": "{{part}}",
+              "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false }, { "Name": "k", "DataType": "integer", "Nullable": false }{{extra}} ],
+              "Indexes": [ { "Name": "pk_{{part}}", "PrimaryKey": true, "Unique": true, "IndexColumns": "id,k" } ],
+              "Partitioning": { "Method": "RANGE", "Expression": "id", "Partitions": [
+                  { "Name": "{{part}}_p1", "Bound": "FOR VALUES FROM (0) TO (100)",
+                    "Partitioning": { "Method": "LIST", "Expression": "k", "Partitions": [ { "Name": "{{part}}_p1a", "Bound": "DEFAULT" } ] } },
+                  { "Name": "{{part}}_p2", "Bound": "FOR VALUES FROM (100) TO (200)" } ] } }
+            """;
+        Exec($"DROP TABLE IF EXISTS public.{part} CASCADE");
+        try
+        {
+            WritePackage("");
+            WriteFile("Tables", $"public.{part}.json", Json(", { \"Name\": \"b\", \"DataType\": \"integer\", \"Nullable\": true }"));
+            Deploy();
+            Exec($"INSERT INTO public.{part} (id, k, b) VALUES (1, 1, 1), (2, 2, 2), (150, 1, 3); ANALYZE public.{part}");
+
+            WriteFile("Tables", $"public.{part}.json", Json(""));
+            var result = Deploy(settings: new System.Collections.Generic.Dictionary<string, string> { ["Target:DestructiveChangePolicy"] = "warn" });
+
+            Assert.That(result.Audit.Single(r => r.Action == "destructive" && r.ObjectName == $"public.{part}.b").EstimatedRows, Is.EqualTo(3));
+        }
+        finally
+        {
+            Exec($"DROP TABLE IF EXISTS public.{part} CASCADE");
+        }
+    }
+
     // H3 slice B: a type change that loses values silently, and a plain column replaced by a generated one.
 
     private const string Typed = "dc_typed";
@@ -157,6 +190,10 @@ public class DestructiveChangeTests : DestructiveChangeSharedTests
     [TestCase("jsonb", "json", "none")]
     [TestCase("varchar(10)", "varchar(10) COLLATE \"C\"", "none")]
     [TestCase("geometry(Point,4326)", "geometry(LineString,4326)", "fails")]
+    // A type named with its schema is that type, not the schema: two domains in one schema are different types.
+    [TestCase("public.d_amount2", "public.d_amount0", "loses")]
+    [TestCase("public.d_amount2", "public.d_amount2", "none")]
+    [TestCase("pg_catalog.int4", "integer", "none")]
     public void TheClassifierMatchesWhatTheEngineDoes(string from, string to, string expected)
     {
         Assert.That(Scalar($"SELECT \"SchemaSmith\".\"ColumnChangeLoss\"('{from}', '{to.Replace("'", "''")}')")?.ToString(), Is.EqualTo(expected));

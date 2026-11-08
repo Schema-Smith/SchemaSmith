@@ -198,7 +198,8 @@ BEGIN
       JOIN pg_catalog.pg_class pc ON pc.oid = con.conrelid
       JOIN pg_catalog.pg_namespace pn ON pn.oid = pc.relnamespace
       WHERE con.contype = 'f'
-        AND con.confrelid = v_Oid;
+        AND con.confrelid = v_Oid
+        AND con.conparentid = 0;  -- not the copies of a partitioned table's key on its partitions
   PERFORM set_config('search_path', v_SearchPath, TRUE);
 
   UPDATE temp_rebuild_inbound_keys k SET "Declared" = TRUE
@@ -478,7 +479,8 @@ BEGIN
     JOIN pg_catalog.pg_class pc ON pc.oid = con.conrelid
     JOIN pg_catalog.pg_namespace pn ON pn.oid = pc.relnamespace
     WHERE con.contype = 'f'
-      AND con.confrelid = v_Oid;
+      AND con.confrelid = v_Oid
+      AND con.conparentid = 0;  -- not the copies of a partitioned table's key on its partitions
 
   -- STORAGE. The shadow is created where and how the table is stored -- declared where the package declares it, as
   -- it is otherwise -- because what it is created with is what the table has afterwards. Created bare, an unlogged
@@ -551,7 +553,8 @@ BEGIN
         JOIN pg_catalog.pg_class pc ON pc.oid = con.conrelid
         JOIN pg_catalog.pg_namespace pn ON pn.oid = pc.relnamespace
         WHERE con.contype = 'f'
-          AND con.confrelid = v_Oid;
+          AND con.confrelid = v_Oid
+          AND con.conparentid = 0;  -- not the copies of a partitioned table's key on its partitions
     INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
       SELECT pg_backend_pid(), 'foreignKey', k."ChildSchema" || '.' || k."ChildTable" || '.' || k."KeyName", 'wouldCreate'
         FROM temp_rebuild_inbound_keys k

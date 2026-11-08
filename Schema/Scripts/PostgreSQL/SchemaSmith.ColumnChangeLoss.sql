@@ -25,6 +25,8 @@ BEGIN
   t := LOWER(TRIM(COALESCE(p_To, '')));
   f := REGEXP_REPLACE(f, '\s+collate\s+.*$', '');
   t := REGEXP_REPLACE(t, '\s+collate\s+.*$', '');
+  f := REGEXP_REPLACE(f, '^pg_catalog\.', '');
+  t := REGEXP_REPLACE(t, '^pg_catalog\.', '');
   f := REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(REGEXP_REPLACE(f,
          '^character varying', 'varchar'), '^character', 'char'), '^double precision', 'float8'),
          '^timestamp(\(\d+\))? with time zone', 'timestamptz\1'), '^timestamp(\(\d+\))? without time zone', 'timestamp\1'),
@@ -37,8 +39,9 @@ BEGIN
   -- An interval with a field restriction or a precision truncates; to a plain interval nothing changes.
   IF f LIKE 'interval%' AND t LIKE 'interval%' THEN RETURN CASE WHEN t = 'interval' THEN 'none' ELSE 'loses' END; END IF;
 
-  fb := SUBSTRING(f FROM '^[a-z0-9_"]+');
-  tb := SUBSTRING(t FROM '^[a-z0-9_"]+');
+  -- A schema-qualified name (a domain, an enum) is kept whole: cut at the dot, two types in one schema compared equal.
+  fb := SUBSTRING(f FROM '^[a-z0-9_".]+');
+  tb := SUBSTRING(t FROM '^[a-z0-9_".]+');
   fa := SUBSTRING(f FROM '\(([^)]*)\)');
   ta := SUBSTRING(t FROM '\(([^)]*)\)');
   fb := CASE fb WHEN 'integer' THEN 'int4' WHEN 'int' THEN 'int4' WHEN 'smallint' THEN 'int2' WHEN 'bigint' THEN 'int8'

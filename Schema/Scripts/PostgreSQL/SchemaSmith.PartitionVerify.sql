@@ -73,6 +73,17 @@ BEGIN
   FOR r IN SELECT p.* FROM temp_partitions p ORDER BY p."TableSchema", p."TableName", p."Depth", p."Position" LOOP
     v_parent_oid := to_regclass("SchemaSmith"."QuoteName"(r."TableSchema") || '.' || "SchemaSmith"."QuoteName"(r."ParentName"));
     v_oid := to_regclass("SchemaSmith"."QuoteName"(r."TableSchema") || '.' || "SchemaSmith"."QuoteName"(r."Name"));
+    -- A parent this run creates has no partitions yet, so a declared one whose name is taken would be skipped by the create
+    -- (it creates only what does not exist) and the run would end without it.
+    IF v_parent_oid IS NULL AND v_oid IS NOT NULL THEN
+      v_problems := v_problems || format('Partition %s.%s of %s.%s is declared, but %s.%s already exists (%s). SchemaSmith does not ATTACH an existing object -- attach it manually, or rename the declared partition.',
+                                         r."TableSchema", r."Name", r."TableSchema", r."ParentName", r."TableSchema", r."Name",
+                                         (SELECT CASE c.relkind WHEN 'r' THEN CASE WHEN c.relispartition THEN 'a partition of another table' ELSE 'a standalone table' END
+                                                                WHEN 'p' THEN 'a partitioned table' WHEN 'v' THEN 'a view' WHEN 'm' THEN 'a materialized view'
+                                                                WHEN 'S' THEN 'a sequence' WHEN 'f' THEN 'a foreign table' WHEN 'i' THEN 'an index' ELSE 'another object' END
+                                            FROM pg_class c WHERE c.oid = v_oid));
+      CONTINUE;
+    END IF;
     CONTINUE WHEN v_parent_oid IS NULL OR (SELECT relkind FROM pg_class WHERE oid = v_parent_oid) <> 'p';
 
     IF v_oid IS NOT NULL THEN

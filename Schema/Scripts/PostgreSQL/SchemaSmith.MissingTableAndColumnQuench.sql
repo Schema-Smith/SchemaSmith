@@ -15,6 +15,9 @@ DECLARE
   restored_table TEXT;
   saved_time_zone TEXT;
   refused_partitions TEXT;
+  -- The database's own default tablespace, which a partitioned table may not name.
+  db_default_tablespace TEXT = (SELECT t.spcname FROM pg_catalog.pg_tablespace t JOIN pg_catalog.pg_database d ON d.dattablespace = t.oid
+                              WHERE d.datname = current_database());
 BEGIN
   RAISE NOTICE 'Handle Table Renames';
   SELECT STRING_AGG('RAISE NOTICE ''  Rename Table %.% to %'', ''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."OldName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
@@ -118,7 +121,11 @@ BEGIN
                     -- TABLESPACE follows WITH in the CREATE TABLE grammar. Emitted only when declared:
                     -- an unset Tablespace means placement is not managed, so the table lands wherever
                     -- default_tablespace puts it, exactly as it did before this shipped.
-                    CASE WHEN COALESCE(tt."Tablespace", '') <> '' THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(tt."Tablespace") ELSE '' END ||
+                    -- A partitioned table refuses the database's default tablespace by name ("cannot specify default
+                    -- tablespace for partitioned relations"), and left out it lands there all the same.
+                    CASE WHEN COALESCE(tt."Tablespace", '') <> ''
+                          AND NOT (tt."PartitionMethod" <> '' AND tt."Tablespace" = db_default_tablespace)
+                         THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(tt."Tablespace") ELSE '' END ||
                     ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''table'', ''' || REPLACE((tt."Schema" || '.' || tt."Name")::TEXT, '''', '''''') || ''', ''created'');', CHR(10))
     INTO sql_script
@@ -157,7 +164,8 @@ BEGIN
                     'CREATE TABLE ' || "SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."Name") ||
                     ' PARTITION OF ' || "SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."ParentName") || ' ' || p."Bound" ||
                     CASE WHEN p."Method" <> '' THEN ' PARTITION BY ' || p."Method" || ' (' || p."Expression" || ')' ELSE '' END ||
-                    CASE WHEN p."Tablespace" IS NOT NULL THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(p."Tablespace") ELSE '' END || ';' || CHR(10) ||
+                    CASE WHEN p."Tablespace" IS NOT NULL AND NOT (p."Method" <> '' AND p."Tablespace" = db_default_tablespace)
+                         THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(p."Tablespace") ELSE '' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''partition'', ''' ||
                     REPLACE(p."TableSchema" || '.' || p."ParentName" || '.' || p."Name", '''', '''''') || ''', ''created'', ' ||
                     COALESCE('''' || REPLACE("SchemaSmith"."OnlineApplyForm"(p_OnlineApply, p."TableSchema", p."TableName", 'partition'), '''', '''''') || '''', 'NULL') || ');', CHR(10)

@@ -201,6 +201,30 @@ public class TableQuench_DeclarativePartitioningTests : BaseTableQuenchTests
         }
     }
 
+    // The same when the partitioned table is new: the name is still taken, and the run must say so before it creates the
+    // parent and leaves the partition out.
+    [Test]
+    public void ADeclaredPartitionOfANewTableThatExistsAsAStandaloneTable_IsRefused_AndNothingIsCreated()
+    {
+        var t = "dpn_" + Guid.NewGuid().ToString("N")[..8];
+        using var conn = Open();
+        try
+        {
+            Exec(conn, $"CREATE TABLE public.{t}_h0 (id integer NOT NULL)");
+            var ex = DeployFails(conn, Json(t), "Dpn_" + t);
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex.Message, Does.Contain($"public.{t}_h0 already exists").And.Contain("a standalone table"));
+                Assert.That(Scalar(conn, $"SELECT to_regclass('public.{t}_h')::text"), Is.Null, "the new partitioned table was not created");
+            });
+        }
+        finally
+        {
+            Exec(conn, $"DROP TABLE IF EXISTS public.{t}_h0");
+            Drop(conn, t);
+        }
+    }
+
     [Test]
     public void ANewPartitionWhoseRangeHoldsDefaultRows_IsRefused_AndNothingIsCreated()
     {

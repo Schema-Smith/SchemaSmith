@@ -103,6 +103,32 @@ public class RebuildTablePreservationTests : BaseTableQuenchTests
         });
     }
 
+    // A partitioned table's key is copied onto each partition under the same name; only the parent's is the one to drop and
+    // restore. Dropping a copy fails ("cannot drop inherited constraint"), and after the parent's goes the copies are gone.
+    [Test]
+    public void AKeyFromAPartitionedTable_SurvivesARebuildOfTheTableItReferences()
+    {
+        using var r = Seeded();
+        r.Exec($@"CREATE TABLE ""{r.Other}"".""P"" (""Id"" INT NOT NULL, ""ParentId"" INT NULL
+                    CONSTRAINT fk_part REFERENCES ""{r.Schema}"".""Parent"" (""Id"")) PARTITION BY RANGE (""Id"");
+                  CREATE TABLE ""{r.Other}"".""P1"" PARTITION OF ""{r.Other}"".""P"" FOR VALUES FROM (0) TO (100);
+                  CREATE TABLE ""{r.Other}"".""P2"" PARTITION OF ""{r.Other}"".""P"" FOR VALUES FROM (100) TO (200);
+                  INSERT INTO ""{r.Other}"".""P"" VALUES (10, 1), (150, 2);");
+        var before = r.Scalar($"SELECT '\"{r.Schema}\".\"Parent\"'::regclass::oid");
+
+        Deploy(r, r.Json("VARCHAR(60)"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Scalar($"SELECT '\"{r.Schema}\".\"Parent\"'::regclass::oid"), Is.Not.EqualTo(before), "setup: the table was rebuilt");
+            Assert.That(r.Scalar($"SELECT COUNT(*) FROM pg_constraint WHERE conname = 'fk_part' AND conparentid = 0 AND confrelid = '\"{r.Schema}\".\"Parent\"'::regclass"),
+                Is.EqualTo("1"), "the key is back once, on the partitioned table, referencing the new table");
+            Assert.That(() => r.Exec($@"INSERT INTO ""{r.Other}"".""P"" VALUES (160, 99);"),
+                Throws.InstanceOf<PostgresException>().With.Property("SqlState").EqualTo("23503"), "and enforcing on every partition");
+            Assert.That(r.Scalar($@"SELECT COUNT(*) FROM ""SchemaSmith"".""RebuildSetAsideForeignKeys"" WHERE ""ChildSchema"" = '{r.Other}'"), Is.EqualTo("0"));
+        });
+    }
+
     [Test]
     public void ANotValidKey_ComesBackNotValid()
     {

@@ -24,7 +24,7 @@ public class TablespaceDeployTests : ObjectScriptDeployFixture
     protected override string ProductName => "TablespaceDeployProduct";
 
     private void CleanUp() =>
-        Exec("DROP TABLE IF EXISTS public.ts_deploy_a, public.ts_deploy_b; DELETE FROM \"SchemaSmith\".\"ProductOwnership\" WHERE \"ProductName\" = 'TablespaceDeployProduct'");
+        Exec("DROP TABLE IF EXISTS public.ts_deploy_a, public.ts_deploy_b, public.ts_deploy_p; DELETE FROM \"SchemaSmith\".\"ProductOwnership\" WHERE \"ProductName\" = 'TablespaceDeployProduct'");
 
     [Test]
     public void AMissingTablespace_IsRefusedBeforeAnyTableIsCreated()
@@ -45,6 +45,39 @@ public class TablespaceDeployTests : ObjectScriptDeployFixture
                 Assert.That(errors, Has.Some.Contains("Tablespace not found").And.Contains("ss_no_such_ts"), string.Join("\n", errors));
                 Assert.That(Count("SELECT COUNT(*) FROM pg_tables WHERE schemaname = 'public' AND tablename IN ('ts_deploy_a', 'ts_deploy_b')"),
                     Is.Zero, "nothing is created before the refusal");
+            });
+        }
+        finally
+        {
+            CleanUp();
+        }
+    }
+
+    // A partitioned table refuses the database's default tablespace by name; declared on one, it is still created there.
+    [Test]
+    public void APartitionedTableDeclaredOnTheDefaultTablespace_IsCreated_AndRedeploysClean()
+    {
+        CleanUp();
+        try
+        {
+            var defaultTablespace = Scalar("SELECT t.spcname FROM pg_tablespace t JOIN pg_database d ON d.dattablespace = t.oid WHERE d.datname = current_database()")?.ToString();
+            WritePackage("");
+            WriteFile("Tables", "public.ts_deploy_p.json", $$"""
+                { "Schema": "public", "Name": "ts_deploy_p", "Tablespace": "{{defaultTablespace}}",
+                  "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false }, { "Name": "k", "DataType": "integer", "Nullable": false } ],
+                  "Partitioning": { "Method": "RANGE", "Expression": "id", "Partitions": [
+                      { "Name": "ts_deploy_p1", "Bound": "FOR VALUES FROM (0) TO (100)", "Tablespace": "{{defaultTablespace}}",
+                        "Partitioning": { "Method": "LIST", "Expression": "k", "Partitions": [ { "Name": "ts_deploy_p1a", "Bound": "DEFAULT" } ] } } ] } }
+                """);
+
+            Deploy();
+            var again = Deploy();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Count("SELECT COUNT(*) FROM pg_class WHERE relname IN ('ts_deploy_p', 'ts_deploy_p1', 'ts_deploy_p1a')"), Is.EqualTo(3));
+                Assert.That(again.Audit.Where(r => r.Action is "created" or "modified" or "dropped").Select(r => $"{r.ObjectType} {r.ObjectName} {r.Action}"), Is.Empty,
+                    "the redeploy changes nothing");
             });
         }
         finally

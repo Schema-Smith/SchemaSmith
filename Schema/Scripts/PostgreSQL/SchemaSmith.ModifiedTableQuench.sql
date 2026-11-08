@@ -134,7 +134,7 @@ BEGIN
         FROM temp_product_ownership tp
         JOIN pg_class fc       ON fc.relname = tp."TableName"
         JOIN pg_namespace fn   ON fn.oid = fc.relnamespace AND fn.nspname = tp."Schema"
-        JOIN pg_constraint con ON con.contype = 'f' AND con.confrelid = fc.oid
+        JOIN pg_constraint con ON con.contype = 'f' AND con.confrelid = fc.oid AND con.conparentid = 0
         JOIN pg_class pc       ON pc.oid = con.conrelid
         JOIN pg_namespace pn   ON pn.oid = pc.relnamespace
         WHERE tp."IndexName" IS NULL
@@ -156,7 +156,7 @@ BEGIN
             FROM temp_product_ownership tp
             JOIN pg_class fc       ON fc.relname = tp."TableName"
             JOIN pg_namespace fn   ON fn.oid = fc.relnamespace AND fn.nspname = tp."Schema"
-            JOIN pg_constraint con ON con.contype = 'f' AND con.confrelid = fc.oid
+            JOIN pg_constraint con ON con.contype = 'f' AND con.confrelid = fc.oid AND con.conparentid = 0
             JOIN pg_class pc       ON pc.oid = con.conrelid
             JOIN pg_namespace pn   ON pn.oid = pc.relnamespace
             WHERE tp."IndexName" IS NULL

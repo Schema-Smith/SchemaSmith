@@ -68,18 +68,17 @@ BEGIN
     RETURN;
   END IF;
 
-  -- reltuples is -1 on 14+ for a table never analyzed, and 0 with pages on 12-13: unknown, not zero. A partitioned parent
-  -- holds no rows of its own, so its partitions' are summed.
+  -- reltuples is -1 on 14+ for a table never analyzed, and 0 with pages on 12-13: unknown, not zero. A partitioned table
+  -- holds no rows of its own, so its leaves' are summed, at every depth; pg_partition_tree lists nothing for a plain
+  -- table, which is counted as itself.
   UPDATE temp_destructive d
      SET "EstimatedRows" = (
        SELECT CASE WHEN COUNT(*) FILTER (WHERE c.reltuples < 0 OR (c.reltuples = 0 AND c.relpages > 0)) > 0 THEN NULL
                    ELSE SUM(c.reltuples)::BIGINT END
          FROM pg_class c
-        WHERE c.relkind IN ('r', 'p')
-          AND (c.oid = to_regclass("SchemaSmith"."QuoteName"(split_part(d."TableName", '.', 1)) || '.' || "SchemaSmith"."QuoteName"(split_part(d."TableName", '.', 2)))
-               OR c.oid IN (SELECT inhrelid FROM pg_inherits
-                             WHERE inhparent = to_regclass("SchemaSmith"."QuoteName"(split_part(d."TableName", '.', 1)) || '.' || "SchemaSmith"."QuoteName"(split_part(d."TableName", '.', 2)))))
-          AND c.relkind = 'r');
+        WHERE c.relkind = 'r'
+          AND c.oid IN (SELECT pt.relid FROM pg_partition_tree(to_regclass("SchemaSmith"."QuoteName"(split_part(d."TableName", '.', 1)) || '.' || "SchemaSmith"."QuoteName"(split_part(d."TableName", '.', 2)))) pt
+                        UNION SELECT to_regclass("SchemaSmith"."QuoteName"(split_part(d."TableName", '.', 1)) || '.' || "SchemaSmith"."QuoteName"(split_part(d."TableName", '.', 2)))));
 
   UPDATE temp_destructive
      SET "Accepted" = POSITION(';' || LOWER("ObjectName") || ';' IN v_accept) > 0 OR POSITION(';' || LOWER("TableName") || ';' IN v_accept) > 0;
