@@ -94,9 +94,10 @@ public static class SqlServerServerObjectCaster
     }
 
     // The script recomputes the same signature on the target; a NULL there (no such object) never equals the captured one.
-    private static string IfChanged(string signatureSql, string name, string captured, string body) => Lines(
+    // Compared in a binary collation: under the server's usual case-insensitive one a change only in case never applied.
+    internal static string IfChanged(string signatureSql, string name, string captured, string body) => Lines(
         $"DECLARE @name SYSNAME = {N(name)};",
-        $"IF ISNULL(({signatureSql}), N'') <> {N(captured)}",
+        $"IF ISNULL(({signatureSql}), N'') COLLATE Latin1_General_BIN2 <> {N(captured)} COLLATE Latin1_General_BIN2",
         "BEGIN",
         body.TrimEnd(),
         "END");
@@ -167,7 +168,7 @@ public static class SqlServerServerObjectCaster
                + N'|' + CAST(j.notify_level_eventlog AS NVARCHAR(10)) + N'|' + CAST(j.notify_level_email AS NVARCHAR(10)) + N'|' + CAST(j.notify_level_page AS NVARCHAR(10))
                + N'|' + CAST(j.delete_level AS NVARCHAR(10)) + N'|' + CASE WHEN j.notify_level_email > 0 THEN ISNULL(oe.name, N'') ELSE N'' END
                + N'|' + CASE WHEN j.notify_level_page > 0 THEN ISNULL(op.name, N'') ELSE N'' END + N'|' + CAST(j.start_step_id AS NVARCHAR(10))
-               + N'|' + ISNULL((SELECT CAST(s.step_id AS NVARCHAR(10)) + N':' + s.step_name + N':' + s.subsystem + N':' + ISNULL(s.command, N'') + N':' + ISNULL(s.database_name, N'')
+               + N'|' + ISNULL((SELECT CAST(s.step_id AS NVARCHAR(10)) + N':' + s.step_name + N':' + s.subsystem + N':' + ISNULL(CONVERT(NVARCHAR(MAX), CAST(s.command AS VARBINARY(MAX)), 2), N'') + N':' + ISNULL(s.database_name, N'')
                             + N':' + CAST(s.on_success_action AS NVARCHAR(10)) + N':' + CAST(s.on_success_step_id AS NVARCHAR(10)) + N':' + CAST(s.on_fail_action AS NVARCHAR(10))
                             + N':' + CAST(s.on_fail_step_id AS NVARCHAR(10)) + N':' + CAST(s.retry_attempts AS NVARCHAR(10)) + N':' + CAST(s.retry_interval AS NVARCHAR(10))
                             + N':' + ISNULL(s.output_file_name, N'') + N':' + CAST(s.flags AS NVARCHAR(10)) + N':' + ISNULL(s.database_user_name, N'')
@@ -259,12 +260,21 @@ public static class SqlServerServerObjectCaster
                 "            IF @schedule_id IS NULL BREAK;",
                 "            EXEC msdb.dbo.sp_detach_schedule @job_id = @job_id, @schedule_id = @schedule_id, @delete_unused_schedule = 1;",
                 "        END"));
+            // A schedule another job shares is attached as it is; adding it would give this job a copy of its own.
             foreach (var sc in schedules)
                 body.Append(Lines(
-                    $"        EXEC msdb.dbo.sp_add_jobschedule @job_id = @job_id, @name = {N(sc["name"])}, @enabled = {sc["enabled"]}, @freq_type = {sc["freq_type"]},",
-                    $"             @freq_interval = {sc["freq_interval"]}, @freq_subday_type = {sc["freq_subday_type"]}, @freq_subday_interval = {sc["freq_subday_interval"]},",
-                    $"             @freq_relative_interval = {sc["freq_relative_interval"]}, @freq_recurrence_factor = {sc["freq_recurrence_factor"]},",
-                    $"             @active_start_date = {sc["active_start_date"]}, @active_end_date = {sc["active_end_date"]}, @active_start_time = {sc["active_start_time"]}, @active_end_time = {sc["active_end_time"]};"));
+                    "        SET @schedule_id = (SELECT TOP 1 schedule_id FROM msdb.dbo.sysschedules",
+                    $"             WHERE name = {N(sc["name"])} AND enabled = {sc["enabled"]} AND freq_type = {sc["freq_type"]} AND freq_interval = {sc["freq_interval"]}",
+                    $"               AND freq_subday_type = {sc["freq_subday_type"]} AND freq_subday_interval = {sc["freq_subday_interval"]} AND freq_relative_interval = {sc["freq_relative_interval"]}",
+                    $"               AND freq_recurrence_factor = {sc["freq_recurrence_factor"]} AND active_start_date = {sc["active_start_date"]} AND active_end_date = {sc["active_end_date"]}",
+                    $"               AND active_start_time = {sc["active_start_time"]} AND active_end_time = {sc["active_end_time"]} ORDER BY schedule_id);",
+                    "        IF @schedule_id IS NOT NULL",
+                    "            EXEC msdb.dbo.sp_attach_schedule @job_id = @job_id, @schedule_id = @schedule_id;",
+                    "        ELSE",
+                    $"            EXEC msdb.dbo.sp_add_jobschedule @job_id = @job_id, @name = {N(sc["name"])}, @enabled = {sc["enabled"]}, @freq_type = {sc["freq_type"]},",
+                    $"                 @freq_interval = {sc["freq_interval"]}, @freq_subday_type = {sc["freq_subday_type"]}, @freq_subday_interval = {sc["freq_subday_interval"]},",
+                    $"                 @freq_relative_interval = {sc["freq_relative_interval"]}, @freq_recurrence_factor = {sc["freq_recurrence_factor"]},",
+                    $"                 @active_start_date = {sc["active_start_date"]}, @active_end_date = {sc["active_end_date"]}, @active_start_time = {sc["active_start_time"]}, @active_end_time = {sc["active_end_time"]};"));
             body.Append(Lines(
                 "        IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobservers WHERE job_id = @job_id) EXEC msdb.dbo.sp_add_jobserver @job_id = @job_id, @server_name = N'(local)';",
                 "    END"));
@@ -319,7 +329,7 @@ public static class SqlServerServerObjectCaster
 
     internal static string AuditSignature(int major) => $"""
         SELECT a.type COLLATE DATABASE_DEFAULT + N'|' + a.on_failure_desc COLLATE DATABASE_DEFAULT + N'|' + CAST(a.queue_delay AS NVARCHAR(10)) + N'|' + ISNULL(f.log_file_path COLLATE DATABASE_DEFAULT, N'')
-               + N'|' + ISNULL(CAST(f.max_file_size AS NVARCHAR(20)), N'') + N'|' + ISNULL(CAST(f.max_rollover_files AS NVARCHAR(20)), N'')
+               + N'|' + ISNULL(CAST(f.max_file_size AS NVARCHAR(20)), N'') + N'|' + ISNULL(CAST(f.max_rollover_files AS NVARCHAR(20)), N'') + N'|' + {(major >= 11 ? "ISNULL(CAST(f.max_files AS NVARCHAR(20)), N'')" : "N''")}
                + N'|' + ISNULL(CAST(f.reserve_disk_space AS NVARCHAR(1)), N'') + N'|' + {(major >= 11 ? "ISNULL(a.predicate COLLATE DATABASE_DEFAULT, N'')" : "N''")}
                + N'|' + CAST(a.is_state_enabled AS NVARCHAR(1))
           FROM sys.server_audits a LEFT JOIN sys.server_file_audits f ON f.audit_id = a.audit_id
@@ -339,6 +349,7 @@ public static class SqlServerServerObjectCaster
         var audits = Rows(cmd, $"""
             SELECT a.name, a.type, CAST(a.audit_guid AS NVARCHAR(36)) AS audit_guid, a.on_failure_desc, a.queue_delay, CAST(a.is_state_enabled AS INT) AS enabled,
                    {(major >= 11 ? "a.predicate" : "CAST(NULL AS NVARCHAR(MAX)) AS predicate")}, f.log_file_path, f.max_file_size, f.max_rollover_files,
+                   {(major >= 11 ? "f.max_files" : "CAST(0 AS INT) AS max_files")},
                    CAST(f.reserve_disk_space AS INT) AS reserve_disk_space
               FROM sys.server_audits a LEFT JOIN sys.server_file_audits f ON f.audit_id = a.audit_id
             """);
@@ -351,7 +362,9 @@ public static class SqlServerServerObjectCaster
                 case "FL":
                     var size = a["max_file_size"] is "0" or null ? "UNLIMITED" : $"{a["max_file_size"]} MB";
                     var rollover = a["max_rollover_files"] is "2147483647" or null ? "UNLIMITED" : a["max_rollover_files"];
-                    target = $"TO FILE (FILEPATH = {N(a["log_file_path"])}, MAXSIZE = {size}, MAX_ROLLOVER_FILES = {rollover}, RESERVE_DISK_SPACE = {(a["reserve_disk_space"] == "1" ? "ON" : "OFF")})";
+                    // MAX_FILES and MAX_ROLLOVER_FILES exclude each other: an audit with a file limit keeps it.
+                    var files = a["max_files"] is null or "0" ? $"MAX_ROLLOVER_FILES = {rollover}" : $"MAX_FILES = {a["max_files"]}";
+                    target = $"TO FILE (FILEPATH = {N(a["log_file_path"])}, MAXSIZE = {size}, {files}, RESERVE_DISK_SPACE = {(a["reserve_disk_space"] == "1" ? "ON" : "OFF")})";
                     break;
                 case "SL": target = "TO SECURITY_LOG"; break;
                 case "AL": target = "TO APPLICATION_LOG"; break;

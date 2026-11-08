@@ -58,10 +58,18 @@ public class ServerObjectCastTests
             EXEC msdb.dbo.sp_add_job @job_name = N'ss_slow';
             EXEC msdb.dbo.sp_add_jobstep @job_name = N'ss_slow', @step_name = N'wait', @subsystem = N'TSQL', @command = N'WAITFOR DELAY ''00:00:40''';
             EXEC msdb.dbo.sp_add_jobserver @job_name = N'ss_slow';
+            -- A step whose command holds a character XML cannot carry, and a schedule two jobs share.
+            DECLARE @odd NVARCHAR(100) = N'SELECT 3 -- ' + NCHAR(1);
+            EXEC msdb.dbo.sp_add_job @job_name = N'ss_ctl';
+            EXEC msdb.dbo.sp_add_jobstep @job_name = N'ss_ctl', @step_name = N'odd', @subsystem = N'TSQL', @command = @odd;
+            EXEC msdb.dbo.sp_add_jobserver @job_name = N'ss_ctl';
+            EXEC msdb.dbo.sp_add_schedule @schedule_name = N'ss_shared', @freq_type = 4, @freq_interval = 1, @active_start_time = 30000;
+            EXEC msdb.dbo.sp_attach_schedule @job_name = N'ss_ctl', @schedule_name = N'ss_shared';
+            EXEC msdb.dbo.sp_attach_schedule @job_name = N'ss_slow', @schedule_name = N'ss_shared';
             EXEC msdb.dbo.sp_add_alert @name = N'ss_alert', @severity = 17, @job_name = N'ss_job';
             EXEC msdb.dbo.sp_add_notification @alert_name = N'ss_alert', @operator_name = N'ss_op', @notification_method = 1;
             """);
-        Exec("CREATE SERVER AUDIT ss_audit TO FILE (FILEPATH = N'/var/opt/mssql/data/') WITH (QUEUE_DELAY = 1000, ON_FAILURE = CONTINUE)");
+        Exec("CREATE SERVER AUDIT ss_audit TO FILE (FILEPATH = N'/var/opt/mssql/data/', MAX_FILES = 5) WITH (QUEUE_DELAY = 1000, ON_FAILURE = CONTINUE)");
         Exec("CREATE SERVER AUDIT SPECIFICATION ss_spec FOR SERVER AUDIT ss_audit ADD (FAILED_LOGIN_GROUP) WITH (STATE = ON)");
         Exec("ALTER SERVER AUDIT ss_audit WITH (STATE = ON)");
         Exec("CREATE EVENT SESSION ss_xe ON SERVER ADD EVENT sqlserver.error_reported (ACTION (sqlserver.sql_text) WHERE severity >= 16) " +
@@ -96,6 +104,14 @@ public class ServerObjectCastTests
         IF EXISTS (SELECT 1 FROM msdb.dbo.sysalerts WHERE name = N'ss_alert') EXEC msdb.dbo.sp_delete_alert @name = N'ss_alert';
         IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N'ss_job') EXEC msdb.dbo.sp_delete_job @job_name = N'ss_job';
         IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N'ss_slow') EXEC msdb.dbo.sp_delete_job @job_name = N'ss_slow';
+        IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N'ss_ctl') EXEC msdb.dbo.sp_delete_job @job_name = N'ss_ctl';
+        DECLARE @sid INT;
+        WHILE 1 = 1
+        BEGIN
+            SET @sid = (SELECT TOP 1 schedule_id FROM msdb.dbo.sysschedules WHERE name = N'ss_shared');
+            IF @sid IS NULL BREAK;
+            EXEC msdb.dbo.sp_delete_schedule @schedule_id = @sid, @force_delete = 1;
+        END
         IF EXISTS (SELECT 1 FROM msdb.dbo.sysoperators WHERE name = N'ss_op') EXEC msdb.dbo.sp_delete_operator @name = N'ss_op';
         IF EXISTS (SELECT 1 FROM sys.server_audit_specifications WHERE name = N'ss_spec')
         BEGIN
@@ -192,6 +208,7 @@ public class ServerObjectCastTests
         EveryKind_IsCast_AndRegisteredAsAnAfterFolderForEveryServer();
         RunningTheScriptsWhereNothingChanged_LeavesEveryObjectAlone();
         AJobChangedOnTheServer_IsBroughtBack_KeepingItsIdAndHistory();
+        AJobThatSharesASchedule_KeepsItShared();
         ARunningJob_IsLeftAsItIs_AndTheRunSaysSo();
         OnAServerWithoutThem_TheScriptsCreateEveryObject();
     }
@@ -286,6 +303,28 @@ public class ServerObjectCastTests
         }
     }
 
+    private string StepCommand(string job, int step) =>
+        Scalar($"SELECT s.command FROM msdb.dbo.sysjobsteps s JOIN msdb.dbo.sysjobs j ON j.job_id = s.job_id WHERE j.name = N'{job}' AND s.step_id = {step}")?.ToString();
+
+    private int SharedScheduleCount() => Convert.ToInt32(Scalar("SELECT COUNT(*) FROM msdb.dbo.sysschedules WHERE name = N'ss_shared'"));
+    private int SharedScheduleJobs() => Convert.ToInt32(Scalar(
+        "SELECT COUNT(*) FROM msdb.dbo.sysjobschedules js JOIN msdb.dbo.sysschedules sc ON sc.schedule_id = js.schedule_id WHERE sc.name = N'ss_shared'"));
+
+    private void AJobThatSharesASchedule_KeepsItShared()
+    {
+        Exec("EXEC msdb.dbo.sp_update_jobstep @job_name = N'ss_ctl', @step_id = 1, @retry_attempts = 3");
+
+        RunTheScripts("ss_ctl");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Scalar("SELECT s.retry_attempts FROM msdb.dbo.sysjobsteps s JOIN msdb.dbo.sysjobs j ON j.job_id = s.job_id WHERE j.name = N'ss_ctl'"), Is.EqualTo(0), "the job is back");
+            Assert.That(StepCommand("ss_ctl", 1), Is.EqualTo("SELECT 3 -- " + (char)1), "with the character XML cannot carry");
+            Assert.That(SharedScheduleCount(), Is.EqualTo(1), "the shared schedule is not copied");
+            Assert.That(SharedScheduleJobs(), Is.EqualTo(2), "and both jobs still run on it");
+        });
+    }
+
     private void OnAServerWithoutThem_TheScriptsCreateEveryObject()
     {
         Exec("""
@@ -300,6 +339,7 @@ public class ServerObjectCastTests
             DROP TRIGGER ss_ddl ON ALL SERVER;
             DROP TRIGGER ss_ddl2 ON ALL SERVER;
             EXEC msdb.dbo.sp_delete_job @job_name = N'ss_owned';
+            EXEC msdb.dbo.sp_delete_job @job_name = N'ss_ctl';
             DROP LOGIN ss_owner;
             """);
 
@@ -313,6 +353,9 @@ public class ServerObjectCastTests
             Assert.That(Scalar("SELECT o.name FROM msdb.dbo.sysjobs j JOIN msdb.dbo.sysoperators o ON o.id = j.notify_email_operator_id WHERE j.name = N'ss_job'"), Is.EqualTo("ss_op"));
             Assert.That(Scalar("SELECT COUNT(*) FROM msdb.dbo.sysnotifications n JOIN msdb.dbo.sysalerts a ON a.id = n.alert_id WHERE a.name = N'ss_alert'"), Is.EqualTo(1));
             Assert.That(Scalar("SELECT CAST(is_state_enabled AS INT) FROM sys.server_audits WHERE name = N'ss_audit'"), Is.EqualTo(1));
+            Assert.That(Scalar("SELECT f.max_files FROM sys.server_file_audits f JOIN sys.server_audits a ON a.audit_id = f.audit_id WHERE a.name = N'ss_audit'"), Is.EqualTo(5), "with its file limit");
+            Assert.That(SharedScheduleCount(), Is.EqualTo(1), "a job created where its shared schedule exists takes that one");
+            Assert.That(SharedScheduleJobs(), Is.EqualTo(2));
             Assert.That(Scalar("SELECT d.audit_action_name FROM sys.server_audit_specification_details d JOIN sys.server_audit_specifications s ON s.server_specification_id = d.server_specification_id WHERE s.name = N'ss_spec'"),
                 Is.EqualTo("FAILED_LOGIN_GROUP"));
             Assert.That(Scalar("SELECT COUNT(*) FROM sys.server_event_session_events e JOIN sys.server_event_sessions s ON s.event_session_id = e.event_session_id WHERE s.name = N'ss_xe' AND e.name = N'error_reported'"),
