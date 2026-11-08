@@ -31,6 +31,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Fixed
 
+- **SQL Server: a declared clustered key that replaces one other tables reference, and could not take those references back, stops by name.** The clustered primary key or unique constraint a declared clustered key replaces is dropped with the foreign keys that reference it, and each is put back on the declared key. When one the package does not declare references columns the declared table would have no primary key or unique constraint over, the drop failed with the raw "Could not drop constraint" (3727). The deploy now stops before anything is dropped, naming the foreign keys.
 - **`SchemaTongs --WriteSchemasOnly` with no `Product.json` exits 2.** A missing product file is something to fix and run again, which is exit 2; it exited 3, the code for an unexpected failure.
 - **A package at `SchemaPackagePath: "."` keeps the dots in its script paths.** The deployment summary removed the product root wherever it appeared in a script's path rather than only at the front, so with `.` as the root every dot was removed (`Tables/dbo.Orders.json` became `Tables/dboOrdersjson`). Only the leading root is removed now.
 - **A `MaxThreads` outside 1-20 says so.** A value above 20, or below 1, quietly ran with 10 threads; it still does, and now logs a warning naming the value it set aside.

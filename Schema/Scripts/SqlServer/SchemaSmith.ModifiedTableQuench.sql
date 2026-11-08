@@ -2898,6 +2898,55 @@ BEGIN TRY
                         WHERE si.[object_id] = OBJECT_ID(i.[Schema] + '.' + i.[TableName]) 
                           AND si.[name] = SchemaSmith.fn_StripBracketWrapping(i.[IndexName]))
   
+  -- A conflicting clustered primary key or unique constraint that other tables' foreign keys reference comes off with
+  -- them, and each is put back on the declared key. One the package does not declare can only be put back when the table
+  -- will have a primary key or unique constraint over exactly the columns it references; when it will not, the drop
+  -- failed with the raw 3727, so the deploy stops by name here, before anything is dropped.
+  RAISERROR('Check Foreign Keys On A Conflicting Clustered Key', 10, 100) WITH NOWAIT
+  IF OBJECT_ID('tempdb..#ConflictInboundKeys') IS NOT NULL DROP TABLE #ConflictInboundKeys
+  SELECT [ParentSchemaBr] = mct.[Schema], [ParentTableBr] = mct.[TableName],
+         [ChildSchema] = OBJECT_SCHEMA_NAME(fk.parent_object_id) COLLATE DATABASE_DEFAULT,
+         [ChildTable] = OBJECT_NAME(fk.parent_object_id) COLLATE DATABASE_DEFAULT,
+         [KeyName] = fk.[name] COLLATE DATABASE_DEFAULT,
+         -- The referenced columns as a sorted set, to compare with a declared key's.
+         [ReferencedSet] = CAST((SELECT ',' + COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id)
+                                   FROM sys.foreign_key_columns fkc WHERE fkc.constraint_object_id = fk.[object_id]
+                                  ORDER BY COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)') AS NVARCHAR(MAX)) COLLATE DATABASE_DEFAULT,
+         [Declared] = CAST(0 AS BIT)
+    INTO #ConflictInboundKeys
+    FROM #MissingClusteredIndexTables mct WITH (NOLOCK)
+    JOIN sys.indexes si ON si.[object_id] = OBJECT_ID(mct.[Schema] + '.' + mct.[TableName]) AND si.[type] IN (1, 5)
+                       AND (si.is_primary_key = 1 OR si.is_unique_constraint = 1)
+    JOIN sys.foreign_keys fk ON fk.referenced_object_id = si.[object_id] AND fk.key_index_id = si.index_id
+
+  IF EXISTS (SELECT 1 FROM #ConflictInboundKeys)
+  BEGIN
+    UPDATE k SET [Declared] = 1
+      FROM #ConflictInboundKeys k
+     WHERE EXISTS (SELECT 1 FROM #ForeignKeys f WITH (NOLOCK)
+                    WHERE SchemaSmith.fn_StripBracketWrapping(f.[Schema]) = k.[ChildSchema]
+                      AND SchemaSmith.fn_StripBracketWrapping(f.[TableName]) = k.[ChildTable]
+                      AND SchemaSmith.fn_StripBracketWrapping(f.[KeyName]) = k.[KeyName])
+
+    DECLARE @v_ConflictUnrestorable NVARCHAR(MAX) =
+      STUFF((SELECT ', ' + QUOTENAME(k.[ChildSchema]) + '.' + QUOTENAME(k.[ChildTable]) + '.' + QUOTENAME(k.[KeyName])
+               FROM #ConflictInboundKeys k
+              WHERE k.[Declared] = 0
+                AND NOT EXISTS (SELECT 1 FROM #Indexes i WITH (NOLOCK)
+                                 WHERE i.[Schema] = k.[ParentSchemaBr] AND i.[TableName] = k.[ParentTableBr]
+                                   AND (ISNULL(i.[PrimaryKey], 0) = 1 OR ISNULL(i.[UniqueConstraint], 0) = 1 OR ISNULL(i.[Unique], 0) = 1)
+                                   AND RTRIM(ISNULL(i.[FilterExpression], '')) = ''
+                                   AND (SELECT ',' + SchemaSmith.fn_StripBracketWrapping(LTRIM(RTRIM(REPLACE(REPLACE(l.[value], ' DESC', ''), ' ASC', ''))))
+                                          FROM SchemaSmith.fn_SplitList(i.[IndexColumns], ',') l
+                                         ORDER BY SchemaSmith.fn_StripBracketWrapping(LTRIM(RTRIM(REPLACE(REPLACE(l.[value], ' DESC', ''), ' ASC', ''))))
+                                         FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)') = k.[ReferencedSet])
+              ORDER BY k.[ChildSchema], k.[ChildTable], k.[KeyName]
+              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+    IF @v_ConflictUnrestorable IS NOT NULL
+      RAISERROR('The declared clustered key replaces one that foreign key(s) %s reference, and the package declares no primary key or unique constraint those keys could reference afterwards. Declare the keys, or a key over the columns they reference, or change the table with Before/After migration scripts.', 16, 1, @v_ConflictUnrestorable)
+
+  END
+
   RAISERROR('Drop Conflicting Clustered Index', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping ' + REPLACE(REPLACE(CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1 THEN 'constraint' ELSE 'index' END, '''', ''''''), '%', '%%') + ' ' + REPLACE(REPLACE(mct.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(mct.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(si.[Name], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE WHEN si.is_primary_key = 1 OR si.is_unique_constraint = 1
