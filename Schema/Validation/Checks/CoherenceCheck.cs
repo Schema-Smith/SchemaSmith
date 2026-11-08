@@ -567,8 +567,9 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     // Optionally wrapped in parentheses and N-prefixed, as a hand-written SQL Server default may be.
+    // No space before the parenthesis: 'Pending (review)' is a string, not a call.
     private static readonly System.Text.RegularExpressions.Regex QuotedFunctionCall =
-        new(@"^\s*(?:\(\s*)?N?'\s*(?<call>[A-Za-z_][A-Za-z0-9_$]*\s*\(.*\))\s*'\s*(?:\)\s*)?$", System.Text.RegularExpressions.RegexOptions.Singleline);
+        new(@"^\s*(?:\(\s*)?N?'\s*(?<call>[A-Za-z_][A-Za-z0-9_$]*\(.*\))\s*'\s*(?:\)\s*)?$", System.Text.RegularExpressions.RegexOptions.Singleline);
 
     /// <summary>
     /// A declared <c>MinimumVersion</c> the engine cannot resolve aborts the deploy before any object is
