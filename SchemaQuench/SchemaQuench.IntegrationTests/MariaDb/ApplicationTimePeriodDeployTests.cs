@@ -177,7 +177,18 @@ CREATE TABLE `{existing}` (`Id` INT NOT NULL PRIMARY KEY,
             }]
             """;
 
+        // The preview says what the run will do, in the same shape every other change row takes.
+        ClearAudit(cmd);
+        RunTableQuenchProc(cmd, json, whatIf: true);
+        Assert.Multiple(() =>
+        {
+            Assert.That(PeriodCount(cmd, existing), Is.Zero, "a preview adds nothing");
+            Assert.That(PeriodAudit(cmd, existing), Is.EqualTo("period wouldCreate"), "and reports the period it would add");
+        });
+
+        ClearAudit(cmd);
         RunTableQuenchProc(cmd, json);
+        Assert.That(PeriodAudit(cmd, existing), Is.EqualTo("period created"), "the change is recorded as a period that was created");
 
         cmd.CommandText = $@"
 SELECT CONCAT(PERIOD, '|', START_COLUMN_NAME, '|', END_COLUMN_NAME)
@@ -227,6 +238,19 @@ SELECT COUNT(*) FROM INFORMATION_SCHEMA.PERIODS
         cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.PERIODS "
                           + $"WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{table}' AND PERIOD <> 'SYSTEM_TIME'";
         return Convert.ToInt32(cmd.ExecuteScalar());
+    }
+
+    private static void ClearAudit(IDbCommand cmd)
+    {
+        cmd.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static string PeriodAudit(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = "SELECT COALESCE(GROUP_CONCAT(CONCAT(ObjectType, ' ', ActionType) SEPARATOR '; '), '') FROM SchemaSmith_ChangeAudit "
+                          + $"WHERE SessionId = CONNECTION_ID() AND ObjectName = '{table}.Validity'";
+        return cmd.ExecuteScalar()?.ToString();
     }
 
     private bool SkipUnlessPeriodsReadable(IDbCommand cmd)
@@ -281,10 +305,19 @@ SELECT COUNT(*) FROM INFORMATION_SCHEMA.PERIODS
         Assert.That(PeriodCount(cmd, DropTarget), Is.EqualTo(1),
             "With the variable UNSET, the period must still be left alone. Unset is what a caller that has never heard of this flag leaves behind, and it must mean off.");
 
-        // Same package, flag ON -- now it goes.
+        // Same package, flag ON -- now it goes; a preview first says so and drops nothing.
         cmd.CommandText = "SET @ss_drop_periods_removed = 1";
         cmd.ExecuteNonQuery();
+        ClearAudit(cmd);
+        RunTableQuenchProc(cmd, DropTargetJson(withPeriod: false), whatIf: true);
+        Assert.Multiple(() =>
+        {
+            Assert.That(PeriodCount(cmd, DropTarget), Is.EqualTo(1), "a preview drops nothing");
+            Assert.That(PeriodAudit(cmd, DropTarget), Is.EqualTo("period wouldDrop"), "and reports the period it would drop");
+        });
+        ClearAudit(cmd);
         RunTableQuenchProc(cmd, DropTargetJson(withPeriod: false));
+        Assert.That(PeriodAudit(cmd, DropTarget), Is.EqualTo("period dropped"), "the drop is recorded as a period");
 
         Assert.That(PeriodCount(cmd, DropTarget), Is.Zero,
             "with the flag on, the period the package no longer declares must be dropped");

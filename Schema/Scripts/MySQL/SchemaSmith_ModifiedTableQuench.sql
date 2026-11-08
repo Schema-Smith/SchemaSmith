@@ -4610,9 +4610,14 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                         DEALLOCATE PREPARE ss_pdd_exec;
 
                         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-                        VALUES (CONNECTION_ID(), 'PERIOD',
+                        VALUES (CONNECTION_ID(), 'period',
                                 CONCAT(SchemaSmith_StripBacktickWrapping(@ss_pdd_table), '.',
                                        SchemaSmith_StripBacktickWrapping(@ss_pdd_name)), 'dropped');
+                    ELSE
+                        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+                        VALUES (CONNECTION_ID(), 'period',
+                                CONCAT(SchemaSmith_StripBacktickWrapping(@ss_pdd_table), '.',
+                                       SchemaSmith_StripBacktickWrapping(@ss_pdd_name)), 'wouldDrop');
                     END IF;
 
                     SET @ss_pdd_id := (SELECT MIN(RowId) FROM _SchemaSmith_PeriodsToDrop WHERE RowId > @ss_pdd_id);
@@ -4651,9 +4656,14 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                         DEALLOCATE PREPARE ss_pd_exec;
 
                         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
-                        VALUES (CONNECTION_ID(), 'PERIOD',
+                        VALUES (CONNECTION_ID(), 'period',
                                 CONCAT(SchemaSmith_StripBacktickWrapping(@ss_pd_table), '.',
-                                       SchemaSmith_StripBacktickWrapping(@ss_pd_name)), 'added');
+                                       SchemaSmith_StripBacktickWrapping(@ss_pd_name)), 'created');
+                    ELSE
+                        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+                        VALUES (CONNECTION_ID(), 'period',
+                                CONCAT(SchemaSmith_StripBacktickWrapping(@ss_pd_table), '.',
+                                       SchemaSmith_StripBacktickWrapping(@ss_pd_name)), 'wouldCreate');
                     END IF;
                 END IF;
 

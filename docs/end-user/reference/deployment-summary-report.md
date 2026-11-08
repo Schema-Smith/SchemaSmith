@@ -333,6 +333,7 @@ Where the counts are the summary, `details[]` is the itemized list — one row p
 - **`dataDelivery`** — a table's `DataDelivery` that ran (`delivered`), or under `WhatIf` would run (`wouldDeliver`). The name is the table's, with ` [variant]` when the delivery names one.
 - **`database`** and **`schema`** — a database or schema created because its `TemplateTargets` entry or template sets `CreateIfMissing` (`created`, or `wouldCreate` under `WhatIf`).
 - **`sequence`** — a sequence created or modified (PostgreSQL and MariaDB).
+- **`period`** — a MariaDB application-time period added to an existing table (`created`) or dropped by `DropPeriodsRemovedFromProduct` (`dropped`), named `table.period`; `wouldCreate` / `wouldDrop` under `WhatIf`.
 - **`domain type`**, **`domain constraint`**, **`enum type`** and **`enum value`** — PostgreSQL domains and enum types. An enum value the package no longer declares, or a changed value order, is recorded as `wouldDrop` / `wouldModify` even on a real run, because PostgreSQL cannot apply it without recreating the type.
 - **`changeDataCapture`**, **`changeTracking`** and **`temporal`** — SQL Server CDC, change tracking and system versioning on a table: `created` when turned on, `dropped` when turned off, `modified` for a CDC capture-instance rotation or a change-tracking reset. Disabling CDC on a table with two capture instances records one row for each.
 
