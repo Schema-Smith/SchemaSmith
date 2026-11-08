@@ -27,6 +27,12 @@ public interface ISettingDescriptor
 
     // Throws a DbException when the engine refuses the change, or SettingValueException for a value it would never take.
     void Apply(IDbCommand cmd, string name, string value, string database);
+
+    // What to do so a change that a restart loses is kept; null when there is nothing to add.
+    string RevertAdvice(string name) => null;
 }
 
 public sealed class SettingValueException(string message) : Exception(message);
+
+// The server cannot take the change at all from here (a read-only variable without SET PERSIST_ONLY).
+public sealed class SettingUnfixableException(string message) : Exception(message);

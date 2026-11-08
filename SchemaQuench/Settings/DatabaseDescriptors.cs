@@ -108,6 +108,10 @@ public static class SettingDescriptors
             (Platform.SqlServer, SettingScope.Database, "scopedconfiguration") => new SqlServerScopedConfigurationDescriptor(serverMajorVersion),
             (Platform.PostgreSQL, SettingScope.Database, "parameter") => new PostgreSqlDatabaseParameterDescriptor(),
             (Platform.MySQL, SettingScope.Database, "option") => new MySqlOptionDescriptor(),
+            (Platform.SqlServer, SettingScope.Server, "configuration") => new SqlServerConfigurationDescriptor(),
+            (Platform.SqlServer, SettingScope.Server, "traceflag") => new SqlServerTraceFlagDescriptor(),
+            (Platform.PostgreSQL, SettingScope.Server, "parameter") => new PostgreSqlServerParameterDescriptor(),
+            (Platform.MySQL, SettingScope.Server, "variable") => new MySqlVariableDescriptor(platform, serverMajorVersion),
             _ => throw new ArgumentException($"No {scope.ToString().ToLowerInvariant()} setting kind '{kind}' on {platform}.", nameof(kind))
         };
     }

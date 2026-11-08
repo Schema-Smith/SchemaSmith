@@ -9,8 +9,10 @@ using System.Linq;
 using Schema.Checkpointing;
 using Schema.Delivery;
 using Schema.Domain;
+using Schema.Domain.Settings;
 using Schema.Isolators;
 using Schema.Utility;
+using SchemaQuench.Settings;
 
 namespace SchemaQuench;
 
@@ -132,6 +134,10 @@ public partial class DatabaseQuench
                 SafeProgressLog("  [WhatIf] Setup scripts:");
                 WhatIfLogSetupScripts(_iteration.SetupScripts);
             }),
+
+            // D12: the database settings the template declares, after Setup (which may prepare what one relies on) and before the
+            // first object. Absent means unmanaged: without DatabaseSettings.json nothing is read. No checkpoint: it re-runs on resume.
+            new("DatabaseSettings", null, () => _template.DatabaseSettings != null, () => QuenchDatabaseSettings(command), StepPreview.SameCall),
 
             new("ObjectScriptsWithoutUnresolvedTokens", null, () => true, () =>
             {
@@ -333,6 +339,32 @@ public partial class DatabaseQuench
             // A checkpointed step's time is recorded whenever it ran -- in a preview, only when the preview made the same call.
             if (step.CheckpointName != null && (!IsWhatIf || step.Preview == StepPreview.SameCall))
                 RunTiming?.Record(LogPrefix, _databaseName, step.Name, sw.ElapsedMilliseconds, 0);
+        }
+    }
+
+    private void QuenchDatabaseSettings(IDbCommand command)
+    {
+        SafeProgressLog(_whatIfOnly ? "  [WhatIf] Database settings" : "  Database settings");
+        var major = _product.Platform.GetBasePlatform() switch
+        {
+            Platform.SqlServer => _sqlServerMajorVersion,
+            Platform.PostgreSQL => _postgreSqlServerVersionNum / 10000,
+            _ => _mySqlServerVersionNum / 100
+        };
+        var step = new SettingsStep(kind => SettingDescriptors.For(_product.Platform, SettingScope.Database, kind, major));
+        var result = step.Run(command, _template.DatabaseSettings, _databaseName, _whatIfOnly, e => FolderGate.ShouldApply(command, e),
+            ChangeAudit, AuditTarget, LogSetting);
+        if (result.Stopped)
+            throw new RunFailedException($"Database settings stopped the deploy to {_databaseName}: {result.StopMessage}");
+    }
+
+    private void LogSetting(SettingLevel level, string message)
+    {
+        switch (level)
+        {
+            case SettingLevel.Error: SafeProgressLogError("    " + message); break;
+            case SettingLevel.Warning: lock (_lockObject) { _progressLog.Warn($"{LogPrefix}     {message}"); FailureCtx.Log(message); } break;
+            default: SafeProgressLog("    " + message); break;
         }
     }
 

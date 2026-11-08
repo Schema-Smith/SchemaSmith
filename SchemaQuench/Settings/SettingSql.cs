@@ -24,18 +24,23 @@ internal static class SettingSql
     internal static string StandardLiteral(string value) => "'" + (value ?? "").Replace("'", "''") + "'";
     internal static string MySqlLiteral(string value) => "'" + (value ?? "").Replace("\\", "\\\\").Replace("'", "''") + "'";
 
-    internal static void Execute(IDbCommand cmd, string sql)
+    internal static void Execute(IDbCommand cmd, string sql, params (string Name, object Value)[] parameters)
     {
         cmd.Parameters.Clear();
         cmd.CommandText = sql;
-        cmd.ExecuteNonQuery();
+        AddParameters(cmd, parameters);
+        try
+        {
+            cmd.ExecuteNonQuery();
+        }
+        finally
+        {
+            cmd.Parameters.Clear();
+        }
     }
 
-    // Runs a query with named parameters and returns the first row's columns as strings, or null when there is no row.
-    internal static string[] FirstRow(IDbCommand cmd, string sql, params (string Name, object Value)[] parameters)
+    private static void AddParameters(IDbCommand cmd, (string Name, object Value)[] parameters)
     {
-        cmd.Parameters.Clear();
-        cmd.CommandText = sql;
         foreach (var (name, value) in parameters)
         {
             var p = cmd.CreateParameter();
@@ -43,6 +48,14 @@ internal static class SettingSql
             p.Value = value;
             cmd.Parameters.Add(p);
         }
+    }
+
+    // Runs a query with named parameters and returns the first row's columns as strings, or null when there is no row.
+    internal static string[] FirstRow(IDbCommand cmd, string sql, params (string Name, object Value)[] parameters)
+    {
+        cmd.Parameters.Clear();
+        cmd.CommandText = sql;
+        AddParameters(cmd, parameters);
         try
         {
             using var reader = cmd.ExecuteReader();
