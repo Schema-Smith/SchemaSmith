@@ -66,11 +66,11 @@ public class SettingScriptTests
         Assert.That(sql, Is.EqualTo("ALTER SYSTEM SET \"log_min_duration_statement\" = '250';\r\nSELECT pg_reload_conf();\r\n"));
     }
 
-    [TestCase(Platform.MySQL, 8, "SET PERSIST max_connections = 180;\r\n")]
-    [TestCase(Platform.MariaDb, 11, "SET GLOBAL max_connections = 180;\r\n")]
+    [TestCase(Platform.MySQL, 8, "IF(@@GLOBAL.max_connections = 180, 'DO 0', 'SET PERSIST max_connections = 180')")]
+    [TestCase(Platform.MariaDb, 11, "IF(@@GLOBAL.max_connections = 180, 'DO 0', 'SET GLOBAL max_connections = 180')")]
     public void MySqlVariable_PersistsWhereTheServerCan(Platform platform, int major, string expected)
     {
-        Assert.That(new MySqlVariableDescriptor(platform, major).RenderScript("max_connections", "180", null), Is.EqualTo(expected));
+        Assert.That(new MySqlVariableDescriptor(platform, major).RenderScript("max_connections", "180", null), Does.Contain(expected));
     }
 
     [Test]

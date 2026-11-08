@@ -42,6 +42,10 @@ public abstract class ServerSettingsSharedTests
     // A setting whose change waits for a restart; null where the engine cannot say (MariaDB, MySQL 5.7).
     protected abstract (string Name, string Value)? PendingRestart { get; }
 
+    // Read-only settings, to render a script for at their current value: a number and a boolean that is ON, which the
+    // server reads back as 1. Empty where the engine's scripts cannot meet one.
+    protected virtual string[] ReadOnlyNames => [];
+
     private string _packageDir;
     private IDbConnection _admin;
     private readonly List<string> _log = [];
@@ -143,6 +147,46 @@ public abstract class ServerSettingsSharedTests
     private string Lines => string.Join("\n", _log);
 
     protected string[] RunDeclared(string name, string value) => Run(Declare(name, value, fix: true, "Error"));
+
+    private Schema.Settings.ISettingDescriptor Descriptor()
+    {
+        using var cmd = _admin.CreateCommand();
+        var major = Schema.Settings.SettingDescriptors.MajorVersion(Platform, TargetVersionDetector.Detect(cmd, Platform).ServerComparable);
+        return Schema.Settings.SettingDescriptors.For(Platform, Schema.Domain.Settings.SettingScope.Server, Kind, major);
+    }
+
+    // SchemaTongs' Script output: a script per setting, which a package runs on every deploy.
+    [Test]
+    public void TheRenderedScript_SetsTheValue_AndIsSafeToRunAgain()
+    {
+        var script = Descriptor().RenderScript(DynamicName, DynamicValue, null);
+
+        Exec(script);
+        Exec(script);
+
+        Assert.That(() => ReadValue(DynamicName), Is.EqualTo(DynamicValue).After(3000, 100), script);
+    }
+
+    // A read-only setting already at its value must not fail the deploy that runs its script, every time.
+    [Test]
+    public void TheRenderedScript_ForAReadOnlySettingAtItsValue_Runs()
+    {
+        if (ReadOnlyNames.Length == 0) Assert.Ignore("This engine's scripts do not meet read-only settings.");
+        var descriptor = Descriptor();
+        Assert.Multiple(() =>
+        {
+            foreach (var name in ReadOnlyNames)
+            {
+                // The value as extraction writes it, which is how a package declares it.
+                using var cmd = _admin.CreateCommand();
+                var current = descriptor.Read(cmd, name, null).Running;
+                var script = descriptor.RenderScript(name, current, null);
+
+                Assert.DoesNotThrow(() => Exec(script), $"{name} = {current}\n{script}");
+                Assert.That(descriptor.Read(cmd, name, null).Running, Is.EqualTo(current), name);
+            }
+        });
+    }
 
     [Test]
     public void AnEnforcedDynamicSetting_IsChanged_AndARunAfterIsSilent()

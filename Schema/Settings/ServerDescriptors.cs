@@ -280,11 +280,24 @@ public sealed class MySqlVariableDescriptor(Platform platform, int serverMajorVe
 
     private static bool IsReadOnly(DbException e) => e.Message.Contains("read only variable", StringComparison.OrdinalIgnoreCase);
 
+    // The script runs on every deploy, so it sets the variable only when the value differs: a read-only variable already
+    // at its value would otherwise fail every deploy. A boolean reads back as 1/0, so ON/OFF match either spelling.
     public string RenderScript(string name, string value, string database)
     {
         if (!VariableName.IsMatch(name ?? "")) throw new SettingValueException($"'{name}' is not a variable name.");
         var v = (value ?? "").Trim();
-        return $"SET {(CanPersist ? "PERSIST" : "GLOBAL")} {name} = {(Bare.IsMatch(v) ? v : SettingSql.MySqlLiteral(v))};\r\n";
+        var literal = Bare.IsMatch(v) ? v : SettingSql.MySqlLiteral(v);
+        var matches = v.ToUpperInvariant() switch
+        {
+            "ON" => $"@@GLOBAL.{name} IN ('ON', 1)",
+            "OFF" => $"@@GLOBAL.{name} IN ('OFF', 0)",
+            _ => $"@@GLOBAL.{name} = {literal}"
+        };
+        var set = $"SET {(CanPersist ? "PERSIST" : "GLOBAL")} {name} = {literal}";
+        return $"SET @schemasmith_setting = IF({matches}, 'DO 0', {SettingSql.MySqlLiteral(set)});\r\n" +
+               "PREPARE schemasmith_setting FROM @schemasmith_setting;\r\n" +
+               "EXECUTE schemasmith_setting;\r\n" +
+               "DEALLOCATE PREPARE schemasmith_setting;\r\n";
     }
 
     private static readonly HashSet<string> MachineIdentity = new(StringComparer.OrdinalIgnoreCase)

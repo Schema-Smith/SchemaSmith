@@ -83,6 +83,7 @@ public class MySqlServerSettingsTests : ServerSettingsSharedTests
     protected override string DynamicName => "max_connections";
     protected override string DynamicValue => "180";
     protected override (string Name, string Value)? PendingRestart => ("back_log", "100");
+    protected override string[] ReadOnlyNames => ["lower_case_table_names", "log_bin"];
 
     protected override string ReadValue(string name) => Scalar($"SELECT @@GLOBAL.{name}")?.ToString();
 
@@ -103,6 +104,7 @@ public class MariaDbServerSettingsTests : ServerSettingsSharedTests
     protected override string DynamicName => "max_connections";
     protected override string DynamicValue => "180";
     protected override (string Name, string Value)? PendingRestart => null;
+    protected override string[] ReadOnlyNames => ["lower_case_table_names", "aria_used_for_temp_tables"];
 
     protected override string ReadValue(string name) => Scalar($"SELECT @@GLOBAL.{name}")?.ToString();
     protected override void ResetSetting(string name) => Exec("SET GLOBAL max_connections = 151");

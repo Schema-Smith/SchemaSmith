@@ -24,8 +24,14 @@ cleanup() {
 trap cleanup EXIT
 
 if [ "${NO_BUILD:-0}" != "1" ]; then
-  dotnet build "$PROJ" -c Debug -nologo -v q 2>&1 | grep -E " error |Error\(s\)" | head -5
-  dotnet build "$TONGS" -c Debug -nologo -v q 2>&1 | grep -E " error |Error\(s\)" | head -5
+  # A failed build would leave the last good binaries in place, and the legs would quietly test those.
+  for proj in "$PROJ" "$TONGS"; do
+    if ! out=$(dotnet build "$proj" -c Debug -nologo -v q 2>&1); then
+      echo "$out" | grep -E " error " | head -5
+      echo "FAIL: $proj did not build -- NOT RUN"
+      exit 1
+    fi
+  done
 fi
 
 wait_ready() {
