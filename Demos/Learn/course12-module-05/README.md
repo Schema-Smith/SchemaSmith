@@ -47,7 +47,7 @@ schemaquench --ConfigFile:deploy.settings.json --report:./rerun    # exit 0
 ## Object Changes
 - Created: tables=0, columns=0, indexes=0, constraints=0, foreignKeys=0, procedures=0, views=0, functions=0
 - Modified: tables=0, columns=0
-- Dropped: tables=0, indexes=0, constraints=0, foreignKeys=0
+- Dropped: tables=0, columns=0, indexes=0, constraints=0, foreignKeys=0
 ```
 
 Zeros, on every engine. That is the claim this whole module is about, and the report is the evidence — not the

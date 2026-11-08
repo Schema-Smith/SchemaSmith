@@ -248,7 +248,7 @@ Read **Object Changes**. A clean database reads all zeroes:
 ## Object Changes
 - Created: tables=0, columns=0, indexes=0, constraints=0, foreignKeys=0, procedures=0, views=0, functions=0
 - Modified: tables=0, columns=0
-- Dropped: tables=0, indexes=0, constraints=0, foreignKeys=0
+- Dropped: tables=0, columns=0, indexes=0, constraints=0, foreignKeys=0
 ```
 
 Now let it drift again. Somebody tunes another query by hand:

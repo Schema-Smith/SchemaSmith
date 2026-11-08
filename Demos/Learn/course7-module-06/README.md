@@ -50,7 +50,7 @@ Open `out/whatif-summary.md` first — the human receipt, same `Object Changes` 
 ## Object Changes
 - Created: tables=5, columns=5, indexes=5, constraints=5, foreignKeys=0, procedures=0, views=0, functions=0
 - Modified: tables=0, columns=5
-- Dropped: tables=0, indexes=5, constraints=0, foreignKeys=0
+- Dropped: tables=0, columns=0, indexes=5, constraints=0, foreignKeys=0
 - Ran (object scripts): 0
 - Unchanged (object scripts): 0
 ```
