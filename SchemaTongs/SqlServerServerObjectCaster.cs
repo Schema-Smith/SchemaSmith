@@ -277,18 +277,13 @@ public static class SqlServerServerObjectCaster
     private static IEnumerable<ServerObjectScript> Alerts(IDbCommand cmd)
     {
         var alerts = Rows(cmd, """
-            SELECT a.id, a.name, a.message_id, a.severity, a.enabled, a.delay_between_responses, a.notification_message, a.include_event_description,
+            SELECT a.id, a.name, a.event_id, a.message_id, a.severity, a.enabled, a.delay_between_responses, a.notification_message, a.include_event_description,
                    a.database_name, a.event_description_keyword, j.name AS job_name, a.performance_condition
               FROM msdb.dbo.sysalerts a LEFT JOIN msdb.dbo.sysjobs j ON j.job_id = a.job_id
             """);
         foreach (var a in alerts)
         {
-            var args = $"@name = {N(a["name"])}, @message_id = {a["message_id"]}, @severity = {a["severity"]}, @enabled = {a["enabled"]}, " +
-                       $"@delay_between_responses = {a["delay_between_responses"]}, @notification_message = {N(a["notification_message"] ?? "")}, " +
-                       $"@include_event_description_in = {a["include_event_description"]}, @database_name = {N(a["database_name"] ?? "")}, " +
-                       $"@event_description_keyword = {N(a["event_description_keyword"] ?? "")}" +
-                       (a["job_name"] is { } job ? $", @job_name = {N(job)}" : "") +
-                       (string.IsNullOrEmpty(a["performance_condition"]) ? "" : $", @performance_condition = {N(a["performance_condition"])}");
+            var args = AlertArguments(a);
             var sql = new StringBuilder(Lines(
                 $"IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysalerts WHERE name = {N(a["name"])})",
                 $"    EXEC msdb.dbo.sp_add_alert {args};",
@@ -304,6 +299,20 @@ public static class SqlServerServerObjectCaster
                     $"    EXEC msdb.dbo.sp_update_notification @alert_name = {N(a["name"])}, @operator_name = {N(n["name"])}, @notification_method = {n["notification_method"]};"));
             yield return new ServerObjectScript("AgentAlerts", FileNameFor(a["name"]), sql.ToString());
         }
+    }
+
+    // msdb keeps a WMI alert (event_id 8) with its namespace in database_name and its query in performance_condition.
+    internal static string AlertArguments(IReadOnlyDictionary<string, string> a)
+    {
+        var wmi = a["event_id"] == "8";
+        return $"@name = {N(a["name"])}, @message_id = {a["message_id"]}, @severity = {a["severity"]}, @enabled = {a["enabled"]}, " +
+               $"@delay_between_responses = {a["delay_between_responses"]}, @notification_message = {N(a["notification_message"] ?? "")}, " +
+               $"@include_event_description_in = {a["include_event_description"]}, " +
+               (wmi ? $"@wmi_namespace = {N(a["database_name"])}, @wmi_query = {N(a["performance_condition"])}, "
+                    : $"@database_name = {N(a["database_name"] ?? "")}, ") +
+               $"@event_description_keyword = {N(a["event_description_keyword"] ?? "")}" +
+               (a["job_name"] is { } job ? $", @job_name = {N(job)}" : "") +
+               (wmi || string.IsNullOrEmpty(a["performance_condition"]) ? "" : $", @performance_condition = {N(a["performance_condition"])}");
     }
 
     // ---- server audits and audit specifications ----
