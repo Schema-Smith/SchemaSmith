@@ -23,12 +23,16 @@ public abstract class DatabaseSettingsSharedTests : ObjectScriptDeployFixture
 
     // The value as the test reads it back, in the same spelling as ValueA / ValueB.
     protected abstract string ReadCurrent();
-    protected abstract void SetCurrent(string value);
+    protected abstract string SetSql(string value);
+    protected void SetCurrent(string value) => Exec(SetSql(value));
     protected abstract void Restore();
     protected abstract string EquivalentSpellingOfA { get; }
     protected abstract (string Name, string Value, string Action) Refused { get; }
 
-    private const string Folders = """{ "FolderPath": "Objects", "QuenchSlot": "Objects" }""";
+    private const string Folders = """
+        { "FolderPath": "Setup", "QuenchSlot": "Setup" },
+        { "FolderPath": "Objects", "QuenchSlot": "Objects" }
+        """;
 
     [SetUp]
     public void StartFromA()
@@ -46,7 +50,7 @@ public abstract class DatabaseSettingsSharedTests : ObjectScriptDeployFixture
 
     private void Package(string settingsJson, bool withObject = false)
     {
-        WritePackage(Folders, "Objects");
+        WritePackage(Folders, "Setup", "Objects");
         if (withObject) WriteFile("Objects", "01-probe.sql", "CREATE TABLE settings_probe (id INT NOT NULL)");
         if (settingsJson != null) File.WriteAllText(Path.Join(TemplateDir, "DatabaseSettings.json"), settingsJson);
     }
@@ -163,20 +167,60 @@ public abstract class DatabaseSettingsSharedTests : ObjectScriptDeployFixture
         });
     }
 
-    // No checkpoint: a resumed run re-runs the step, so a setting the first run refused to touch is fixed on the resume.
+    // Setup runs first, so a script can prepare what a setting relies on: here it sets the very value the file declares.
+    [Test]
+    public void TheStepRunsAfterSetup()
+    {
+        Package(One(ValueB, fix: false, "Error"));
+        WriteFile("Setup", "01-prepare.sql", SetSql(ValueB));
+
+        var run = Deploy();
+
+        Assert.That(SettingRows(run), Is.Empty, "the setting already matched when the step read it: " + Lines(run));
+    }
+
+    // Extraction's script output for this setting, run as a package would run it: twice, the second time changing nothing.
+    [Test]
+    public void TheRenderedScript_SetsTheValue_AndIsSafeToRunAgain()
+    {
+        var major = Schema.Settings.SettingDescriptors.MajorVersion(Platform, VersionComparable());
+        var script = Schema.Settings.SettingDescriptors.For(Platform, Schema.Domain.Settings.SettingScope.Database, Kind, major).RenderScript(Name, ValueB, MainDb);
+
+        Exec(script);
+        var afterFirst = ReadCurrent();
+        Exec(script);
+
+        Assert.That(afterFirst, Is.EqualTo(ValueB), script);
+        Assert.That(ReadCurrent(), Is.EqualTo(ValueB));
+    }
+
+    private int VersionComparable()
+    {
+        using var cmd = Connection.CreateCommand();
+        return Schema.Utility.TargetVersionDetector.Detect(cmd, Platform).ServerComparable;
+    }
+
+    // No checkpoint: the step re-runs on resume even when the stopped run had already finished it, so a value changed
+    // between the two runs (someone set it by hand, or the file was corrected) is still put right.
     [Test]
     public void AResumedRun_ReRunsTheStep()
     {
         var checkpointDir = Path.Join(Path.GetTempPath(), $"SettingsResume_{Guid.NewGuid():N}");
         try
         {
-            Package(One(ValueB, fix: false, "Error"), withObject: true);
+            Package(One(ValueB, fix: true, "Error"), withObject: true);
+            WriteFile("Setup", "01-noop.sql", "SELECT 1");
+            WriteFile("Objects", "02-broken.sql", "THIS IS NOT SQL");
             Deploy(expectSuccess: false, checkpointDir: checkpointDir);
+            Assert.That(ReadCurrent(), Is.EqualTo(ValueB), "the first run fixed the setting before it stopped");
+            Assert.That(Directory.Exists(checkpointDir) && Directory.GetFiles(checkpointDir, "*", SearchOption.AllDirectories).Length > 0, Is.True,
+                "the stopped run left a resume point, so the next deploy really resumes");
 
-            File.WriteAllText(Path.Join(TemplateDir, "DatabaseSettings.json"), One(ValueB, fix: true, "Error"));
+            File.Delete(Path.Join(TemplateDir, "Objects", "02-broken.sql"));
+            File.WriteAllText(Path.Join(TemplateDir, "DatabaseSettings.json"), One(ValueA, fix: true, "Error"));
             var resumed = Deploy(checkpointDir: checkpointDir, resume: true);
 
-            Assert.That(ReadCurrent(), Is.EqualTo(ValueB));
+            Assert.That(ReadCurrent(), Is.EqualTo(ValueA), "the resumed run read and fixed the setting again\n" + Lines(resumed));
             Assert.That(SettingRows(resumed), Is.EqualTo(new[] { $"{Kind} {Name} changed" }));
         }
         finally

@@ -26,6 +26,6 @@ public class DatabaseSettingsTests : DatabaseSettingsSharedTests
     protected override string ReadCurrent() =>
         Scalar("SELECT CASE is_auto_update_stats_async_on WHEN 1 THEN 'ON' ELSE 'OFF' END FROM sys.databases WHERE name = DB_NAME()")?.ToString();
 
-    protected override void SetCurrent(string value) => Exec($"ALTER DATABASE CURRENT SET AUTO_UPDATE_STATISTICS_ASYNC {value}");
+    protected override string SetSql(string value) => $"ALTER DATABASE CURRENT SET AUTO_UPDATE_STATISTICS_ASYNC {value}";
     protected override void Restore() => SetCurrent("OFF");
 }

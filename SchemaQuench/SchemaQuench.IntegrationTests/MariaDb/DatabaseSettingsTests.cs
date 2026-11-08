@@ -31,6 +31,6 @@ public class DatabaseSettingsTests : DatabaseSettingsSharedTests
     protected override string ReadCurrent() =>
         Scalar($"SELECT DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '{MainDb}'")?.ToString();
 
-    protected override void SetCurrent(string value) => Exec($"ALTER DATABASE `{MainDb}` COLLATE {value}");
+    protected override string SetSql(string value) => $"ALTER DATABASE `{MainDb}` COLLATE {value}";
     protected override void Restore() => SetCurrent(_original ?? "utf8mb4_general_ci");
 }

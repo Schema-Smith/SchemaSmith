@@ -29,6 +29,6 @@ public class DatabaseSettingsTests : DatabaseSettingsSharedTests
          WHERE r.setrole = 0 AND r.setdatabase = (SELECT oid FROM pg_database WHERE datname = current_database()) AND x LIKE 'work_mem=%'
         """)?.ToString();
 
-    protected override void SetCurrent(string value) => Exec($"ALTER DATABASE \"{MainDb}\" SET work_mem = '{value}'");
+    protected override string SetSql(string value) => $"ALTER DATABASE \"{MainDb}\" SET work_mem = '{value}'";
     protected override void Restore() => Exec($"ALTER DATABASE \"{MainDb}\" RESET work_mem");
 }
