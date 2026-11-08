@@ -75,7 +75,10 @@ public class RuleExtractionTests
             using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = $"DROP DATABASE IF EXISTS \"{_sourceDb}\" WITH (FORCE)";
+            // WITH (FORCE) is PostgreSQL 13; ending the sessions first works on every supported version.
+            cmd.CommandText = $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{_sourceDb}' AND pid <> pg_backend_pid()";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"DROP DATABASE IF EXISTS \"{_sourceDb}\"";
             cmd.ExecuteNonQuery();
         }
         catch (System.Data.Common.DbException) { /* best-effort cleanup must not mask a test result */ }

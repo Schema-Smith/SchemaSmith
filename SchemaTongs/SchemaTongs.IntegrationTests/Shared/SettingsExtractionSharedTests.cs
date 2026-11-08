@@ -119,6 +119,18 @@ public abstract class SettingsExtractionSharedTests
     }
 
     private string TemplateDir => Path.Join(_productDir, "Templates", "Main");
+
+    // What this server says about the identity setting, and one setting at its default, read the way extraction reads them.
+    private (Schema.Settings.CapturedSetting Identity, Schema.Settings.CapturedSetting SomeDefault) ServerFacts()
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        var major = Schema.Settings.SettingDescriptors.MajorVersion(Platform, TargetVersionDetector.Detect(cmd, Platform).ServerComparable);
+        var all = SettingKinds.For(Platform, SettingScope.Server)
+            .SelectMany(k => Schema.Settings.SettingDescriptors.For(Platform, SettingScope.Server, k, major).Enumerate(cmd, _sourceDb)).ToList();
+        return (all.FirstOrDefault(s => string.Equals(s.Name, MachineIdentitySetting.Name, StringComparison.OrdinalIgnoreCase)),
+            all.FirstOrDefault(s => s.IsDefault && !s.IsMachineIdentity));
+    }
     private SettingsFile Load(string path, SettingScope scope) => SettingsFile.LoadIfPresent(path, Platform, scope);
 
     [Test]
@@ -199,11 +211,18 @@ public abstract class SettingsExtractionSharedTests
             Extract(new Dictionary<string, string> { ["ShouldCast:ServerSettings"] = "true", ["ShouldCast:SettingsAllowlist"] = allowlist });
             var allowed = Load(Path.Join(_productDir, SettingsFile.ServerFileName), SettingScope.Server);
 
+            var (identity, someDefault) = ServerFacts();
             Assert.Multiple(() =>
             {
                 Assert.That(plain, Is.Not.Null, "ServerSettings.json was written and loads");
-                Assert.That(plain!.Settings.Select(s => s.Name.ToLowerInvariant()), Has.No.Member(MachineIdentitySetting.Name.ToLowerInvariant()));
                 Assert.That(allowed!.Settings.Select(s => s.Name.ToLowerInvariant()), Is.EqualTo(new[] { MachineIdentitySetting.Name.ToLowerInvariant() }));
+                // Left out because it names the machine, not because it is at its default -- where this server has changed it.
+                if (identity is { IsDefault: false })
+                    Assert.That(plain!.Settings.Select(s => s.Name.ToLowerInvariant()), Has.No.Member(MachineIdentitySetting.Name.ToLowerInvariant()));
+                else
+                    Assert.Warn($"{MachineIdentitySetting.Name} is at its default on this server, so leaving it out proves nothing here.");
+                if (someDefault != null)
+                    Assert.That(plain!.Settings.Select(s => s.Name.ToLowerInvariant()), Has.No.Member(someDefault.Name.ToLowerInvariant()), "a setting at its default is left out");
             });
         }
         finally

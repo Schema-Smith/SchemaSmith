@@ -17,7 +17,7 @@ public class SettingsExtractionTests : SettingsExtractionSharedTests
     protected override string AdminDatabase => "postgres";
     protected override (string Kind, string Name, string Value) ChangedSetting => ("Parameter", "work_mem", "12MB");
     protected override (string Kind, string Name) DefaultSetting => ("Parameter", "statement_timeout");
-    protected override (string Kind, string Name) MachineIdentitySetting => ("Parameter", "port");
+    protected override (string Kind, string Name) MachineIdentitySetting => ("Parameter", "listen_addresses");
 
     protected override void CreateSourceDatabase(IDbCommand cmd, string name)
     {
@@ -29,7 +29,10 @@ public class SettingsExtractionTests : SettingsExtractionSharedTests
 
     protected override void DropSourceDatabase(IDbCommand cmd, string name)
     {
-        cmd.CommandText = $"DROP DATABASE IF EXISTS \"{name}\" WITH (FORCE)";
+        // WITH (FORCE) is PostgreSQL 13; ending the sessions first works on every supported version.
+        cmd.CommandText = $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{name}' AND pid <> pg_backend_pid()";
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = $"DROP DATABASE IF EXISTS \"{name}\"";
         cmd.ExecuteNonQuery();
     }
 }
