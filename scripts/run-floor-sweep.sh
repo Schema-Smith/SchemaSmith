@@ -101,6 +101,9 @@ FLOORS=(
   "band-mariadb-118:mariadb:11.8:13418:MariaDb"
   "band-mariadb-123:mariadb:12.3:13412:MariaDb"
   "band-mariadb-13:mariadb:13:13413:MariaDb"
+  # MariaDB's minors are feature releases, so the ceiling is pinned by minor too: the bare 13 tag above follows CI's
+  # leg and rolls to 13.1 at its GA, and this keeps 13.0 covered once it does.
+  "band-mariadb-130:mariadb:13.0:13430:MariaDb"
   "band-mysql-80:mysql:8.0:13480:MySQL"
   "band-mysql-84:mysql:8.4:13484:MySQL"
   "band-mysql-97:mysql:9.7:13409:MySQL"
@@ -132,15 +135,21 @@ assert_latest_is_covered() {
     FAILED=1; return
   fi
   major="${ver%%.*}"
-  # MySQL and MariaDB pin whole majors (9, 26, 13); PostgreSQL does too (18). A band matching either
-  # the bare major or major.minor counts as covering it.
-  if printf '%s
-' "${FLOORS[@]}" | grep -qE ":$img:($major|$major\.[0-9]+):"; then
+  minor=$(echo "$ver" | cut -d. -f2)
+  # MySQL and PostgreSQL pin whole majors (26, 18): a band matching the bare major or major.minor covers it. MariaDB's
+  # minors are feature releases (13.1 adds DDL 13.0 lacks), so its latest must be pinned by major.minor exactly --
+  # otherwise the bare-major band rolls 13.0 -> 13.1 at GA and 13.0 loses coverage with no signal.
+  if [ "$img" = mariadb ]; then
+    pattern=":$img:$major\.$minor:"; wanted="$major.$minor"
+  else
+    pattern=":$img:($major|$major\.[0-9]+):"; wanted="$major"
+  fi
+  if printf '%s\n' "${FLOORS[@]}" | grep -qE "$pattern"; then
     echo "  $img:latest = $ver -- covered by a pinned band"
   else
-    echo "  !! $img:latest = $ver and NO band pins major $major."
-    echo "     The ceiling moved. Add \"band-$img-$major:$img:$major:<port>:<category>\" to FLOORS,"
-    echo "     and a matching leg to continuous-integration.yml + release.yml REQUIRED_CHECKS."
+    echo "  !! $img:latest = $ver and NO band pins $wanted."
+    echo "     The ceiling moved. Add \"band-$img-${wanted//./}:$img:$wanted:<port>:<category>\" to FLOORS,"
+    echo "     and, for a new major, a matching leg to continuous-integration.yml + release.yml REQUIRED_CHECKS."
     FAILED=1
   fi
 }
