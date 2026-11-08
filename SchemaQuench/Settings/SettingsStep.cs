@@ -86,10 +86,18 @@ public sealed class SettingsStep(Func<string, ISettingDescriptor> descriptorFor)
         {
             return new SettingEvaluation(p.Setting, scope, SettingOutcome.Unfixable, p.Before.Configured, p.Before.Running, e.Message);
         }
-        // SqlServerErrorException: SQL Server reports an error through InfoMessage on SchemaQuench's connections, not by throwing.
-        catch (Exception e) when (e is DbException or SettingValueException or SqlServerErrorException)
+        catch (DbException e)
         {
-            return new SettingEvaluation(p.Setting, scope, SettingOutcome.FixFailed, p.Before.Configured, p.Before.Running, e.Message);
+            return Failed(p, scope, e);
+        }
+        catch (SettingValueException e)
+        {
+            return Failed(p, scope, e);
+        }
+        // SQL Server reports an error through InfoMessage on SchemaQuench's connections, not by throwing.
+        catch (SqlServerErrorException e)
+        {
+            return Failed(p, scope, e);
         }
 
         // Graded from what the server now reports, never from the absence of an error.
@@ -112,13 +120,20 @@ public sealed class SettingsStep(Func<string, ISettingDescriptor> descriptorFor)
         return new SettingEvaluation(p.Setting, scope, outcome, p.Before.Configured, after.Running ?? p.Before.Running, detail ?? after.UnfixableReason);
     }
 
+    private static SettingEvaluation Failed(Pending p, SettingScope scope, Exception e) =>
+        new(p.Setting, scope, SettingOutcome.FixFailed, p.Before.Configured, p.Before.Running, e.Message);
+
     private static SettingReading SafeRead(ISettingDescriptor descriptor, IDbCommand cmd, string name, string database)
     {
         try
         {
             return descriptor.Read(cmd, name, database);
         }
-        catch (Exception e) when (e is DbException or SqlServerErrorException)
+        catch (DbException e)
+        {
+            return SettingReading.Missing(e.Message);
+        }
+        catch (SqlServerErrorException e)
         {
             return SettingReading.Missing(e.Message);
         }

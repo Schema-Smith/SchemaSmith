@@ -254,8 +254,8 @@ public class ProductQuenchTests
         var file = Substitute.For<IFile>();
         var directory = Substitute.For<IDirectory>();
         directory.Exists("Product").Returns(true);
-        file.Exists(Path.Combine("Product", "Product.json")).Returns(true);
-        file.ReadAllText(Path.Combine("Product", "Product.json")).Returns("""{ "Name": "TestProduct", "Platform": "SqlServer", "ScriptFolders": [] }""");
+        file.Exists(Path.Join("Product", "Product.json")).Returns(true);
+        file.ReadAllText(Path.Join("Product", "Product.json")).Returns("""{ "Name": "TestProduct", "Platform": "SqlServer", "ScriptFolders": [] }""");
         if (serverSettingsJson != null)
         {
             file.Exists(Path.Join("Product", "ServerSettings.json")).Returns(true);

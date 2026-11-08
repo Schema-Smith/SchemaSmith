@@ -436,11 +436,11 @@ public static class RepositoryHelper
         var directory = DirectoryWrapper.GetFromFactory();
         var templates = Path.Join(productPath, "Templates");
         var names = GetSettingsSchemaFileNames(platform);
-        var hasServer = file.Exists(Path.Combine(productPath, SettingsFile.ServerFileName));
+        var hasServer = file.Exists(Path.Join(productPath, SettingsFile.ServerFileName));
         var hasDatabase = directory.Exists(templates)
                           && (directory.GetFiles(templates, SettingsFile.DatabaseFileName, SearchOption.AllDirectories)?.Length ?? 0) > 0;
-        if (hasServer || file.Exists(Path.Combine(schemaPath, names[0]))) yield return names[0];
-        if (hasDatabase || file.Exists(Path.Combine(schemaPath, names[1]))) yield return names[1];
+        if (hasServer || file.Exists(Path.Join(schemaPath, names[0]))) yield return names[0];
+        if (hasDatabase || file.Exists(Path.Join(schemaPath, names[1]))) yield return names[1];
     }
 
     public static string[] GetSchemaFileNames(Platform platform)

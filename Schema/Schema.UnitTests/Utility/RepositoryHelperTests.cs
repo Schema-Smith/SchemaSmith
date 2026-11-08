@@ -265,7 +265,7 @@ public class RepositoryHelperTests
     public void WriteSchemaFilesWithResults_PackageWithServerSettings_AddsOnlyThatSchema()
     {
         _file.Exists(Arg.Any<string>()).Returns(false);
-        _file.Exists(Path.Combine("/fake/product", "ServerSettings.json")).Returns(true);
+        _file.Exists(Path.Join("/fake/product", "ServerSettings.json")).Returns(true);
 
         var results = RepositoryHelper.WriteSchemaFilesWithResults("/fake/product", Platform.SqlServer);
 
@@ -277,11 +277,11 @@ public class RepositoryHelperTests
     [Test]
     public void WriteSchemaFilesWithResults_TemplateWithDatabaseSettings_AddsThatSchema()
     {
-        var templates = Path.Combine("/fake/product", "Templates");
+        var templates = Path.Join("/fake/product", "Templates");
         _file.Exists(Arg.Any<string>()).Returns(false);
         _directory.Exists(templates).Returns(true);
         _directory.GetFiles(templates, "DatabaseSettings.json", SearchOption.AllDirectories)
-            .Returns([Path.Combine(templates, "Main", "DatabaseSettings.json")]);
+            .Returns([Path.Join(templates, "Main", "DatabaseSettings.json")]);
 
         var results = RepositoryHelper.WriteSchemaFilesWithResults("/fake/product", Platform.PostgreSQL);
 
@@ -292,7 +292,7 @@ public class RepositoryHelperTests
     [Test]
     public void WriteSchemaFilesWithResults_CommittedSettingsSchema_IsKeptCurrent()
     {
-        var committed = Path.Combine("/fake/product", ".json-schemas", "serversettings.mysql.schema");
+        var committed = Path.Join("/fake/product", ".json-schemas", "serversettings.mysql.schema");
         _file.Exists(Arg.Any<string>()).Returns(false);
         _file.Exists(committed).Returns(true);
         _file.ReadAllText(committed).Returns("""{ "type": "object", "properties": {} }""");
