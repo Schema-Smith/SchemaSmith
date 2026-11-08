@@ -48,21 +48,21 @@ public abstract class DatabaseSettingsSharedTests : ObjectScriptDeployFixture
         Exec("DROP TABLE IF EXISTS settings_probe");
     }
 
-    private void Package(string settingsJson, bool withObject = false)
+    protected void Package(string settingsJson, bool withObject = false)
     {
         WritePackage(Folders, "Setup", "Objects");
         if (withObject) WriteFile("Objects", "01-probe.sql", "CREATE TABLE settings_probe (id INT NOT NULL)");
         if (settingsJson != null) File.WriteAllText(Path.Join(TemplateDir, "DatabaseSettings.json"), settingsJson);
     }
 
-    private string One(string value, bool fix, string onDrift, string name = null) => $$"""
+    protected string One(string value, bool fix, string onDrift, string name = null) => $$"""
         { "Settings": [ { "Kind": "{{Kind}}", "Name": "{{name ?? Name}}", "Value": "{{value}}", "Fix": {{(fix ? "true" : "false")}}, "OnDrift": "{{onDrift}}" } ] }
         """;
 
-    private static string[] SettingRows(DeployResult run) =>
+    protected static string[] SettingRows(DeployResult run) =>
         run.Audit.Where(r => r.ObjectType == "DatabaseSetting").Select(r => $"{r.ObjectName} {r.Action}").ToArray();
 
-    private static string Lines(DeployResult run) => string.Join("\n", run.Log);
+    protected static string Lines(DeployResult run) => string.Join("\n", run.Log);
 
     [Test]
     public void NoSettingsFile_NoStep_NoAudit_NoLog()
