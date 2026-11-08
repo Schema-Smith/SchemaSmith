@@ -289,6 +289,10 @@ public class DriftTests
     [TestCase("INSERT INTO `drift`.SchemaSmith_ExpressionMap SELECT * FROM `shop`.SchemaSmith_ExpressionMap", "INSERT INTO `drift`.SchemaSmith_ExpressionMap SELECT * FROM `shop`.SchemaSmith_ExpressionMap")]
     [TestCase("SET @schemasmith_destructive_policy = 'fail'", "SET @schemasmith_destructive_policy = 'fail'")]
     [TestCase("SELECT * FROM shop.Orders", "SELECT * FROM shop.Orders")]
+    [TestCase("CALL SchemaSmith_TableQuench('P', 'shop', '[{\"Name\":\"SchemaSmith_Log\"}]')", "CALL `drift`.SchemaSmith_TableQuench('P', 'shop', '[{\"Name\":\"SchemaSmith_Log\"}]')")]
+    [TestCase("SELECT 'it''s SchemaSmith_X' FROM SchemaSmith_Y", "SELECT 'it''s SchemaSmith_X' FROM `drift`.SchemaSmith_Y")]
+    [TestCase(@"SELECT 'a\' SchemaSmith_Y'", @"SELECT 'a\' SchemaSmith_Y'")]
+    [TestCase("SELECT \"x SchemaSmith_X\", `my SchemaSmith_T` FROM SchemaSmith_Y", "SELECT \"x SchemaSmith_X\", `my SchemaSmith_T` FROM `drift`.SchemaSmith_Y")]
     public void TheHelperDatabase_QualifiesOnlySchemaSmithNames(string sql, string expected)
     {
         Assert.That(DriftHelperDatabase.Qualify(sql, "drift"), Is.EqualTo(expected));

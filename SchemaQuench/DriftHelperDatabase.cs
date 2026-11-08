@@ -21,8 +21,38 @@ internal static partial class DriftHelperDatabase
     [GeneratedRegex(@"(?<![.\w`$@'])(_?SchemaSmith_[A-Za-z0-9_]+)")]
     private static partial Regex SchemaSmithName();
 
-    public static string Qualify(string sql, string helperDatabase) =>
-        string.IsNullOrEmpty(sql) ? sql : SchemaSmithName().Replace(sql, m => $"{Quote(helperDatabase)}.{m.Groups[1].Value}");
+    public static string Qualify(string sql, string helperDatabase)
+    {
+        if (string.IsNullOrEmpty(sql)) return sql;
+        // Only the SQL itself: a name inside a string ('...', "...") or a quoted identifier is data, such as a user table
+        // named SchemaSmith_Log in the table JSON a routine is handed.
+        var result = new System.Text.StringBuilder(sql.Length + 32);
+        var code = 0;
+        var i = 0;
+        while (i < sql.Length)
+        {
+            var c = sql[i];
+            if (c is not ('\'' or '"' or '`')) { i++; continue; }
+            result.Append(SchemaSmithName().Replace(sql[code..i], m => $"{Quote(helperDatabase)}.{m.Groups[1].Value}"));
+            var start = i++;
+            while (i < sql.Length)
+            {
+                if (sql[i] == '\\' && c != '`') { i += 2; continue; }
+                if (sql[i] == c)
+                {
+                    if (i + 1 < sql.Length && sql[i + 1] == c) { i += 2; continue; }
+                    i++;
+                    break;
+                }
+                i++;
+            }
+            i = Math.Min(i, sql.Length);
+            result.Append(sql, start, i - start);
+            code = i;
+        }
+        result.Append(SchemaSmithName().Replace(sql[code..], m => $"{Quote(helperDatabase)}.{m.Groups[1].Value}"));
+        return result.ToString();
+    }
 
     public static string Quote(string name) => $"`{name.Replace("`", "``")}`";
 
