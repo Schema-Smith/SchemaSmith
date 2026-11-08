@@ -78,6 +78,52 @@ public class SettingsCasterTests
     }
 
     [Test]
+    public void AValueAScriptCannotCarry_IsLeftOutWithAWarning_NotAnAbortedExtraction()
+    {
+        var descriptor = Substitute.For<ISettingDescriptor>();
+        descriptor.RenderScript("1117", Arg.Any<string>(), Arg.Any<string>()).Returns(_ => throw new SettingValueException("not a keyword"));
+        descriptor.RenderScript("max degree of parallelism", Arg.Any<string>(), Arg.Any<string>()).Returns("-- ok");
+        var (file, _) = SettingsCaster.Capture(Server, SettingScope.Server, null, SettingsPolicyDefault.Report);
+        var warnings = new System.Collections.Generic.List<string>();
+
+        var scripts = SettingsCaster.Scripts(file, _ => descriptor, "db", warnings.Add);
+
+        Assert.That(scripts.Select(s => s.FileName), Is.EqualTo(new[] { "Configuration.max degree of parallelism.sql" }));
+        Assert.That(warnings, Has.One.Contains("TraceFlag '1117' is not scripted"));
+    }
+
+    // Re-extraction keeps what a person decided and changes only the captured values.
+    [Test]
+    public void Merge_KeepsPoliciesVariantsAndUncapturedDeclarations_AndUpdatesValues()
+    {
+        Setting S(string name, string value, bool fix, DriftLevel onDrift, string gate = null) =>
+            new() { Kind = "Configuration", Name = name, Value = value, Fix = fix, OnDrift = onDrift, ShouldApplyExpression = gate };
+        var existing = new SettingsFile { Scope = SettingScope.Server, Settings =
+        [
+            S("max degree of parallelism", "4", true, DriftLevel.Error),
+            S("cost threshold for parallelism", "50", true, DriftLevel.Warn, gate: "SELECT 1"),
+            S("optimize for ad hoc workloads", "1", false, DriftLevel.Warn),
+        ] };
+        var captured = new SettingsFile { Scope = SettingScope.Server, Settings =
+        [
+            S("max degree of parallelism", "8", false, DriftLevel.Warn),
+            S("cost threshold for parallelism", "25", false, DriftLevel.Warn),
+            S("backup compression default", "1", false, DriftLevel.Warn),
+        ] };
+
+        var merged = SettingsCaster.Merge(existing, captured).Settings
+            .Select(s => $"{s.Name}={s.Value} {s.Fix} {s.OnDrift} {(s.ShouldApplyExpression == null ? "" : "gated")}".Trim()).ToArray();
+
+        Assert.That(merged, Is.EqualTo(new[]
+        {
+            "max degree of parallelism=8 True Error",
+            "cost threshold for parallelism=50 True Warn gated",
+            "optimize for ad hoc workloads=1 False Warn",
+            "backup compression default=1 False Warn",
+        }));
+    }
+
+    [Test]
     public void AScriptFileName_HasNoCharacterAFileSystemRefuses()
     {
         var name = SettingsCaster.ScriptFileName(new Setting { Kind = "Configuration", Name = "affinity I/O mask" });

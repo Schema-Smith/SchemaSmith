@@ -25,8 +25,24 @@ public static class SqlServerServerObjectCaster
     public static readonly string[] Folders = ["ServerTriggers", "AgentOperators", "AgentJobs", "AgentAlerts", "ServerAudits", "EventSessions"];
 
     public static IReadOnlyList<ServerObjectScript> Cast(IDbCommand cmd, int serverMajorVersion, Action<string> warn) =>
-        Triggers(cmd).Concat(Operators(cmd)).Concat(Jobs(cmd, warn)).Concat(Alerts(cmd)).Concat(Audits(cmd, serverMajorVersion, warn)).Concat(EventSessions(cmd))
-            .ToList();
+        Distinct(Triggers(cmd, warn).Concat(Operators(cmd)).Concat(Jobs(cmd, warn)).Concat(Alerts(cmd)).Concat(Audits(cmd, serverMajorVersion, warn)).Concat(EventSessions(cmd)));
+
+    // Two names can map to one file ("DBA: Backup" and "DBA? Backup", or a difference of case): the later one gets a suffix
+    // rather than overwriting the first.
+    private static List<ServerObjectScript> Distinct(IEnumerable<ServerObjectScript> scripts)
+    {
+        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var result = new List<ServerObjectScript>();
+        foreach (var script in scripts)
+        {
+            var name = script.FileName;
+            var n = 1;
+            while (!used.Add($"{script.Folder}/{name}"))
+                name = script.FileName[..^4] + $"~{++n}.sql";
+            result.Add(script with { FileName = name });
+        }
+        return result;
+    }
 
     // ---- helpers ----
 
@@ -87,7 +103,7 @@ public static class SqlServerServerObjectCaster
 
     // ---- server triggers (DDL and logon) ----
 
-    private static IEnumerable<ServerObjectScript> Triggers(IDbCommand cmd)
+    private static IEnumerable<ServerObjectScript> Triggers(IDbCommand cmd, Action<string> warn)
     {
         foreach (var t in Rows(cmd, """
                      SELECT t.name, m.definition, CAST(t.is_disabled AS INT) AS is_disabled, CAST(m.uses_ansi_nulls AS INT) AS ansi_nulls,
@@ -97,8 +113,14 @@ public static class SqlServerServerObjectCaster
                      """))
         {
             var name = t["name"];
-            var definition = (t["definition"] ?? "").Trim();
-            var header = Regex.Match(definition, @"(?<!\w)CREATE\s+TRIGGER\b", RegexOptions.IgnoreCase);
+            if (t["definition"] == null)
+            {
+                warn($"  Server trigger '{name}' is encrypted, so its definition cannot be read; it is left out.");
+                continue;
+            }
+            var definition = t["definition"].Trim();
+            // Matched outside comments and strings: a commented-out CREATE TRIGGER above the real one must not be the one rewritten.
+            var header = Regex.Match(SqlTextMask.Blank(definition), @"(?<!\w)CREATE\s+TRIGGER\b", RegexOptions.IgnoreCase);
             if (!header.Success) continue;
             var altered = definition[..header.Index] + "ALTER TRIGGER" + definition[(header.Index + header.Length)..];
             var logon = Regex.IsMatch(definition, @"\b(FOR|AFTER)\s+LOGON\b", RegexOptions.IgnoreCase);
@@ -141,13 +163,15 @@ public static class SqlServerServerObjectCaster
     // ---- Agent jobs ----
 
     internal const string JobSignature = """
-        SELECT CAST(j.enabled AS NVARCHAR(1)) + N'|' + ISNULL(j.description, N'') + N'|' + ISNULL(c.name, N'') + N'|' + ISNULL(SUSER_SNAME(j.owner_sid), N'')
+        SELECT CAST(j.enabled AS NVARCHAR(1)) + N'|' + ISNULL(j.description, N'') + N'|' + ISNULL(c.name, N'')
                + N'|' + CAST(j.notify_level_eventlog AS NVARCHAR(10)) + N'|' + CAST(j.notify_level_email AS NVARCHAR(10)) + N'|' + CAST(j.notify_level_page AS NVARCHAR(10))
-               + N'|' + CAST(j.delete_level AS NVARCHAR(10)) + N'|' + ISNULL(oe.name, N'') + N'|' + ISNULL(op.name, N'') + N'|' + CAST(j.start_step_id AS NVARCHAR(10))
+               + N'|' + CAST(j.delete_level AS NVARCHAR(10)) + N'|' + CASE WHEN j.notify_level_email > 0 THEN ISNULL(oe.name, N'') ELSE N'' END
+               + N'|' + CASE WHEN j.notify_level_page > 0 THEN ISNULL(op.name, N'') ELSE N'' END + N'|' + CAST(j.start_step_id AS NVARCHAR(10))
                + N'|' + ISNULL((SELECT CAST(s.step_id AS NVARCHAR(10)) + N':' + s.step_name + N':' + s.subsystem + N':' + ISNULL(s.command, N'') + N':' + ISNULL(s.database_name, N'')
                             + N':' + CAST(s.on_success_action AS NVARCHAR(10)) + N':' + CAST(s.on_success_step_id AS NVARCHAR(10)) + N':' + CAST(s.on_fail_action AS NVARCHAR(10))
                             + N':' + CAST(s.on_fail_step_id AS NVARCHAR(10)) + N':' + CAST(s.retry_attempts AS NVARCHAR(10)) + N':' + CAST(s.retry_interval AS NVARCHAR(10))
-                            + N':' + ISNULL(s.output_file_name, N'') + N':' + CAST(s.flags AS NVARCHAR(10)) + N';'
+                            + N':' + ISNULL(s.output_file_name, N'') + N':' + CAST(s.flags AS NVARCHAR(10)) + N':' + ISNULL(s.database_user_name, N'')
+                            + N':' + CAST(s.cmdexec_success_code AS NVARCHAR(10)) + N';'
                        FROM msdb.dbo.sysjobsteps s WHERE s.job_id = j.job_id ORDER BY s.step_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), N'')
                + N'|' + ISNULL((SELECT sc.name + N':' + CAST(sc.enabled AS NVARCHAR(1)) + N':' + CAST(sc.freq_type AS NVARCHAR(10)) + N':' + CAST(sc.freq_interval AS NVARCHAR(10))
                             + N':' + CAST(sc.freq_subday_type AS NVARCHAR(10)) + N':' + CAST(sc.freq_subday_interval AS NVARCHAR(10)) + N':' + CAST(sc.freq_relative_interval AS NVARCHAR(10))
@@ -177,7 +201,7 @@ public static class SqlServerServerObjectCaster
             var name = j["name"];
             var steps = Rows(cmd, """
                 SELECT step_id, step_name, subsystem, command, database_name, on_success_action, on_success_step_id, on_fail_action, on_fail_step_id,
-                       retry_attempts, retry_interval, output_file_name, flags, proxy_id
+                       retry_attempts, retry_interval, output_file_name, flags, proxy_id, database_user_name, cmdexec_success_code
                   FROM msdb.dbo.sysjobsteps WHERE job_id = CAST(@job AS UNIQUEIDENTIFIER) ORDER BY step_id
                 """, ("@job", j["job_id"]));
             var schedules = Rows(cmd, """
@@ -190,7 +214,8 @@ public static class SqlServerServerObjectCaster
                 warn($"  Agent job '{name}' step '{s["step_name"]}' runs under a proxy, which holds a credential: the step is cast without it.");
 
             var jobArgs = $"@enabled = {j["enabled"]}, @description = {N(j["description"] ?? "")}, @category_name = {N(j["category"] ?? "[Uncategorized (Local)]")}, " +
-                          $"@owner_login_name = {N(j["owner"])}, @notify_level_eventlog = {j["notify_level_eventlog"]}, @notify_level_email = {j["notify_level_email"]}, " +
+                          "@owner_login_name = @owner, " +
+                          $"@notify_level_eventlog = {j["notify_level_eventlog"]}, @notify_level_email = {j["notify_level_email"]}, " +
                           $"@notify_level_page = {j["notify_level_page"]}, @delete_level = {j["delete_level"]}" +
                           // An operator only where one is named: sp_verify_job refuses an empty name, and a level of 0 already says "never".
                           (j["email_operator"] is { } emailOperator ? $", @notify_email_operator_name = {N(emailOperator)}" : "") +
@@ -198,6 +223,8 @@ public static class SqlServerServerObjectCaster
             var body = new StringBuilder();
             body.Append(Lines(
                 "    DECLARE @job_id UNIQUEIDENTIFIER = (SELECT job_id FROM msdb.dbo.sysjobs WHERE name = @name);",
+                "    -- The owner is a login of the source server: kept where this server has it, otherwise the job keeps or takes the deploying login.",
+                $"    DECLARE @owner SYSNAME = CASE WHEN SUSER_ID({N(j["owner"] ?? "")}) IS NOT NULL THEN {N(j["owner"] ?? "")} END;",
                 "    -- A running job is left as it is; the next deploy brings it into line.",
                 "    IF @job_id IS NOT NULL AND EXISTS (SELECT 1 FROM msdb.dbo.sysjobactivity a WHERE a.job_id = @job_id",
                 "               AND a.session_id = (SELECT MAX(session_id) FROM msdb.dbo.syssessions) AND a.start_execution_date IS NOT NULL AND a.stop_execution_date IS NULL)",
@@ -220,7 +247,8 @@ public static class SqlServerServerObjectCaster
                     $"        EXEC msdb.dbo.sp_add_jobstep @job_id = @job_id, @step_id = {s["step_id"]}, @step_name = {N(s["step_name"])}, @subsystem = {N(s["subsystem"])},",
                     $"             @command = {N(s["command"] ?? "")}, @database_name = {N(s["database_name"])}, @on_success_action = {s["on_success_action"]},",
                     $"             @on_success_step_id = {s["on_success_step_id"]}, @on_fail_action = {s["on_fail_action"]}, @on_fail_step_id = {s["on_fail_step_id"]},",
-                    $"             @retry_attempts = {s["retry_attempts"]}, @retry_interval = {s["retry_interval"]}, @output_file_name = {N(s["output_file_name"])}, @flags = {s["flags"]};"));
+                    $"             @retry_attempts = {s["retry_attempts"]}, @retry_interval = {s["retry_interval"]}, @output_file_name = {N(s["output_file_name"])}, @flags = {s["flags"]},",
+                    $"             @database_user_name = {N(s["database_user_name"])}, @cmdexec_success_code = {s["cmdexec_success_code"]};"));
             if (steps.Count > 0)
                 body.Append(Lines($"        EXEC msdb.dbo.sp_update_job @job_id = @job_id, @start_step_id = {j["start_step_id"]};"));
             body.Append(Lines(

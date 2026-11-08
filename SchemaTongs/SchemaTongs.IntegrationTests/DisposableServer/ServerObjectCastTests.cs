@@ -51,7 +51,8 @@ public class ServerObjectCastTests
             EXEC msdb.dbo.sp_add_operator @name = N'ss_op', @enabled = 1, @email_address = N'dba@example.com';
             EXEC msdb.dbo.sp_add_job @job_name = N'ss_job', @enabled = 1, @description = N'two steps', @notify_level_email = 2, @notify_email_operator_name = N'ss_op';
             EXEC msdb.dbo.sp_add_jobstep @job_name = N'ss_job', @step_name = N'first', @subsystem = N'TSQL', @command = N'SELECT 1', @on_success_action = 3;
-            EXEC msdb.dbo.sp_add_jobstep @job_name = N'ss_job', @step_name = N'second', @subsystem = N'TSQL', @command = N'SELECT 2';
+            EXEC msdb.dbo.sp_add_jobstep @job_name = N'ss_job', @step_name = N'second', @subsystem = N'TSQL', @command = N'SELECT 2',
+                 @database_name = N'master', @database_user_name = N'dbo';
             EXEC msdb.dbo.sp_add_jobschedule @job_name = N'ss_job', @name = N'nightly', @freq_type = 4, @freq_interval = 1, @active_start_time = 20000;
             EXEC msdb.dbo.sp_add_jobserver @job_name = N'ss_job';
             EXEC msdb.dbo.sp_add_job @job_name = N'ss_slow';
@@ -67,6 +68,18 @@ public class ServerObjectCastTests
              "ADD TARGET package0.ring_buffer (SET max_memory = 1024) WITH (STARTUP_STATE = OFF)");
         Exec("ALTER EVENT SESSION ss_xe ON SERVER STATE = START");
         Exec("CREATE TRIGGER ss_ddl ON ALL SERVER FOR CREATE_DATABASE AS PRINT 'database created'");
+        // A trigger whose text carries a commented-out CREATE TRIGGER above the real one.
+        Exec("/* was: CREATE TRIGGER old_name ON ALL SERVER */\r\nCREATE TRIGGER ss_ddl2 ON ALL SERVER FOR ALTER_DATABASE AS PRINT 'altered'");
+        // Two names that map to one file, and a job owned by a login the target will not have.
+        Exec("""
+            EXEC msdb.dbo.sp_add_job @job_name = N'DBA: Backup';
+            EXEC msdb.dbo.sp_add_job @job_name = N'DBA? Backup';
+            CREATE LOGIN ss_owner WITH PASSWORD = N'Owner!Pass2026x', CHECK_POLICY = OFF;
+            EXEC msdb.dbo.sp_add_job @job_name = N'ss_owned', @owner_login_name = N'ss_owner';
+            """);
+        // Things that hold a credential, which must never be scripted.
+        Exec("CREATE CREDENTIAL ss_cred WITH IDENTITY = N'ss_identity', SECRET = N'ss_secret_value'");
+        Exec("EXEC sp_addlinkedserver @server = N'ss_link', @srvproduct = N'SQL Server'");
 
         _productDir = Path.Join(Path.GetTempPath(), $"ServerObjects_{Guid.NewGuid():N}");
         Extract();
@@ -96,6 +109,13 @@ public class ServerObjectCastTests
         END
         IF EXISTS (SELECT 1 FROM sys.server_event_sessions WHERE name = N'ss_xe') DROP EVENT SESSION ss_xe ON SERVER;
         IF EXISTS (SELECT 1 FROM sys.server_triggers WHERE name = N'ss_ddl') DROP TRIGGER ss_ddl ON ALL SERVER;
+        IF EXISTS (SELECT 1 FROM sys.credentials WHERE name = N'ss_cred') DROP CREDENTIAL ss_cred;
+        IF EXISTS (SELECT 1 FROM sys.server_triggers WHERE name = N'ss_ddl2') DROP TRIGGER ss_ddl2 ON ALL SERVER;
+        IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N'DBA: Backup') EXEC msdb.dbo.sp_delete_job @job_name = N'DBA: Backup';
+        IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N'DBA? Backup') EXEC msdb.dbo.sp_delete_job @job_name = N'DBA? Backup';
+        IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobs WHERE name = N'ss_owned') EXEC msdb.dbo.sp_delete_job @job_name = N'ss_owned';
+        IF SUSER_ID(N'ss_owner') IS NOT NULL DROP LOGIN ss_owner;
+        IF EXISTS (SELECT 1 FROM sys.servers WHERE name = N'ss_link') EXEC sp_dropserver @server = N'ss_link';
         """);
 
     private void Exec(string sql)
@@ -199,6 +219,11 @@ public class ServerObjectCastTests
             }
             Assert.That(product, Does.Contain("\"QuenchSlot\": \"After\"").And.Contain("\"ServerToQuench\": \"Both\""), product);
             Assert.That(File.Exists(Path.Join(_productDir, "EventSessions", "system_health.sql")), Is.False, "the server's own sessions are left out");
+            var jobFiles = Directory.GetFiles(Path.Join(_productDir, "AgentJobs")).Select(Path.GetFileName).ToList();
+            Assert.That(jobFiles, Has.Member("DBA_ Backup.sql").And.Member("DBA_ Backup~2.sql"), "two names that map to one file both survive");
+            var everything = string.Join("\n", Directory.GetFiles(_productDir, "*", SearchOption.AllDirectories).Select(File.ReadAllText));
+            Assert.That(everything, Does.Not.Contain("ss_cred").And.Not.Contain("ss_secret_value").And.Not.Contain("ss_link"),
+                "nothing that holds a credential is scripted");
         });
     }
 
@@ -273,6 +298,9 @@ public class ServerObjectCastTests
             DROP SERVER AUDIT ss_audit;
             DROP EVENT SESSION ss_xe ON SERVER;
             DROP TRIGGER ss_ddl ON ALL SERVER;
+            DROP TRIGGER ss_ddl2 ON ALL SERVER;
+            EXEC msdb.dbo.sp_delete_job @job_name = N'ss_owned';
+            DROP LOGIN ss_owner;
             """);
 
         RunTheScripts();
@@ -290,6 +318,10 @@ public class ServerObjectCastTests
             Assert.That(Scalar("SELECT COUNT(*) FROM sys.server_event_session_events e JOIN sys.server_event_sessions s ON s.event_session_id = e.event_session_id WHERE s.name = N'ss_xe' AND e.name = N'error_reported'"),
                 Is.EqualTo(1));
             Assert.That(Scalar("SELECT COUNT(*) FROM sys.server_triggers WHERE name = N'ss_ddl'"), Is.EqualTo(1));
+            Assert.That(Scalar("SELECT COUNT(*) FROM sys.server_triggers WHERE name = N'ss_ddl2'"), Is.EqualTo(1), "and the one with a commented-out header");
+            Assert.That(Scalar("SELECT s.database_user_name FROM msdb.dbo.sysjobsteps s JOIN msdb.dbo.sysjobs j ON j.job_id = s.job_id WHERE j.name = N'ss_job' AND s.step_id = 2"),
+                Is.EqualTo("dbo"), "a step keeps the user it runs as");
+            Assert.That(Scalar("SELECT COUNT(*) FROM msdb.dbo.sysjobs WHERE name = N'ss_owned'"), Is.EqualTo(1), "a job whose owner this server lacks is still created");
         });
 
         // And a deploy after that changes nothing more: the scripts reach the state they describe.

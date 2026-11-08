@@ -727,7 +727,8 @@ SELECT STRING_AGG(i.indexrelid::regclass::text, ', ' ORDER BY 1)
         if (_settingsOutput != SettingsOutput.Script)
         {
             var path = Path.Join(baseDir, server ? SettingsFile.ServerFileName : SettingsFile.DatabaseFileName);
-            JsonHelper.Write(path, file);
+            var existing = SettingsFile.LoadIfPresent(path, _platform, scope, tolerateDeclarationErrors: true);
+            JsonHelper.Write(path, SettingsCaster.Merge(existing, file));
             _settingsFilesToStamp.Add((path, server ? "serversettings" : "databasesettings"));
         }
         if (_settingsOutput != SettingsOutput.Json)
@@ -737,7 +738,7 @@ SELECT STRING_AGG(i.indexrelid::regclass::text, ', ' ORDER BY 1)
             var folder = _settingsOutput == SettingsOutput.Script ? (server ? "ServerSettings" : "DatabaseSettings") : (server ? "ServerSettingsScripts" : "DatabaseSettingsScripts");
             var folderPath = Path.Join(baseDir, folder);
             DirectoryWrapper.GetFromFactory().CreateDirectory(folderPath);
-            foreach (var (fileName, sql) in SettingsCaster.Scripts(file, kind => descriptorFor(scope, kind), targetDb))
+            foreach (var (fileName, sql) in SettingsCaster.Scripts(file, kind => descriptorFor(scope, kind), targetDb, message => _progressLog.Warn(message)))
                 FileWrapper.GetFromFactory().WriteAllText(Path.Join(folderPath, fileName), sql);
             if (_settingsOutput == SettingsOutput.Script) RegisterSettingsFolder(server, folder);
         }

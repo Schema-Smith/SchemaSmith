@@ -50,8 +50,48 @@ public static class SettingsCaster
         return (new SettingsFile { Scope = scope, Settings = settings }, notOnServer);
     }
 
-    public static IReadOnlyList<(string FileName, string Sql)> Scripts(SettingsFile file, Func<string, ISettingDescriptor> descriptorFor, string database) =>
-        file.Settings.Select(s => (ScriptFileName(s), descriptorFor(s.Kind).RenderScript(s.Name, s.Value, database))).ToList();
+    // A value a script cannot carry (a SQL Server option value that is not a keyword or number) is left out with a warning,
+    // rather than aborting the extraction.
+    public static IReadOnlyList<(string FileName, string Sql)> Scripts(SettingsFile file, Func<string, ISettingDescriptor> descriptorFor, string database,
+        Action<string> warn = null)
+    {
+        var scripts = new List<(string, string)>();
+        foreach (var s in file.Settings)
+        {
+            try
+            {
+                scripts.Add((ScriptFileName(s), descriptorFor(s.Kind).RenderScript(s.Name, s.Value, database)));
+            }
+            catch (SettingValueException e)
+            {
+                warn?.Invoke($"  {s.Display} is not scripted: {e.Message}");
+            }
+        }
+        return scripts;
+    }
+
+    /// <summary>
+    /// Re-extraction into a settings file that already exists keeps what a person decided: each captured setting takes the
+    /// existing declaration's Fix and OnDrift, a setting declared with variants is left as declared, and a declaration the
+    /// capture did not return stays. Only the captured values change.
+    /// </summary>
+    public static SettingsFile Merge(SettingsFile existing, SettingsFile captured)
+    {
+        if (existing == null) return captured;
+        static string Key(Setting s) => $"{s.Kind?.ToLowerInvariant()}|{s.Name?.ToLowerInvariant()}";
+        var gated = existing.Settings.Where(s => !string.IsNullOrWhiteSpace(s.ShouldApplyExpression)).Select(Key).ToHashSet();
+        var plain = existing.Settings.Where(s => string.IsNullOrWhiteSpace(s.ShouldApplyExpression)).GroupBy(Key).ToDictionary(g => g.Key, g => g.First());
+        var capturedByKey = captured.Settings.Where(s => !gated.Contains(Key(s))).ToDictionary(Key);
+
+        var merged = new List<Setting>();
+        foreach (var s in existing.Settings)
+        {
+            if (!string.IsNullOrWhiteSpace(s.ShouldApplyExpression) || !capturedByKey.Remove(Key(s), out var fresh)) { merged.Add(s); continue; }
+            merged.Add(new Setting { Kind = s.Kind, Name = s.Name, Value = fresh.Value, Fix = s.Fix, OnDrift = s.OnDrift, VariantName = s.VariantName });
+        }
+        merged.AddRange(captured.Settings.Where(s => capturedByKey.ContainsKey(Key(s)) && !plain.ContainsKey(Key(s))));
+        return new SettingsFile { Scope = captured.Scope, Settings = merged };
+    }
 
     public static string ScriptFileName(Setting s)
     {
