@@ -3182,7 +3182,7 @@ SET NOCOUNT ON
         if (identity == null) return null;
 
         var scriptPath = GetRelativeScriptPath(script.LogPath);
-        var pathHash = Sha256(scriptPath);
+        var pathHash = StampPathHash(scriptPath, _schemaName);
         var textHash = Sha256(string.Join("\n", script.Batches));
         var unchanged = false;
         var stamped = false;
@@ -3242,6 +3242,11 @@ SET NOCOUNT ON
         Platform.PostgreSQL => $"\"{column}\"",
         _ => column
     };
+
+    // Each tenant of a schema template has its own modules, so its own stamp: sharing one, the tenants overwrote each
+    // other's and none of them ever read as unchanged. A template without a schema keeps the key it always had.
+    internal static string StampPathHash(string scriptPath, string schemaName) =>
+        Sha256(string.IsNullOrEmpty(schemaName) ? scriptPath : scriptPath + "|" + schemaName);
 
     private static string Sha256(string text) =>
         Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text ?? ""))).ToLowerInvariant();

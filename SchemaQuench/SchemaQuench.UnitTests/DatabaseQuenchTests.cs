@@ -311,6 +311,19 @@ public class DatabaseQuenchTests
 
     #endregion
 
+    // Each tenant of a schema template keeps its own module stamp; a template without a schema keeps the key it had.
+    [Test]
+    public void StampPathHash_IsPerTenant_AndUnchangedWithoutASchema()
+    {
+        var plain = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes("Procedures/Get.sql"))).ToLowerInvariant();
+        Assert.Multiple(() =>
+        {
+            Assert.That(DatabaseQuench.StampPathHash("Procedures/Get.sql", "tenant_a"), Is.Not.EqualTo(DatabaseQuench.StampPathHash("Procedures/Get.sql", "tenant_b")));
+            Assert.That(DatabaseQuench.StampPathHash("Procedures/Get.sql", ""), Is.EqualTo(plain), "a stamp written before keeps matching");
+            Assert.That(DatabaseQuench.StampPathHash("Procedures/Get.sql", null), Is.EqualTo(plain));
+        });
+    }
+
     #region Platform-Specific SQL Generation
 
     [Test]
