@@ -16,6 +16,8 @@ using Schema.Domain.SqlServer;
 using Schema.Checkpointing;
 using Schema.Isolators;
 using Schema.Utility;
+using SchemaQuench.Settings;
+using Schema.Domain.Settings;
 using SchemaQuench.Reporting;
 using Schema.Configuration;
 
@@ -1027,6 +1029,7 @@ public class ProductQuench
 
             if (RefuseFoldedTableNameCollisions(templatesInScope)) return;
 
+            QuenchServerSettings();
             QuenchProductScriptsWithCheckpoint(_product.BeforeFolders, "Before Product", true);
 
             foreach (var template in templatesInScope)
@@ -1281,6 +1284,47 @@ public class ProductQuench
         }
 
         return templates;
+    }
+
+    // D12: the server settings the package declares, on every server the product deploys to (configuration is per instance,
+    // so a secondary gets them too), before the Before scripts. Absent means unmanaged: without ServerSettings.json no server
+    // is contacted. No checkpoint: it re-runs on resume.
+    internal void QuenchServerSettings()
+    {
+        if (_product.ServerSettings == null) return;
+        var servers = _product.Platform == Platform.SqlServer ? _secondaryServers.Prepend(_primaryServer).Distinct(StringComparer.OrdinalIgnoreCase).ToList() : [_primaryServer];
+        string stop = null;
+        foreach (var server in servers)
+        {
+            _progressLog.Info(IsWhatIfOnly ? $"[WhatIf] Server settings on {server}" : $"Server settings on {server}");
+            using var command = GetCommand(server);
+            try
+            {
+                var major = SettingDescriptors.MajorVersion(_product.Platform, TargetVersionDetector.Detect(command, _product.Platform).ServerComparable);
+                var step = new SettingsStep(kind => SettingDescriptors.For(_product.Platform, SettingScope.Server, kind, major));
+                var result = step.Run(command, _product.ServerSettings, null, IsWhatIfOnly, e => FolderGate.ShouldApply(command, e), _changeAudit,
+                    new ChangeTarget(server, null), (level, message) => LogServerSetting(level, $"  {message}"));
+                if (result.Stopped) stop ??= $"{server}: {result.StopMessage}";
+            }
+            finally
+            {
+                command.Connection?.Close();
+                command.Connection?.Dispose();
+            }
+        }
+        if (stop == null) return;
+        _anyFailure = true;
+        throw new RunFailedException($"Server settings stopped the deploy on {stop}");
+    }
+
+    private void LogServerSetting(SettingLevel level, string message)
+    {
+        switch (level)
+        {
+            case SettingLevel.Error: _progressLog.Error(message); break;
+            case SettingLevel.Warning: _progressLog.Warn(message); break;
+            default: _progressLog.Info(message); break;
+        }
     }
 
     internal void QuenchProductScriptsWithCheckpoint(List<ProductFolder> folders, string msg, bool isBefore)

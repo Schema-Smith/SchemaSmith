@@ -247,6 +247,92 @@ public class ProductQuenchTests
         }
     }
 
+    // D12: the server settings step runs on every server the product deploys to, before the Before scripts, and only when
+    // the package has ServerSettings.json.
+    private static void ArrangeServerSettingsProduct(string serverSettingsJson)
+    {
+        var file = Substitute.For<IFile>();
+        var directory = Substitute.For<IDirectory>();
+        directory.Exists("Product").Returns(true);
+        file.Exists(Path.Combine("Product", "Product.json")).Returns(true);
+        file.ReadAllText(Path.Combine("Product", "Product.json")).Returns("""{ "Name": "TestProduct", "Platform": "SqlServer", "ScriptFolders": [] }""");
+        if (serverSettingsJson != null)
+        {
+            file.Exists(Path.Join("Product", "ServerSettings.json")).Returns(true);
+            file.ReadAllText(Path.Join("Product", "ServerSettings.json")).Returns(serverSettingsJson);
+        }
+        FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+        {
+            ["SchemaPackagePath"] = "Product", ["Target:Server"] = "primary-server", ["Target:SecondaryServers"] = "secondary-server", ["MaxThreads"] = "1"
+        }).Build());
+        FactoryContainer.Register<IFile>(file);
+        FactoryContainer.Register<IDirectory>(directory);
+    }
+
+    private const string OneServerSetting = """
+        { "Settings": [ { "Kind": "Configuration", "Name": "cost threshold for parallelism", "Value": "50", "Fix": true, "OnDrift": "Warn" } ] }
+        """;
+
+    [Test]
+    public void ServerSettings_AreReadOnEveryServerTheProductDeploysTo()
+    {
+        ArrangeServerSettingsProduct(OneServerSetting);
+        try
+        {
+            var quench = new RecordingProductQuench();
+
+            quench.QuenchServerSettings();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(quench.CommandServers, Is.EquivalentTo(new[] { "primary-server", "secondary-server" }));
+                // The mocked servers have no such option, so each reports it cannot be fixed; one row per server.
+                Assert.That(quench.ChangeAudit.Snapshot().Where(r => r.ObjectType == "ServerSetting").Select(r => r.Target.Server),
+                    Is.EquivalentTo(new[] { "primary-server", "secondary-server" }));
+            });
+        }
+        finally
+        {
+            FactoryContainer.Clear();
+        }
+    }
+
+    [Test]
+    public void NoServerSettingsFile_NoServerIsContacted()
+    {
+        ArrangeServerSettingsProduct(null);
+        try
+        {
+            var quench = new RecordingProductQuench();
+
+            quench.QuenchServerSettings();
+
+            Assert.That(quench.CommandServers, Is.Empty);
+            Assert.That(quench.ChangeAudit.Snapshot(), Is.Empty);
+        }
+        finally
+        {
+            FactoryContainer.Clear();
+        }
+    }
+
+    [Test]
+    public void AServerSettingThatStops_FailsTheRunNamingTheServer()
+    {
+        ArrangeServerSettingsProduct(OneServerSetting.Replace("\"Fix\": true, \"OnDrift\": \"Warn\"", "\"Fix\": false, \"OnDrift\": \"Error\""));
+        try
+        {
+            var quench = new RecordingProductQuench();
+
+            Assert.That(() => quench.QuenchServerSettings(), Throws.InstanceOf<RunFailedException>()
+                .With.Message.Contains("Server settings stopped the deploy").And.Message.Contains("primary-server"));
+        }
+        finally
+        {
+            FactoryContainer.Clear();
+        }
+    }
+
     private sealed class RecordingProductQuench : ProductQuench
     {
         public List<string> CommandServers { get; } = [];

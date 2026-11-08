@@ -99,6 +99,10 @@ public sealed class MySqlOptionDescriptor : ISettingDescriptor
 
 public static class SettingDescriptors
 {
+    // TargetVersionDetector's comparable: the major on SQL Server and PostgreSQL, major * 100 + minor on the MySQL family.
+    public static int MajorVersion(Platform platform, int serverComparable) =>
+        platform.GetBasePlatform() == Platform.MySQL ? serverComparable / 100 : serverComparable;
+
     public static ISettingDescriptor For(Platform platform, SettingScope scope, string kind, int serverMajorVersion)
     {
         var k = kind?.ToLowerInvariant();

@@ -345,12 +345,8 @@ public partial class DatabaseQuench
     private void QuenchDatabaseSettings(IDbCommand command)
     {
         SafeProgressLog(_whatIfOnly ? "  [WhatIf] Database settings" : "  Database settings");
-        var major = _product.Platform.GetBasePlatform() switch
-        {
-            Platform.SqlServer => _sqlServerMajorVersion,
-            Platform.PostgreSQL => _postgreSqlServerVersionNum / 10000,
-            _ => _mySqlServerVersionNum / 100
-        };
+        // Detected here: the version fields above are only filled on some paths (SQL Server's when kindling runs).
+        var major = SettingDescriptors.MajorVersion(_product.Platform, TargetVersionDetector.Detect(command, _product.Platform).ServerComparable);
         var step = new SettingsStep(kind => SettingDescriptors.For(_product.Platform, SettingScope.Database, kind, major));
         var result = step.Run(command, _template.DatabaseSettings, _databaseName, _whatIfOnly, e => FolderGate.ShouldApply(command, e),
             ChangeAudit, AuditTarget, LogSetting);

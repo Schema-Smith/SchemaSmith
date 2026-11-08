@@ -46,6 +46,17 @@ public class ServerDescriptorTests
         Assert.That(SettingDescriptors.For(platform, SettingScope.Server, kind, 16), Is.InstanceOf(expected));
     }
 
+    // TargetVersionDetector's comparable is the major on SQL Server and PostgreSQL, and major * 100 + minor on the MySQL family.
+    [TestCase(Platform.SqlServer, 16, 16)]
+    [TestCase(Platform.PostgreSQL, 12, 12)]
+    [TestCase(Platform.MySQL, 807, 8)]
+    [TestCase(Platform.MySQL, 507, 5)]
+    [TestCase(Platform.MariaDb, 1104, 11)]
+    public void MajorVersion_FromTheDetectorsComparable(Platform platform, int comparable, int major)
+    {
+        Assert.That(SettingDescriptors.MajorVersion(platform, comparable), Is.EqualTo(major));
+    }
+
     [Test]
     public void SqlServerConfiguration_PassesNameAndValueAsParameters_AndRestoresAdvancedOptions()
     {
