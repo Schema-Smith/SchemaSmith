@@ -32,6 +32,44 @@ public class DestructiveChangeTests : DestructiveChangeSharedTests
     protected override long SumOf(string table, string column) => Convert.ToInt64(Scalar($"SELECT SUM({column}) FROM dbo.{table}"));
     protected override long RowCount(string table) => Count($"SELECT COUNT(*) FROM dbo.{table}");
 
+    // A table the rebuild policy elects (for its changed column) is rebuilt from its declared columns, so a column it stops
+    // declaring goes with the rebuild: the policy must judge that change before the rebuild runs, not after it.
+    [Test]
+    public void UnderFail_ATableElectedForRebuild_IsRefusedAndKeepsItsColumn()
+    {
+        const string rebuilt = "dc_rebuilt";
+        string Json(string vType, bool withW) => $$"""
+            { "Schema": "[dbo]", "Name": "[{{rebuilt}}]", "RebuildPolicy": { "Mode": "ALWAYS" },
+              "Columns": [ { "Name": "[id]", "DataType": "INT IDENTITY(1, 1)", "Nullable": false }, { "Name": "[v]", "DataType": "{{vType}}", "Nullable": true }{{(withW ? ", { \"Name\": \"[w]\", \"DataType\": \"INT\", \"Nullable\": true }" : "")}} ],
+              "Indexes": [ { "Name": "[PK_{{rebuilt}}]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[id]" } ] }
+            """;
+        Exec($"DROP TABLE IF EXISTS dbo.{rebuilt}");
+        try
+        {
+            WritePackage("");
+            WriteFile("Tables", $"dbo.{rebuilt}.json", Json("INT", withW: true));
+            WriteFile("Tables", TableFileName(Kept), TableJson(Kept, "a", "b"));
+            WriteFile("Tables", TableFileName(Gone), TableJson(Gone, "a"));
+            Deploy();
+            Exec($"INSERT dbo.{rebuilt} (v, w) VALUES (1, 7)");
+
+            WriteFile("Tables", $"dbo.{rebuilt}.json", Json("BIGINT", withW: false));
+            var result = Deploy(expectSuccess: false, settings: Policy("fail"));
+
+            Assert.That(result.Failure, Is.Not.Null, "the deploy must be refused; it ran the rebuild instead");
+            Assert.Multiple(() =>
+            {
+                Assert.That(result.Failure!.Error, Does.Contain("Destructive change refused").And.Contain($"dbo.{rebuilt}.w"), result.Failure.Error);
+                Assert.That(ColumnExists(rebuilt, "w"), Is.True, "the rebuild did not run");
+                Assert.That(SumOf(rebuilt, "w"), Is.EqualTo(7), "the column keeps its values");
+            });
+        }
+        finally
+        {
+            Exec($"DROP TABLE IF EXISTS dbo.{rebuilt}");
+        }
+    }
+
     // H3 slice B: a type change that loses values silently, and a plain column replaced by a computed or identity one.
 
     private const string Typed = "dc_typed";
@@ -58,6 +96,8 @@ public class DestructiveChangeTests : DestructiveChangeSharedTests
     [TestCase("DATETIME2(7)", "'2020-01-01 10:00:00.1234567'", "DATE")]
     [TestCase("NVARCHAR(20)", "N'\u03A9mega'", "VARCHAR(20)")]
     [TestCase("FLOAT", "1.75", "INT")]
+    [TestCase("VARCHAR(20)", "'1.555'", "DECIMAL(10,2)")]
+    [TestCase("VARCHAR(30)", "'2024-01-01T10:00:00'", "DATE")]
     public void UnderFail_ATypeChangeThatLosesValuesIsRefusedAndTheValueKept(string from, string value, string to)
     {
         DeployTyped(from, value);
@@ -139,6 +179,12 @@ public class DestructiveChangeTests : DestructiveChangeSharedTests
     [TestCase("INT", "VARCHAR(20)", "none")]
     [TestCase("VARCHAR(10)", "VARCHAR(5)", "fails")]
     [TestCase("VARCHAR(10)", "INT", "fails")]
+    [TestCase("VARCHAR(20)", "DECIMAL(10,2)", "loses")]
+    [TestCase("VARCHAR(30)", "DATE", "loses")]
+    [TestCase("VARCHAR(30)", "DATETIME2(0)", "loses")]
+    [TestCase("VARCHAR(30)", "SMALLDATETIME", "loses")]
+    [TestCase("VARCHAR(40)", "DATETIME2(7)", "fails")]
+    [TestCase("VARCHAR(40)", "UNIQUEIDENTIFIER", "fails")]
     [TestCase("NVARCHAR(10)", "VARCHAR(10)", "loses")]
     [TestCase("VARCHAR(10)", "NVARCHAR(10)", "none")]
     [TestCase("VARCHAR(10)", "CHAR(10)", "none")]

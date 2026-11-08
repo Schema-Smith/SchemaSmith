@@ -26,7 +26,8 @@ GO
 CREATE PROCEDURE SchemaSmith.RebuildTable
   @p_Schema NVARCHAR(128),
   @p_Table NVARCHAR(128),
-  @p_WhatIf BIT = 0
+  @p_WhatIf BIT = 0,
+  @p_DropUndeclaredKeys BIT = 0
 AS
 BEGIN
   SET NOCOUNT ON
@@ -162,6 +163,23 @@ BEGIN
                       WHERE SchemaSmith.fn_StripBracketWrapping(f.[Schema]) = k.[ChildSchema]
                         AND SchemaSmith.fn_StripBracketWrapping(f.[TableName]) = k.[ChildTable]
                         AND SchemaSmith.fn_StripBracketWrapping(f.[KeyName]) = k.[KeyName])
+
+    -- A key the rest of this step drops anyway is not one to put back: one on a table the step drops for leaving the
+    -- package, and one the package does not declare on a table it does (ModifiedTableQuench drops those after the rebuilds).
+    -- The rebuild still drops it with the others; it is neither refused for nor set aside.
+    IF OBJECT_ID('tempdb..#TablesRemovedFromProduct') IS NOT NULL
+      DELETE k FROM #RebuildInboundKeys k
+       WHERE k.[Declared] = 0
+         AND EXISTS (SELECT 1 FROM #TablesRemovedFromProduct r WITH (NOLOCK)
+                      WHERE SchemaSmith.fn_StripBracketWrapping(r.[Schema]) = k.[ChildSchema]
+                        AND SchemaSmith.fn_StripBracketWrapping(r.[TableName]) = k.[ChildTable])
+    IF @p_DropUndeclaredKeys = 1 AND OBJECT_ID('tempdb..#Tables') IS NOT NULL
+      DELETE k FROM #RebuildInboundKeys k
+       WHERE k.[Declared] = 0
+         AND EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK)
+                      WHERE SchemaSmith.fn_StripBracketWrapping(t.[Schema]) = k.[ChildSchema]
+                        AND SchemaSmith.fn_StripBracketWrapping(t.[Name]) = k.[ChildTable]
+                        AND ISNULL(t.[DropForeignKeysRemovedFromProduct], 1) = 1)
 
     IF OBJECT_ID('tempdb..#RebuildInboundKeyColumns') IS NOT NULL DROP TABLE #RebuildInboundKeyColumns
     SELECT [ChildSchema] = OBJECT_SCHEMA_NAME(fk.parent_object_id) COLLATE DATABASE_DEFAULT,

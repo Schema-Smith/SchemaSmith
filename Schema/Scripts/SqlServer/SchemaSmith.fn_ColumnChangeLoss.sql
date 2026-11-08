@@ -85,10 +85,15 @@ BEGIN
   IF @fb IN ('CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR') AND @tb IN ('CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR')
     RETURN CASE WHEN @fb IN ('NCHAR', 'NVARCHAR') AND @tb IN ('CHAR', 'VARCHAR') THEN 'loses'
                 WHEN @t1 < @f1 THEN 'fails' ELSE 'none' END
-  -- Text into a number or a date fails on a value that does not convert.
+  -- Text into a number or a date fails on a value that does not convert. One that does can still lose part of itself without
+  -- an error: '1.555' into DECIMAL(10,2) rounds, a time of day into DATE is dropped, fractional seconds beyond the target's
+  -- round. Only an integer, a UNIQUEIDENTIFIER, and the 7-digit DATETIME2 / DATETIMEOFFSET take what converts whole.
   IF @fb IN ('CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR')
      AND (@tRank IS NOT NULL OR @tb IN ('DECIMAL', 'DATE', 'DATETIME', 'DATETIME2', 'SMALLDATETIME', 'DATETIMEOFFSET', 'TIME', 'UNIQUEIDENTIFIER'))
-    RETURN CASE WHEN @tb = 'BIT' THEN 'loses' ELSE 'fails' END
+    RETURN CASE WHEN @tb = 'BIT' THEN 'loses'
+                WHEN @tRank IS NOT NULL OR @tb = 'UNIQUEIDENTIFIER' THEN 'fails'
+                WHEN @tb IN ('DATETIME2', 'DATETIMEOFFSET') AND @t1 >= 7 THEN 'fails'
+                ELSE 'loses' END
   IF @fb IN ('BINARY', 'VARBINARY') AND @tb IN ('BINARY', 'VARBINARY') RETURN CASE WHEN @t1 < @f1 THEN 'fails' ELSE 'none' END
   IF @fb = 'UNIQUEIDENTIFIER' AND @tb IN ('CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR') RETURN CASE WHEN @t1 >= 36 THEN 'none' ELSE 'fails' END
 

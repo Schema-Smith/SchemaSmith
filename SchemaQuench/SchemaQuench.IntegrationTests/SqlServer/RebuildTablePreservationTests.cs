@@ -64,11 +64,11 @@ public class RebuildTablePreservationTests : BaseTableQuenchTests
         }
 
         // The deploy's table and foreign-key passes in one session, as SchemaQuench runs them.
-        public void Deploy(string json, string product, bool foreignKeys = true)
+        public void Deploy(string json, string product, bool foreignKeys = true, bool dropRemovedTables = false)
         {
             Parse(json);
             Exec("EXEC SchemaSmith.MissingTableAndColumnQuench @WhatIf = 0");
-            Exec($"EXEC SchemaSmith.ModifiedTableQuench @ProductName = '{product}', @WhatIf = 0, @DropUnknownIndexes = 0, @DropTablesRemovedFromProduct = 0, @RebuildPolicyMode = 'ALWAYS'");
+            Exec($"EXEC SchemaSmith.ModifiedTableQuench @ProductName = '{product}', @WhatIf = 0, @DropUnknownIndexes = 0, @DropTablesRemovedFromProduct = {(dropRemovedTables ? 1 : 0)}, @RebuildPolicyMode = 'ALWAYS'");
             Exec($"EXEC SchemaSmith.MissingIndexesAndConstraintsQuench '{product}', 0");
             if (foreignKeys) Exec($"EXEC SchemaSmith.ForeignKeyQuench @ProductName = '{product}', @WhatIf = 0");
         }
@@ -83,7 +83,7 @@ public class RebuildTablePreservationTests : BaseTableQuenchTests
             var child = childTable == null ? "" : $$"""
 ,
   { "Schema": "[dbo]", "Name": "[{{childTable}}]",
-    "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[ParentId]", "DataType": "INT", "Nullable": true } ],
+    "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[ParentId]", "DataType": "{{idType}}", "Nullable": true } ],
     "ForeignKeys": [ { "Name": "[{{childKey}}]", "Columns": "[ParentId]", "RelatedTableSchema": "[dbo]", "RelatedTable": "[{{Parent}}]", "RelatedColumns": "[Id]" } ] }
 """;
             return "[" + parent + child + "]";
@@ -231,6 +231,43 @@ IF OBJECT_ID('SchemaSmith.RebuildSetAsideForeignKeys') IS NOT NULL DELETE FROM S
         {
             Assert.That(r.Key($"{r.Token}_FK", "ParentId"), Is.EqualTo("1|0|0"), "the declared key is back");
             Assert.That(r.Scalar($"SELECT COUNT(*) FROM sys.foreign_keys WHERE [name] = '{r.Token}_FK2'"), Is.EqualTo("0"), "the undeclared one on the product's own table is dropped, as it would be without a rebuild");
+            Assert.That(r.Scalar($"SELECT COUNT(*) FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE [KeyName] LIKE '{r.Token}%'"), Is.EqualTo("0"));
+        });
+    }
+
+    // A key the rest of this step drops anyway -- from a table it drops for leaving the package, or one the package does not
+    // declare on a table it does -- is not one the rebuild has to put back, so it cannot refuse the rebuild.
+    [Test]
+    public void AKeyFromATableThisDeployDrops_DoesNotRefuseTheRebuild()
+    {
+        using var r = Seeded();
+        var child = $"{r.Token}_C";
+        r.Deploy(r.ParentJson("NVARCHAR(50)", child, $"{r.Token}_FK"), _productName);
+
+        Assert.DoesNotThrow(() => r.Deploy(r.ParentJson("NVARCHAR(60)", idType: "BIGINT"), _productName, dropRemovedTables: true));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Scalar($"SELECT TYPE_NAME(system_type_id) FROM sys.columns WHERE [object_id] = OBJECT_ID('dbo.{r.Parent}') AND [name] = 'Id'"), Is.EqualTo("bigint"));
+            Assert.That(r.Scalar($"SELECT OBJECT_ID('dbo.{child}')"), Is.Null, "the table that left the package is dropped");
+            Assert.That(r.Scalar($"SELECT COUNT(*) FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE [KeyName] LIKE '{r.Token}%'"), Is.EqualTo("0"), "and nothing waits to be put back");
+        });
+    }
+
+    [Test]
+    public void AnUndeclaredKeyOnTheProductsOwnTable_DoesNotRefuseARebuildThatChangesTheColumnItReferences()
+    {
+        using var r = Seeded();
+        var child = $"{r.Token}_C";
+        r.Deploy(r.ParentJson("NVARCHAR(50)", child, $"{r.Token}_FK"), _productName);
+        r.Exec($"ALTER TABLE dbo.[{child}] ADD CONSTRAINT [{r.Token}_FK2] FOREIGN KEY (ParentId) REFERENCES dbo.[{r.Parent}] (Id)");
+
+        Assert.DoesNotThrow(() => r.Deploy(r.ParentJson("NVARCHAR(60)", child, $"{r.Token}_FK", idType: "BIGINT"), _productName));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Key($"{r.Token}_FK", "ParentId"), Is.EqualTo("1|0|0"), "the declared key is back");
+            Assert.That(r.Scalar($"SELECT COUNT(*) FROM sys.foreign_keys WHERE [name] = '{r.Token}_FK2'"), Is.EqualTo("0"), "the undeclared one is dropped");
             Assert.That(r.Scalar($"SELECT COUNT(*) FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE [KeyName] LIKE '{r.Token}%'"), Is.EqualTo("0"));
         });
     }

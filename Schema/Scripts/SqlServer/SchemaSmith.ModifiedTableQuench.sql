@@ -520,7 +520,7 @@ BEGIN TRY
                   OR sc.is_sparse <> [Sparse]
                   OR sc.is_column_set <> [IsColumnSet]
                   OR (c.[PaddingApplies] = 1 AND c.[AnsiPadding] IS NOT NULL AND sc.is_ansi_padded <> c.[AnsiPadding])
-                  OR ([Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') COLLATE DATABASE_DEFAULT <> [Collation])
+                  OR ([Collation] <> 'IGNORE' AND ISNULL(NULLIF(ic.COLLATION_NAME, @v_DatabaseCollation), '') COLLATE DATABASE_DEFAULT <> ISNULL(NULLIF([Collation], @v_DatabaseCollation), ''))
                   OR ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> [EncryptionType]
                   OR (ISNULL(cm.ExistingEncType, 'NONE') COLLATE DATABASE_DEFAULT <> 'NONE' AND (ISNULL(cm.ExistingEncAlgo, '') COLLATE DATABASE_DEFAULT <> [EncryptionAlgorithm] OR ISNULL(cm.ExistingEncKey, '') COLLATE DATABASE_DEFAULT <> SchemaSmith.fn_StripBracketWrapping([EncryptionKey]))) THEN 1 ELSE 0 END AS BIT)) d
     -- Each option is its own ALTER COLUMN (two in one statement is a syntax error), split around the definition change:
@@ -1286,6 +1286,11 @@ BEGIN TRY
        -- the case it was added for.
        OR (p.[OnOrderMismatch] = 1 AND p.[OrderMismatch] = 1)
 
+  -- The destructive-change gate (H3) runs before the rebuilds: a rebuild copies only the declared columns, so a column
+  -- the package stopped declaring, or a narrowed one, is lost there just as an in-place drop would lose it.
+  RAISERROR('Check destructive changes', 10, 100) WITH NOWAIT
+  EXEC SchemaSmith.DestructiveChangeGate @Policy = @DestructiveChangePolicy, @Accept = @AcceptDestructive, @WhatIf = @WhatIf, @IncludeColumns = 1
+
   IF EXISTS (SELECT 1 FROM #RebuildElection)
   BEGIN
     DECLARE @v_RebuildSchema NVARCHAR(500), @v_RebuildTable NVARCHAR(500)
@@ -1301,7 +1306,8 @@ BEGIN TRY
       -- refusal as an error and the quench fails -- deliberately. It does NOT quietly fall back to
       -- altering in place: that would let a package ask for a rebuild and silently get something else,
       -- and the states that block a rebuild are exactly the ones where that difference matters.
-      EXEC SchemaSmith.RebuildTable @p_Schema = @v_RebuildSchema, @p_Table = @v_RebuildTable, @p_WhatIf = @WhatIf
+      EXEC SchemaSmith.RebuildTable @p_Schema = @v_RebuildSchema, @p_Table = @v_RebuildTable, @p_WhatIf = @WhatIf,
+                                    @p_DropUndeclaredKeys = @DropForeignKeysRemovedFromProduct
       FETCH NEXT FROM rebuild_cursor INTO @v_RebuildSchema, @v_RebuildTable
     END
     CLOSE rebuild_cursor
@@ -1339,10 +1345,7 @@ BEGIN TRY
   END
 
   -- Every refusal in this step comes before the first drop (#511), and dropping a table is the drop that loses most:
-  -- a refused deploy used to have destroyed the tables the package no longer declares, rows included. The
-  -- destructive-change gate (H3) is the last of them.
-  RAISERROR('Check destructive changes', 10, 100) WITH NOWAIT
-  EXEC SchemaSmith.DestructiveChangeGate @Policy = @DestructiveChangePolicy, @Accept = @AcceptDestructive, @WhatIf = @WhatIf, @IncludeColumns = 1
+  -- a refused deploy used to have destroyed the tables the package no longer declares, rows included.
   IF @DropTablesRemovedFromProduct = 1
     EXEC SchemaSmith.DropTablesRemovedFromProduct @ProductName = @ProductName, @WhatIf = @WhatIf
 
