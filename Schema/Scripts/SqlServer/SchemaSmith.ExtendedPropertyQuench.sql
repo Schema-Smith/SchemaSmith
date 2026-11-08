@@ -144,6 +144,37 @@ BEGIN
                       AND si.[name] COLLATE DATABASE_DEFAULT = x.[Index])
        AND ISNULL(OBJECTPROPERTYEX(OBJECT_ID(i.[Schema] + '.' + i.[TableName], 'U'), 'TableIsMemoryOptimized'), 0) = 0
 
+  -- An XML, spatial or JSON index carries a Description and a bag as any index does, read from its own working set so a
+  -- variant its ShouldApplyExpression pruned takes them with it. A package written before these had a Description kept
+  -- an XML index's MS_Description in the bag; it stands in for an omitted Description.
+  INSERT INTO #DeclaredProperties ([ObjectType], [Schema], [Table], [Level2Name], [Name], [Declared])
+    SELECT 'index', x.[Schema], x.[Table], x.[Index], p.[Name], p.[Declared]
+      FROM (SELECT [Schema], [TableName], [IndexName], [Description] FROM #XmlIndexes WITH (NOLOCK)
+            UNION ALL SELECT [Schema], [TableName], [IndexName], [Description] FROM #SpatialIndexes WITH (NOLOCK)
+            UNION ALL SELECT [Schema], [TableName], [IndexName], [Description] FROM #JsonIndexes WITH (NOLOCK)) ti
+      CROSS APPLY (SELECT SchemaSmith.fn_StripBracketWrapping(ti.[Schema]) AS [Schema], SchemaSmith.fn_StripBracketWrapping(ti.[TableName]) AS [Table],
+                          SchemaSmith.fn_StripBracketWrapping(ti.[IndexName]) AS [Index]) x
+      CROSS APPLY (SELECT N'MS_Description' AS [Name], NULLIF(r.[Raw], '') AS [Declared]
+                     FROM (SELECT COALESCE(ti.[Description],
+                                           (SELECT TOP 1 ep.[Value] FROM #ExtendedProperties ep WITH (NOLOCK)
+                                             WHERE ep.[ObjectType] = 'index' AND ep.[Name] = N'MS_Description'
+                                               AND SchemaSmith.fn_StripBracketWrapping(ep.[Schema]) = x.[Schema]
+                                               AND SchemaSmith.fn_StripBracketWrapping(ep.[TableName]) = x.[Table]
+                                               AND SchemaSmith.fn_StripBracketWrapping(ep.[ObjectName]) = x.[Index])) AS [Raw]) r
+                    WHERE r.[Raw] IS NOT NULL
+                   UNION ALL
+                   SELECT ep.[Name], NULLIF(ep.[Value], '')
+                     FROM #ExtendedProperties ep WITH (NOLOCK)
+                    WHERE ep.[ObjectType] = 'index'
+                      AND SchemaSmith.fn_StripBracketWrapping(ep.[Schema]) = x.[Schema]
+                      AND SchemaSmith.fn_StripBracketWrapping(ep.[TableName]) = x.[Table]
+                      AND SchemaSmith.fn_StripBracketWrapping(ep.[ObjectName]) = x.[Index]
+                      AND ep.[Name] <> N'MS_Description'
+                      AND ep.[Name] NOT IN (SELECT [Name] FROM @InternalNames)) p
+     WHERE EXISTS (SELECT 1 FROM sys.indexes si
+                    WHERE si.[object_id] = OBJECT_ID(ti.[Schema] + '.' + ti.[TableName], 'U')
+                      AND si.[name] COLLATE DATABASE_DEFAULT = x.[Index])
+
   -- What the database already says, read once. An index's property may sit on the index itself (class 7)
   -- or, for a key constraint, on the constraint (class 1); whichever holds it is the one updated or
   -- dropped, and a new one goes on the constraint when the index backs one.

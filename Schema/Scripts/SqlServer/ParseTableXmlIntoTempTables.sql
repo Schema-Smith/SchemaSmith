@@ -297,7 +297,7 @@
          t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), i.[IsPrimary],
          [Column] = SchemaSmith.fn_SafeBracketWrap(i.[Column]), [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap(i.[PrimaryIndex]),
          i.[SecondaryIndexType], [XmlCompression] = ISNULL(i.[XmlCompression], 0), i.[ShouldApplyExpression], i.[VariantName],
-         i.[Selective], i.[ForPath], [KindPrefix] = CAST(NULL AS NVARCHAR(20)), [KindSuffix] = CAST(NULL AS NVARCHAR(MAX))
+         i.[Selective], i.[ForPath], [KindPrefix] = CAST(NULL AS NVARCHAR(20)), [KindSuffix] = CAST(NULL AS NVARCHAR(MAX)), i.[Description]
     INTO #XmlIndexes
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/XmlIndexes') AS Y(xi)
@@ -311,7 +311,8 @@
       [ShouldApplyExpression] = xi.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = xi.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
       [Selective] = CASE WHEN xi.exist('Selective') = 1 THEN xi.query('Selective') END,
-      [ForPath] = xi.value('(ForPath/text())[1]', 'NVARCHAR(200)')
+      [ForPath] = xi.value('(ForPath/text())[1]', 'NVARCHAR(200)'),
+      [Description] = CASE WHEN xi.exist('Description') = 1 THEN ISNULL(xi.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') END
       ) i;
 {{ParseSelectiveXmlIndexesXml}}
 
@@ -346,13 +347,14 @@
     [FillFactor] TINYINT NULL,
     [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
-    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
   )
   INSERT INTO #SpatialIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Tessellation], [XMin], [YMin], [XMax], [YMax],
-                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])
+                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName], [Description])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], s.[IndexName], s.[Column], s.[Tessellation], s.[XMin], s.[YMin], s.[XMax], s.[YMax],
-         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[CompressionType], s.[ShouldApplyExpression], s.[VariantName]
+         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[CompressionType], s.[ShouldApplyExpression], s.[VariantName], s.[Description]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/SpatialIndexes') AS Y(sx)
     CROSS APPLY (SELECT
@@ -371,7 +373,8 @@
       [FillFactor] = sx.value('(FillFactor/text())[1]', 'TINYINT'),
       [CompressionType] = sx.value('(CompressionType/text())[1]', 'NVARCHAR(100)'),
       [ShouldApplyExpression] = sx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
-      [VariantName] = sx.value('(VariantName/text())[1]', 'NVARCHAR(128)')
+      [VariantName] = sx.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
+      [Description] = CASE WHEN sx.exist('Description') = 1 THEN ISNULL(sx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') END
       ) s;
 
   -- NORMALIZE -- names wrapped, the scheme and densities in upper case, however the rows arrived.
@@ -531,6 +534,21 @@
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/CheckConstraints') AS Y(cc)
     CROSS APPLY cc.nodes('Extensions/ExtendedProperties/p') AS P(p)
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], idx.value('(Name/text())[1]', 'NVARCHAR(500)'), p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/XmlIndexes') AS Y(idx)
+    CROSS APPLY idx.nodes('Extensions/ExtendedProperties/p') AS P(p)
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], idx.value('(Name/text())[1]', 'NVARCHAR(500)'), p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/SpatialIndexes') AS Y(idx)
+    CROSS APPLY idx.nodes('Extensions/ExtendedProperties/p') AS P(p)
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], idx.value('(Name/text())[1]', 'NVARCHAR(500)'), p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/JsonIndexes') AS Y(idx)
+    CROSS APPLY idx.nodes('Extensions/ExtendedProperties/p') AS P(p)
 
   -- Identify CheckConstraints to skip based on ShouldApply expression (scoped by [_RowId]) — identical to JSON twin.
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'DELETE FROM #CheckConstraints WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');'

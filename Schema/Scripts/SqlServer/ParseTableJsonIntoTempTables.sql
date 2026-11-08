@@ -271,6 +271,7 @@
     [XmlCompression] BIT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     -- A selective XML index's declaration as JSON, and the path a secondary selective index is FOR; KindPrefix and
     -- KindSuffix are what every create and compare renders around the index's name, table and column.
     [Selective] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
@@ -304,7 +305,8 @@
     [FillFactor] TINYINT NULL,
     [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
-    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #ForeignKeys
@@ -998,12 +1000,12 @@
   EXEC(@v_SQL)
   
   RAISERROR('Parse XML Indexes from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [XmlCompression], [ShouldApplyExpression], [VariantName], [Selective], [ForPath])
+  INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [XmlCompression], [ShouldApplyExpression], [VariantName], [Selective], [ForPath], [Description])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          -- INGEST ONLY -- NORMALIZE below owns the transforms.
          t.[Schema], t.[Name] AS [TableName], i.[IndexName], i.[IsPrimary],
          i.[Column], i.[PrimaryIndex],
-         i.[SecondaryIndexType], i.[XmlCompression], i.[ShouldApplyExpression], i.[VariantName], i.[Selective], i.[ForPath]
+         i.[SecondaryIndexType], i.[XmlCompression], i.[ShouldApplyExpression], i.[VariantName], i.[Selective], i.[ForPath], i.[Description]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(XmlIndexes) WITH (
       [IndexName] NVARCHAR(500) '$.Name',
@@ -1015,7 +1017,8 @@
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName',
       [Selective] NVARCHAR(MAX) '$.Selective' AS JSON,
-      [ForPath] NVARCHAR(200) '$.ForPath'
+      [ForPath] NVARCHAR(200) '$.ForPath',
+      [Description] NVARCHAR(MAX) '$.Description'
       ) i;
 
   -- NORMALIZE -- one definition, applied however the rows arrived.
@@ -1034,11 +1037,11 @@
   
   RAISERROR('Parse Spatial Indexes from Json', 10, 100) WITH NOWAIT
   INSERT INTO #SpatialIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Tessellation], [XMin], [YMin], [XMax], [YMax],
-                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])
+                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName], [Description])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          -- INGEST ONLY -- NORMALIZE below owns the transforms.
          t.[Schema], t.[Name] AS [TableName], s.[IndexName], s.[Column], s.[Tessellation], s.[XMin], s.[YMin], s.[XMax], s.[YMax],
-         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[CompressionType], s.[ShouldApplyExpression], s.[VariantName]
+         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[CompressionType], s.[ShouldApplyExpression], s.[VariantName], s.[Description]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(SpatialIndexes) WITH (
       [IndexName] NVARCHAR(500) '$.Name',
@@ -1056,7 +1059,8 @@
       [FillFactor] TINYINT '$.FillFactor',
       [CompressionType] NVARCHAR(100) '$.CompressionType',
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
-      [VariantName] NVARCHAR(128) '$.VariantName'
+      [VariantName] NVARCHAR(128) '$.VariantName',
+      [Description] NVARCHAR(MAX) '$.Description'
       ) s;
 
   -- NORMALIZE -- names wrapped, the scheme and densities in upper case, however the rows arrived.
@@ -1206,6 +1210,24 @@
     CROSS APPLY OPENJSON(t.[CheckConstraints]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) cc
     CROSS APPLY OPENJSON(cc.[Eps]) ep
    WHERE cc.[Eps] IS NOT NULL
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], i.[Name], ep.[key], ep.[value]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(t.[XmlIndexes]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) i
+    CROSS APPLY OPENJSON(i.[Eps]) ep
+   WHERE i.[Eps] IS NOT NULL
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], i.[Name], ep.[key], ep.[value]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(t.[SpatialIndexes]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) i
+    CROSS APPLY OPENJSON(i.[Eps]) ep
+   WHERE i.[Eps] IS NOT NULL
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], i.[Name], ep.[key], ep.[value]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(t.[JsonIndexes]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) i
+    CROSS APPLY OPENJSON(i.[Eps]) ep
+   WHERE i.[Eps] IS NOT NULL
 
   -- Identify CheckConstraints to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG('DELETE FROM #CheckConstraints WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');', CHAR(13) + CHAR(10))

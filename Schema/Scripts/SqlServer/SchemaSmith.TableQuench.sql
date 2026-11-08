@@ -91,6 +91,9 @@ BEGIN TRY
   IF EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE [Description] IS NOT NULL)
        OR EXISTS (SELECT 1 FROM #Columns WITH (NOLOCK) WHERE [Description] IS NOT NULL)
        OR EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #XmlIndexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #SpatialIndexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #JsonIndexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
        OR EXISTS (SELECT 1 FROM #ExtendedProperties WITH (NOLOCK))
     EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf
   ELSE RAISERROR('Skipping extended properties: none declared', 10, 100) WITH NOWAIT

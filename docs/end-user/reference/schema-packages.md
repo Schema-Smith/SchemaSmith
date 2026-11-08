@@ -1509,6 +1509,7 @@ XML index definitions in the `XmlIndexes` array. A primary XML index must be cre
 | `ForPath` | string | **SQL Server 2012 SP1+.** Makes this a secondary selective XML index on the named path of the selective index in `PrimaryIndex` (`USING XML INDEX … FOR (path)`). `SecondaryIndexType` does not apply. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
+| `Description` | string | The `MS_Description` extended property. Omitted, an existing description is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | Custom metadata. |
 
 ### Selective XML indexes
@@ -1569,6 +1570,7 @@ Spatial index definitions in the `SpatialIndexes` array, one `CREATE SPATIAL IND
 | `CompressionType` | string | `DATA_COMPRESSION`: `NONE`, `ROW` or `PAGE`. Omitted, the index is created uncompressed. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies. Max 128 characters. |
+| `Description` | string | The `MS_Description` extended property. Omitted, an existing description is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | Custom metadata. |
 
 **Only what you declare is compared.** An attribute you leave out is the engine's choice when the index is created, and a later deploy does not compare it, so a definition that names only the column keeps whatever the index has. A declared attribute that differs from the live index drops and re-creates it. A change to the clustered primary key takes the table's spatial indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A spatial index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and [`IndexOnlyTableQuenches`](#template-settings-intent) deploys behave the same. That includes `CompressionType`: left out, an index compressed by hand keeps its compression. SchemaTongs writes it when the index is compressed.
@@ -1604,6 +1606,7 @@ JSON index definitions in the `JsonIndexes` array, one `CREATE JSON INDEX` each 
 | `CompressionType` | string | `DATA_COMPRESSION`: `NONE`, `ROW` or `PAGE`. Omitted, the index is created uncompressed and its compression is not compared. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies. Max 128 characters. |
+| `Description` | string | The `MS_Description` extended property. Omitted, an existing description is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | Custom metadata. |
 
 **The paths are a set, compared as written.** Their order does not matter, but their text does: JSON keys are case-sensitive, so changing `$.status` to `$.Status` is a change, and SQL Server keeps a path exactly as it was written, spacing included. A changed path, column, `OptimizeForArraySearch`, `FillFactor` or `CompressionType` drops and re-creates the index; a `FillFactor` or `CompressionType` you leave out is not compared, so a JSON index someone compressed by hand stays compressed. A change to the clustered primary key takes the table's JSON indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A JSON index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and [`IndexOnlyTableQuenches`](#template-settings-intent) deploys behave the same. SchemaTongs extracts `CompressionType` when the index is compressed.
@@ -2391,7 +2394,7 @@ A materialized view that should be skipped for non-production environments is on
 
 ## Descriptions
 
-A table, column, index, indexed view, materialized view, sequence, enum type and domain type can carry a `Description`, and on PostgreSQL so can a foreign key, check or exclusion constraint, row-level security policy and statistics object. It is one key on every engine, stored where the engine keeps such things:
+A table, column, index (on SQL Server XML, spatial and JSON indexes included), indexed view, materialized view, sequence, enum type and domain type can carry a `Description`, and on PostgreSQL so can a foreign key, check or exclusion constraint, row-level security policy and statistics object. It is one key on every engine, stored where the engine keeps such things:
 
 | Engine | Where `Description` lives |
 |---|---|

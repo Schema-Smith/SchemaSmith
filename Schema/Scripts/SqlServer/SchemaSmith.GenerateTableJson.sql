@@ -472,7 +472,8 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                             WHERE i.xml_index_type = 2
                             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)) AS [Selective],
                (SELECT s.[ForPath] FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id) AS [ForPath],
-			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE(x.[Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+               (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Index', i.[Name])) AS [Description],
+			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE(x.[Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
           FROM sys.xml_indexes i
           JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
           WHERE i.[object_id] = st.[object_id]
@@ -491,7 +492,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                tz.cells_per_object AS [CellsPerObject],
                NULLIF(i.fill_factor, 0) AS [FillFactor],
                NULLIF((SELECT MAX(p.data_compression_desc) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1
-                        WHERE it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id) COLLATE DATABASE_DEFAULT, 'NONE') AS [CompressionType]
+                        WHERE it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id) COLLATE DATABASE_DEFAULT, 'NONE') AS [CompressionType],
+               (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Index', i.[name])) AS [Description],
+               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE(x.[Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
           FROM sys.spatial_indexes i
           JOIN sys.spatial_index_tessellations tz ON tz.[object_id] = i.[object_id] AND tz.index_id = i.index_id
           JOIN sys.index_columns ic ON ic.[object_id] = i.[object_id] AND ic.index_id = i.index_id
@@ -506,7 +509,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                              WHERE p.[object_id] = l.[object_id] AND p.index_id = l.index_id AND p.[Path] <> '$')) AS [Paths],
                CASE WHEN l.[OptimizeForArraySearch] = 1 THEN CAST(1 AS BIT) END AS [OptimizeForArraySearch],
                l.[FillFactor] AS [FillFactor],
-               NULLIF(l.[Compression], 'NONE') AS [CompressionType]
+               NULLIF(l.[Compression], 'NONE') AS [CompressionType],
+               (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Index', l.[Name])) AS [Description],
+               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE(x.[Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', l.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
           FROM #LiveJsonIndexes l
           WHERE l.[object_id] = st.[object_id]
           ORDER BY l.[Name]

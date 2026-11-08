@@ -661,7 +661,7 @@ public static class ForgeKindler
         "CREATE TABLE #JsonIndexes ([_RowId] BIGINT NULL, [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, " +
         "[IndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Paths] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, " +
         "[ForClause] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, [OptimizeForArraySearch] BIT NULL, [FillFactor] TINYINT NULL, [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL, " +
-        "[ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL)\n";
+        "[ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL, [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL)\n";
 
     // NORMALIZE, then the ShouldApplyExpression filter, for either tier's rows.
     private const string SqlServerNormalizeJsonIndexes =
@@ -675,22 +675,23 @@ public static class ForgeKindler
 
     internal static readonly string SqlServerParseJsonIndexesJson =
         "RAISERROR('Parse JSON Indexes from Json', 10, 100) WITH NOWAIT\n" +
-        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Paths], [OptimizeForArraySearch], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])\n" +
-        "SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), t.[Schema], t.[Name], j.[IndexName], j.[Column], j.[Paths], j.[OptimizeForArraySearch], j.[FillFactor], j.[CompressionType], j.[ShouldApplyExpression], j.[VariantName]\n" +
+        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Paths], [OptimizeForArraySearch], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName], [Description])\n" +
+        "SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), t.[Schema], t.[Name], j.[IndexName], j.[Column], j.[Paths], j.[OptimizeForArraySearch], j.[FillFactor], j.[CompressionType], j.[ShouldApplyExpression], j.[VariantName], j.[Description]\n" +
         "  FROM #TableDefinitions t WITH (NOLOCK)\n" +
         "  CROSS APPLY OPENJSON(t.[JsonIndexes]) WITH ([IndexName] NVARCHAR(500) '$.Name', [Column] NVARCHAR(500) '$.Column', [Paths] NVARCHAR(MAX) '$.Paths' AS JSON, " +
         "[OptimizeForArraySearch] BIT '$.OptimizeForArraySearch', [FillFactor] TINYINT '$.FillFactor', [CompressionType] NVARCHAR(100) '$.CompressionType', [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression', " +
-        "[VariantName] NVARCHAR(128) '$.VariantName') j\n" +
+        "[VariantName] NVARCHAR(128) '$.VariantName', [Description] NVARCHAR(MAX) '$.Description') j\n" +
         "UPDATE j SET [ForClause] = " + JsonIndexForClause("OPENJSON(j.[Paths]) WITH ([Path] NVARCHAR(MAX) '$') p WHERE 1 = 1") + ", [Paths] = NULL FROM #JsonIndexes j\n" +
         SqlServerNormalizeJsonIndexes;
 
     internal static readonly string SqlServerParseJsonIndexesXml =
         "RAISERROR('Parse JSON Indexes from Xml', 10, 100) WITH NOWAIT\n" +
-        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [ForClause], [OptimizeForArraySearch], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])\n" +
+        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [ForClause], [OptimizeForArraySearch], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName], [Description])\n" +
         "SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), t.[Schema], t.[Name], jx.value('(Name/text())[1]', 'NVARCHAR(500)'), jx.value('(Column/text())[1]', 'NVARCHAR(500)'),\n" +
         "       " + JsonIndexForClause("(SELECT n.value('.', 'NVARCHAR(MAX)') AS [Path] FROM jx.nodes('Paths') AS P(n)) p WHERE 1 = 1") + ",\n" +
         "       jx.value('(OptimizeForArraySearch/text())[1]', 'BIT'), jx.value('(FillFactor/text())[1]', 'TINYINT'), jx.value('(CompressionType/text())[1]', 'NVARCHAR(100)'),\n" +
-        "       jx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'), jx.value('(VariantName/text())[1]', 'NVARCHAR(128)')\n" +
+        "       jx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'), jx.value('(VariantName/text())[1]', 'NVARCHAR(128)'),\n" +
+        "       CASE WHEN jx.exist('Description') = 1 THEN ISNULL(jx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') END\n" +
         "  FROM #TableDefinitions t WITH (NOLOCK)\n" +
         "  CROSS APPLY t.[TableXml].nodes('/Table/JsonIndexes') AS Y(jx)\n" +
         SqlServerNormalizeJsonIndexes;
