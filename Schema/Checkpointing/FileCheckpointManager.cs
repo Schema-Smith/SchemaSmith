@@ -346,7 +346,7 @@ public class FileCheckpointManager : ICheckpointing
             if (trimmedLine.StartsWith("# Started:", StringComparison.Ordinal))
             {
                 var dateStr = trimmedLine.Substring("# Started:".Length).Trim();
-                if (DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out var startedAt))
+                if (DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var startedAt))
                     checkpoint.StartedAt = startedAt;
                 continue;
             }
@@ -395,7 +395,7 @@ public class FileCheckpointManager : ICheckpointing
         sb.AppendLine($"# Database: {checkpoint.DatabaseName}");
         if (!string.IsNullOrEmpty(checkpoint.SchemaName))
             sb.AppendLine($"# Schema: {checkpoint.SchemaName}");
-        sb.AppendLine($"# Started: {checkpoint.StartedAt:yyyy-MM-dd HH:mm:ss}");
+        sb.AppendLine($"# Started: {checkpoint.StartedAt:yyyy-MM-dd HH:mm:ss}Z");
         sb.AppendLine();
 
         sb.AppendLine("[Completed Steps]");
@@ -482,7 +482,7 @@ public class FileCheckpointManager : ICheckpointing
             if (trimmedLine.StartsWith("# Started:", StringComparison.Ordinal))
             {
                 var dateStr = trimmedLine.Substring("# Started:".Length).Trim();
-                if (DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out var startedAt))
+                if (DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var startedAt))
                     checkpoint.StartedAt = startedAt;
                 continue;
             }
@@ -533,7 +533,7 @@ public class FileCheckpointManager : ICheckpointing
         var sb = new StringBuilder();
         sb.AppendLine("# SchemaQuench Product Checkpoint");
         sb.AppendLine($"# Product: {checkpoint.ProductName}");
-        sb.AppendLine($"# Started: {checkpoint.StartedAt:yyyy-MM-dd HH:mm:ss}");
+        sb.AppendLine($"# Started: {checkpoint.StartedAt:yyyy-MM-dd HH:mm:ss}Z");
         sb.AppendLine();
 
         foreach (var serverScripts in checkpoint.CompletedBeforeScripts.OrderBy(kvp => kvp.Key))

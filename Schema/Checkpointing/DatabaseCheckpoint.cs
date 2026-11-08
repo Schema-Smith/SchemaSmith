@@ -13,7 +13,8 @@ internal class DatabaseCheckpoint
     public string Server { get; set; } = "";
     public string DatabaseName { get; set; } = "";
     public string SchemaName { get; set; } = "";
-    public DateTime StartedAt { get; set; } = DateTime.Now;
+    // UTC, as the deployment summary reports times.
+    public DateTime StartedAt { get; set; } = DateTime.UtcNow;
 
     public List<string> CompletedSteps { get; set; } = [];
     public Dictionary<DatabaseScriptSlot, List<string>> CompletedScripts { get; set; } = new();

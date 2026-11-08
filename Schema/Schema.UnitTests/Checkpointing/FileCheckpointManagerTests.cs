@@ -255,6 +255,24 @@ public class FileCheckpointManagerTests
         Assert.That(parsed.StartedAt, Is.EqualTo(new DateTime(2026, 4, 11, 10, 30, 0)));
     }
 
+    // A checkpoint's start time is UTC, as the deployment summary's times are, and reads back as UTC.
+    [Test]
+    public void ANewCheckpoint_RecordsItsStartInUtc()
+    {
+        var before = DateTime.UtcNow.AddSeconds(-1);
+        var checkpoint = new DatabaseCheckpoint { ProductName = "P", TemplateName = "Main", Server = "s", DatabaseName = "d" };
+
+        var formatted = FileCheckpointManager.FormatDatabaseCheckpoint(checkpoint);
+        var parsed = FileCheckpointManager.ParseDatabaseCheckpoint(formatted, "P", "Main", "s", "d");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(formatted, Does.Match(@"# Started: \d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}Z"));
+            Assert.That(parsed.StartedAt.Kind, Is.EqualTo(DateTimeKind.Utc));
+            Assert.That(parsed.StartedAt, Is.InRange(before, DateTime.UtcNow.AddSeconds(1)));
+        });
+    }
+
     [Test]
     public void ProductCheckpoint_ParseFormat_RoundTrip()
     {
