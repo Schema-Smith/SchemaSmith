@@ -52,7 +52,7 @@ public sealed class DriftFailOn
     [
         "table", "column", "index", "constraint", "foreignKey", "statistic", "xmlIndex", "fullTextIndex", "sequence", "domainType",
         "domainConstraint", "enumType", "enumValue", "temporal", "changeDataCapture", "changeTracking", "database", "schema",
-        "indexedView", "materializedView", "event", "period", Modules, Migrations,
+        "indexedView", "materializedView", "event", "period", "serverSetting", "databaseSetting", Modules, Migrations,
     ];
 
     private readonly HashSet<string> _actions;
@@ -172,6 +172,9 @@ public static class DriftVerdict
         _ => null,
     };
 
+    private static bool OnServerOf(ChangeTarget row, ChangeTarget target) =>
+        row != null && row.Database == null && string.Equals(row.Server, target.Server, StringComparison.OrdinalIgnoreCase);
+
     public static DriftReport Decide(IReadOnlyList<DriftUnit> units, IReadOnlyList<ChangeAuditRow> audit, DriftCapture capture, DriftFailOn failOn)
     {
         var targets = new List<DriftTargetReport>();
@@ -182,7 +185,8 @@ public static class DriftVerdict
         {
             var target = unit.Target;
             var counted = new List<(string Type, string Name, string Class)>();
-            foreach (var row in audit.Where(r => r.Target == target))
+            // A server setting is recorded for the server alone: every target on it is one the deploy would change.
+            foreach (var row in audit.Where(r => r.Target == target || OnServerOf(r.Target, target)))
             {
                 if (row.Action == "dropSuppressed")
                     extra.Add(Item(unit, row.ObjectType, row.ObjectName, row.Action));

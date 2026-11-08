@@ -55,6 +55,27 @@ public class DriftTests
         });
     }
 
+    // A server setting the deploy would change is recorded for the server, not for one of its databases; every target on
+    // that server is one the deploy would change.
+    [Test]
+    public void AServerSettingTheDeployWouldChange_IsDriftOnEveryTargetOnThatServer()
+    {
+        var serverRow = Row("ServerSetting", "Configuration cost threshold for parallelism", "wouldChange", new ChangeTarget("SRV", null));
+        var report = Decide([Unit(), Unit("Other")], [serverRow]);
+        Assert.Multiple(() =>
+        {
+            Assert.That(report.Drifted, Is.True);
+            Assert.That(report.Targets.Select(t => t.Status), Is.EqualTo(new[] { "drifted", "drifted" }));
+        });
+        Assert.That(Decide([new DriftUnit("elsewhere", "Shop", "", "Main", false, false)], [serverRow]).Drifted, Is.False, "not a target on another server");
+    }
+
+    [TestCase("serverSetting", "ServerSetting", true)]
+    [TestCase("databaseSetting", "DatabaseSetting", true)]
+    [TestCase("table", "ServerSetting", false)]
+    public void SettingsCanBeListedInDriftFailOn(string failOn, string type, bool counts) =>
+        Assert.That(Decide([Unit()], [Row(type, "Parameter work_mem", "wouldChange")], failOn: failOn).Drifted, Is.EqualTo(counts));
+
     // Data delivery runs every deploy by design, a refused or downgraded change says nothing about state, and the grants a
     // re-applied module gets back follow the module, which counts on its own.
     [TestCase("wouldDeliver")]
