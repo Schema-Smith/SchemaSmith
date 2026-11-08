@@ -149,6 +149,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `failures` | One entry per failed scope — the same content as the failure roll-up log. |
 | `lockWaits` | Each statement that had to wait on another session's lock, or lost a deadlock, and was tried again — its own section below. Empty when nothing waited. |
 | `destructive` | Each table or column the run dropped, or refused to drop, because the package no longer declares it — its own section below. `null` when there were none. Schema version 1.3 added it. |
+| `settingOutcomes` | What the [server and database settings](schema-packages.md#server-and-database-settings) steps reported, counted per scope: `server` and `database`, each with `changed`, `pendingRestart`, `drift`, `fixFailed`, `unfixable` and `wouldChange` (`null` for a scope with nothing reported). `null` when the package declares no settings, or every setting matched. Schema version 1.3 added it. |
 | `whatIf` | The would-apply / would-skip / would-deliver plan; `null` unless the run was `WhatIf` mode. |
 | `objectChanges` | Verified DDL changes and object-script runs — its own section below. |
 | `preventDrop` | The no-drop protection manifest: what the run would have dropped by absence and withheld — its own section below. `null` unless the environment's `PreventDrop` is on. |
@@ -334,6 +335,7 @@ Where the counts are the summary, `details[]` is the itemized list — one row p
 - **`database`** and **`schema`** — a database or schema created because its `TemplateTargets` entry or template sets `CreateIfMissing` (`created`, or `wouldCreate` under `WhatIf`).
 - **`sequence`** — a sequence created or modified (PostgreSQL and MariaDB).
 - **`period`** — a MariaDB application-time period added to an existing table (`created`) or dropped by `DropPeriodsRemovedFromProduct` (`dropped`), named `table.period`; `wouldCreate` / `wouldDrop` under `WhatIf`.
+- **`ServerSetting`** and **`DatabaseSetting`** — a declared [server or database setting](schema-packages.md#server-and-database-settings) that differed, named `Kind Name` (such as `Option RECOVERY`): `changed`, `pendingRestart` (set, waiting for a restart), `drift` (reported, not fixed), `fixFailed`, `unfixable`, or `wouldChange` under `WhatIf`. A matching setting has no row. The `settingOutcomes` block counts them per scope.
 - **`domain type`**, **`domain constraint`**, **`enum type`** and **`enum value`** — PostgreSQL domains and enum types. An enum value the package no longer declares, or a changed value order, is recorded as `wouldDrop` / `wouldModify` even on a real run, because PostgreSQL cannot apply it without recreating the type.
 - **`changeDataCapture`**, **`changeTracking`** and **`temporal`** — SQL Server CDC, change tracking and system versioning on a table: `created` when turned on, `dropped` when turned off, `modified` for a CDC capture-instance rotation or a change-tracking reset. Disabling CDC on a table with two capture instances records one row for each.
 

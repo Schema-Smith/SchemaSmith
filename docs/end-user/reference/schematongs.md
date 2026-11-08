@@ -197,7 +197,14 @@ For the full explanation of configuration loading, environment variable mapping,
     "EventTriggers": true,
 
     "Events": true,
-    "Packages": true
+    "Packages": true,
+
+    "ServerSettings": false,
+    "DatabaseSettings": false,
+    "SettingsDefaultPolicy": "Report",
+    "SettingsAllowlist": "",
+    "SettingsOutput": "Json",
+    "ServerObjects": false
   },
   "OrphanHandling": {
     "Mode": "Detect"
@@ -212,7 +219,7 @@ For the full explanation of configuration loading, environment variable mapping,
 }
 ```
 
-The platform-specific `ShouldCast` flags are simply ignored when they don't apply to the configured `Source:Platform`. You can leave the full set in place across all your environments. Every `ShouldCast` object flag defaults to `true` when it is left out; `ValidateScripts` and the deprecated `ScriptDynamicDependencyRemovalForFunctions` default to `false`. `Sequences` and `Packages` act on MariaDB only -- MySQL has neither object, so the flags mean nothing there whatever they say. `Source:CompatEncoding` takes `auto` (the default when blank), `legacy` or `modern`, choosing the payload encoding SchemaTongs uses against a SQL Server source; `auto` picks the legacy form when the database's compatibility level is below 130 or the server is older than SQL Server 2017. `Source:CommandTimeoutSeconds` is how long one extraction command may run, `0` (the default) for no limit; a command timeout set in `ConnectionProperties` or a `--ConnectionString` takes precedence.
+The platform-specific `ShouldCast` flags are simply ignored when they don't apply to the configured `Source:Platform`. You can leave the full set in place across all your environments. Every `ShouldCast` object flag defaults to `true` when it is left out; `ValidateScripts`, the deprecated `ScriptDynamicDependencyRemovalForFunctions` and the [settings and server-object switches](#server-and-database-settings) default to `false`. `Sequences` and `Packages` act on MariaDB only -- MySQL has neither object, so the flags mean nothing there whatever they say. `Source:CompatEncoding` takes `auto` (the default when blank), `legacy` or `modern`, choosing the payload encoding SchemaTongs uses against a SQL Server source; `auto` picks the legacy form when the database's compatibility level is below 130 or the server is older than SQL Server 2017. `Source:CommandTimeoutSeconds` is how long one extraction command may run, `0` (the default) for no limit; a command timeout set in `ConnectionProperties` or a `--ConnectionString` takes precedence.
 
 ### Source connection
 
@@ -339,6 +346,57 @@ A view is written as `CREATE OR REPLACE VIEW`, so a view that fails to deploy le
 **Extraction privileges.** The account needs `SELECT` on the database, `SHOW VIEW` for views, `TRIGGER` for triggers, `EVENT` for events, and, for the body of a routine it did not create, global `SELECT` (MySQL 8.0.20+: `SHOW_ROUTINE`; MariaDB: `SELECT` on `mysql.proc`). An object whose definition the server will not return is logged as skipped and counted in the run's skipped objects; without the `TRIGGER` privilege the catalog lists no triggers at all, and SchemaTongs says so once.
 
 ---
+
+## Server and Database Settings
+
+SchemaTongs can capture how a reference server is configured, so a package brings every server of its class into line -- or reports how each one differs -- with the differences visible in source control. It writes the [settings files SchemaQuench reads](schema-packages.md#server-and-database-settings), and on SQL Server it can also script the server's own objects: Agent jobs, audits, server triggers and Extended Events sessions. Every switch is off by default, so an extraction without them reads nothing new and writes nothing new.
+
+| Switch | Default | What it writes |
+|---|---|---|
+| `ShouldCast:ServerSettings` | `false` | `ServerSettings.json` beside `Product.json` |
+| `ShouldCast:DatabaseSettings` | `false` | `DatabaseSettings.json` in the template folder. Skipped, with a warning, for a [schema template](#schema-only-mode): a database setting runs once per database. |
+| `ShouldCast:SettingsDefaultPolicy` | `Report` | The `Fix` and `OnDrift` written on every setting: `Report` (`false`, `Warn`), `EnforceWarn` (`true`, `Warn`) or `EnforceError` (`true`, `Error`). Edit any of them afterwards. |
+| `ShouldCast:SettingsAllowlist` | _(empty)_ | A file naming exactly the settings to capture (format below). |
+| `ShouldCast:SettingsOutput` | `Json` | `Json`, `Script` or `Both` (below). |
+| `ShouldCast:ServerObjects` | `false` | SQL Server's server-level objects, as product `After` folders (below). |
+
+**What gets captured.** Without an allowlist, only settings that differ from what the engine starts with, and none that names this machine -- a file path, the host, the port, a server id. What counts as the default:
+
+- **SQL Server:** a configuration option that differs from its documented default (an option outside that list is captured only when allowlisted), each trace flag that is on globally, a database option that differs from the `model` database, and a database-scoped configuration that is not at its default.
+- **PostgreSQL:** a server parameter set in a configuration file or on the command line, and every setting the database carries itself.
+- **MySQL 8.0 and later:** a variable whose value did not come from the build. **MariaDB:** a variable that differs from its default. **MySQL 5.7** cannot say which variables were changed, so it captures server variables only from an allowlist, and SchemaTongs says so. On either engine, a database's character set and collation are captured when they differ from the server's.
+
+**Allowlists are exact.** An allowlist captures exactly its settings, at their default or not, machine-specific or not. An allowlisted setting the server does not have is warned about. A scope the file leaves out captures nothing.
+
+```json
+{
+  "Server":   [ { "Kind": "Configuration", "Name": "max server memory (MB)" } ],
+  "Database": [ { "Kind": "Option", "Name": "COMPATIBILITY_LEVEL" } ]
+}
+```
+
+**Three output forms.** `Json` writes the settings files. `Script` writes one compare-then-set script per setting instead -- into a `ServerSettings` folder registered as a product `Before` folder, or a `DatabaseSettings` folder registered as the template's `Setup` folder -- for a team that would rather review SQL. `Both` writes the JSON, which deploys, and the scripts into `ServerSettingsScripts` / `DatabaseSettingsScripts`, which no slot runs, as a copy to read; nothing is applied twice.
+
+### Server objects (SQL Server)
+
+With `ShouldCast:ServerObjects`, each of the server's own objects is written as one script that is safe to run on every deploy, into product `After` folders that run on every server the product deploys to -- each instance carries its own. The folders are added to `Product.json` in the order the objects depend on each other:
+
+| Folder | Holds |
+|---|---|
+| `ServerTriggers` | Server DDL and logon triggers, with their enabled state |
+| `AgentOperators` | SQL Server Agent operators |
+| `AgentJobs` | Agent jobs, with their steps and schedules |
+| `AgentAlerts` | Agent alerts and the operators they notify |
+| `ServerAudits` | Server audits (to a file, the security log or the application log), then their specifications |
+| `EventSessions` | Extended Events sessions, except the ones SQL Server ships with |
+
+- **Jobs update in place.** A job's `job_id`, and with it the job's history, stays attached. A job that is running when the deploy reaches it is left as it is, and the run says so; the next deploy brings it into line.
+- **Unchanged, untouched.** A job, audit, specification or session script carries a fingerprint of the object taken from the source, and changes the object only when the target's differs. A running session is not restarted; an audit is not switched off and on.
+- **No credentials.** Linked servers, credentials, proxies and Database Mail accounts are left out. A job step that runs under a proxy is written without it, with a warning.
+- **No drop by absence.** An object removed from the package stays on the server, as with every scripted object.
+
+An audit's file path is written as the source has it, so servers of one class should share their audit paths.
+
 
 ## Folder Mapping
 

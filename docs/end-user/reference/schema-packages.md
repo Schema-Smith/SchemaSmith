@@ -481,6 +481,83 @@ A SQL Server `Template.json` takes the same `ServerToQuench` key at the template
 
 ---
 
+## Server and Database Settings
+
+A package can say how the servers and databases it deploys to should be configured, and SchemaQuench brings each target into line or reports how it differs. `ServerSettings.json` sits beside `Product.json` and describes the server; `DatabaseSettings.json` sits in a template folder and describes every database that template deploys to. Neither file is required. Without one, SchemaQuench reads no setting of that scope, needs no extra permission and adds nothing to the log or the [deployment summary](deployment-summary-report.md). A setting the file does not list is never read or changed. For how to use them -- one package per class of server, capturing a reference server -- see [Server and Database Settings](../guide/13-server-settings.md) in the guide.
+
+```json
+{
+  "Settings": [
+    { "Kind": "Configuration", "Name": "cost threshold for parallelism", "Value": "50", "Fix": true, "OnDrift": "Warn" },
+    { "Kind": "Configuration", "Name": "max degree of parallelism", "Value": "8", "Fix": true, "OnDrift": "Error",
+      "ShouldApplyExpression": "SELECT CASE WHEN @@SERVERNAME LIKE 'OLTP%' THEN 1 ELSE 0 END", "VariantName": "OLTP class" }
+  ]
+}
+```
+
+| Property | Required | Meaning |
+|---|---|---|
+| `Kind` | yes | The catalog the setting lives in (table below). A name alone is ambiguous: SQL Server's `MAXDOP` is both a server configuration and a database-scoped configuration. |
+| `Name` | yes | The setting as the engine names it, matched without regard to case. |
+| `Value` | yes | The value the setting should have, as a string. |
+| `Fix` | yes | `true` changes a setting that differs; `false` only reports it. |
+| `OnDrift` | yes | `Warn`, `Error` or `Ignore`: the level for whatever is still wrong once the deploy has done its part (policy table below). |
+| `ShouldApplyExpression` | no | A query returning 1 when this declaration applies to the target, as for [conditional application](#conditional-application). |
+| `VariantName` | no | The variant's name, echoed in the log. |
+
+`Fix` and `OnDrift` are required so a policy is never assumed: a declaration without them is refused at load and reported by [`--Validate`](validate.md#server-and-database-settings). SchemaTongs writes both on every setting it captures.
+
+| Engine | `ServerSettings.json` | `DatabaseSettings.json` |
+|---|---|---|
+| SQL Server | `Configuration` (`sys.configurations`, set with `sp_configure` and `RECONFIGURE`); `TraceFlag` (named by number, `ON` or `OFF`, global) | `Option` (an `ALTER DATABASE ... SET` keyword); `ScopedConfiguration` (`ALTER DATABASE SCOPED CONFIGURATION`, SQL Server 2016 and later) |
+| PostgreSQL | `Parameter` (`ALTER SYSTEM`, then a configuration reload) | `Parameter` (`ALTER DATABASE ... SET`) |
+| MySQL, MariaDB | `Variable` (`SET PERSIST` on MySQL 8.0 and later, `SET GLOBAL` otherwise) | `Option`: `CHARACTER SET` or `COLLATE` |
+
+The SQL Server `Option` names SchemaQuench reads are `COMPATIBILITY_LEVEL`, `RECOVERY`, `READ_COMMITTED_SNAPSHOT`, `ALLOW_SNAPSHOT_ISOLATION`, `AUTO_CLOSE`, `AUTO_SHRINK`, `AUTO_CREATE_STATISTICS`, `AUTO_UPDATE_STATISTICS`, `AUTO_UPDATE_STATISTICS_ASYNC`, `PAGE_VERIFY`, `TRUSTWORTHY`, `PARAMETERIZATION`, `TARGET_RECOVERY_TIME` (in seconds), `DELAYED_DURABILITY`, `ANSI_NULLS`, `ANSI_PADDING`, `ANSI_WARNINGS`, `ARITHABORT`, `CONCAT_NULL_YIELDS_NULL`, `QUOTED_IDENTIFIER`, `NUMERIC_ROUNDABORT` and `ACCELERATED_DATABASE_RECOVERY` (2019 and later). Another option is reported as one that cannot be fixed; set it in a [`Setup`](#quench-slot-reference) script instead. A PostgreSQL parameter that only a server restart can change (`postmaster`) cannot be set per database, and is reported so.
+
+**Spellings compare.** Each kind compares the engine's way, so a different spelling of the same value is not drift: `ON`, `1`, `true` and `yes` are one value, numbers compare as numbers, and keywords ignore case. A PostgreSQL value with a unit is converted using the parameter's own unit, so `128MB` matches `16384` for a parameter counted in 8 kB pages. A SQL Server `Option` or `ScopedConfiguration` value must be a keyword or a number; anything else is refused rather than sent.
+
+**Variants.** Two or more declarations of one `Kind` and `Name`, each gated by a `ShouldApplyExpression`, let one package serve several classes of server. A target where none applies leaves the setting unmanaged; one where two apply stops the step, naming both variants. An ungated duplicate is `--Validate` error `SS-SET-003`.
+
+**Not per schema.** A database setting runs once per database, so a schema template with `DatabaseSettings.json` is refused; put the file in a regular template that targets the same databases.
+
+### What the policy does
+
+| `Fix`, `OnDrift` | Differs, not fixed | Fixed and in effect | Fixed, takes effect after a restart | Fix failed, or cannot be fixed here |
+|---|---|---|---|---|
+| `false`, `Warn` | warning | -- | -- | -- |
+| `false`, `Error` | **error**, and the step stops before changing anything | -- | -- | -- |
+| `false`, `Ignore` | info | -- | -- | -- |
+| `true`, `Warn` | -- | info | warning | warning |
+| `true`, `Error` | -- | info | **error**, and the deploy stops after the step | **error**, and the deploy stops after the step |
+| `true`, `Ignore` | -- | info | info | info |
+
+A setting that matches is silent. A fix that takes effect now but is lost at the next restart -- `SET GLOBAL` on MySQL 5.7 and MariaDB, a SQL Server trace flag -- is a fix with a warning under every policy that fixes; the next deploy after a restart finds the drift and fixes it again. A trace flag's warning says to add `-T<n>` to the server's startup parameters to keep it.
+
+**Waiting for a restart.** SQL Server reports a change as waiting when the configured value and the value in use differ after `RECONFIGURE`; PostgreSQL reports it in `pg_settings.pending_restart`; on MySQL 8.0 a read-only variable is persisted with `SET PERSIST_ONLY` and reported as waiting. MySQL 5.7 and MariaDB cannot say, and a read-only variable there cannot be fixed from a deploy.
+
+**One line per outcome.** For example:
+
+```
+Server setting Configuration 'max degree of parallelism': 4 -> 8
+Server setting Configuration 'user connections' set to 500; takes effect after a restart (running value 0)
+Database setting Option 'COMPATIBILITY_LEVEL' fix failed: <the engine's message>
+Database setting ScopedConfiguration 'MAXDOP' cannot be fixed on this server: database-scoped configuration needs SQL Server 2016
+Database setting Option 'RECOVERY' is FULL, declared SIMPLE (not fixed)
+```
+
+### When it runs
+
+- **Server settings** run after the product's validation and before its `Before` scripts, on the primary server and on each [secondary server](#secondary-servers): configuration belongs to each instance.
+- **Database settings** run in each database right after its `Setup` scripts, so a script can prepare what a setting relies on, and before the first object.
+- Neither step is checkpointed: both run again on a [resumed](schemaquench.md#checkpoint-and-resume) deploy, where a setting already fixed reads as matching and is silent.
+- **Under WhatIf** both read and compare, change nothing, and say what the real run would change -- including `would stop here` where it would stop.
+
+**Permissions.** A report-only setting needs only catalog reads. Fixing needs the engine's rights: `ALTER SETTINGS` (SQL Server server configuration), `ALTER` on the database, a superuser for PostgreSQL's `ALTER SYSTEM`, `SYSTEM_VARIABLES_ADMIN` on MySQL. A missing right is reported as a failed fix with the engine's message, so a least-privilege account still gets a useful report. Each outcome is a [deployment summary](deployment-summary-report.md) row with object type `ServerSetting` or `DatabaseSetting`.
+
+SchemaTongs captures both files from a reference server: see [Server and Database Settings](schematongs.md#server-and-database-settings) in the SchemaTongs reference.
+
+
 ## Complete Folder Structure
 
 A schema package is a predictable directory tree. Every tool in the SchemaSmith toolset discovers what it needs by convention -- `Product.json` at the root, `Templates/` one level down, platform-specific script folders inside each template -- so you never have to configure paths or point a tool at individual files. Marker files and generated artifacts sit alongside the files you author, and the whole layout maps cleanly onto source control.

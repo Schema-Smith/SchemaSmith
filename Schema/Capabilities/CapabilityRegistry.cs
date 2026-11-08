@@ -88,6 +88,10 @@ namespace Schema.Capabilities
                 13, "SQL Server 2016", null, DegradeKind.Refused, null));
             rows.Add(new("memory-optimized-computed", "Computed columns on a memory-optimized table", Platform.SqlServer,
                 14, "SQL Server 2017", null, DegradeKind.Refused, null));
+            // D12: a ScopedConfiguration in DatabaseSettings.json has no catalog to read below 2016; the setting is graded
+            // "cannot be fixed on this server" at its OnDrift level. No 'downgraded' row: the settings step audits it.
+            rows.Add(new("settings-scoped-configuration", "Database-scoped configuration setting", Platform.SqlServer,
+                13, "SQL Server 2016", null, DegradeKind.Skip, null));
             rows.Add(new("online-index", "Online index build", Platform.SqlServer,
                 11, "SQL Server 2012", null, DegradeKind.Reduced, null));
             rows.Add(new("online-alter-column", "Online column change", Platform.SqlServer,
@@ -168,6 +172,10 @@ namespace Schema.Capabilities
             // the change runs ALGORITHM=INPLACE, LOCK=NONE, and the change's Mode says online.
             rows.Add(new("instant-alter", "Instant column add or drop", Platform.MySQL,
                 800, "MySQL 8.0.29", null, DegradeKind.Reduced, null, IntroducedInPatchComparable: 80029));
+            // D12: below 8.0 a server Variable can only be set with SET GLOBAL, which a restart undoes; the fix is applied and
+            // the run warns that it reverts. MariaDB has no SET PERSIST at any version, which this registry cannot express.
+            rows.Add(new("settings-persist", "Persisted server variable", Platform.MySQL,
+                800, "MySQL 8.0", null, DegradeKind.Reduced, null));
             rows.Add(new("invisible-index", "Invisible index", Platform.MySQL,
                 800, "MySQL 8.0", null, DegradeKind.Skip, "INDEX (invisible, MySQL 8.0 / MariaDB 10.6)"));
             rows.Add(new("descending-index", "Descending index key part", Platform.MySQL,

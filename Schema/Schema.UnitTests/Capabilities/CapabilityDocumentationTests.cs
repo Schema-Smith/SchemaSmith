@@ -57,6 +57,7 @@ public class CapabilityDocumentationTests
         ["SqlServer/memory-optimized-constraints"] = "**Memory-optimized constraints**",
         ["SqlServer/memory-optimized-computed"] = "**Memory-optimized computed columns**",
         ["SqlServer/online-index"] = "**Online index build**",
+        ["SqlServer/settings-scoped-configuration"] = "**Database-scoped configuration setting**",
         ["SqlServer/online-alter-column"] = "**Online column change**",
         ["SqlServer/resumable-index"] = "**Resumable index build**",
         ["SqlServer/selective-xml-index"] = "**Selective XML index**",
@@ -98,6 +99,7 @@ public class CapabilityDocumentationTests
 
         // ---- MySQL ----
         ["MySQL/invisible-index"] = "**Invisible index**",
+        ["MySQL/settings-persist"] = "**Persisted server variable**",
         ["MySQL/descending-index"] = "**Descending index key parts**",
         ["MySQL/instant-alter"] = "**Instant column add or drop**",
         ["MySQL/check-constraint"] = "**CHECK constraints**",
