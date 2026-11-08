@@ -53,14 +53,18 @@ gate: BEGIN
           AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Tables t
                            WHERE SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(po.ObjectName));
 
-        -- A partitioned table removed from the product is refused by name by STEP 8's guard; the gate stands aside so that
-        -- is the message the deploy stops on.
-        IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.PARTITIONS ip
-                    WHERE ip.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ip.TABLE_SCHEMA) = v_DbKey
-                      AND ip.PARTITION_NAME IS NOT NULL
-                      AND SchemaSmith_IdentifierKey(ip.TABLE_NAME) IN (SELECT TableKey FROM _SchemaSmith_Destructive)) THEN
-            LEAVE gate;
-        END IF;
+        -- A partitioned table removed from the product is refused by name by STEP 8's guard, so it is left off this list and
+        -- that is the message it stops on. Every other change in the step is still judged here: STEP 8 comes after the
+        -- column passes.
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GatePartitioned;
+        CREATE TEMPORARY TABLE _SchemaSmith_GatePartitioned (RowId INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB
+            SELECT DISTINCT CONVERT(SchemaSmith_IdentifierKey(ip.TABLE_NAME) USING utf8mb4) COLLATE utf8mb4_bin AS TableKey
+              FROM INFORMATION_SCHEMA.PARTITIONS ip
+             WHERE ip.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ip.TABLE_SCHEMA) = v_DbKey
+               AND ip.PARTITION_NAME IS NOT NULL;
+        DELETE d FROM _SchemaSmith_Destructive d
+         WHERE d.Kind = 'table drop' AND d.TableKey IN (SELECT TableKey FROM _SchemaSmith_GatePartitioned);
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GatePartitioned;
     END IF;
 
     IF p_DropColumns = 1 THEN

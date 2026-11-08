@@ -201,6 +201,48 @@ INSERT INTO `{table}` (`Id`, `Val`) VALUES (1, 'one'), (2, 'two'), (3, NULL);");
 
     // ---- the proven AUTO_INCREMENT defect ------------------------------------
 
+    // The index that keys an AUTO_INCREMENT column outside the primary key goes into the shadow's CREATE whole, its
+    // comment included (up to 1024 characters).
+    [Test]
+    public void Rebuild_KeepsAnAutoIncrementKeyWithALongComment()
+    {
+        var table = $"RbAutoKey_{Uid()}";
+        var comment = new string('c', 600);
+        using var conn = OpenMainDb();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            Exec(cmd, $"CREATE TABLE `{table}` (`Id` INT NOT NULL AUTO_INCREMENT, `Code` INT NOT NULL, PRIMARY KEY (`Code`), UNIQUE KEY `ux_id` (`Id`)); " +
+                      $"INSERT INTO `{table}` (`Code`) VALUES (10), (20);");
+            var json = $$"""
+                [{
+                    "Name": "{{table}}",
+                    "Columns": [
+                        {"Name": "Id", "DataType": "INT", "Nullable": false, "AutoIncrement": true},
+                        {"Name": "Code", "DataType": "INT", "Nullable": false}
+                    ],
+                    "Indexes": [
+                        {"Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Code"},
+                        {"Name": "ux_id", "Unique": true, "IndexColumns": "Id", "Comment": "{{comment}}"}
+                    ]
+                }]
+                """;
+            Rebuild(cmd, json, table);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Int(cmd, $"SELECT COUNT(*) FROM `{table}`"), Is.EqualTo(2), "the rows came across");
+                Assert.That(Strings(cmd, "SELECT INDEX_COMMENT FROM INFORMATION_SCHEMA.STATISTICS " +
+                                         $"WHERE TABLE_SCHEMA = {Lit(_mainDb)} AND TABLE_NAME = {Lit(table)} AND INDEX_NAME = 'ux_id'"),
+                    Is.EqualTo(new List<string> { comment }), "with the key and its whole comment");
+            });
+        }
+        finally
+        {
+            Exec(cmd, $"DROP TABLE IF EXISTS `{table}`");
+        }
+    }
+
     [Test]
     public void Rebuild_DoesNotReissueTheAutoIncrementOfADeletedHighestRow()
     {

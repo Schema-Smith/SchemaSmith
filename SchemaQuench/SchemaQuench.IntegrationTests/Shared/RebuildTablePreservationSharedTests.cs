@@ -23,6 +23,8 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         public string Parent => $"rbp_{Uid}";
         public string Child => $"rbc_{Uid}";
         public string Other => $"rbo_{Uid}";
+        // MySQL names a foreign key once per database, and these fixtures run side by side in one.
+        public string ChildKey => $"fk_child_{Uid}";
         public string OtherDb => $"rbx_{Uid}";
 
         public Run(Platform platform, string connectionString, string db)
@@ -50,7 +52,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
             return v == null || v == DBNull.Value ? null : v.ToString();
         }
 
-        public string Json(string valType, string idType = "INT", bool child = false, string childKey = "fk_child",
+        public string Json(string valType, string idType = "INT", bool child = false, string? childKey = null,
                            bool primaryKey = true, bool uniqueCode = false)
         {
             var indexes = (primaryKey ? """{ "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" }""" : "")
@@ -65,7 +67,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
 , { "Name": "{{Child}}",
     "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "ParentId", "DataType": "INT", "Nullable": true } ],
     "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" } ],
-    "ForeignKeys": [ { "Name": "{{childKey}}", "Columns": "ParentId", "RelatedTable": "{{Parent}}", "RelatedColumns": "Id" } ] }
+    "ForeignKeys": [ { "Name": "{{childKey ?? ChildKey}}", "Columns": "ParentId", "RelatedTable": "{{Parent}}", "RelatedColumns": "Id" } ] }
 """ : "") + "]";
         }
 
@@ -227,7 +229,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(r.Key(r.Child, "fk_child"), Is.Not.Null, "the declared key is back");
+            Assert.That(r.Key(r.Child, r.ChildKey), Is.Not.Null, "the declared key is back");
             Assert.That(r.Key(r.Child, $"fk_extra_{r.Uid}"), Is.Not.Null,
                 "a key this product never declared is not its to drop, rebuild or not");
             Assert.That(r.SetAside(r.Child), Is.EqualTo("0"));
@@ -241,11 +243,11 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         Deploy(r, r.Json("VARCHAR(50)", child: true, childKey: $"fk_gone_{r.Uid}"));
         Assert.That(r.Key(r.Child, $"fk_gone_{r.Uid}"), Is.Not.Null, "setup: the product declared and owns the key");
 
-        Deploy(r, r.Json("VARCHAR(60)", child: true, childKey: "fk_child"));
+        Deploy(r, r.Json("VARCHAR(60)", child: true, childKey: r.ChildKey));
 
         Assert.Multiple(() =>
         {
-            Assert.That(r.Key(r.Child, "fk_child"), Is.Not.Null);
+            Assert.That(r.Key(r.Child, r.ChildKey), Is.Not.Null);
             Assert.That(r.Key(r.Child, $"fk_gone_{r.Uid}"), Is.Null, "the key the product removed stays removed");
             Assert.That(r.SetAside(r.Child), Is.EqualTo("0"));
         });

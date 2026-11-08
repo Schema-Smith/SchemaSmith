@@ -26,7 +26,7 @@ public abstract class DestructiveChangeSharedTests : ObjectScriptDeployFixture
     protected abstract long SumOf(string table, string column);
     protected abstract long RowCount(string table);
 
-    private const string Kept = "dc_kept", Gone = "dc_gone";
+    protected const string Kept = "dc_kept", Gone = "dc_gone";
 
     [SetUp]
     public void TwoTablesWithData()
@@ -48,13 +48,13 @@ public abstract class DestructiveChangeSharedTests : ObjectScriptDeployFixture
         Exec(Drop(Gone));
     }
 
-    private void StopDeclaringColumnBAndTableGone()
+    protected void StopDeclaringColumnBAndTableGone()
     {
         WritePackage("");
         WriteFile("Tables", TableFileName(Kept), TableJson(Kept, "a"));
     }
 
-    private static Dictionary<string, string> Policy(string policy, string accept = null)
+    protected static Dictionary<string, string> Policy(string policy, string accept = null)
     {
         var settings = new Dictionary<string, string> { ["Target:DestructiveChangePolicy"] = policy };
         if (accept != null) settings["Target:AcceptDestructive"] = accept;

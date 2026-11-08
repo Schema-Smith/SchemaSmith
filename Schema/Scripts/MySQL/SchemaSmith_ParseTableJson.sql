@@ -1333,7 +1333,7 @@ BEGIN
        SET t.AutoIncrementColumn = SchemaSmith_StripBacktickWrapping(c.ColumnName),
            t.AutoIncrementKeyClause = CONCAT(', KEY (`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`)')
      WHERE i.RowId IS NULL
-        OR LOCATE(CONCAT('`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`') COLLATE utf8mb4_unicode_ci, i.IndexColumns COLLATE utf8mb4_unicode_ci) > 1;
+        OR LOCATE(CONCAT('`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`') COLLATE utf8mb4_unicode_ci, SchemaSmith_NormalizeIndexColumns(i.IndexColumns) COLLATE utf8mb4_unicode_ci) <> 1;
 
     -- A declared index that leads with the column is that index, created in the CREATE under its own name and options,
     -- so the index pass finds it present. An unnamed KEY is left only when the package declares none: it belongs to no
@@ -1341,12 +1341,12 @@ BEGIN
     UPDATE _SchemaSmith_Tables t
       JOIN _SchemaSmith_Indexes i ON i.TableName = t.TableName AND i.IsPrimaryKey = 0 AND i.ShouldApply = 1
                                  AND UPPER(i.IndexType) IN ('BTREE', 'HASH')
-       SET t.AutoIncrementKeyClause = CONCAT(', ', IF(i.IsUnique = 1, 'UNIQUE ', ''), 'KEY ', i.IndexName, ' (', i.IndexColumns, ')',
+       SET t.AutoIncrementKeyClause = CONCAT(', ', IF(i.IsUnique = 1, 'UNIQUE ', ''), 'KEY ', i.IndexName, ' (', COALESCE(i.EmitColumns, i.IndexColumns), ')',
                                              IF(UPPER(i.IndexType) = 'HASH', ' USING HASH', ''),
                                              IF(COALESCE(i.Comment, '') <> '', CONCAT(' COMMENT ', QUOTE(i.Comment), ''), ''),
                                              IF(i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1, SchemaSmith_IndexInvisibleClause(), ''))
      WHERE t.AutoIncrementColumn IS NOT NULL
-       AND LOCATE(CONCAT('`', SchemaSmith_EscapeBackticks(t.AutoIncrementColumn), '`') COLLATE utf8mb4_unicode_ci, i.IndexColumns COLLATE utf8mb4_unicode_ci) = 1;
+       AND LOCATE(CONCAT('`', SchemaSmith_EscapeBackticks(t.AutoIncrementColumn), '`') COLLATE utf8mb4_unicode_ci, SchemaSmith_NormalizeIndexColumns(i.IndexColumns) COLLATE utf8mb4_unicode_ci) = 1;
 
     -- Now that ShouldApply has filtered each temp table down to at most one row per natural
     -- key, promote the natural-key indexes to UNIQUE so MySQL's optimizer can infer functional

@@ -33,6 +33,24 @@ public abstract class DestructiveChangeMySqlFamilyTests : DestructiveChangeShare
           "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "id" } ] }
         """;
 
+    // A partitioned table removed from the package is refused by name further on; the gate must still judge every other
+    // change in the step, or a column drop on another table goes ahead before that refusal.
+    [Test]
+    public void UnderFail_APartitionedTableRemoved_DoesNotLetAColumnDropThrough()
+    {
+        Exec($"ALTER TABLE `{MainDb}`.{Gone} PARTITION BY RANGE (id) (PARTITION p0 VALUES LESS THAN (1000000), PARTITION p1 VALUES LESS THAN MAXVALUE)");
+        StopDeclaringColumnBAndTableGone();
+        var result = Deploy(expectSuccess: false, dropRemovedTables: true, settings: Policy("fail"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result.Failure?.Error, Does.Contain($"{MainDb}.{Kept}.b"), result.Failure?.Error);
+            Assert.That(ColumnExists(Kept, "b"), Is.True, "the column is still there");
+            Assert.That(SumOf(Kept, "b"), Is.EqualTo(7), "with its values");
+            Assert.That(RowCount(Gone), Is.EqualTo(1), "the partitioned table is still there");
+        });
+    }
+
     private string ValueOfV() => Scalar($"SELECT CAST(v AS CHAR) FROM `{MainDb}`.{Typed}")?.ToString();
 
     private static Dictionary<string, string> Fail => new() { ["Target:DestructiveChangePolicy"] = "fail" };
@@ -176,6 +194,11 @@ public abstract class DestructiveChangeMySqlFamilyTests : DestructiveChangeShare
     [TestCase("enum('a','b')", "ENUM('b','a','c')", 0, "none")]
     [TestCase("tinyint(1)", "BOOLEAN", 0, "none")]
     [TestCase("longtext", "JSON", 0, "fails")]
+    [TestCase("bit(1)", "BIT(8)", 1, "none")]
+    [TestCase("bit(8)", "BIT(1)", 1, "fails")]
+    [TestCase("year", "SMALLINT", 1, "none")]
+    [TestCase("year", "INT", 1, "none")]
+    [TestCase("year", "TINYINT", 1, "fails")]
     public void TheClassifierMatchesWhatTheEngineDoes(string from, string to, int strict, string expected)
     {
         var answer = Scalar($"SELECT SchemaSmith_ColumnChangeLoss('{from.Replace("'", "''")}', '{to.Replace("'", "''")}', {strict})")?.ToString();

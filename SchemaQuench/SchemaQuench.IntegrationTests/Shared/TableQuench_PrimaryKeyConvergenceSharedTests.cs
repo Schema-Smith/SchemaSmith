@@ -124,6 +124,7 @@ public abstract class TableQuench_PrimaryKeyConvergenceSharedTests : BaseTableQu
     // with DropUnknownIndexes on, the redeploy finds nothing undeclared to drop.
     [TestCase(null, "UNIQUE", TestName = "AnAutoIncrementKeyedOnlyByAUniqueIndex_IsCreated")]
     [TestCase("`Tenant`,`Id`", "", TestName = "AnAutoIncrementKeyedBySecondaryIndexBehindTheKey_IsCreated")]
+    [TestCase("`Tenant`", "UNIQUE", TestName = "AnAutoIncrementOutsideTheKey_KeyedByAUniqueIndex_IsCreated")]
     public void ANewTableWhoseAutoIncrementIsKeyedByADeclaredIndex_IsCreated_AndRedeploysClean(string primaryKey, string unique)
     {
         var table = $"PkAutoNew_{Guid.NewGuid().ToString("N")[..8]}";

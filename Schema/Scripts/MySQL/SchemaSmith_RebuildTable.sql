@@ -105,7 +105,7 @@ BEGIN
     DECLARE v_LiveEngine VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_Collation VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_Engine VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-    DECLARE v_AutoIncrementKeyClause VARCHAR(500) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_AutoIncrementKeyClause TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_PrimaryKeyClause TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_CapturedAutoIncrement BIGINT UNSIGNED DEFAULT NULL;
     DECLARE v_AutoIncrementInCopy TINYINT DEFAULT 0;
@@ -979,7 +979,11 @@ BEGIN
         -- keys are dropped this session holds a lock another deploy's foreign-key pass waits on: without it, a pass in
         -- between saw the key still there, cleared the record, and the drop below then lost the key for good.
         SET @ss_rebuild_fk_lock = CONCAT('ss_rbfk_', MD5(CONCAT(v_SchemaRaw, '.', v_TableRaw)));
-        DO GET_LOCK(@ss_rebuild_fk_lock, 60);
+        -- Without the lock the race it closes is open again, so a rebuild that cannot take it in a minute stops here.
+        IF COALESCE(GET_LOCK(@ss_rebuild_fk_lock, 60), 0) <> 1 THEN
+            SET @ss_msg = LEFT(CONCAT('Rebuild of ', v_TableRaw, ' stopped: another deploy holds its lock'), 128);
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+        END IF;
         BEGIN
         DECLARE EXIT HANDLER FOR SQLEXCEPTION
         BEGIN

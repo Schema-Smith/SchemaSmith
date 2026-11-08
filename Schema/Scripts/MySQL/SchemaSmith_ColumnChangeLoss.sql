@@ -165,6 +165,12 @@ BEGIN
     ELSEIF fb IN ('DATE', 'DATETIME', 'TIMESTAMP', 'TIME', 'YEAR') AND tCap IS NOT NULL AND tb NOT LIKE '%BINARY' AND tb NOT LIKE '%BLOB' THEN
         SET r = IF(tCap >= CASE fb WHEN 'DATE' THEN 10 WHEN 'YEAR' THEN 4 WHEN 'TIME' THEN 10 ELSE 19 END + IF(f1 > 0, f1 + 1, 0), 'none', 'fails');
 
+    -- A wider BIT keeps every value; a YEAR (0 and 1901-2155) fits any integer from SMALLINT up.
+    ELSEIF fb = 'BIT' AND tb = 'BIT' THEN
+        SET r = IF(COALESCE(t1, 1) >= COALESCE(f1, 1), 'none', 'fails');
+    ELSEIF fb = 'YEAR' AND tr IS NOT NULL THEN
+        SET r = IF(tb = 'TINYINT', 'fails', 'none');
+
     -- Enums and sets: every live member still declared keeps every value; a member gone refuses or blanks the value.
     ELSEIF fb IN ('ENUM', 'SET') AND tb = fb THEN
         SET r = 'none';
