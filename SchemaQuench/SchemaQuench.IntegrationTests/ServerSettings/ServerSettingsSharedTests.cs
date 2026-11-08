@@ -102,11 +102,20 @@ public abstract class ServerSettingsSharedTests
         { "Settings": [ { "Kind": "{{Kind}}", "Name": "{{name}}", "Value": "{{value}}", "Fix": {{(fix ? "true" : "false")}}, "OnDrift": "{{onDrift}}" } ] }
         """;
 
-    // Runs the product's server settings step against the throwaway server and returns its ServerSetting audit rows.
-    private string[] Run(string settingsJson, bool whatIf = false)
+    private const string BeforeScript = "01-before-marker.sql";
+
+    // Runs the product's server settings step against the throwaway server and returns its ServerSetting audit rows. With
+    // wholeProduct, it runs the whole deploy instead, with one product Before script, and a stopped deploy logs "STOPPED".
+    private string[] Run(string settingsJson, bool whatIf = false, bool wholeProduct = false)
     {
-        File.WriteAllText(Path.Join(_packageDir, "Product.json"), $$"""{ "Name": "ServerSettingsProduct", "Platform": "{{Platform}}", "TemplateOrder": [] }""");
+        var folders = wholeProduct ? """, "ScriptFolders": [ { "FolderPath": "Before", "QuenchSlot": "Before" } ]""" : "";
+        File.WriteAllText(Path.Join(_packageDir, "Product.json"), $$"""{ "Name": "ServerSettingsProduct", "Platform": "{{Platform}}", "TemplateOrder": []{{folders}} }""");
         File.WriteAllText(Path.Join(_packageDir, "ServerSettings.json"), settingsJson);
+        if (wholeProduct)
+        {
+            Directory.CreateDirectory(Path.Join(_packageDir, "Before"));
+            File.WriteAllText(Path.Join(_packageDir, "Before", BeforeScript), "SELECT 1");
+        }
         lock (FactoryContainer.SharedLockObject)
         {
             var saved = FactoryContainer.Resolve<IConfigurationRoot>();
@@ -133,7 +142,10 @@ public abstract class ServerSettingsSharedTests
                 LogFactory.Register("ErrorLog", Substitute.For<log4net.ILog>());
 
                 var quench = new ProductQuench();
-                quench.QuenchServerSettings();
+                if (!wholeProduct) quench.QuenchServerSettings();
+                else
+                    try { quench.QuenchProduct(suppressKindlingForTesting: true); }
+                    catch (RunFailedException e) { _log.Add("STOPPED " + e.Message); }
                 return quench.ChangeAudit.Snapshot().Where(r => r.ObjectType == "ServerSetting").Select(r => $"{r.ObjectName} {r.Action}").ToArray();
             }
             finally
@@ -185,6 +197,37 @@ public abstract class ServerSettingsSharedTests
                 Assert.DoesNotThrow(() => Exec(script), $"{name} = {current}\n{script}");
                 Assert.That(descriptor.Read(cmd, name, null).Running, Is.EqualTo(current), name);
             }
+        });
+    }
+
+    // The step inside a real deploy: it runs, and before the product's Before scripts.
+    [Test]
+    public void AWholeDeploy_FixesTheSetting_BeforeTheBeforeScriptsRun()
+    {
+        var audit = Run(Declare(DynamicName, DynamicValue, fix: true, "Error"), wholeProduct: true);
+
+        var settingLine = _log.FindIndex(l => l != null && l.Contains($"'{DynamicName}'"));
+        var beforeLine = _log.FindIndex(l => l != null && l.Contains(BeforeScript));
+        Assert.Multiple(() =>
+        {
+            Assert.That(audit, Is.EqualTo(new[] { $"{Kind} {DynamicName} changed" }), Lines);
+            Assert.That(ReadValue(DynamicName), Is.EqualTo(DynamicValue));
+            Assert.That(_log, Has.None.StartsWith("STOPPED"), Lines);
+            Assert.That(settingLine, Is.GreaterThanOrEqualTo(0), "the setting is logged\n" + Lines);
+            Assert.That(beforeLine, Is.GreaterThan(settingLine), "the Before script runs after the setting is fixed\n" + Lines);
+        });
+    }
+
+    // A setting the deploy enforces and cannot fix stops it before the Before scripts change anything.
+    [Test]
+    public void AWholeDeploy_StoppedByASetting_RunsNoBeforeScript()
+    {
+        Run(Declare("schemasmith_no_such_setting", "1", fix: true, "Error"), wholeProduct: true);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(_log, Has.Some.StartsWith("STOPPED Server settings stopped the deploy"), Lines);
+            Assert.That(_log, Has.None.Contains(BeforeScript), Lines);
         });
     }
 
