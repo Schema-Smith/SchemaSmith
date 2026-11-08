@@ -29,6 +29,10 @@ namespace Schema.Domain
         [JsonIgnore]
         public Exception Error { get; set; }
 
+        /// <summary>The batch that raised <see cref="Error"/>, for the failure artifact to mark.</summary>
+        [JsonIgnore]
+        public int? FailedBatchIndex { get; set; }
+
         [JsonIgnore]
         public ScriptOutcome Outcome { get; set; } = ScriptOutcome.Applied;
 

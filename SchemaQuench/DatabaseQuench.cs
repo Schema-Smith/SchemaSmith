@@ -2585,14 +2585,18 @@ SET NOCOUNT ON
         try
         {
             script.CheckForUnresolvedTokens(_databaseName, "", _progressLog.Warn);
+            script.FailedBatchIndex = null;
             for (var i = 1; i <= (runTwice ? 2 : 1); i++)
-                foreach (var batch in script.Batches)
+                for (var batchIndex = 0; batchIndex < script.Batches.Count; batchIndex++)
                 {
+                    var batch = script.Batches[batchIndex];
+                    script.FailedBatchIndex = batchIndex;
                     needDBReset = needDBReset || batch.ContainsIgnoringCase("USE ");
                     _infoMessageException = null;
                     ScriptStatement.Execute(destCmd, batch);
                     if (_infoMessageException != null) throw _infoMessageException;
                 }
+            script.FailedBatchIndex = null;
 
             script.HasBeenQuenched = true;
             script.Error = null;
@@ -3521,7 +3525,8 @@ SET NOCOUNT ON
         throw new ScriptQuenchException(failures);
     }
 
-    private static int FailingBatchIndex(SqlScript script) => script.Batches.Count - 1;
+    // The batch that raised the error; the last one only when the error came before any batch ran.
+    internal static int FailingBatchIndex(SqlScript script) => script.FailedBatchIndex ?? script.Batches.Count - 1;
 
     /// <summary>
     /// Shared artifact-on-failure wrap for the two single-statement validation scripts

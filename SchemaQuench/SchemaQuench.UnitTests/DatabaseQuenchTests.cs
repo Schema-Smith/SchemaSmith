@@ -1001,6 +1001,24 @@ public class DatabaseQuenchTests
         Assert.That(script.Error.Message, Does.Contain("Syntax error"));
     }
 
+    // The failure artifact marks the batch that raised the error, not the script's last one.
+    [Test]
+    public void QuenchOneScript_AFailureInAnEarlierBatch_IsTheBatchTheArtifactMarks()
+    {
+        var product = new Product { Name = "Test", Platform = Platform.SqlServer };
+        var quench = new DatabaseQuench(product, new Template { Name = "T" }, new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", UpdateTables = false, DeliverData = false }, null);
+        var script = new SqlScript { Name = "three.sql" };
+        script.Batches.Add("SELECT 1");
+        script.Batches.Add("SELECT broken");
+        script.Batches.Add("SELECT 3");
+        var mockCmd = CreateMockCommand();
+        mockCmd.When(c => c.ExecuteNonQuery()).Do(_ => { if (mockCmd.CommandText == "SELECT broken") throw new Exception("Invalid column name 'broken'"); });
+
+        quench.QuenchOneScript(mockCmd, script, false, false);
+
+        Assert.That(DatabaseQuench.FailingBatchIndex(script), Is.EqualTo(1));
+    }
+
     // MariaDB reports a FOLLOWS whose predecessor does not exist yet as error 4031, which the driver takes for
     // "disconnected by the server" and marks the session broken. The retry pass that would then succeed needs the
     // connection reopened, and on the MySQL family a fresh session must be put back on the target database.

@@ -31,6 +31,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Fixed
 
+- **A template script's failure artifact marks the batch that failed.** It marked the script's last batch whatever failed, so in a multi-batch script the `>>> FAILING BATCH` marker pointed at the wrong statement.
 - **A checkpoint file's `# Started:` time is UTC, as the deployment summary's times are.** It was the machine's local time with nothing to say so; it is written with a trailing `Z` now. A checkpoint written before still reads.
 - **The deployment summary's `exitCode` is the code the run exits with under `ExitNonZeroOnWarning`.** The summary is written before the run exits, and recorded `0` for a run that then exited `1` because it warned with `ExitNonZeroOnWarning` on.
 - **Object scripts in a schema template are skipped when unchanged on each tenant.** The record of what each module last deployed was kept per script, not per tenant schema, so the tenants of one database overwrote each other's record and none of them ever read as unchanged: every deploy ran every object script on every tenant. Each tenant now keeps its own; a template without a schema keeps the record it already has.
