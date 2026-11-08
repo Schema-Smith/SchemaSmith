@@ -120,4 +120,47 @@ public class TableQuench_ColumnRenameDependentsTests : BaseTableQuenchTests
             cmd.ExecuteNonQuery();
         }
     }
+
+    // A key on a computed column that reads the renaming column has to come off, and SQL Server refuses to drop a key a
+    // foreign key references (3725). The deploy stops by name before it drops anything, rather than partway through.
+    [Test]
+    public void AReferencedKeyOnAComputedReader_StopsTheDeployByName_BeforeAnythingChanges()
+    {
+        var table = $"RenKey_{Guid.NewGuid().ToString("N")[..8]}";
+        string Json(string price, string oldPrice) => $$"""
+[ { "Schema": "[dbo]", "Name": "[{{table}}]",
+    "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false },
+                 { "Name": "{{price}}", "DataType": "INT", "Nullable": true{{oldPrice}} },
+                 { "Name": "[Code]", "DataType": "INT", "Nullable": true, "ComputedExpression": "{{price}} + 1000", "Persisted": true } ],
+    "Indexes": [ { "Name": "[PK_{{table}}]", "PrimaryKey": true, "Unique": true, "Clustered": true, "IndexColumns": "[Id]" },
+                 { "Name": "[UQ_{{table}}_Code]", "Unique": true, "UniqueConstraint": true, "IndexColumns": "[Code]" } ] } ]
+""";
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            RunTableQuenchProc(cmd, Json("[Price]", ""));
+            cmd.CommandText = $"CREATE TABLE [dbo].[{table}_C] ([Code] INT NULL CONSTRAINT [FK_{table}_C] REFERENCES [dbo].[{table}] ([Code]))";
+            cmd.ExecuteNonQuery();
+
+            var ex = Assert.Catch(() => RunTableQuenchProc(cmd, Json("[UnitPrice]", ", \"OldName\": \"[Price]\"")));
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(ex!.Message, Does.Contain($"FK_{table}_C").And.Contain($"UQ_{table}_Code"), "the refusal names the key and what references it");
+                cmd.CommandText = $"SELECT COUNT(*) FROM sys.key_constraints WHERE [name] = 'UQ_{table}_Code'";
+                Assert.That(cmd.ExecuteScalar(), Is.EqualTo(1), "the key was not dropped");
+                cmd.CommandText = $"SELECT COL_NAME(OBJECT_ID('dbo.{table}'), 2)";
+                Assert.That(cmd.ExecuteScalar(), Is.EqualTo("Price"), "the column was not renamed");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS [dbo].[{table}_C]; DROP TABLE IF EXISTS [dbo].[{table}]";
+            cmd.ExecuteNonQuery();
+        }
+    }
 }

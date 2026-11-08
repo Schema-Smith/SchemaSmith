@@ -153,7 +153,7 @@ BEGIN
            LiveCached = q.is_cached,
            LiveCacheSize = q.cache_size
       FROM #Sequences s
-      JOIN sys.sequences q ON q.[object_id] = OBJECT_ID(QUOTENAME(s.SeqSchema) + '.' + QUOTENAME(s.SeqName)) AND q.[name] = s.SeqName;
+      JOIN sys.sequences q ON q.[object_id] = OBJECT_ID(QUOTENAME(s.SeqSchema) + '.' + QUOTENAME(s.SeqName)) AND q.[name] = s.SeqName COLLATE DATABASE_DEFAULT;
 
     -- REFUSALS, all before any DDL.
     DECLARE @bad NVARCHAR(MAX);

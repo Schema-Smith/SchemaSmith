@@ -110,6 +110,37 @@ public class ContainedDatabaseTests : BaseTableQuenchTests
         }
     }
 
+    // A declared sequence that already exists is read back by joining the catalog with the declared list.
+    [Test]
+    public void ASequenceThatExists_IsCompared_InAPartiallyContainedDatabase()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = "SELECT CAST(value_in_use AS INT) FROM sys.configurations WHERE [name] = 'contained database authentication'";
+        var containmentWas = Convert.ToInt32(cmd.ExecuteScalar());
+        var db = $"Contained_{Guid.NewGuid():N}"[..28];
+        const string sequences = "<Sequences><Sequence><Schema>dbo</Schema><Name>seq_c</Name><DataType>int</DataType><Start>1</Start><Increment>5</Increment></Sequence></Sequences>";
+        try
+        {
+            if (containmentWas == 0) Run(cmd, "EXEC sp_configure 'contained database authentication', 1; RECONFIGURE;");
+            Run(cmd, $"CREATE DATABASE [{db}] CONTAINMENT = PARTIAL COLLATE Japanese_CS_AS_KS");
+            conn.ChangeDatabase(db);
+            ForgeKindler.KindleTheForge(cmd, Platform.SqlServer, forceReKindle: true, IngestEncoding.Json);
+            Run(cmd, "CREATE SEQUENCE dbo.seq_c AS int START WITH 1 INCREMENT BY 1");
+
+            Assert.DoesNotThrow(() => Run(cmd, $"EXEC SchemaSmith.SequenceQuench @ProductName = N'P', @Sequences = N'{sequences}', @WhatIf = 0"));
+            cmd.CommandText = "SELECT CAST(increment AS INT) FROM sys.sequences WHERE [name] = 'seq_c'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(5), "the declared increment reached it");
+        }
+        finally
+        {
+            conn.ChangeDatabase("master");
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
+        }
+    }
+
     private static void Run(IDbCommand cmd, string sql)
     {
         cmd.CommandText = sql;

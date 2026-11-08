@@ -277,6 +277,19 @@ BEGIN TRY
   IF @v_RenameUndeclared IS NOT NULL
     RAISERROR('A column rename needs %s dropped first, which the package does not declare, so nothing in this run could put it back. Declare it in the table''s JSON, or drop it in a Before script.', 16, 1, @v_RenameUndeclared)
 
+  -- A key a foreign key references cannot be dropped (3725): stop by name before the first drop, not partway through.
+  DECLARE @v_RenameReferenced NVARCHAR(MAX) =
+    STUFF((SELECT ', ' + QUOTENAME(b.[ObjectName]) + ' (referenced by ' + QUOTENAME(OBJECT_SCHEMA_NAME(fk.parent_object_id)) + '.'
+                  + QUOTENAME(OBJECT_NAME(fk.parent_object_id)) + '.' + QUOTENAME(fk.[name]) + ')'
+             FROM #RenameBlockers b WITH (NOLOCK)
+             JOIN sys.indexes i ON i.[object_id] = OBJECT_ID(b.[Schema] + '.' + b.[TableName]) AND i.[name] COLLATE DATABASE_DEFAULT = b.[ObjectName]
+             JOIN sys.foreign_keys fk ON fk.referenced_object_id = i.[object_id] AND fk.key_index_id = i.index_id
+             WHERE b.[Kind] IN ('index', 'constraint')
+             ORDER BY b.[ObjectName], fk.[name]
+             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF @v_RenameReferenced IS NOT NULL
+    RAISERROR('A column rename needs %s dropped first, and a foreign key references it. Drop the foreign key in a Before script (declare it to have it put back), or rename the column with a migration script.', 16, 1, @v_RenameReferenced)
+
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping ' + REPLACE(REPLACE(b.[Kind], '''', ''''''), '%', '%%') + ' ' + REPLACE(REPLACE(b.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(b.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(QUOTENAME(b.[ObjectName]), '''', ''''''), '%', '%%') + ' before a column rename'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   CASE b.[Kind]
                                        WHEN 'index' THEN 'DROP INDEX ' + QUOTENAME(b.[ObjectName]) + ' ON ' + b.[Schema] + '.' + b.[TableName] + ';'
