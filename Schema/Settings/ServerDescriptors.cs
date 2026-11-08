@@ -123,16 +123,20 @@ public sealed class SqlServerTraceFlagDescriptor : ISettingDescriptor
     public void Apply(IDbCommand cmd, string name, string value, string database)
     {
         var flag = Flag(name) ?? throw new SettingValueException("a trace flag is named by its number");
-        var on = SettingValueComparer.Boolish(value, "ON");
-        if (!on && !SettingValueComparer.Boolish(value, "OFF"))
-            throw new SettingValueException($"'{value}' for TraceFlag '{name}' is not ON or OFF.");
-        SettingSql.Execute(cmd, $"DBCC {(on ? "TRACEON" : "TRACEOFF")}({flag}, -1)");
+        SettingSql.Execute(cmd, $"DBCC {(IsOn(name, value) ? "TRACEON" : "TRACEOFF")}({flag}, -1)");
+    }
+
+    private static bool IsOn(string name, string value)
+    {
+        if (SettingValueComparer.Boolish(value, "ON")) return true;
+        if (SettingValueComparer.Boolish(value, "OFF")) return false;
+        throw new SettingValueException($"'{value}' for TraceFlag '{name}' is not ON or OFF.");
     }
 
     public string RenderScript(string name, string value, string database)
     {
         var flag = Flag(name) ?? throw new SettingValueException("a trace flag is named by its number");
-        var on = SettingValueComparer.Boolish(value, "ON");
+        var on = IsOn(name, value);
         return $"-- Lasts until the next restart; add -T{flag} to the startup parameters to keep it.\r\nDBCC {(on ? "TRACEON" : "TRACEOFF")}({flag}, -1);\r\n";
     }
 

@@ -45,6 +45,11 @@ public class SettingScriptTests
             "    ALTER DATABASE SCOPED CONFIGURATION SET MAXDOP = 4;\r\n"));
     }
 
+    // A value that is neither ON nor OFF is refused, as the deploy refuses it, rather than written as TRACEOFF.
+    [Test]
+    public void SqlServerTraceFlag_AValueThatIsNotOnOrOff_IsRefused() =>
+        Assert.That(() => new SqlServerTraceFlagDescriptor().RenderScript("1117", "maybe", "db"), Throws.InstanceOf<SettingValueException>());
+
     [Test]
     public void SqlServerTraceFlag_SaysItDoesNotSurviveARestart()
     {
