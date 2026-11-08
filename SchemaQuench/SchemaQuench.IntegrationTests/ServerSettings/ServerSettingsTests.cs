@@ -52,6 +52,25 @@ public class PostgreSqlServerSettingsTests : ServerSettingsSharedTests
         Exec($"ALTER SYSTEM RESET {name}");
         Exec("SELECT pg_reload_conf()");
     }
+
+    // A login with its own value (ALTER ROLE) sees that value, not the server's; the step must compare and fix the server's.
+    [Test]
+    public void ALoginsOwnValue_DoesNotHideTheServers()
+    {
+        Exec("ALTER ROLE CURRENT_USER SET log_min_duration_statement = 1000");
+        try
+        {
+            var first = RunDeclared(DynamicName, DynamicValue);
+            var second = RunDeclared(DynamicName, DynamicValue);
+
+            Assert.That(first, Is.EqualTo(new[] { $"{Kind} {DynamicName} changed" }));
+            Assert.That(second, Is.Empty, "the server's value now matches, whatever the login's own is");
+        }
+        finally
+        {
+            Exec("ALTER ROLE CURRENT_USER RESET log_min_duration_statement");
+        }
+    }
 }
 
 [Category("DisposableServerMySQL")]

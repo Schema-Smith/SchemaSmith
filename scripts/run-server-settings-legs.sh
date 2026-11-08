@@ -81,7 +81,9 @@ for engine in $ENGINES; do
     rc=$?
     summary=$(echo "$out" | grep -aE '^(Passed!|Failed!)' | tail -1)
     # A filter that selects nothing prints no summary: that is a failure, not a pass.
-    if [ "$rc" -eq 0 ] && echo "$summary" | grep -q '^Passed!'; then
+    # Nor is a run where every test skipped itself: dotnet prints "Passed!" with nothing passed.
+    passed=$(echo "$summary" | grep -oE 'Passed: +[0-9]+' | grep -oE '[0-9]+')
+    if [ "$rc" -eq 0 ] && echo "$summary" | grep -q '^Passed!' && [ "${passed:-0}" -gt 0 ]; then
       echo "  $category: $summary"
     else
       FAILED=1

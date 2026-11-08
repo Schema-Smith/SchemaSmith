@@ -18,7 +18,7 @@ namespace SchemaQuench.IntegrationTests.ServerSettings;
 /// <summary>
 /// D12 server settings against a real server. A changed server setting, and above all one waiting for a restart, would
 /// outlive the test on a server other sessions use, so these run only against a throwaway container:
-/// scripts/run-server-settings-legs.sh starts one per engine and sets SCHEMASMITH_DISPOSABLE_SERVER=1, as CI does. They
+/// scripts/run-server-settings-legs.sh starts one per engine and sets SCHEMASMITH_DISPOSABLE_SERVER=1; CI does not run them. They
 /// sit outside the engine namespaces on purpose, so no suite fixture (and no full-text install) is needed: the step only
 /// needs a connection, as the server's administrator.
 /// </summary>
@@ -142,6 +142,8 @@ public abstract class ServerSettingsSharedTests
 
     private string Lines => string.Join("\n", _log);
 
+    protected string[] RunDeclared(string name, string value) => Run(Declare(name, value, fix: true, "Error"));
+
     [Test]
     public void AnEnforcedDynamicSetting_IsChanged_AndARunAfterIsSilent()
     {
@@ -182,7 +184,8 @@ public abstract class ServerSettingsSharedTests
     [Test]
     public void ASettingThatWaitsForARestart_SaysSo_WithTheRunningValue()
     {
-        if (PendingRestart is not { } p) Assert.Ignore("This engine cannot report a change waiting for a restart.");
+        if (PendingRestart == null) Assert.Ignore("This engine cannot report a change waiting for a restart.");
+        var p = PendingRestart.Value;
 
         var rows = Run(Declare(p.Name, p.Value, fix: true, "Warn"));
 
