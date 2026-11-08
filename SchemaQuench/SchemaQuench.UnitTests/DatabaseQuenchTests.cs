@@ -264,6 +264,37 @@ public class DatabaseQuenchTests
         Assert.That(result, Is.EqualTo("Before Scripts/01_setup.sql"));
     }
 
+    // A zipped package names its entries with forward slashes on every OS. The run-once key must be the one a deploy of the
+    // same package as a folder records, or switching between the two runs every completed migration again.
+    [Test]
+    public void GetRelativeScriptPath_ForAZippedPackage_IsTheFoldersKey()
+    {
+        var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
+        var template = new Template { Name = "Main", FilePath = "Templates/Main/Template.json" };
+        var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "server", DatabaseName = "db", UpdateTables = false, DeliverData = false }, null);
+
+        Assert.That(quench.GetRelativeScriptPath("Templates/Main/Before Scripts/00-Init.sql"), Is.EqualTo("Before Scripts/00-Init.sql"));
+    }
+
+    // A database a zipped package was deployed to on Windows before 2.9 holds the long key; it still counts as run there.
+    [Test]
+    public void GetPreZipFixScriptPath_IsTheKeyAWindowsZipRecorded_OrNullWhereTheyAgree()
+    {
+        var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
+        var zipped = new DatabaseQuench(product, new Template { Name = "Main", FilePath = "Templates/Main/Template.json" },
+            new DatabaseQuenchOptions { Server = "server", DatabaseName = "db", UpdateTables = false, DeliverData = false }, null);
+        var folderDir = System.IO.Path.Combine("C:", "products", "P", "Templates", "Main");
+        var folder = new DatabaseQuench(product, new Template { Name = "Main", FilePath = System.IO.Path.Combine(folderDir, "Template.json") },
+            new DatabaseQuenchOptions { Server = "server", DatabaseName = "db", UpdateTables = false, DeliverData = false }, null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(zipped.GetPreZipFixScriptPath("Templates/Main/Before Scripts/00-Init.sql"),
+                System.IO.Path.DirectorySeparatorChar == '\\' ? Is.EqualTo("Templates/Main/Before Scripts/00-Init.sql") : Is.Null);
+            Assert.That(folder.GetPreZipFixScriptPath(System.IO.Path.Combine(folderDir, "Before Scripts", "00-Init.sql")), Is.Null, "a folder's key never changed");
+        });
+    }
+
     [Test]
     public void GetRelativeScriptPath_NormalizesBackslashes()
     {

@@ -386,7 +386,7 @@ public partial class DatabaseQuench
     /// the package, so their run-once tracking rows are protected from pruning.
     /// </summary>
     internal bool IsObsoleteTrackingEntry(string trackedRelativePath, List<SqlScript> currentScripts) =>
-        currentScripts.All(s => GetRelativeScriptPath(s.LogPath) != trackedRelativePath)
+        currentScripts.All(s => GetRelativeScriptPath(s.LogPath) != trackedRelativePath && GetPreZipFixScriptPath(s.LogPath) != trackedRelativePath)
         && !_gatedOffMigrationPaths.Contains(trackedRelativePath);
 
     private string ResolveFolderGateExpression(string expression)
@@ -3273,7 +3273,9 @@ SET NOCOUNT ON
         var alreadyRan = _trackRunOnceMigrations ? GetCompletedEntriesBySlot(destCmd, slot) : [];
         foreach (var script in scripts.Where(s => !s.HasBeenQuenched))
         {
-            if (ShouldAlwaysRun(script.Name) || !alreadyRan.Contains(GetRelativeScriptPath(script.LogPath)))
+            var preZipFixKey = GetPreZipFixScriptPath(script.LogPath);
+            var ranUnderPreZipFixKey = preZipFixKey != null && alreadyRan.Contains(preZipFixKey) && !alreadyRan.Contains(GetRelativeScriptPath(script.LogPath));
+            if (ShouldAlwaysRun(script.Name) || (!alreadyRan.Contains(GetRelativeScriptPath(script.LogPath)) && !ranUnderPreZipFixKey))
             {
                 if (_checkpointing.HasCompletedScript(DbScope, checkpointSlot.ToString(), script.LogPath))
                 {
@@ -3296,6 +3298,8 @@ SET NOCOUNT ON
             {
                 script.HasBeenQuenched = true;
                 SafeProgressLog($"    Skipping (previously quenched) {script.LogPath}");
+                if (ranUnderPreZipFixKey && !_whatIfOnly)
+                    MarkScriptCompleted(destCmd, script, slot);
             }
         }
 
@@ -3442,16 +3446,29 @@ SET NOCOUNT ON
         _ => false
     };
 
+    // Both sides in one separator before the template folder comes off: a zipped package's entries use '/' on every OS,
+    // and on Windows Path.GetDirectoryName turns the template's into '', so the folder was never stripped and a zip
+    // recorded a different key from the same package deployed as a folder.
     internal string GetRelativeScriptPath(string filePath)
     {
-        var stripped = LongPathSupport.StripLongPathPrefix(filePath);
+        var stripped = LongPathSupport.StripLongPathPrefix(filePath).Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         var templateDir = string.IsNullOrEmpty(_template.FilePath)
             ? ""
-            : Path.GetDirectoryName(_template.LogPath) ?? "";
+            : (Path.GetDirectoryName(_template.LogPath) ?? "").Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
         if (templateDir.Length > 0) stripped = stripped.Replace(templateDir, "");
-        return stripped
-            .Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .TrimStart(Path.AltDirectorySeparatorChar);
+        return stripped.TrimStart(Path.AltDirectorySeparatorChar);
+    }
+
+    // TRANSITIONAL (2.9 zip run-once keys; roadmap "Transitional code"): the key a zipped package recorded on Windows
+    // before 2.9, or null where it is the same as today's. A script recorded under it has run; the next run re-keys it.
+    internal string GetPreZipFixScriptPath(string filePath)
+    {
+        if (string.IsNullOrEmpty(_template.FilePath)) return null;
+        var stripped = LongPathSupport.StripLongPathPrefix(filePath);
+        var templateDir = Path.GetDirectoryName(_template.LogPath) ?? "";
+        if (templateDir.Length > 0) stripped = stripped.Replace(templateDir, "");
+        var legacy = stripped.Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).TrimStart(Path.AltDirectorySeparatorChar);
+        return legacy == GetRelativeScriptPath(filePath) ? null : legacy;
     }
 
     #endregion
