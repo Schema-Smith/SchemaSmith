@@ -56,15 +56,19 @@ public sealed class SettingsStep(Func<string, ISettingDescriptor> descriptorFor)
             return new SettingsStepResult(evaluations, !whatIf, message);
         }
 
+        // In the descriptor's order (one change can undo another), and each graded from what the server says after all of them.
+        var failed = new Dictionary<Setting, SettingEvaluation>();
+        foreach (var pending in toFix.OrderBy(p => p.Descriptor.ApplyOrder(p.Setting.Name)))
+            if (TryApply(cmd, pending, file.Scope, database) is { } failure) failed[pending.Setting] = failure;
         foreach (var pending in toFix)
         {
             var index = evaluations.FindIndex(e => ReferenceEquals(e.Setting, pending.Setting));
-            evaluations[index] = Fix(cmd, pending, file.Scope, database);
+            evaluations[index] = failed.TryGetValue(pending.Setting, out var f) ? f : Grade(cmd, pending, file.Scope, database);
         }
 
         Report(evaluations, audit, target, log);
-        var failed = evaluations.Select(SettingsPolicy.Grade).FirstOrDefault(g => g?.Level == SettingLevel.Error);
-        return new SettingsStepResult(evaluations, failed != null, failed?.Message);
+        var error = evaluations.Select(SettingsPolicy.Grade).FirstOrDefault(g => g?.Level == SettingLevel.Error);
+        return new SettingsStepResult(evaluations, error != null, error?.Message);
     }
 
     // FixedActive here only marks "drifted and Fix is on", which Run turns into an apply.
@@ -76,11 +80,13 @@ public sealed class SettingsStep(Func<string, ISettingDescriptor> descriptorFor)
         return setting.Fix == true ? SettingOutcome.FixedActive : SettingOutcome.Drift;
     }
 
-    private static SettingEvaluation Fix(IDbCommand cmd, Pending p, SettingScope scope, string database)
+    // Null when the change was sent; the failure otherwise.
+    private static SettingEvaluation TryApply(IDbCommand cmd, Pending p, SettingScope scope, string database)
     {
         try
         {
             p.Descriptor.Apply(cmd, p.Setting.Name, p.Setting.Value, database);
+            return null;
         }
         catch (SettingUnfixableException e)
         {
@@ -99,8 +105,11 @@ public sealed class SettingsStep(Func<string, ISettingDescriptor> descriptorFor)
         {
             return Failed(p, scope, e);
         }
+    }
 
-        // Graded from what the server now reports, never from the absence of an error.
+    // Graded from what the server now reports, never from the absence of an error.
+    private static SettingEvaluation Grade(IDbCommand cmd, Pending p, SettingScope scope, string database)
+    {
         var after = SafeRead(p.Descriptor, cmd, p.Setting.Name, database);
         var took = after.Exists && p.Descriptor.Equivalent(p.Setting.Value, after);
         SettingOutcome outcome;

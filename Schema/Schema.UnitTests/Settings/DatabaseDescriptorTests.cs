@@ -91,7 +91,60 @@ public class DatabaseDescriptorTests
     {
         var (cmd, sql, _) = Recorder();
         new SqlServerScopedConfigurationDescriptor(16).Apply(cmd, "MAXDOP", "4", "d");
-        Assert.That(sql, Is.EqualTo(new[] { "ALTER DATABASE SCOPED CONFIGURATION SET [MAXDOP] = 4" }));
+        Assert.That(sql, Is.EqualTo(new[] { "ALTER DATABASE SCOPED CONFIGURATION SET MAXDOP = 4" }), "the option is a keyword, not a bracketed name");
+    }
+
+    [Test]
+    public void SqlServerScopedConfiguration_AnOptionThatIsNotAKeyword_IsRefused()
+    {
+        var (cmd, sql, _) = Recorder();
+        Assert.That(() => new SqlServerScopedConfigurationDescriptor(16).Apply(cmd, "MAXDOP] = 1; DROP", "4", "d"), Throws.InstanceOf<SettingValueException>());
+        Assert.That(sql, Is.Empty);
+    }
+
+    // Snapshot options need the database to themselves; on a busy database the change fails at once rather than queueing
+    // every new connection behind it until the command times out.
+    [TestCase("READ_COMMITTED_SNAPSHOT", "ALTER DATABASE [d] SET READ_COMMITTED_SNAPSHOT ON WITH NO_WAIT")]
+    [TestCase("ALLOW_SNAPSHOT_ISOLATION", "ALTER DATABASE [d] SET ALLOW_SNAPSHOT_ISOLATION ON WITH NO_WAIT")]
+    public void SqlServerOption_SnapshotOptions_DoNotWait(string name, string expected)
+    {
+        var (cmd, sql, _) = Recorder();
+        new SqlServerOptionDescriptor().Apply(cmd, name, "ON", "d");
+        Assert.That(sql, Is.EqualTo(new[] { expected }));
+    }
+
+    // search_path and the preload lists quote a single literal as one element: 'a, b' would become the one name "a, b".
+    [TestCase("search_path", "app, public", "ALTER DATABASE \"d\" SET \"search_path\" = 'app', 'public'")]
+    [TestCase("work_mem", "8MB", "ALTER DATABASE \"d\" SET \"work_mem\" = '8MB'")]
+    public void PostgreSqlParameter_AListIsSentElementByElement(string name, string value, string expected)
+    {
+        var (cmd, sql, _) = Recorder();
+        new PostgreSqlDatabaseParameterDescriptor().Apply(cmd, name, value, "d");
+        Assert.That(sql, Is.EqualTo(new[] { expected }));
+    }
+
+    [TestCase("app, public", "app,public", true)]
+    [TestCase("app,public", "\"app\", public", true)]
+    [TestCase("app, public", "public, app", false)]
+    public void PostgreSqlParameter_AListComparesElementByElement(string declared, string current, bool equal)
+    {
+        var d = new PostgreSqlDatabaseParameterDescriptor();
+        Assert.That(d.EquivalentFor("search_path", declared, new SettingReading(true, current, current, false, null)), Is.EqualTo(equal));
+    }
+
+    [TestCase("utf8_general_ci", "utf8mb3_general_ci", true)]
+    [TestCase("utf8", "utf8mb3", true)]
+    [TestCase("utf8mb4_bin", "utf8mb4_general_ci", false)]
+    public void MySqlOption_Utf8IsUtf8mb3(string declared, string current, bool equal)
+    {
+        Assert.That(new MySqlOptionDescriptor().Equivalent(declared, new SettingReading(true, current, current, false, null)), Is.EqualTo(equal));
+    }
+
+    [Test]
+    public void MySqlOption_CharacterSetIsAppliedBeforeCollate()
+    {
+        var d = new MySqlOptionDescriptor();
+        Assert.That(d.ApplyOrder("CHARACTER SET"), Is.LessThan(d.ApplyOrder("COLLATE")));
     }
 
     [Test]
@@ -105,8 +158,8 @@ public class DatabaseDescriptorTests
     public void PostgreSqlParameter_SendsTheValueAsOneLiteral()
     {
         var (cmd, sql, _) = Recorder();
-        new PostgreSqlDatabaseParameterDescriptor().Apply(cmd, "search_path", "a', b; DROP", "my\"db");
-        Assert.That(sql, Is.EqualTo(new[] { "ALTER DATABASE \"my\"\"db\" SET \"search_path\" = 'a'', b; DROP'" }));
+        new PostgreSqlDatabaseParameterDescriptor().Apply(cmd, "application_name", "a', b; DROP", "my\"db");
+        Assert.That(sql, Is.EqualTo(new[] { "ALTER DATABASE \"my\"\"db\" SET \"application_name\" = 'a'', b; DROP'" }));
     }
 
     [Test]

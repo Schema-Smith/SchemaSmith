@@ -102,6 +102,15 @@ public class SettingsFileTests
             .And.Message.Contains(ServerFile));
     }
 
+    // A missing Value would be applied as an empty one -- SET PERSIST sql_mode = '' turns strict mode off.
+    [Test]
+    public void MissingValue_Refuses()
+    {
+        Given(ServerFile, """{ "Settings": [ { "Kind": "Configuration", "Name": "x", "Fix": true, "OnDrift": "Warn" } ] }""");
+
+        Assert.That(() => LoadServer(), Throws.InstanceOf<PackageException>().With.Message.Contains("must state a Value"));
+    }
+
     [Test]
     public void UnknownKind_Refuses_NamingTheKindsThePlatformHas()
     {

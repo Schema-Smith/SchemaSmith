@@ -87,6 +87,17 @@ public class SettingsCheckTests
     }
 
     [Test]
+    public void SettingWithoutAValue_IsSS_SET_002()
+    {
+        var s = S("Variable", "sql_mode");
+        s.Value = null;
+        var findings = Run(Context(Platform.MySQL, server: File(SettingScope.Server, s)));
+
+        Assert.That(findings.Select(f => f.Code), Is.EqualTo(new[] { "SS-SET-002" }));
+        Assert.That(findings[0].Message, Does.Contain("must state a Value"));
+    }
+
+    [Test]
     public void SettingWithoutAName_IsSS_SET_002_Too_AndNamesTheFile()
     {
         var findings = Run(Context(Platform.SqlServer, server: File(SettingScope.Server, S("Configuration", null))));

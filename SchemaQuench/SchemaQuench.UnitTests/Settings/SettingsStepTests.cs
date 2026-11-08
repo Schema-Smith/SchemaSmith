@@ -234,6 +234,26 @@ public class SettingsStepTests
         Assert.That(_log.Single().Message, Does.EndWith("reverts at the next restart (add -T1 to keep it)"));
     }
 
+    // One change can undo another (MySQL: a character set resets the collation), so fixes go in the descriptor's order and
+    // each is graded from what the server says after all of them.
+    [Test]
+    public void Fixes_RunInTheDescriptorsOrder_AndAreGradedAfterAllOfThem()
+    {
+        var applied = new List<string>();
+        _descriptor.ApplyOrder("first").Returns(-1);
+        _descriptor.When(d => d.Apply(Arg.Any<IDbCommand>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>()))
+            .Do(ci => applied.Add(ci.ArgAt<string>(1)));
+        // Reads: second before, first before, then the re-reads -- first reads its fix, second does not.
+        var reads = new Dictionary<string, Queue<string>> { ["second"] = new(["4", "4"]), ["first"] = new(["4", "8"]) };
+        _descriptor.Read(Arg.Any<IDbCommand>(), Arg.Any<string>(), Arg.Any<string>())
+            .Returns(ci => new SettingReading(true, reads[ci.ArgAt<string>(1)].Dequeue(), null, false, null));
+
+        Run(false, S(true, DriftLevel.Warn, name: "second"), S(true, DriftLevel.Warn, name: "first"));
+
+        Assert.That(applied, Is.EqualTo(new[] { "first", "second" }));
+        Assert.That(AuditActions(), Is.EqualTo(new[] { "DatabaseSetting Option second unfixable", "DatabaseSetting Option first changed" }));
+    }
+
     [Test]
     public void ANonPersistentFix_IsChangedWithARevertWarning()
     {

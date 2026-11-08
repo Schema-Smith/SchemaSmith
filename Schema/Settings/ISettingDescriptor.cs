@@ -29,6 +29,9 @@ public interface ISettingDescriptor
     // Throws a DbException when the engine refuses the change, or SettingValueException for a value it would never take.
     void Apply(IDbCommand cmd, string name, string value, string database);
 
+    // Lower runs first: one change can undo another (MySQL: a character set resets the collation).
+    int ApplyOrder(string name) => 0;
+
     // What to do so a change that a restart loses is kept; null when there is nothing to add.
     string RevertAdvice(string name) => null;
 

@@ -44,8 +44,9 @@ public sealed class SqlServerConfigurationDescriptor : ISettingDescriptor
                 IF @advanced = 0 BEGIN EXEC sp_configure 'show advanced options', 0; RECONFIGURE; END;
             END TRY
             BEGIN CATCH
+                DECLARE @error NVARCHAR(4000) = ERROR_MESSAGE();
                 IF @advanced = 0 BEGIN EXEC sp_configure 'show advanced options', 0; RECONFIGURE; END;
-                THROW;
+                RAISERROR(@error, 16, 1); -- the re-raise statement arrived in SQL Server 2012; the floor is 2008
             END CATCH
             """;
         SettingSql.Execute(cmd, sql, ("@name", name), ("@value", number));
@@ -150,6 +151,7 @@ public sealed class SqlServerTraceFlagDescriptor : ISettingDescriptor
 public sealed class PostgreSqlServerParameterDescriptor : ISettingDescriptor
 {
     private string _unit;
+    private string _name;
 
     public string Kind => SettingKinds.Parameter;
     public SettingScope Scope => SettingScope.Server;
@@ -157,24 +159,49 @@ public sealed class PostgreSqlServerParameterDescriptor : ISettingDescriptor
 
     public SettingReading Read(IDbCommand cmd, string name, string database)
     {
-        var row = SettingSql.FirstRow(cmd, "SELECT setting, unit, context, CASE WHEN pending_restart THEN 1 ELSE 0 END FROM pg_settings WHERE name = lower(@name)",
+        _name = name;
+        var row = SettingSql.FirstRow(cmd, "SELECT setting, unit, context, CASE WHEN pending_restart THEN 1 ELSE 0 END, source, boot_val FROM pg_settings WHERE name = lower(@name)",
             ("@name", name));
         if (row == null) return SettingReading.Missing($"'{name}' is not a parameter on this server");
         _unit = row[1];
-        return new SettingReading(true, row[0], row[0], row[3] == "1", row[2] == "internal" ? "an internal parameter is fixed when the server is built" : null);
+        var unfixable = row[2] == "internal" ? "an internal parameter is fixed when the server is built" : null;
+        if (row[4] is not ("user" or "database" or "client" or "session"))
+            return new SettingReading(true, row[0], row[0], row[3] == "1", unfixable);
+
+        // The deploy login's own value (ALTER ROLE / ALTER DATABASE) hides the server's, and ALTER SYSTEM cannot change it:
+        // read the server's from its configuration files instead, or the built-in value when they do not set it.
+        try
+        {
+            var file = SettingSql.FirstRow(cmd, "SELECT setting FROM pg_file_settings WHERE name = lower(@name) AND error IS NULL ORDER BY seqno DESC LIMIT 1",
+                ("@name", name));
+            var server = file?[0] ?? row[5];
+            return new SettingReading(true, server, server, row[3] == "1", unfixable);
+        }
+        catch (DbException)
+        {
+            return SettingReading.Missing($"the deploy login sets its own '{name}', which hides the server's value, and it cannot read pg_file_settings to see past it");
+        }
     }
 
-    public bool Equivalent(string declared, SettingReading current) => SettingValueComparer.PostgreSql(declared, current.Configured, _unit);
+    public bool Equivalent(string declared, SettingReading current) =>
+        PostgreSqlLists.IsList(_name) ? PostgreSqlLists.Same(declared, current.Configured) : SettingValueComparer.PostgreSql(declared, current.Configured, _unit);
 
     public void Apply(IDbCommand cmd, string name, string value, string database)
     {
-        SettingSql.Execute(cmd, $"ALTER SYSTEM SET {SettingSql.DoubleQuote(name.ToLowerInvariant())} = {SettingSql.StandardLiteral(value)}");
+        SettingSql.Execute(cmd, $"ALTER SYSTEM SET {SettingSql.DoubleQuote(name.ToLowerInvariant())} = {PostgreSqlLists.Literal(name, value)}");
         SettingSql.Execute(cmd, "SELECT pg_reload_conf()");
+        // The reload is a signal the server acts on in its own time: wait briefly for the value (or the pending restart) to show.
+        for (var attempt = 0; attempt < 30; attempt++)
+        {
+            var now = Read(cmd, name, database);
+            if (now.PendingRestart == true || (now.Exists && Equivalent(value, now))) return;
+            System.Threading.Thread.Sleep(100);
+        }
     }
 
     // ALTER SYSTEM cannot run inside a transaction block, so not inside a DO block either; repeating it is harmless.
     public string RenderScript(string name, string value, string database) =>
-        $"ALTER SYSTEM SET {SettingSql.DoubleQuote(name.ToLowerInvariant())} = {SettingSql.StandardLiteral(value)};\r\nSELECT pg_reload_conf();\r\n";
+        $"ALTER SYSTEM SET {SettingSql.DoubleQuote(name.ToLowerInvariant())} = {PostgreSqlLists.Literal(name, value)};\r\nSELECT pg_reload_conf();\r\n";
 
     internal static readonly HashSet<string> MachineIdentity = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -224,7 +251,16 @@ public sealed class MySqlVariableDescriptor(Platform platform, int serverMajorVe
         return new SettingReading(true, persisted ?? running, running, pending, null);
     }
 
-    public bool Equivalent(string declared, SettingReading current) => SettingValueComparer.Boolish(declared, current.Configured);
+    // A comma list (sql_mode, optimizer_switch) is a set: the server reorders it.
+    public bool Equivalent(string declared, SettingReading current)
+    {
+        if ((declared ?? "").Contains(',') || (current.Configured ?? "").Contains(','))
+            return Items(declared).SetEquals(Items(current.Configured));
+        return SettingValueComparer.Boolish(declared, current.Configured);
+    }
+
+    private static HashSet<string> Items(string value) =>
+        (value ?? "").Split(',').Select(i => i.Trim()).Where(i => i.Length > 0).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
     public void Apply(IDbCommand cmd, string name, string value, string database)
     {

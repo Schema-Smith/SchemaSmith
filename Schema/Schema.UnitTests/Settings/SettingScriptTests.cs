@@ -41,8 +41,8 @@ public class SettingScriptTests
         var sql = new SqlServerScopedConfigurationDescriptor(16).RenderScript("MAXDOP", "4", "db");
 
         Assert.That(sql, Is.EqualTo(
-            "IF NOT EXISTS (SELECT 1 FROM sys.database_scoped_configurations WHERE name = N'MAXDOP' AND CAST(value AS NVARCHAR(4000)) IN (N'4'))\r\n" +
-            "    ALTER DATABASE SCOPED CONFIGURATION SET [MAXDOP] = 4;\r\n"));
+            "IF NOT EXISTS (SELECT 1 FROM sys.database_scoped_configurations WHERE UPPER(name) = N'MAXDOP' AND CAST(value AS NVARCHAR(4000)) IN (N'4'))\r\n" +
+            "    ALTER DATABASE SCOPED CONFIGURATION SET MAXDOP = 4;\r\n"));
     }
 
     [Test]

@@ -55,6 +55,9 @@ public sealed class SettingsCheck : ISchemaCheck
                 yield return new Finding(Severity.Error, UnknownKindCode, Category, $"{where} / {s.Display}",
                     $"Kind '{s.Kind}' is not a {file.Scope.ToString().ToLowerInvariant()} setting kind on {platform.ToDisplayName()}: " +
                     $"use {string.Join(", ", kinds)}.");
+            if (s.Value == null)
+                yield return new Finding(Severity.Error, IncompleteCode, Category, $"{where} / {s.Display}",
+                    "A setting must state a Value; an empty one is written \"\". A missing one would be applied as empty.");
             if (s.Fix == null || s.OnDrift == null)
                 yield return new Finding(Severity.Error, IncompleteCode, Category, $"{where} / {s.Display}",
                     "A setting must state Fix and OnDrift: Fix true or false, OnDrift Warn, Error or Ignore. SchemaTongs writes both.");

@@ -66,12 +66,14 @@ public sealed class SqlServerOptionDescriptor : ISettingDescriptor
             throw new SettingValueException($"'{name}' is not a database option SchemaSmith sets.");
         var keyword = name.ToUpperInvariant();
         var v = SettingSql.RequireToken(value, $"Option '{name}'");
-        return option.Form switch
+        var clause = option.Form switch
         {
             Form.EqualsValue => $"{keyword} = {v}",
             Form.Seconds => $"{keyword} = {Regex.Replace(v, " SECONDS$", "")} SECONDS",
             _ => $"{keyword} {v}"
         };
+        // These need the database to themselves: fail at once on a busy one rather than queue new connections behind it.
+        return keyword is "READ_COMMITTED_SNAPSHOT" or "ALLOW_SNAPSHOT_ISOLATION" ? clause + " WITH NO_WAIT" : clause;
     }
 
     // The catalog keeps a switch as 1 / 0 and a declaration says ON / OFF, so the script accepts either spelling.

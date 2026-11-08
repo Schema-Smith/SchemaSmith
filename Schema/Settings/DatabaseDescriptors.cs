@@ -19,7 +19,7 @@ public sealed class SqlServerScopedConfigurationDescriptor(int serverMajorVersio
     public SettingReading Read(IDbCommand cmd, string name, string database)
     {
         if (serverMajorVersion < 13) return SettingReading.Missing("database-scoped configuration needs SQL Server 2016");
-        var row = SettingSql.FirstRow(cmd, "SELECT CAST(value AS NVARCHAR(4000)) FROM sys.database_scoped_configurations WHERE name = @name", ("@name", name));
+        var row = SettingSql.FirstRow(cmd, "SELECT CAST(value AS NVARCHAR(4000)) FROM sys.database_scoped_configurations WHERE UPPER(name) = UPPER(@name)", ("@name", name));
         return row == null
             ? SettingReading.Missing($"'{name}' is not a database-scoped configuration on this server")
             : new SettingReading(true, row[0], row[0], false, null);
@@ -28,8 +28,14 @@ public sealed class SqlServerScopedConfigurationDescriptor(int serverMajorVersio
     public bool Equivalent(string declared, SettingReading current) => SettingValueComparer.Boolish(declared, current.Configured);
 
     public void Apply(IDbCommand cmd, string name, string value, string database) =>
-        SettingSql.Execute(cmd, $"ALTER DATABASE SCOPED CONFIGURATION SET {SettingSql.BracketQuote(name.ToUpperInvariant())} = " +
+        SettingSql.Execute(cmd, $"ALTER DATABASE SCOPED CONFIGURATION SET {OptionKeyword(name)} = " +
                                 SettingSql.RequireToken(value, $"ScopedConfiguration '{name}'"));
+
+    // The option is a keyword, which SET does not accept bracketed.
+    private static string OptionKeyword(string name) =>
+        System.Text.RegularExpressions.Regex.IsMatch(name ?? "", "^[A-Za-z_]+$")
+            ? name.ToUpperInvariant()
+            : throw new SettingValueException($"'{name}' is not a database-scoped configuration name.");
 
     // The catalog keeps a switch as 1 / 0, so a captured value is written as ON / OFF unless the configuration is a number.
     private static readonly HashSet<string> Numeric = new(StringComparer.OrdinalIgnoreCase) { "MAXDOP", "PAUSED_RESUMABLE_INDEX_ABORT_DURATION_MINUTES" };
@@ -38,8 +44,9 @@ public sealed class SqlServerScopedConfigurationDescriptor(int serverMajorVersio
     {
         var v = SettingSql.RequireToken(value, $"ScopedConfiguration '{name}'");
         var accepted = v switch { "ON" => "N'ON', N'1'", "OFF" => "N'OFF', N'0'", _ => SettingSql.NLiteral(v) };
-        return $"IF NOT EXISTS (SELECT 1 FROM sys.database_scoped_configurations WHERE name = {SettingSql.NLiteral(name.ToUpperInvariant())} AND CAST(value AS NVARCHAR(4000)) IN ({accepted}))\r\n" +
-               $"    ALTER DATABASE SCOPED CONFIGURATION SET {SettingSql.BracketQuote(name.ToUpperInvariant())} = {v};\r\n";
+        var keyword = OptionKeyword(name);
+        return $"IF NOT EXISTS (SELECT 1 FROM sys.database_scoped_configurations WHERE UPPER(name) = {SettingSql.NLiteral(keyword)} AND CAST(value AS NVARCHAR(4000)) IN ({accepted}))\r\n" +
+               $"    ALTER DATABASE SCOPED CONFIGURATION SET {keyword} = {v};\r\n";
     }
 
     public IEnumerable<CapturedSetting> Enumerate(IDbCommand cmd, string database)
@@ -58,6 +65,7 @@ public sealed class SqlServerScopedConfigurationDescriptor(int serverMajorVersio
 public sealed class PostgreSqlDatabaseParameterDescriptor : ISettingDescriptor
 {
     private string _unit;
+    private string _name;
 
     public string Kind => SettingKinds.Parameter;
     public SettingScope Scope => SettingScope.Database;
@@ -73,6 +81,7 @@ public sealed class PostgreSqlDatabaseParameterDescriptor : ISettingDescriptor
                        AND x LIKE s.name || '=%' LIMIT 1)
               FROM pg_settings s WHERE s.name = lower(@name)
             """;
+        _name = name;
         var row = SettingSql.FirstRow(cmd, sql, ("@db", database), ("@name", name));
         if (row == null) return SettingReading.Missing($"'{name}' is not a parameter on this server");
         _unit = row[1];
@@ -82,14 +91,19 @@ public sealed class PostgreSqlDatabaseParameterDescriptor : ISettingDescriptor
             : new SettingReading(true, configured, configured, false, null);
     }
 
-    public bool Equivalent(string declared, SettingReading current) => SettingValueComparer.PostgreSql(declared, current.Configured, _unit);
+    public bool Equivalent(string declared, SettingReading current) => EquivalentFor(_name, declared, current);
+
+    public bool EquivalentFor(string name, string declared, SettingReading current) =>
+        PostgreSqlLists.IsList(name) ? PostgreSqlLists.Same(declared, current.Configured) : SettingValueComparer.PostgreSql(declared, current.Configured, _unit);
 
     public void Apply(IDbCommand cmd, string name, string value, string database) =>
-        SettingSql.Execute(cmd, $"ALTER DATABASE {SettingSql.DoubleQuote(database)} SET {SettingSql.DoubleQuote(name.ToLowerInvariant())} = {SettingSql.StandardLiteral(value)}");
+        SettingSql.Execute(cmd, $"ALTER DATABASE {SettingSql.DoubleQuote(database)} SET {SettingSql.DoubleQuote(name.ToLowerInvariant())} = {PostgreSqlLists.Literal(name, value)}");
 
     // Repeating ALTER DATABASE SET is harmless, so the script needs no comparison; it names the database it runs in.
     public string RenderScript(string name, string value, string database) =>
-        $"DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET {SettingSql.DoubleQuote(name.ToLowerInvariant()).Replace("'", "''")} = %L', current_database(), {SettingSql.StandardLiteral(value)}); END $$;\r\n";
+        PostgreSqlLists.IsList(name)
+            ? $"DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET {SettingSql.DoubleQuote(name.ToLowerInvariant()).Replace("'", "''")} = {PostgreSqlLists.Literal(name, value).Replace("'", "''")}', current_database()); END $$;\r\n"
+            : $"DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET {SettingSql.DoubleQuote(name.ToLowerInvariant()).Replace("'", "''")} = %L', current_database(), {SettingSql.StandardLiteral(value)}); END $$;\r\n";
 
     // Every setting the database carries itself is one somebody chose. Every other parameter a database can set is listed at
     // the server's value, as a default, so an allowlist can capture it too.
@@ -133,7 +147,15 @@ public sealed class MySqlOptionDescriptor : ISettingDescriptor
         return row == null ? SettingReading.Missing($"database '{database}' was not found") : new SettingReading(true, row[column], row[column], false, null);
     }
 
-    public bool Equivalent(string declared, SettingReading current) => SettingValueComparer.CaseInsensitive(declared, current.Configured);
+    // MySQL 8.0.30 reports utf8 as utf8mb3, so the old spelling is the same value.
+    public bool Equivalent(string declared, SettingReading current) =>
+        SettingValueComparer.CaseInsensitive(Utf8mb3(declared), Utf8mb3(current.Configured));
+
+    private static string Utf8mb3(string value) =>
+        System.Text.RegularExpressions.Regex.Replace(value ?? "", "^utf8(?=_|$)", "utf8mb3", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    // A character set resets the collation, so it goes first.
+    public int ApplyOrder(string name) => Column(name) == 0 ? -1 : 0;
 
     public void Apply(IDbCommand cmd, string name, string value, string database)
     {
@@ -181,4 +203,25 @@ public static class SettingDescriptors
             _ => throw new ArgumentException($"No {scope.ToString().ToLowerInvariant()} setting kind '{kind}' on {platform}.", nameof(kind))
         };
     }
+}
+
+/// <summary>PostgreSQL parameters whose value is a list it quotes element by element: one literal would be one element.</summary>
+internal static class PostgreSqlLists
+{
+    private static readonly HashSet<string> Lists = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "search_path", "temp_tablespaces", "shared_preload_libraries", "session_preload_libraries", "local_preload_libraries"
+    };
+
+    internal static bool IsList(string name) => name != null && Lists.Contains(name);
+
+    private static IEnumerable<string> Elements(string value) =>
+        (value ?? "").Split(',').Select(e => e.Trim()).Where(e => e.Length > 0)
+            .Select(e => e.Length >= 2 && e[0] == '"' && e[^1] == '"' ? e[1..^1].Replace("\"\"", "\"") : e);
+
+    internal static string Literal(string name, string value) =>
+        IsList(name) ? string.Join(", ", Elements(value).Select(SettingSql.StandardLiteral)) : SettingSql.StandardLiteral(value);
+
+    internal static bool Same(string declared, string current) =>
+        Elements(declared).Select(e => e.ToLowerInvariant()).SequenceEqual(Elements(current).Select(e => e.ToLowerInvariant()));
 }

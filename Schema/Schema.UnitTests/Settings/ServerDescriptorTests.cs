@@ -75,6 +75,22 @@ public class ServerDescriptorTests
         });
     }
 
+    // THROW arrived in SQL Server 2012; the floor is 2008.
+    [Test]
+    public void SqlServerConfiguration_ReRaisesWithoutThrow()
+    {
+        var (cmd, sql, _) = Recorder();
+        new SqlServerConfigurationDescriptor().Apply(cmd, "cost threshold for parallelism", "50", null);
+        Assert.That(sql[0], Does.Not.Contain("THROW").And.Contain("RAISERROR"));
+    }
+
+    [TestCase("STRICT_TRANS_TABLES,NO_ZERO_DATE", "NO_ZERO_DATE,STRICT_TRANS_TABLES", true)]
+    [TestCase("STRICT_TRANS_TABLES", "STRICT_TRANS_TABLES,NO_ZERO_DATE", false)]
+    public void MySqlVariable_AListComparesAsASet(string declared, string current, bool equal)
+    {
+        Assert.That(new MySqlVariableDescriptor(Platform.MySQL, 8).Equivalent(declared, new SettingReading(true, current, current, false, null)), Is.EqualTo(equal));
+    }
+
     [Test]
     public void SqlServerConfiguration_RefusesANonNumber()
     {

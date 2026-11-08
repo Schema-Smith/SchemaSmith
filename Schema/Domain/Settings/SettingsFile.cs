@@ -51,6 +51,8 @@ public sealed class SettingsFile
             if (!kinds.Contains(setting.Kind ?? "", StringComparer.OrdinalIgnoreCase))
                 throw new PackageException($"Setting {setting.Display} in {FilePath} has Kind '{setting.Kind}', which is not a " +
                                            $"{Scope.ToString().ToLowerInvariant()} setting kind on {platform.ToDisplayName()}: use {string.Join(", ", kinds)}.");
+            if (setting.Value == null)
+                throw new PackageException($"Setting {setting.Display} in {FilePath} must state a Value; an empty one is written \"\".");
             if (setting.Fix == null || setting.OnDrift == null)
                 throw new PackageException($"Setting {setting.Display} in {FilePath} must state Fix and OnDrift: " +
                                            "Fix true or false, OnDrift Warn, Error or Ignore.");
