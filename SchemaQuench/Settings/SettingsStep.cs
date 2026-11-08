@@ -4,7 +4,9 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Diagnostics;
 using System.Linq;
+using System.Threading;
 using Schema.Domain.Settings;
 using Schema.Settings;
 
@@ -17,8 +19,12 @@ public sealed record SettingsStepResult(IReadOnlyList<SettingEvaluation> Evaluat
 /// report-only Error setting has drifted, apply the fixes, re-read, and grade each outcome from what the server now says.
 /// Matching settings are silent. Nothing is written under WhatIf.
 /// </summary>
-public sealed class SettingsStep(Func<string, ISettingDescriptor> descriptorFor)
+public sealed class SettingsStep(Func<string, ISettingDescriptor> descriptorFor, TimeSpan? settle = null)
 {
+    // How long a re-read that does not match yet is retried: some changes land a moment after the statement returns
+    // (MySQL 5.7 resizes the buffer pool in the background).
+    private readonly TimeSpan _settle = settle ?? TimeSpan.FromSeconds(5);
+
     private sealed record Pending(Setting Setting, ISettingDescriptor Descriptor, SettingReading Before);
 
     public SettingsStepResult Run(IDbCommand cmd, SettingsFile file, string database, bool whatIf, Func<string, bool> gate,
@@ -108,17 +114,27 @@ public sealed class SettingsStep(Func<string, ISettingDescriptor> descriptorFor)
     }
 
     // Graded from what the server now reports, never from the absence of an error.
-    private static SettingEvaluation Grade(IDbCommand cmd, Pending p, SettingScope scope, string database)
+    private SettingEvaluation Grade(IDbCommand cmd, Pending p, SettingScope scope, string database)
     {
         var after = SafeRead(p.Descriptor, cmd, p.Setting.Name, database);
         var took = after.Exists && p.Descriptor.Equivalent(p.Setting.Value, after);
+        var clock = Stopwatch.StartNew();
+        while (!took && after.Exists && after.PendingRestart != true && clock.Elapsed < _settle)
+        {
+            Thread.Sleep(250);
+            after = SafeRead(p.Descriptor, cmd, p.Setting.Name, database);
+            took = after.Exists && p.Descriptor.Equivalent(p.Setting.Value, after);
+        }
         SettingOutcome outcome;
         string detail = null;
         if (after.PendingRestart == true) outcome = SettingOutcome.FixedPendingRestart;
         else if (!took)
         {
             outcome = SettingOutcome.Unfixable;
-            detail = after.Exists ? $"the server kept {after.Configured}" : after.UnfixableReason;
+            // A server that rounds or clamps the value took the change but holds another one; say which, so it can be declared.
+            detail = !after.Exists ? after.UnfixableReason
+                : after.Configured == p.Before.Configured ? $"the server kept {after.Configured}"
+                : $"the server set {after.Configured} instead of {p.Setting.Value}; declare {after.Configured} to match it";
         }
         else if (p.Descriptor.PersistsAcrossRestart) outcome = SettingOutcome.FixedActive;
         else

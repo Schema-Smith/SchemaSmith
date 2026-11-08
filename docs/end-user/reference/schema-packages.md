@@ -536,12 +536,15 @@ A setting that matches is silent. A fix that takes effect now but is lost at the
 
 **Waiting for a restart.** SQL Server reports a change as waiting when the configured value and the value in use differ after `RECONFIGURE`; PostgreSQL reports it in `pg_settings.pending_restart`; on MySQL 8.0 a read-only variable is persisted with `SET PERSIST_ONLY` and reported as waiting. MySQL 5.7 and MariaDB cannot say, and a read-only variable there cannot be fixed from a deploy.
 
+**A value the server rounds or limits.** Some servers take a change and keep a different value: MySQL rounds `innodb_buffer_pool_size` up to a whole number of buffer-pool chunks (128 MB by default), and cuts a value past a variable's limit to the limit. The setting is reported as one that cannot be fixed, naming the value the server holds -- declare that value and the next deploy matches. A change the server finishes a moment after the statement returns (MySQL 5.7 resizes the buffer pool in the background) is read again for a few seconds before it is graded.
+
 **One line per outcome.** For example:
 
 ```
 Server setting Configuration 'max degree of parallelism': 4 -> 8
 Server setting Configuration 'user connections' set to 500; takes effect after a restart (running value 0)
 Database setting Option 'COMPATIBILITY_LEVEL' fix failed: <the engine's message>
+Server setting Variable 'innodb_buffer_pool_size' cannot be fixed on this server: the server set 268435456 instead of 200000000; declare 268435456 to match it
 Database setting ScopedConfiguration 'MAXDOP' cannot be fixed on this server: database-scoped configuration needs SQL Server 2016
 Database setting Option 'RECOVERY' is FULL, declared SIMPLE (not fixed)
 ```

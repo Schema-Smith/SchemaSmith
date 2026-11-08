@@ -42,8 +42,10 @@ public class SettingsStepTests
             .Returns(_ => new SettingReading(true, queue.Count > 1 ? queue.Dequeue() : queue.Peek(), null, false, null));
     }
 
-    private SettingsStepResult Run(bool whatIf, params Setting[] settings) =>
-        new SettingsStep(_ => _descriptor).Run(Substitute.For<IDbCommand>(), new SettingsFile { Scope = SettingScope.Database, Settings = settings.ToList() },
+    private SettingsStepResult Run(bool whatIf, params Setting[] settings) => Run(whatIf, TimeSpan.Zero, settings);
+
+    private SettingsStepResult Run(bool whatIf, TimeSpan settle, params Setting[] settings) =>
+        new SettingsStep(_ => _descriptor, settle).Run(Substitute.For<IDbCommand>(), new SettingsFile { Scope = SettingScope.Database, Settings = settings.ToList() },
             "db", whatIf, _ => true, _audit, new ChangeTarget("srv", "db"), (level, message) => _log.Add((level, message)));
 
     private string[] AuditActions() => _audit.Snapshot().Select(r => $"{r.ObjectType} {r.ObjectName} {r.Action}").ToArray();
@@ -143,6 +145,33 @@ public class SettingsStepTests
         Assert.That(result.Stopped, Is.False);
         Assert.That(AuditActions(), Is.EqualTo(new[] { "DatabaseSetting Option maxdop changed" }));
         Assert.That(_log.Single(), Is.EqualTo((SettingLevel.Info, "Database setting Option 'maxdop': 4 -> 8")));
+    }
+
+    // MySQL 5.7 resizes the buffer pool in the background: the value reads as before for a moment, then as set. A fix that
+    // lands within the settle time is a fix, not a failure.
+    [Test]
+    public void AFixTheServerFinishesAMomentLater_IsChanged()
+    {
+        Reads("4", "4", "4", "8");
+
+        var result = Run(false, TimeSpan.FromSeconds(5), S(true, DriftLevel.Error));
+
+        Assert.That(result.Stopped, Is.False, string.Join("\n", _log));
+        Assert.That(AuditActions(), Is.EqualTo(new[] { "DatabaseSetting Option maxdop changed" }));
+    }
+
+    // A server that rounds or clamps a value takes the change but holds another value: the run names it, so the package can
+    // declare what the server keeps, and an enforced setting still stops, since the server does not hold what it declares.
+    [Test]
+    public void AValueTheServerAdjusts_IsNamed_AndStillStopsAnEnforcedDeploy()
+    {
+        Reads("4", "16");
+
+        var result = Run(false, S(true, DriftLevel.Error));
+
+        Assert.That(result.Stopped, Is.True);
+        Assert.That(AuditActions(), Is.EqualTo(new[] { "DatabaseSetting Option maxdop unfixable" }));
+        Assert.That(_log.Single().Message, Does.EndWith("cannot be fixed on this server: the server set 16 instead of 8; declare 16 to match it"));
     }
 
     [Test]

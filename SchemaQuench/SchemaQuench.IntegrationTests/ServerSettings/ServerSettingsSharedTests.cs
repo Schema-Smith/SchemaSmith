@@ -156,7 +156,7 @@ public abstract class ServerSettingsSharedTests
         }
     }
 
-    private string Lines => string.Join("\n", _log);
+    protected string Lines => string.Join("\n", _log);
 
     protected string[] RunDeclared(string name, string value) => Run(Declare(name, value, fix: true, "Error"));
 

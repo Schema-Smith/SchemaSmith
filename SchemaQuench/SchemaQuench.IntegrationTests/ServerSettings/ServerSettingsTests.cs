@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using NUnit.Framework;
 using Schema.Domain;
+using Schema.Utility;
 
 namespace SchemaQuench.IntegrationTests.ServerSettings;
 
@@ -96,6 +97,26 @@ public class MySqlServerSettingsTests : ServerSettingsSharedTests
     {
         if (Persists) Exec($"RESET PERSIST IF EXISTS {name}");
         if (name == "max_connections") Exec("SET GLOBAL max_connections = 151");
+    }
+
+    // The server rounds the buffer pool up to a whole number of chunks (128 MB by default) without an error: the run says
+    // what it holds, so the package can declare that. Enforced, it still stops the deploy: the server does not hold what the
+    // package says. On MySQL 5.7 the resize lands a moment after the SET, which the step waits for.
+    [Test]
+    public void ABufferPoolSizeTheServerRounds_IsNamed_AndStopsTheDeploy()
+    {
+        try
+        {
+            var stop = Assert.Throws<RunFailedException>(() => RunDeclared("innodb_buffer_pool_size", "200000000"));
+
+            Assert.That(stop!.Message, Does.EndWith(
+                "Variable 'innodb_buffer_pool_size' cannot be fixed on this server: the server set 268435456 instead of 200000000; declare 268435456 to match it"), Lines);
+        }
+        finally
+        {
+            ResetSetting("innodb_buffer_pool_size");
+            Exec("SET GLOBAL innodb_buffer_pool_size = 134217728");
+        }
     }
 }
 
