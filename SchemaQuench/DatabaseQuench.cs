@@ -3351,7 +3351,7 @@ SET NOCOUNT ON
             SafeProgressLog(line);
     }
 
-    internal static bool ShouldAlwaysRun(string scriptName) => Path.GetFileNameWithoutExtension(scriptName).EndsWith("[ALWAYS]");
+    internal static bool ShouldAlwaysRun(string scriptName) => Path.GetFileNameWithoutExtension(scriptName).EndsWith("[ALWAYS]", StringComparison.Ordinal);
 
     // Only an absent tracking table reads as "nothing has run yet". Any other failure -- the deploy login cannot read the
     // table -- would make every run-once script run again, so the run stops before running one.
@@ -3666,7 +3666,7 @@ SET NOCOUNT ON
     // no SchemaSmith frame and logs only with VerboseLogging.
     internal static bool ShouldLogPostgreSqlNotice(string messageText, string where, bool verboseLogging)
     {
-        if (messageText.EndsWith("does not exist, skipping") || messageText.EndsWith("already exists, skipping")) return false;
+        if (messageText.EndsWith("does not exist, skipping", StringComparison.Ordinal) || messageText.EndsWith("already exists, skipping", StringComparison.Ordinal)) return false;
         return verboseLogging || (where?.Contains("PL/pgSQL function \"SchemaSmith\".", StringComparison.Ordinal) ?? false);
     }
 

@@ -306,7 +306,7 @@ public class FileCheckpointManager : ICheckpointing
         try
         {
             var files = DirectoryWrapper.GetFromFactory().GetFiles(_checkpointDirectory, pattern, SearchOption.TopDirectoryOnly);
-            foreach (var file in files.Where(f => !f.EndsWith(".product.checkpoint")))
+            foreach (var file in files.Where(f => !f.EndsWith(".product.checkpoint", StringComparison.Ordinal)))
             {
                 try { FileWrapper.GetFromFactory().Delete(file); }
                 catch { }
@@ -343,7 +343,7 @@ public class FileCheckpointManager : ICheckpointing
             var trimmedLine = line.Trim();
             if (string.IsNullOrWhiteSpace(trimmedLine)) continue;
 
-            if (trimmedLine.StartsWith("# Started:"))
+            if (trimmedLine.StartsWith("# Started:", StringComparison.Ordinal))
             {
                 var dateStr = trimmedLine.Substring("# Started:".Length).Trim();
                 if (DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out var startedAt))
@@ -351,9 +351,9 @@ public class FileCheckpointManager : ICheckpointing
                 continue;
             }
 
-            if (trimmedLine.StartsWith("#")) continue;
+            if (trimmedLine.StartsWith("#", StringComparison.Ordinal)) continue;
 
-            if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
+            if (trimmedLine.StartsWith("[", StringComparison.Ordinal) && trimmedLine.EndsWith("]", StringComparison.Ordinal))
             {
                 currentSection = trimmedLine.Substring(1, trimmedLine.Length - 2);
                 continue;
@@ -479,7 +479,7 @@ public class FileCheckpointManager : ICheckpointing
             var trimmedLine = line.Trim();
             if (string.IsNullOrWhiteSpace(trimmedLine)) continue;
 
-            if (trimmedLine.StartsWith("# Started:"))
+            if (trimmedLine.StartsWith("# Started:", StringComparison.Ordinal))
             {
                 var dateStr = trimmedLine.Substring("# Started:".Length).Trim();
                 if (DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.None, out var startedAt))
@@ -487,18 +487,18 @@ public class FileCheckpointManager : ICheckpointing
                 continue;
             }
 
-            if (trimmedLine.StartsWith("#")) continue;
+            if (trimmedLine.StartsWith("#", StringComparison.Ordinal)) continue;
 
-            if (trimmedLine.StartsWith("[") && trimmedLine.EndsWith("]"))
+            if (trimmedLine.StartsWith("[", StringComparison.Ordinal) && trimmedLine.EndsWith("]", StringComparison.Ordinal))
             {
                 var sectionContent = trimmedLine.Substring(1, trimmedLine.Length - 2);
 
-                if (sectionContent.StartsWith("Before Product Scripts - "))
+                if (sectionContent.StartsWith("Before Product Scripts - ", StringComparison.Ordinal))
                 {
                     currentSection = "Before Product Scripts";
                     currentServer = sectionContent.Substring("Before Product Scripts - ".Length);
                 }
-                else if (sectionContent.StartsWith("After Product Scripts - "))
+                else if (sectionContent.StartsWith("After Product Scripts - ", StringComparison.Ordinal))
                 {
                     currentSection = "After Product Scripts";
                     currentServer = sectionContent.Substring("After Product Scripts - ".Length);
