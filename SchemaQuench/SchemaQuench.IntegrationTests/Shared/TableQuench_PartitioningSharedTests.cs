@@ -161,14 +161,29 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
                 Assert.That(LiveMethod(cmd, table), Is.EqualTo(method));
                 Assert.That(LivePartitionCount(cmd, table), Is.EqualTo(2));
             });
+            ClearChanges(cmd);
             Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithHashPartitioning(table, 2, method, expression: null), productName: product),
                 "an unchanged KEY () table redeploys without a repartitioning refusal");
+            Assert.That(Changes(cmd, table), Is.Empty, "and changes nothing");
         }
         finally
         {
             DropTable(cmd, table);
         }
         conn.Close();
+    }
+
+    private static void ClearChanges(IDbCommand cmd)
+    {
+        cmd.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static string Changes(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = "SELECT COALESCE(GROUP_CONCAT(CONCAT(ObjectType, ' ', ObjectName, ' ', ActionType) SEPARATOR '; '), '') "
+                          + $"FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ObjectName LIKE '%{table}%'";
+        return cmd.ExecuteScalar()?.ToString();
     }
 
     [Test]
@@ -219,9 +234,11 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
         {
             RunTableQuenchProc(cmd, WithRangePartitioning(table), productName: product);
 
+            ClearChanges(cmd);
             Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithRangePartitioning(table, expression: " ID "), productName: product),
                 "backticks, whitespace and case are normalized away before comparing -- otherwise the same "
                 + "package would deploy on one engine and be refused on another");
+            Assert.That(Changes(cmd, table), Is.Empty, "and the table is left as it is");
         }
         finally
         {
@@ -983,8 +1000,10 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
         try
         {
             RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'east'"), productName: product);
+            ClearChanges(cmd);
             Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'east'"), productName: product),
                 "an unchanged list redeploys");
+            Assert.That(Changes(cmd, table), Is.Empty, "and changes nothing");
 
             Assert.Throws<MySqlException>(() => RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'EAST'"), productName: product));
         }

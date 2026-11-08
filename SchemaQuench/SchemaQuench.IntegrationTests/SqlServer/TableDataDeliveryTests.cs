@@ -393,12 +393,15 @@ public class TableDataDeliveryTests
             {
                 c.CommandText = $@"SELECT CONCAT_WS(',',
                         IIF(j.name = x.name AND j.name = N'Zoë 名', NULL, 'name'), IIF(j.amt = x.amt AND j.amt = {amount}, NULL, 'amt'),
-                        IIF(j.dt = x.dt, NULL, 'dt'), IIF(CAST(j.dto AS NVARCHAR(40)) = CAST(x.dto AS NVARCHAR(40)), NULL, 'dto'),
-                        IIF(j.bin = x.bin, NULL, 'bin'), IIF(j.flag = x.flag, NULL, 'flag'),
-                        IIF(j.shape.STEquals(x.shape) = 1 AND j.shape.STSrid = x.shape.STSrid, NULL, 'shape'),
-                        IIF(j.uid = x.uid, NULL, 'uid'), IIF(j.notes = x.notes, NULL, 'notes'))
+                        IIF(j.dt = x.dt AND j.dt = '2024-03-05T10:11:12.1234567', NULL, 'dt'),
+                        IIF(CAST(j.dto AS NVARCHAR(40)) = CAST(x.dto AS NVARCHAR(40)) AND CAST(j.dto AS NVARCHAR(40)) = N'2024-03-05 10:11:12.1234567 +05:30', NULL, 'dto'),
+                        IIF(j.bin = x.bin AND j.bin = 0xDEADBEEF00, NULL, 'bin'), IIF(j.flag = x.flag AND j.flag = 1, NULL, 'flag'),
+                        IIF(j.shape.STEquals(x.shape) = 1 AND j.shape.STSrid = x.shape.STSrid
+                            AND j.shape.STEquals(geometry::STGeomFromText('POINT (1 2)', 4326)) = 1 AND j.shape.STSrid = 4326, NULL, 'shape'),
+                        IIF(j.uid = x.uid AND j.uid = '6F9619FF-8B86-D011-B42D-00C04FC964FF', NULL, 'uid'),
+                        IIF(j.notes = x.notes AND j.notes = N'[{{""a"":1}},{{""b"":2}}]', NULL, 'notes'))
                     FROM [dbo].[{_testTableName}] j JOIN [dbo].[{_testTableName}] x ON j.code = 'J001' AND x.code = 'X001'";
-                Assert.That(c.ExecuteScalar()?.ToString(), Is.Empty, "the list names each column where the JSON delivery differs from the XML one");
+                Assert.That(c.ExecuteScalar()?.ToString(), Is.Empty, "the list names each column where the JSON delivery differs from the XML one or from the source value");
             }
             Assert.That(downgrades, Is.Empty, "nothing was skipped, so nothing is downgraded");
             Assert.That(logs, Has.None.Contains("SKIPPED"));

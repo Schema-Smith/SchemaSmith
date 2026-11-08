@@ -459,6 +459,85 @@ ModifiedTables
         }
     }
 
+    // The MySQL family's twins of the SQL Server and PostgreSQL resume tests: a seeded database checkpoint is resumed
+    // from, and a failed run leaves the checkpoints it found.
+    private void RegisterRun(string product)
+    {
+        FactoryContainer.Register(FixtureConfig);
+        FactoryContainer.Register(_environment);
+        LogFactory.Register("ErrorLog", _errorLog);
+        LogFactory.Register("ProgressLog", _progressLog);
+        _environment.CommandLine.Returns("--SkipKindlingForge --ResumeQuench");
+        var config = FactoryContainer.Resolve<IConfigurationRoot>();
+        config["SchemaPackagePath"] = TestHelper.GetTestProductPath(ProductPlatformFolder, product);
+        config["CheckpointDirectory"] = _checkpointDir;
+        Directory.CreateDirectory(_checkpointDir);
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        ForgeKindler.KindleTheForge(cmd, Platform, forceReKindle: false);
+    }
+
+    [Test]
+    public void ShouldResumeFromDatabaseCheckpoint()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            RegisterRun("ValidProduct");
+            var product = Product.Load();
+            var storedDb = StoredDatabaseName();
+            File.WriteAllText(Path.Join(_checkpointDir,
+                    Path.GetFileName($"{FileNameEncoder.Encode(product.Name)}.{FileNameEncoder.Encode("Main")}.{FileNameEncoder.Encode(_server)}.{FileNameEncoder.Encode(storedDb)}.{FileNameEncoder.Encode("")}.checkpoint")),
+                $"# SchemaQuench Database Checkpoint\n# Product: {product.Name}\n# Template: Main\n# Server: {_server}\n# Database: {storedDb}\n" +
+                $"# Started: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\n[Completed Steps]\nKindleForge\n\n[Before Scripts]\n\n[Object Scripts]\n\n" +
+                "[After Tables Object Scripts]\n\n[Between Tables And Keys Scripts]\n\n[After Table Scripts]\n\n[Table Data Scripts]\n\n[After Scripts]\n");
+            try
+            {
+                Program.Main(["SkipKindlingForge"]);
+
+                _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains(storedDb) && s.Contains("Resuming from checkpoint")));
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                FactoryContainer.Unregister<ICheckpointing>();
+            }
+        }
+    }
+
+    [Test]
+    public void ShouldPreserveCheckpointOnFailure()
+    {
+        // The failing run stops before any step succeeds, so nothing it writes shows that cleanup was skipped: a checkpoint
+        // seeded ahead of it has to still be there, unchanged.
+        lock (FactoryContainer.SharedLockObject)
+        {
+            RegisterRun("BeforeTemplateScriptError");
+            var seeded = Path.Join(_checkpointDir, "BeforeTemplateScriptError.product.checkpoint");
+            const string seededContent = "# Seeded by test to verify cleanup is skipped on failure\n[Completed Templates]\nTemplate:Seeded\n";
+            File.WriteAllText(seeded, seededContent);
+            try
+            {
+                Program.Main(["SkipKindlingForge"]);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(File.Exists(seeded), Is.True, "a failed run must not delete a checkpoint");
+                    Assert.That(File.ReadAllText(seeded), Is.EqualTo(seededContent), "nor change it");
+                    _environment.Received(1).Exit(2);
+                });
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                FactoryContainer.Unregister<ICheckpointing>();
+            }
+        }
+    }
+
     private string StoredDatabaseName()
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);

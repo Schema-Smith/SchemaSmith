@@ -478,6 +478,17 @@ public abstract class TableQuench_LargeSchemaSharedTests : BaseTableQuenchTests
 
         var json = BuildSakilaJson();
 
+        // The fixture's tests share the schema, so the sixteen tables may already be there: the preview has to report the
+        // ones that are not, and create none.
+        int BaseTables()
+        {
+            cmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{TestSchema}' AND TABLE_TYPE = 'BASE TABLE'";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+        var before = BaseTables();
+        cmd.CommandText = $"DELETE FROM `{_mainDb}`.SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+        cmd.ExecuteNonQuery();
+
         // WhatIf mode (p_WhatIf = 1) should produce no errors
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_ParseTableJson('{TestSchema}', '{json.Replace("'", "''")}')";
         TransientRetry.Run(() => cmd.ExecuteNonQuery());
@@ -493,6 +504,14 @@ public abstract class TableQuench_LargeSchemaSharedTests : BaseTableQuenchTests
 
         cmd.CommandText = $"CALL `{_mainDb}`.SchemaSmith_MissingIndexesAndConstraintsQuench('{_productName}', '{TestSchema}', 1, 1)";
         TransientRetry.Run(() => cmd.ExecuteNonQuery());
+
+        cmd.CommandText = $"SELECT COUNT(*) FROM `{_mainDb}`.SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ObjectType = 'table' AND ActionType = 'wouldCreate'";
+        var wouldCreate = Convert.ToInt32(cmd.ExecuteScalar());
+        Assert.Multiple(() =>
+        {
+            Assert.That(BaseTables(), Is.EqualTo(before), "a preview creates nothing");
+            Assert.That(wouldCreate, Is.EqualTo(16 - before), "and reports each table it would create");
+        });
 
         conn.Close();
     }

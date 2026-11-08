@@ -184,6 +184,19 @@ public abstract class TableQuenchTestsSharedTests
         var result = command.ExecuteScalar();
 
         Assert.That(result, Is.Not.Null, $"Table {tableName} should have been created");
+        Assert.That(ColumnShape(command, tableName), Is.EqualTo("id int NO auto, name varchar(100) YES"), "with the declared columns");
+    }
+
+    // Each column as name, type (with its length), nullability and auto-increment, in order: the engines spell
+    // COLUMN_TYPE differently (int(11) on MariaDB, int on MySQL 8), so it is built from DATA_TYPE.
+    private string ColumnShape(IDbCommand command, string table)
+    {
+        command.Parameters.Clear();
+        command.CommandText = $@"
+            SELECT GROUP_CONCAT(CONCAT(COLUMN_NAME, ' ', DATA_TYPE, COALESCE(CONCAT('(', CHARACTER_MAXIMUM_LENGTH, ')'), ''), ' ', IS_NULLABLE,
+                                       IF(EXTRA LIKE '%auto_increment%', ' auto', '')) ORDER BY ORDINAL_POSITION SEPARATOR ', ')
+              FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{table}'";
+        return command.ExecuteScalar()?.ToString();
     }
 
     [Test]
@@ -258,6 +271,8 @@ public abstract class TableQuenchTestsSharedTests
         var result = command.ExecuteScalar();
 
         Assert.That(result, Is.Not.Null, "Column 'description' should have been added");
+        Assert.That(ColumnShape(command, tableName), Is.EqualTo("id int NO auto, name varchar(50) NO, description text(65535) YES"),
+            "added after the others, as declared, and nothing else changed");
     }
 
     [Test]
@@ -400,6 +415,10 @@ public abstract class TableQuenchTestsSharedTests
         var result = command.ExecuteScalar();
 
         Assert.That(result, Is.Not.Null, "Index idx_email should have been created");
+        command.CommandText = $@"
+            SELECT CONCAT(GROUP_CONCAT(COLUMN_NAME ORDER BY SEQ_IN_INDEX), ' non_unique=', MAX(NON_UNIQUE)) FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{tableName}' AND INDEX_NAME = 'idx_email'";
+        Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("email non_unique=1"), "on the declared column, and not unique");
 
         // Cleanup
         command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
@@ -551,6 +570,10 @@ public abstract class TableQuenchTestsSharedTests
         var result = command.ExecuteScalar();
 
         Assert.That(result, Is.Not.Null, "Foreign key should have been created");
+        command.CommandText = $@"
+            SELECT CONCAT(COLUMN_NAME, ' -> ', REFERENCED_TABLE_NAME, '.', REFERENCED_COLUMN_NAME) FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE
+            WHERE TABLE_SCHEMA = '{_testDb}' AND TABLE_NAME = '{childTable}' AND CONSTRAINT_NAME = 'fk_child_parent'";
+        Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo($"parent_id -> {parentTable}.id").IgnoreCase, "between the declared columns");
 
         // Cleanup (child first due to FK)
         command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{childTable}`";
