@@ -200,8 +200,7 @@ public class RebuildTablePreservationTests : BaseTableQuenchTests
         r.Exec($@"CREATE TABLE ""{r.Other}"".""C"" (""Id"" INT NOT NULL, ""ParentId"" INT NULL CONSTRAINT fk_other REFERENCES ""{r.Schema}"".""Parent"" (""Id""));");
         var parse = ForgeKindler.GetParseTableJsonScript(Platform.PostgreSQL);
         r.Exec("DO $t$\nDECLARE\n  table_json TEXT = '" + r.Json("VARCHAR(60)").Replace("'", "''") + "';\n  sql_script TEXT = '';\n  p_UpdateFillFactor BOOLEAN = FALSE;\nBEGIN\n" + parse + "\nEND $t$;");
-        r.Exec($@"CALL ""SchemaSmith"".""RebuildTable""('{r.Schema}', 'Parent', FALSE);
-                  ALTER TABLE ""{r.Schema}"".""Parent"" ADD CONSTRAINT pk_parent PRIMARY KEY (""Id"");");
+        r.Exec($@"CALL ""SchemaSmith"".""RebuildTable""('{r.Schema}', 'Parent', FALSE);");
         Assert.That(r.Scalar($@"SELECT COUNT(*) FROM ""SchemaSmith"".""RebuildSetAsideForeignKeys"" WHERE ""ChildSchema"" = '{r.Other}'"), Is.EqualTo("1"), "setup: the key is set aside");
 
         using var other = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
@@ -209,7 +208,10 @@ public class RebuildTablePreservationTests : BaseTableQuenchTests
         other.ChangeDatabase(_mainDb);
         using (var begin = other.CreateCommand())
         {
-            begin.CommandText = $@"BEGIN; ALTER TABLE ""{r.Other}"".""C"" ADD CONSTRAINT fk_other FOREIGN KEY (""ParentId"") REFERENCES ""{r.Schema}"".""Parent"" (""Id"");";
+            // The primary key goes back inside this transaction too: once it is committed, any deploy running in parallel in
+            // the shared database restores the key, and this connection's own ADD would be the one to fail.
+            begin.CommandText = $@"BEGIN; ALTER TABLE ""{r.Schema}"".""Parent"" ADD CONSTRAINT pk_parent PRIMARY KEY (""Id"");
+                                  ALTER TABLE ""{r.Other}"".""C"" ADD CONSTRAINT fk_other FOREIGN KEY (""ParentId"") REFERENCES ""{r.Schema}"".""Parent"" (""Id"");";
             begin.ExecuteNonQuery();
         }
         var deploy = System.Threading.Tasks.Task.Run(() => RunTableQuenchProc(r.Conn.CreateCommand(), $$"""
