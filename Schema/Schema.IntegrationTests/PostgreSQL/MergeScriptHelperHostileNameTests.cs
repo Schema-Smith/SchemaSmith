@@ -65,7 +65,7 @@ public class MergeScriptHelperHostileNameTests
             : $"<rows><row>{X(Key, "1")}{X(Value, "uno")}{X(Other, "10")}</row><row>{X(Key, "3")}{X(Value, "tres")}{X(Other, "30")}</row></rows>";
         using var command = _connection.CreateCommand();
         command.CommandText = "SHOW server_version_num";
-        var version = Convert.ToInt32(command.ExecuteScalar()) / 100;
+        var version = Convert.ToInt32(command.ExecuteScalar()) / 10000;   // the major: below 15 there is no MERGE
         var keys = keysFromTheCatalog ? MergeScriptHelper.GetKeyColumns(Platform.PostgreSQL, command, Schema, Table) : Q(Key);
         var script = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, command, Schema, Table, data, keys,
             mergeUpdate: true, mergeDelete: true, disableTriggers: false, tokenizeScripts: false, mergeFilter: null,
@@ -74,7 +74,7 @@ public class MergeScriptHelperHostileNameTests
         if (deferred)
         {
             command.CommandText = DeferredMergeBuilder.Build(new MergeScriptHelperAdapter(Platform.PostgreSQL), command, "PostgreSQL", Schema, Table,
-                data, keys, false, new System.Collections.Generic.List<string> { Other }, contentEncoding: encoding);
+                data, keys, false, new System.Collections.Generic.List<string> { Other }, pgServerVersionNum: version, contentEncoding: encoding);
             command.ExecuteNonQuery();
         }
         command.CommandText = script;
