@@ -1,8 +1,8 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
-using SchemaQuench.Settings;
+using Schema.Settings;
 
-namespace SchemaQuench.UnitTests.Settings;
+namespace Schema.UnitTests.Settings;
 
 // An equivalent spelling is not drift: each kind compares the engine's way.
 [TestFixture]

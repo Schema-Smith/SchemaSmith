@@ -6,6 +6,7 @@ using System.Data;
 using System.Data.Common;
 using System.Linq;
 using Schema.Domain.Settings;
+using Schema.Settings;
 
 namespace SchemaQuench.Settings;
 

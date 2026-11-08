@@ -4,7 +4,7 @@ using System;
 using System.Globalization;
 using System.Text.RegularExpressions;
 
-namespace SchemaQuench.Settings;
+namespace Schema.Settings;
 
 /// <summary>Compares a declared value with the server's the engine's way, so an equivalent spelling is not drift.</summary>
 public static class SettingValueComparer

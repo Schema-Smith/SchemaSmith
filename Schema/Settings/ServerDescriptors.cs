@@ -8,7 +8,7 @@ using System.Text.RegularExpressions;
 using Schema.Domain;
 using Schema.Domain.Settings;
 
-namespace SchemaQuench.Settings;
+namespace Schema.Settings;
 
 /// <summary>SQL Server <c>Configuration</c>: <c>sys.configurations</c>, changed with <c>sp_configure</c> and <c>RECONFIGURE</c>.
 /// A change waits for a restart when the configured value and the value in use differ afterwards.</summary>

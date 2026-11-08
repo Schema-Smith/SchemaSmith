@@ -6,9 +6,9 @@ using System.Data;
 using NSubstitute;
 using Schema.Domain;
 using Schema.Domain.Settings;
-using SchemaQuench.Settings;
+using Schema.Settings;
 
-namespace SchemaQuench.UnitTests.Settings;
+namespace Schema.UnitTests.Settings;
 
 [TestFixture]
 public class DatabaseDescriptorTests

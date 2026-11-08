@@ -4,7 +4,7 @@ using System;
 using System.Data;
 using Schema.Domain.Settings;
 
-namespace SchemaQuench.Settings;
+namespace Schema.Settings;
 
 // Configured is the value compared; Running is the value in effect when a change waits for a restart. Exists is false for a
 // name the server does not have, and UnfixableReason then says why (or why the setting cannot be changed here).

@@ -6,7 +6,7 @@ using System.Data;
 using System.Text.RegularExpressions;
 using Schema.Domain.Settings;
 
-namespace SchemaQuench.Settings;
+namespace Schema.Settings;
 
 /// <summary>SQL Server <c>Option</c>: an <c>ALTER DATABASE … SET</c> keyword, read from <c>sys.databases</c>.</summary>
 public sealed class SqlServerOptionDescriptor : ISettingDescriptor

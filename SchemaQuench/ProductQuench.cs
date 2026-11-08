@@ -18,6 +18,7 @@ using Schema.Isolators;
 using Schema.Utility;
 using SchemaQuench.Settings;
 using Schema.Domain.Settings;
+using Schema.Settings;
 using SchemaQuench.Reporting;
 using Schema.Configuration;
 

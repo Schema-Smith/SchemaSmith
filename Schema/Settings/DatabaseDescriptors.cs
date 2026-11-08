@@ -5,7 +5,7 @@ using System.Data;
 using Schema.Domain;
 using Schema.Domain.Settings;
 
-namespace SchemaQuench.Settings;
+namespace Schema.Settings;
 
 /// <summary>SQL Server <c>ScopedConfiguration</c>: <c>sys.database_scoped_configurations</c> in the database the command is in.</summary>
 public sealed class SqlServerScopedConfigurationDescriptor(int serverMajorVersion) : ISettingDescriptor

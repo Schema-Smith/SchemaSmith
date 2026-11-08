@@ -3,7 +3,7 @@
 using System.Data;
 using System.Text.RegularExpressions;
 
-namespace SchemaQuench.Settings;
+namespace Schema.Settings;
 
 internal static class SettingSql
 {

@@ -8,6 +8,7 @@ using System.Linq;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 using Schema.Domain.Settings;
+using Schema.Settings;
 using SchemaQuench.Settings;
 
 namespace SchemaQuench.UnitTests.Settings;

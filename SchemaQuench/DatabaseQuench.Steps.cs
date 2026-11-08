@@ -10,6 +10,7 @@ using Schema.Checkpointing;
 using Schema.Delivery;
 using Schema.Domain;
 using Schema.Domain.Settings;
+using Schema.Settings;
 using Schema.Isolators;
 using Schema.Utility;
 using SchemaQuench.Settings;
