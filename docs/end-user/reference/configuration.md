@@ -700,6 +700,8 @@ Controls whether SchemaQuench drops tables that exist in the database but no lon
 
 A `false` at any tier is sticky — it locks the effective value to `false` for all lower tiers and cannot be re-enabled by a more-specific setting. Absent (not set) inherits from the tier above. A `true` at a lower tier overrides an inherited `true` but never an ancestor's `false`.
 
+> **Note:** The environment value must be `true` or `false`. Anything else -- `flase`, `0`, `yes` -- stops the run before any server is contacted, naming the setting, rather than reading as unset and falling through to the default. The same holds for every drop setting: `DropColumnsRemovedFromProduct`, `DropForeignKeysRemovedFromProduct`, `DropCheckConstraintsRemovedFromProduct`, `DropExcludeConstraintsRemovedFromProduct`, `DropStatisticsRemovedFromProduct`, `DropIndexesRemovedFromProduct`, `DropPeriodsRemovedFromProduct`, `DropEventsRemovedFromProduct`, `DropUnknownIndexes` and `DropSchemaBoundDependents`.
+
 ```json
 // SchemaQuench.settings.json — turn off auto-drop for this environment
 { "DropTablesRemovedFromProduct": false }

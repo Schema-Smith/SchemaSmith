@@ -180,6 +180,7 @@ public class ProductQuench
         // Read here so a bad value stops the run before anything connects, naming the setting.
         _timeouts = SessionTimeouts.Read(_config);
         _destructive = DestructivePolicy.Read(_config);
+        RefuseNonBooleanDropSettings(_config);
         // A tier-1 drift check holds its kindle's locks until it rolls back; another session must wait a bounded time, not forever.
         if (_drift && _driftTier == 1 && _timeouts.LockTimeoutSeconds == null) _timeouts = _timeouts with { LockTimeoutSeconds = 10 };
         // A preview neither records progress nor reads or discards a failed deploy's resume point (A16).
@@ -279,6 +280,23 @@ public class ProductQuench
         if (!string.IsNullOrWhiteSpace(mode)) policy.Mode = mode.Trim().ToUpperInvariant();
         if (int.TryParse(threshold, out var parsedThreshold)) policy.Threshold = parsedThreshold;
         return policy;
+    }
+
+    // Drop settings read with ConfigBool. Most default to true, so a value that is neither true nor false must not read as
+    // unset: "flase" meant as false would fall through to dropping.
+    private static readonly string[] DropSettings =
+    [
+        SettingsKeys.DropTablesRemovedFromProduct, SettingsKeys.DropColumnsRemovedFromProduct, SettingsKeys.DropForeignKeysRemovedFromProduct,
+        SettingsKeys.DropCheckConstraintsRemovedFromProduct, SettingsKeys.DropExcludeConstraintsRemovedFromProduct,
+        SettingsKeys.DropStatisticsRemovedFromProduct, SettingsKeys.DropIndexesRemovedFromProduct, SettingsKeys.DropPeriodsRemovedFromProduct,
+        SettingsKeys.DropEventsRemovedFromProduct, SettingsKeys.DropUnknownIndexes, SettingsKeys.DropSchemaBoundDependents
+    ];
+
+    internal static void RefuseNonBooleanDropSettings(IConfiguration config)
+    {
+        foreach (var key in DropSettings)
+            if (!string.IsNullOrWhiteSpace(config[key]) && ConfigBool(config, key) == null)
+                throw new RunFailedException($"{key} is '{config[key]}', which is not true or false. Set it to true or false, or leave it out to use the package's setting.");
     }
 
     internal static bool? ConfigBool(IConfiguration config, string key)

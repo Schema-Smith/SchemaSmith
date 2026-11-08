@@ -3062,6 +3062,46 @@ public class ProductQuenchTests
             "composition is WITHIN a level -- an order-mismatch trigger does not cross the cascade");
     }
 
+    // Most drop settings default to true, so a value that is not true or false -- "flase" meant as false -- used to read as
+    // unset and fall through to dropping. It stops the run instead, naming the setting.
+    [TestCase("DropTablesRemovedFromProduct", "flase")]
+    [TestCase("DropColumnsRemovedFromProduct", "no")]
+    [TestCase("DropIndexesRemovedFromProduct", "0")]
+    [TestCase("DropUnknownIndexes", "yes")]
+    [TestCase("DropSchemaBoundDependents", "on")]
+    [TestCase("DropPeriodsRemovedFromProduct", "1")]
+    [TestCase("DropEventsRemovedFromProduct", "enabled")]
+    public void ADropSettingThatIsNotTrueOrFalse_StopsTheRun_NamingIt(string key, string value)
+    {
+        Assert.That(() => ProductQuench.RefuseNonBooleanDropSettings(Cfg((key, value))), Throws.InstanceOf<RunFailedException>()
+            .With.Message.Contains(key).And.Message.Contains($"'{value}'").And.Message.Contains("true or false"));
+    }
+
+    [Test]
+    public void ADropSettingThatIsNotTrueOrFalse_StopsTheRunBeforeAnyServerIsContacted()
+    {
+        ArrangeServerSettingsProduct(null);
+        FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+        {
+            ["SchemaPackagePath"] = "Product", ["Target:Server"] = "primary-server", ["DropTablesRemovedFromProduct"] = "flase"
+        }).Build());
+        try
+        {
+            Assert.That(() => new RecordingProductQuench(), Throws.InstanceOf<RunFailedException>().With.Message.Contains("DropTablesRemovedFromProduct"));
+        }
+        finally
+        {
+            FactoryContainer.Clear();
+        }
+    }
+
+    [Test]
+    public void DropSettingsThatAreTrueFalseOrUnset_AreAccepted()
+    {
+        Assert.That(() => ProductQuench.RefuseNonBooleanDropSettings(Cfg(("DropTablesRemovedFromProduct", "False"), ("DropColumnsRemovedFromProduct", "true"),
+            ("DropIndexesRemovedFromProduct", " "))), Throws.Nothing);
+    }
+
     [Test]
     public void EnvRebuildPolicy_AbsentWhenNoKeyIsSet()
     {
