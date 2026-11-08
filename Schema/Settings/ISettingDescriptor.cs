@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
 using Schema.Domain.Settings;
 
@@ -30,7 +31,17 @@ public interface ISettingDescriptor
 
     // What to do so a change that a restart loses is kept; null when there is nothing to add.
     string RevertAdvice(string name) => null;
+
+    // Every setting this catalog holds for the server (or the database), for extraction: its value, whether that is the
+    // engine's default, and whether it names this machine (a path, a host, a port) rather than a class of server.
+    IEnumerable<CapturedSetting> Enumerate(IDbCommand cmd, string database);
+
+    // SQL a package can run on every deploy to bring the setting to the value: compare-then-set where the set is not
+    // already harmless to repeat.
+    string RenderScript(string name, string value, string database);
 }
+
+public sealed record CapturedSetting(string Kind, string Name, string Value, bool IsDefault, bool IsMachineIdentity = false);
 
 public sealed class SettingValueException(string message) : Exception(message);
 

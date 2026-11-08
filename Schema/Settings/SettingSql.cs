@@ -1,5 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System.Collections.Generic;
 using System.Data;
 using System.Text.RegularExpressions;
 
@@ -21,6 +22,7 @@ internal static class SettingSql
     internal static string BracketQuote(string name) => "[" + name.Replace("]", "]]") + "]";
     internal static string DoubleQuote(string name) => "\"" + name.Replace("\"", "\"\"") + "\"";
     internal static string BacktickQuote(string name) => "`" + name.Replace("`", "``") + "`";
+    internal static string NLiteral(string value) => "N'" + (value ?? "").Replace("'", "''") + "'";
     internal static string StandardLiteral(string value) => "'" + (value ?? "").Replace("'", "''") + "'";
     internal static string MySqlLiteral(string value) => "'" + (value ?? "").Replace("\\", "\\\\").Replace("'", "''") + "'";
 
@@ -48,6 +50,30 @@ internal static class SettingSql
             p.Value = value;
             cmd.Parameters.Add(p);
         }
+    }
+
+    // Every row of a query, each as its columns in strings.
+    internal static List<string[]> Rows(IDbCommand cmd, string sql, params (string Name, object Value)[] parameters)
+    {
+        cmd.Parameters.Clear();
+        cmd.CommandText = sql;
+        AddParameters(cmd, parameters);
+        var rows = new List<string[]>();
+        try
+        {
+            using var reader = cmd.ExecuteReader();
+            while (reader.Read())
+            {
+                var row = new string[reader.FieldCount];
+                for (var i = 0; i < row.Length; i++) row[i] = reader.IsDBNull(i) ? null : System.Convert.ToString(reader.GetValue(i), System.Globalization.CultureInfo.InvariantCulture);
+                rows.Add(row);
+            }
+        }
+        finally
+        {
+            cmd.Parameters.Clear();
+        }
+        return rows;
     }
 
     // Runs a query with named parameters and returns the first row's columns as strings, or null when there is no row.

@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using System.Text.RegularExpressions;
 using Schema.Domain.Settings;
 
@@ -56,18 +57,64 @@ public sealed class SqlServerOptionDescriptor : ISettingDescriptor
     public bool Equivalent(string declared, SettingReading current) =>
         SettingValueComparer.Boolish(Regex.Replace(declared ?? "", @"(?i)\s*seconds$", ""), current.Configured);
 
-    public void Apply(IDbCommand cmd, string name, string value, string database)
+    public void Apply(IDbCommand cmd, string name, string value, string database) =>
+        SettingSql.Execute(cmd, $"ALTER DATABASE {SettingSql.BracketQuote(database)} SET {Clause(name, value)}");
+
+    private static string Clause(string name, string value)
     {
         if (!Options.TryGetValue(name, out var option))
             throw new SettingValueException($"'{name}' is not a database option SchemaSmith sets.");
         var keyword = name.ToUpperInvariant();
         var v = SettingSql.RequireToken(value, $"Option '{name}'");
-        var clause = option.Form switch
+        return option.Form switch
         {
             Form.EqualsValue => $"{keyword} = {v}",
             Form.Seconds => $"{keyword} = {Regex.Replace(v, " SECONDS$", "")} SECONDS",
             _ => $"{keyword} {v}"
         };
-        SettingSql.Execute(cmd, $"ALTER DATABASE {SettingSql.BracketQuote(database)} SET {clause}");
     }
+
+    // The catalog keeps a switch as 1 / 0 and a declaration says ON / OFF, so the script accepts either spelling.
+    private static IEnumerable<string> Spellings(string value)
+    {
+        var v = Regex.Replace(value.Trim().ToUpperInvariant(), " SECONDS$", "");
+        return v switch { "ON" => ["ON", "1"], "OFF" => ["OFF", "0"], _ => [v] };
+    }
+
+    // DB_NAME() and EXEC, not ALTER DATABASE CURRENT: that arrives in SQL Server 2012, and the floor is 2008.
+    public string RenderScript(string name, string value, string database)
+    {
+        var clause = Clause(name, value);
+        var column = Options[name].Column;
+        var accepted = string.Join(", ", Spellings(value).Select(SettingSql.NLiteral));
+        return $"IF NOT EXISTS (SELECT 1 FROM sys.databases WHERE name = DB_NAME() AND CAST({column} AS NVARCHAR(128)) IN ({accepted}))\r\n" +
+               "BEGIN\r\n" +
+               $"    DECLARE @sql NVARCHAR(MAX) = N'ALTER DATABASE ' + QUOTENAME(DB_NAME()) + N' SET {clause.Replace("'", "''")}';\r\n" +
+               "    EXEC (@sql);\r\n" +
+               "END\r\n";
+    }
+
+    // Captured when it differs from the model database, which is what a new database on this server gets.
+    public IEnumerable<CapturedSetting> Enumerate(IDbCommand cmd, string database)
+    {
+        foreach (var (name, option) in Options)
+        {
+            string[] row;
+            try
+            {
+                row = SettingSql.FirstRow(cmd, $"SELECT CAST({option.Column} AS NVARCHAR(128)), " +
+                                               $"(SELECT CAST({option.Column} AS NVARCHAR(128)) FROM sys.databases WHERE name = N'model') " +
+                                               "FROM sys.databases WHERE name = @db", ("@db", database));
+            }
+            catch (System.Data.Common.DbException)
+            {
+                continue; // a column this version does not have
+            }
+            if (row == null) yield break;
+            yield return new CapturedSetting(Kind, name, AsKeyword(option.Column, row[0]), row[0] == row[1]);
+        }
+    }
+
+    private static string AsKeyword(string column, string raw) =>
+        column.StartsWith("is_", StringComparison.Ordinal) ? (raw == "1" ? "ON" : "OFF") : raw;
 }
