@@ -97,7 +97,15 @@ public static class Program
         {
             productQuench.QuenchProduct(skipKindlingForge);
         }
-        catch (Exception e) when (IsUnexplainedConnectionLoss(e))
+        catch (RunFailedException e)
+        {
+            // A failed validation, product script, version check or refused target: the run is over, the user can fix
+            // it, and checkpoints stay for --ResumeQuench. First, so a failure that names the server it could not reach keeps
+            // that message when a connection error is inside it.
+            LogBackup.FailedRunExit("SchemaQuench", e);
+            return;
+        }
+        catch (Exception e) when (ConnectionLostClassifier.IsConnectionLost(e))
         {
             // Last-resort net for a mid-deploy drop that escapes the per-server/per-database seams
             // (which name the specific server): surface the disconnect message instead of a raw
@@ -107,13 +115,6 @@ public static class Program
             LogFactory.GetLogger("ProgressLog").Error(ConnectionLostMessage.Build(null, "deployment"));
             LogFactory.GetLogger("ErrorLog").Error("Lost connection during deployment", e);
             LogBackup.BackupLogsAndExit("SchemaQuench", 2);
-            return;
-        }
-        catch (RunFailedException e)
-        {
-            // A failed validation, product script, version check or refused target: the run is over, the user can fix
-            // it, and checkpoints stay for --ResumeQuench.
-            LogBackup.FailedRunExit("SchemaQuench", e);
             return;
         }
 
@@ -141,10 +142,6 @@ public static class Program
             LogBackup.BackupLogsAndExit("SchemaQuench", 2);
         }
     }
-
-    // A RunFailedException already names what failed ("Unable to connect to X with user Y"), even when a connection error
-    // is inside it; only a drop nothing explained gets the generic message.
-    internal static bool IsUnexplainedConnectionLoss(Exception e) => e is not RunFailedException && ConnectionLostClassifier.IsConnectionLost(e);
 
     public static void UnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
