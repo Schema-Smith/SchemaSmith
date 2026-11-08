@@ -31,4 +31,32 @@ public class DatabaseSettingsTests : DatabaseSettingsSharedTests
 
     protected override string SetSql(string value) => $"ALTER DATABASE \"{MainDb}\" SET work_mem = '{value}'";
     protected override void Restore() => Exec($"ALTER DATABASE \"{MainDb}\" RESET work_mem");
+
+    // With no setting of its own the database runs at the server's value. The deploy's session reports its own: here the
+    // lock_timeout the run sets from Target:LockTimeoutSeconds, so comparing that would call a database without the
+    // declared value one that has it.
+    [Test]
+    public void TheRunsOwnSessionValue_DoesNotPassForTheDatabases()
+    {
+        Exec($"ALTER DATABASE \"{MainDb}\" RESET lock_timeout");
+        try
+        {
+            Package(One("30s", fix: true, "Error", name: "lock_timeout"));
+
+            var run = Deploy(settings: new System.Collections.Generic.Dictionary<string, string> { ["Target:LockTimeoutSeconds"] = "30" });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(SettingRows(run), Is.EqualTo(new[] { "Parameter lock_timeout changed" }), Lines(run));
+                Assert.That(Scalar("""
+                    SELECT substr(x, 14) FROM pg_db_role_setting r CROSS JOIN LATERAL unnest(r.setconfig) AS x
+                     WHERE r.setrole = 0 AND r.setdatabase = (SELECT oid FROM pg_database WHERE datname = current_database()) AND x LIKE 'lock_timeout=%'
+                    """)?.ToString(), Is.EqualTo("30s"), "the database holds the value itself now");
+            });
+        }
+        finally
+        {
+            Exec($"ALTER DATABASE \"{MainDb}\" RESET lock_timeout");
+        }
+    }
 }

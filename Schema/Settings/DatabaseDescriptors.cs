@@ -85,7 +85,15 @@ public sealed class PostgreSqlDatabaseParameterDescriptor : ISettingDescriptor
         var row = SettingSql.FirstRow(cmd, sql, ("@db", database), ("@name", name));
         if (row == null) return SettingReading.Missing($"'{name}' is not a parameter on this server");
         _unit = row[1];
-        var configured = row[3] ?? row[0];
+        // With no setting of its own the database runs at the server's value. pg_settings reports this session's, which the
+        // deploy login's own value (ALTER ROLE), its connection options and the run's own SETs all change.
+        var configured = row[3];
+        if (configured == null)
+        {
+            var server = new PostgreSqlServerParameterDescriptor().Read(cmd, name, database);
+            if (!server.Exists) return server;
+            configured = server.Configured;
+        }
         return row[2] is "postmaster" or "internal"
             ? new SettingReading(true, configured, configured, false, $"a {row[2]} parameter cannot be set per database")
             : new SettingReading(true, configured, configured, false, null);
