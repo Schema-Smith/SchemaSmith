@@ -153,7 +153,7 @@ BEGIN
       END IF;
     END LOOP;
     IF v_Failed IS NOT NULL THEN
-      RAISE EXCEPTION 'Foreign keys set aside by a table rebuild could not be restored, and stay recorded for the next run: %', v_Failed;
+      RAISE EXCEPTION 'Foreign keys set aside by a table rebuild could not be restored, and stay recorded for the next run: %. To give one up, delete its row from "SchemaSmith"."RebuildSetAsideForeignKeys".', v_Failed;
     END IF;
   END IF;
 END

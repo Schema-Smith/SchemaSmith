@@ -453,7 +453,8 @@ BEGIN
         END WHILE;
         IF v_SaFailed IS NOT NULL THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            VALUES (CONNECTION_ID(), CONCAT('  Foreign keys set aside by a table rebuild could not be restored, and stay recorded for the next run: ', v_SaFailed));
+            VALUES (CONNECTION_ID(), CONCAT('  Foreign keys set aside by a table rebuild could not be restored, and stay recorded for the next run: ', v_SaFailed,
+                    '. To give one up, delete its row from SchemaSmith_RebuildSetAsideForeignKeys.'));
             SET @ss_msg = LEFT(CONCAT('Foreign keys set aside by a table rebuild could not be restored: ', v_SaFailed), 128);
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         END IF;

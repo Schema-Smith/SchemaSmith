@@ -117,7 +117,7 @@ BEGIN TRY
     CLOSE restore_cursor
     DEALLOCATE restore_cursor
     IF @v_RsFailed IS NOT NULL
-      RAISERROR('Foreign keys set aside by a table rebuild could not be restored, and stay recorded for the next run: %s', 16, 1, @v_RsFailed)
+      RAISERROR('Foreign keys set aside by a table rebuild could not be restored, and stay recorded for the next run: %s. To give one up, delete its row from SchemaSmith.RebuildSetAsideForeignKeys.', 16, 1, @v_RsFailed)
   END
 
   SET NOCOUNT OFF
