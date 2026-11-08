@@ -28,4 +28,27 @@ public class DatabaseSettingsTests : DatabaseSettingsSharedTests
 
     protected override string SetSql(string value) => $"ALTER DATABASE CURRENT SET AUTO_UPDATE_STATISTICS_ASYNC {value}";
     protected override void Restore() => SetCurrent("OFF");
+
+    // The termination clause is refused for a versioning change (Msg 5083), so this one is sent without it.
+    [Test]
+    public void AllowSnapshotIsolation_IsFixed()
+    {
+        Exec("ALTER DATABASE CURRENT SET ALLOW_SNAPSHOT_ISOLATION OFF");
+        try
+        {
+            Package(One("ON", fix: true, "Error", name: "ALLOW_SNAPSHOT_ISOLATION"));
+
+            var run = Deploy();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(SettingRows(run), Is.EqualTo(new[] { "Option ALLOW_SNAPSHOT_ISOLATION changed" }), Lines(run));
+                Assert.That(Scalar("SELECT snapshot_isolation_state FROM sys.databases WHERE name = DB_NAME()")?.ToString(), Is.EqualTo("1"));
+            });
+        }
+        finally
+        {
+            Exec("ALTER DATABASE CURRENT SET ALLOW_SNAPSHOT_ISOLATION OFF");
+        }
+    }
 }

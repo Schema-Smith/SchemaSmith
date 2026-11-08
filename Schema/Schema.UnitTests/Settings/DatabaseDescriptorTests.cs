@@ -102,14 +102,30 @@ public class DatabaseDescriptorTests
         Assert.That(sql, Is.Empty);
     }
 
-    // Snapshot options need the database to themselves; on a busy database the change fails at once rather than queueing
-    // every new connection behind it until the command times out.
+    // READ_COMMITTED_SNAPSHOT needs the database to itself; on a busy database the change fails at once rather than queueing
+    // every new connection behind it. ALLOW_SNAPSHOT_ISOLATION takes no termination clause (Msg 5083).
     [TestCase("READ_COMMITTED_SNAPSHOT", "ALTER DATABASE [d] SET READ_COMMITTED_SNAPSHOT ON WITH NO_WAIT")]
-    [TestCase("ALLOW_SNAPSHOT_ISOLATION", "ALTER DATABASE [d] SET ALLOW_SNAPSHOT_ISOLATION ON WITH NO_WAIT")]
+    [TestCase("ALLOW_SNAPSHOT_ISOLATION", "ALTER DATABASE [d] SET ALLOW_SNAPSHOT_ISOLATION ON")]
     public void SqlServerOption_SnapshotOptions_DoNotWait(string name, string expected)
     {
         var (cmd, sql, _) = Recorder();
         new SqlServerOptionDescriptor().Apply(cmd, name, "ON", "d");
+        Assert.That(sql, Is.EqualTo(new[] { expected }));
+    }
+
+    // TARGET_RECOVERY_TIME is kept in seconds and may be declared in either unit the statement takes.
+    [TestCase("60", "60")]
+    [TestCase("60 SECONDS", "60")]
+    [TestCase("1 MINUTES", "60")]
+    public void SqlServerOption_TargetRecoveryTime_InEitherUnit_MatchesTheSeconds(string declared, string live) =>
+        Assert.That(new SqlServerOptionDescriptor().Equivalent(declared, new SettingReading(true, live, live, false, null)), Is.True);
+
+    [TestCase("90", "ALTER DATABASE [d] SET TARGET_RECOVERY_TIME = 90 SECONDS")]
+    [TestCase("2 MINUTES", "ALTER DATABASE [d] SET TARGET_RECOVERY_TIME = 2 MINUTES")]
+    public void SqlServerOption_TargetRecoveryTime_IsSentInTheDeclaredUnit(string declared, string expected)
+    {
+        var (cmd, sql, _) = Recorder();
+        new SqlServerOptionDescriptor().Apply(cmd, "TARGET_RECOVERY_TIME", declared, "d");
         Assert.That(sql, Is.EqualTo(new[] { expected }));
     }
 

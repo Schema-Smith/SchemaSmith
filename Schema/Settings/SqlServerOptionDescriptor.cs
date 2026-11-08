@@ -55,7 +55,16 @@ public sealed class SqlServerOptionDescriptor : ISettingDescriptor
     }
 
     public bool Equivalent(string declared, SettingReading current) =>
-        SettingValueComparer.Boolish(Regex.Replace(declared ?? "", @"(?i)\s*seconds$", ""), current.Configured);
+        SettingValueComparer.Boolish(InSeconds(declared ?? ""), current.Configured);
+
+    // TARGET_RECOVERY_TIME is declared as n, n SECONDS or n MINUTES; the catalog keeps seconds.
+    private static string InSeconds(string value)
+    {
+        var minutes = Regex.Match(value.Trim(), @"^(\d+)\s+MINUTES$", RegexOptions.IgnoreCase);
+        if (minutes.Success && long.TryParse(minutes.Groups[1].Value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var n))
+            return (n * 60).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        return Regex.Replace(value, @"(?i)\s*seconds$", "");
+    }
 
     public void Apply(IDbCommand cmd, string name, string value, string database) =>
         SettingSql.Execute(cmd, $"ALTER DATABASE {SettingSql.BracketQuote(database)} SET {Clause(name, value)}");
@@ -69,17 +78,20 @@ public sealed class SqlServerOptionDescriptor : ISettingDescriptor
         var clause = option.Form switch
         {
             Form.EqualsValue => $"{keyword} = {v}",
-            Form.Seconds => $"{keyword} = {Regex.Replace(v, " SECONDS$", "")} SECONDS",
+            Form.Seconds => Regex.IsMatch(v, @"^\d+\s+MINUTES$", RegexOptions.IgnoreCase)
+                ? $"{keyword} = {v}"
+                : $"{keyword} = {Regex.Replace(v, "(?i) SECONDS$", "")} SECONDS",
             _ => $"{keyword} {v}"
         };
-        // These need the database to themselves: fail at once on a busy one rather than queue new connections behind it.
-        return keyword is "READ_COMMITTED_SNAPSHOT" or "ALLOW_SNAPSHOT_ISOLATION" ? clause + " WITH NO_WAIT" : clause;
+        // This one needs the database to itself: fail at once on a busy one rather than queue new connections behind it.
+        // ALLOW_SNAPSHOT_ISOLATION takes no termination clause: SQL Server refuses one for a versioning change (Msg 5083).
+        return keyword == "READ_COMMITTED_SNAPSHOT" ? clause + " WITH NO_WAIT" : clause;
     }
 
     // The catalog keeps a switch as 1 / 0 and a declaration says ON / OFF, so the script accepts either spelling.
     private static IEnumerable<string> Spellings(string value)
     {
-        var v = Regex.Replace(value.Trim().ToUpperInvariant(), " SECONDS$", "");
+        var v = InSeconds(value.Trim().ToUpperInvariant());
         return v switch { "ON" => ["ON", "1"], "OFF" => ["OFF", "0"], _ => [v] };
     }
 
