@@ -2382,6 +2382,8 @@ SET NOCOUNT ON
     // False when the attempts are spent: the wait is recorded as failed and the caller rethrows.
     private bool WaitBeforeRetry(int attempt, Stopwatch waited)
     {
+        // SQL Server rolls a deadlock victim's whole transaction back, so inside tier-1 --Drift's a retry would run outside it.
+        if (_driftInTransaction && _product.Platform.GetBasePlatform() == Platform.SqlServer) return false;
         if (attempt >= ContentionRetryAttempts)
         {
             RecordLockWait(attempt, waited.ElapsedMilliseconds, "failed");

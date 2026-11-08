@@ -56,6 +56,21 @@ public class DatabaseQuenchDeadlockRetryTests
         Assert.That(calls(), Is.EqualTo(3), "should retry twice then succeed on the third attempt");
     }
 
+    // Tier-1 --Drift runs the preview in a transaction it rolls back. SQL Server ends that transaction for a deadlock victim,
+    // so a retry would run, and commit, outside it: the unit fails instead of writing to the target.
+    [Test]
+    public void InsideADriftTransaction_ADeadlockIsNotRetried()
+    {
+        var quench = new DatabaseQuench(new Product { Name = "P", Platform = Platform.SqlServer }, new Template { Name = "T" },
+            new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", Drift = true, DriftInTransaction = true, UpdateTables = false, DeliverData = false }, null);
+        quench.DeadlockRetryBaseMs = 0;
+        quench.ContentionRetryAttempts = 4;
+        var cmd = CommandFailing(1, () => new SqlServerErrorException(1205, "deadlock victim"), out var calls);
+
+        Assert.Throws<SqlServerErrorException>(() => quench.ExecuteNonQueryHandlingMessages(cmd, retryOnDeadlock: true));
+        Assert.That(calls(), Is.EqualTo(1), "the statement is not run again outside the rolled-back transaction");
+    }
+
     [Test]
     public void RetryEnabled_PersistentDeadlock_GivesUpAfterMaxAttempts()
     {
