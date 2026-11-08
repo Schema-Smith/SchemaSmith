@@ -31,6 +31,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Fixed
 
+- **A secondary server that is down is named in the failure.** The run's last-resort handler for a lost connection took over a failure that already said "Unable to connect to X with user Y", because the connection error was inside it, and logged only that the connection to "the target server" was lost. The specific failure is reported now.
 - **A template script's failure artifact marks the batch that failed.** It marked the script's last batch whatever failed, so in a multi-batch script the `>>> FAILING BATCH` marker pointed at the wrong statement.
 - **A checkpoint file's `# Started:` time is UTC, as the deployment summary's times are.** It was the machine's local time with nothing to say so; it is written with a trailing `Z` now. A checkpoint written before still reads.
 - **The deployment summary's `exitCode` is the code the run exits with under `ExitNonZeroOnWarning`.** The summary is written before the run exits, and recorded `0` for a run that then exited `1` because it warned with `ExitNonZeroOnWarning` on.

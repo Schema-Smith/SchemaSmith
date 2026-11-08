@@ -97,7 +97,7 @@ public static class Program
         {
             productQuench.QuenchProduct(skipKindlingForge);
         }
-        catch (Exception e) when (ConnectionLostClassifier.IsConnectionLost(e))
+        catch (Exception e) when (IsUnexplainedConnectionLoss(e))
         {
             // Last-resort net for a mid-deploy drop that escapes the per-server/per-database seams
             // (which name the specific server): surface the disconnect message instead of a raw
@@ -141,6 +141,10 @@ public static class Program
             LogBackup.BackupLogsAndExit("SchemaQuench", 2);
         }
     }
+
+    // A RunFailedException already names what failed ("Unable to connect to X with user Y"), even when a connection error
+    // is inside it; only a drop nothing explained gets the generic message.
+    internal static bool IsUnexplainedConnectionLoss(Exception e) => e is not RunFailedException && ConnectionLostClassifier.IsConnectionLost(e);
 
     public static void UnhandledException(object sender, UnhandledExceptionEventArgs e)
     {
