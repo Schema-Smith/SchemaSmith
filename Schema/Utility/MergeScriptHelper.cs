@@ -840,8 +840,8 @@ WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
             : isXml ? GetXmlDataKeys(tableData) : GetJsonDataKeys(tableData);
         // A declared column list adds the columns no row carries (all NULL), so they are delivered too.
         if (dataKeys != null && !string.IsNullOrWhiteSpace(declaredColumns))
-            foreach (var column in declaredColumns.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                dataKeys.Add(column.Trim('[', ']', '"', '`'));
+            foreach (var column in DeclaredColumnNames(declaredColumns, platform))
+                dataKeys.Add(column);
 
         return platform.GetBasePlatform() switch
         {
@@ -3011,4 +3011,14 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     }
 
     #endregion
+
+    /// <summary>
+    /// The names in a delivery's declared column list (<c>DataDelivery.Columns</c>): comma-separated, a name that holds a
+    /// comma written in the platform's delimiters.
+    /// </summary>
+    public static List<string> DeclaredColumnNames(string declaredColumns, Platform platform) =>
+        Identifier.SplitDelimitedList(declaredColumns, platform)
+            .Select(c => Identifier.Unwrap(c, platform) is var name && name != c ? name : c.Trim('[', ']', '"', '`'))
+            .Where(c => c.Length > 0)
+            .ToList();
 }

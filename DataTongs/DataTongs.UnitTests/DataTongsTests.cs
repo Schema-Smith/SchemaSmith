@@ -1747,6 +1747,16 @@ public class DataTongsTests
     }
 
     // B23: the names a DataTongs select list produces, whether an item is a bare column or an aliased conversion.
+    // The list DataTongs writes reads back as the same names on deploy, a name with a comma in it included.
+    [TestCase(Schema.Domain.Platform.SqlServer)]
+    [TestCase(Schema.Domain.Platform.PostgreSQL)]
+    [TestCase(Schema.Domain.Platform.MySQL)]
+    public void SelectListNames_ReadBackOnDeploy_AsTheSameNames(Schema.Domain.Platform platform)
+    {
+        var written = global::DataTongs.DataTongs.SelectListNames("[Id],[Last, First],[We]]ird]", platform);
+        Assert.That(Schema.Utility.MergeScriptHelper.DeclaredColumnNames(written, platform), Is.EqualTo(new[] { "Id", "Last, First", "We]ird" }), written);
+    }
+
     [Test]
     public void SelectListNames_ReadsEachItemsOutputName()
     {

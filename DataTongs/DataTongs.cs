@@ -409,7 +409,7 @@ public class DataTongs
                 // columns from the data, so the extracted column list is recorded beside it. Only for the list DataTongs
                 // builds itself: a hand-written SelectColumns can hold any expression.
                 var extractedColumns = _platform.GetBasePlatform() == Platform.SqlServer && string.IsNullOrWhiteSpace(table.SelectColumns)
-                    ? SelectListNames(selectColumns ?? GetSelectColumns(cmd, querySchema, tableName))
+                    ? SelectListNames(selectColumns ?? GetSelectColumns(cmd, querySchema, tableName), _platform)
                     : null;
 
                 // Empty markers differ by encoding: XML delivery shreds <rows></rows>, JSON shreds [].
@@ -755,16 +755,24 @@ SELECT EXISTS (
 
     #region Select Columns
 
-    // The output names of a select list DataTongs built: each item ends in its bracketed name or alias.
-    internal static string SelectListNames(string selectList)
+    // The output names of a select list DataTongs built: each item ends in its bracketed name or alias. A name that holds a
+    // comma is written in the platform's delimiters, so the list reads back whole (MergeScriptHelper.DeclaredColumnNames).
+    internal static string SelectListNames(string selectList, Platform platform = Platform.SqlServer)
     {
         if (string.IsNullOrWhiteSpace(selectList)) return null;
         var names = System.Text.RegularExpressions.Regex.Matches(selectList, @"\[(?<n>(?:[^\]]|\]\])+)\](?=\s*(?:,|$))")
             .Select(m => m.Groups["n"].Value.Replace("]]", "]"))
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
-        return names.Count == 0 ? null : string.Join(",", names);
+        return names.Count == 0 ? null : string.Join(",", names.Select(n => n.Contains(',') ? Delimited(n, platform) : n));
     }
+
+    private static string Delimited(string name, Platform platform) => platform.GetBasePlatform() switch
+    {
+        Platform.PostgreSQL => $"\"{name.Replace("\"", "\"\"")}\"",
+        Platform.MySQL => $"`{name.Replace("`", "``")}`",
+        _ => $"[{name.Replace("]", "]]")}]"
+    };
 
     internal string GetSelectColumns(IDbCommand cmd, string schemaOrDb, string tableName)
     {
