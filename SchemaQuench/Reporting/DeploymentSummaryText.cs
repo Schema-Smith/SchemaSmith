@@ -49,6 +49,7 @@ public static class DeploymentSummaryText
         RenderPreventDrop(summary, lines);
         RenderUnsupportedDowngrade(summary, lines);
         RenderDestructive(summary, lines);
+        RenderSettings(summary, lines);
         RenderDrift(summary, lines);
 
         return string.Join("\n", lines);
@@ -250,6 +251,23 @@ public static class DeploymentSummaryText
             var rows = change.EstimatedRows is { } n ? $", about {n.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} rows" : "";
             var accepted = change.Accepted ? ", accepted" : "";
             lines.Add($"  - {change.ObjectName}: {what}{rows} -- {change.Outcome}{accepted} ({FormatScope(change.Server, change.Database, null)})");
+        }
+    }
+
+    private static void RenderSettings(DeploymentSummary summary, List<string> lines)
+    {
+        if (summary.SettingOutcomes == null) return;
+        lines.Add("");
+        lines.Add("## Settings");
+        foreach (var (label, counts) in new[] { ("Server", summary.SettingOutcomes.Server), ("Database", summary.SettingOutcomes.Database) })
+        {
+            if (counts == null) continue;
+            var parts = new[]
+            {
+                (counts.Changed, "changed"), (counts.PendingRestart, "waiting for a restart"), (counts.Drift, "drifted (not fixed)"),
+                (counts.FixFailed, "fix failed"), (counts.Unfixable, "cannot be fixed"), (counts.WouldChange, "would change")
+            }.Where(p => p.Item1 > 0).Select(p => $"{p.Item1} {p.Item2}");
+            lines.Add($"- {label}: {string.Join(", ", parts)}");
         }
     }
 

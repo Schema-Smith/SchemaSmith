@@ -106,7 +106,23 @@ public static class DeploymentSummaryAssembler
             UnsupportedDowngrade: unsupportedDowngrade,
             LockWaits: lockWaits ?? [],
             Destructive: BuildDestructive(changeAudit, destructivePolicy, mode),
-            Drift: mode == RunMode.Drift ? drift : null);
+            Drift: mode == RunMode.Drift ? drift : null,
+            SettingOutcomes: BuildSettings(changeAudit));
+    }
+
+    private static SettingsSummary BuildSettings(ChangeAuditCapture changeAudit)
+    {
+        var rows = changeAudit?.Snapshot().Where(r => r.ObjectType is "ServerSetting" or "DatabaseSetting").ToList();
+        if (rows == null || rows.Count == 0) return null;
+
+        SettingsScopeCounts Counts(string type)
+        {
+            var scope = rows.Where(r => r.ObjectType == type).ToList();
+            if (scope.Count == 0) return null;
+            int N(string action) => scope.Count(r => r.Action == action);
+            return new SettingsScopeCounts(N("changed"), N("pendingRestart"), N("drift"), N("fixFailed"), N("unfixable"), N("wouldChange"));
+        }
+        return new SettingsSummary(Counts("ServerSetting"), Counts("DatabaseSetting"));
     }
 
     /// <summary>

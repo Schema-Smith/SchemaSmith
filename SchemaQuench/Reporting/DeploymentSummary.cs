@@ -32,7 +32,14 @@ public sealed record DeploymentSummary(
     // 1.3: the changes that removed data, and what the policy did with each; null when there were none.
     DestructiveSummary Destructive = null,
     // 1.3: a drift check's verdict (H1); null for any other run.
-    DriftReport Drift = null);
+    DriftReport Drift = null,
+    // 1.3: what the server and database settings steps found, per scope; null when the package declares no settings.
+    SettingsSummary SettingOutcomes = null);
+
+/// <summary>One scope's counts, or null when no setting of that scope was reported (a matching setting is never reported).</summary>
+public sealed record SettingsSummary(SettingsScopeCounts Server, SettingsScopeCounts Database);
+
+public sealed record SettingsScopeCounts(int Changed, int PendingRestart, int Drift, int FixFailed, int Unfixable, int WouldChange);
 
 public sealed record DestructiveSummary(string Policy, IReadOnlyList<DestructiveChange> Changes);
 

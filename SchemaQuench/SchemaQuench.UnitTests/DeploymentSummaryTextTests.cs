@@ -18,6 +18,27 @@ namespace SchemaQuench.UnitTests;
 [TestFixture]
 public class DeploymentSummaryTextTests
 {
+    [Test]
+    public void Render_Settings_OneLinePerScope_NamingEachOutcome()
+    {
+        var summary = BuildFullyPopulatedSummary() with
+        {
+            SettingOutcomes = new SettingsSummary(new SettingsScopeCounts(1, 1, 0, 0, 0, 0), new SettingsScopeCounts(0, 0, 2, 1, 1, 0))
+        };
+
+        var text = DeploymentSummaryText.Render(summary);
+
+        Assert.That(text, Does.Contain("## Settings"));
+        Assert.That(text, Does.Contain("- Server: 1 changed, 1 waiting for a restart"));
+        Assert.That(text, Does.Contain("- Database: 2 drifted (not fixed), 1 fix failed, 1 cannot be fixed"));
+    }
+
+    [Test]
+    public void Render_NoSettings_NoSection()
+    {
+        Assert.That(DeploymentSummaryText.Render(BuildFullyPopulatedSummary() with { SettingOutcomes = null }), Does.Not.Contain("## Settings"));
+    }
+
     private static DeploymentSummary BuildFullyPopulatedSummary()
     {
         var run = new RunInfo(

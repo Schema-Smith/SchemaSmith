@@ -71,6 +71,51 @@ public class DeploymentSummaryAssemblerTests
             protectedModeEnabled: protectedModeEnabled);
     }
 
+    // D12: what the settings steps found, counted per scope; absent when the package declares no settings.
+    [Test]
+    public void Assemble_Settings_CountsEachScopesOutcomes()
+    {
+        var audit = new ChangeAuditCapture();
+        audit.Record("ServerSetting", "Configuration max degree of parallelism", "changed");
+        audit.Record("ServerSetting", "Configuration user connections", "pendingRestart");
+        audit.Record("DatabaseSetting", "Option RECOVERY", "drift");
+        audit.Record("DatabaseSetting", "Option AUTO_CLOSE", "drift");
+        audit.Record("DatabaseSetting", "ScopedConfiguration MAXDOP", "fixFailed");
+        audit.Record("table", "dbo.t", "created");
+
+        var settings = AssembleWith(changeAudit: audit).SettingOutcomes;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.Server, Is.EqualTo(new SettingsScopeCounts(Changed: 1, PendingRestart: 1, Drift: 0, FixFailed: 0, Unfixable: 0, WouldChange: 0)));
+            Assert.That(settings.Database, Is.EqualTo(new SettingsScopeCounts(Changed: 0, PendingRestart: 0, Drift: 2, FixFailed: 1, Unfixable: 0, WouldChange: 0)));
+        });
+    }
+
+    [Test]
+    public void Assemble_Settings_AbsentWithoutSettingRows_AndAScopeWithoutRowsIsNull()
+    {
+        var audit = new ChangeAuditCapture();
+        audit.Record("table", "dbo.t", "created");
+        Assert.That(AssembleWith(changeAudit: audit).SettingOutcomes, Is.Null);
+
+        audit.Record("DatabaseSetting", "Option RECOVERY", "wouldChange");
+        var settings = AssembleWith(changeAudit: audit).SettingOutcomes;
+        Assert.That(settings.Server, Is.Null);
+        Assert.That(settings.Database.WouldChange, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Assemble_SettingRows_StayInTheDetail()
+    {
+        var audit = new ChangeAuditCapture();
+        audit.MarkInstrumented();
+        audit.Record("DatabaseSetting", "Option RECOVERY", "changed");
+
+        Assert.That(AssembleWith(changeAudit: audit).ObjectChanges.Details.Select(d => $"{d.ObjectType} {d.ObjectName} {d.Action}"),
+            Has.Member("DatabaseSetting Option RECOVERY changed"));
+    }
+
     [Test]
     public void Assemble_PreventDrop_NullWhenProtectionOff()
     {
