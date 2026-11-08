@@ -229,6 +229,24 @@ public class TableDataDeliveryTests
         Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("New|NULL"), "the listed column absent from every row is written NULL");
     }
 
+    // FOR XML leaves out a NULL column the same way; the listed column is delivered NULL from XML content too.
+    [Test]
+    public void DeliverTableData_AColumnNullInEveryRow_IsDeliveredWhenListed_FromXmlContent()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"INSERT INTO [{SchemaName}].[{_testTableName}] ([code], [name], [value]) VALUES ('A001', 'Old', 5.00)";
+        command.ExecuteNonQuery();
+
+        var script = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, SchemaName, _testTableName,
+            @"<rows><row><c n=""code"">A001</c><c n=""name"">New</c></row></rows>", "[code]", mergeUpdate: true, mergeDelete: false, disableTriggers: false,
+            tokenizeScripts: false, mergeFilter: null, contentEncoding: "Xml", declaredColumns: "code,name,value");
+        command.CommandText = script;
+        command.ExecuteNonQuery();
+
+        command.CommandText = $"SELECT CONCAT([name], '|', ISNULL(CAST([value] AS VARCHAR(20)), 'NULL')) FROM [{SchemaName}].[{_testTableName}] WHERE [code] = 'A001'";
+        Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("New|NULL"), "the listed column absent from every row is written NULL");
+    }
+
     [Test]
     public void DeliverTableData_XmlEncoding_InsertsAndUpdatesRows()
     {

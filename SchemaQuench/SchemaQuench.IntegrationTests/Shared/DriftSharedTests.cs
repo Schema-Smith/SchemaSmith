@@ -74,7 +74,19 @@ public abstract class DriftSharedTests : ObjectScriptDeployFixture
             Assert.That(run.ExitCode, Is.EqualTo(5), run.Describe());
             Assert.That(run.Report?.Targets.Single().Status, Is.EqualTo("drifted"), run.Describe());
             Assert.That(run.Report?.Targets.Single().Changes.Select(c => Unquoted(c.ObjectName)), Does.Contain(QualifiedColumn(Table, "b")), run.Describe());
+            Assert.That(ColumnBExists(), Is.False, "a drift check changes nothing: the column is still missing");
         });
+    }
+
+    private bool ColumnBExists()
+    {
+        var schema = Platform switch
+        {
+            Schema.Domain.Platform.SqlServer => "'dbo'",
+            Schema.Domain.Platform.PostgreSQL => "'public'",
+            _ => "DATABASE()"
+        };
+        return Convert.ToInt32(Scalar($"SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = {schema} AND TABLE_NAME = '{Table}' AND COLUMN_NAME = 'b'")) > 0;
     }
 
     [Test]
@@ -86,6 +98,25 @@ public abstract class DriftSharedTests : ObjectScriptDeployFixture
 
         Exec(DropColumn(Table, "b"));
         AssertTheDroppedColumnIsDrift(RunDrift(settings: NoKindle));
+    }
+
+    // A database the deploy would create does not exist: the largest drift there is, not a clean target. (Guards the
+    // provisioner's wouldCreate row, which is what drift counts here; the run creates nothing.)
+    [Test]
+    public void ADatabaseTheDeployWouldCreate_IsDrift()
+    {
+        var missing = $"drift_missing_{System.Guid.NewGuid().ToString("N")[..8]}";
+        var run = RunDrift(settings: new Dictionary<string, string>(NoKindle)
+        {
+            ["Target:TemplateTargets:Main:Databases:0"] = missing,
+            ["Target:TemplateTargets:Main:CreateIfMissing"] = "true",
+        });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.ExitCode, Is.EqualTo(5), run.Describe());
+            Assert.That(run.Report?.Targets.Single().Status, Is.EqualTo("drifted"), run.Describe());
+        });
     }
 
     [Test]

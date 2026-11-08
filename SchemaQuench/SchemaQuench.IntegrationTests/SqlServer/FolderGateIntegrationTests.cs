@@ -270,12 +270,22 @@ public class FolderGateIntegrationTests
                 var config = FactoryContainer.Resolve<IConfigurationRoot>();
                 config["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "FolderGateErrorProduct");
                 config["ScriptTokens:TargetDB"] = db;
+                // Exit 2 says the run failed; the log says it failed on the gate's own error, not on something else.
+                var logged = new System.Collections.Generic.List<string>();
+                var progressLog = Substitute.For<log4net.ILog>();
+                progressLog.When(l => l.Error(Arg.Any<object>())).Do(ci => logged.Add(ci.ArgAt<object>(0)?.ToString()));
+                var errorLog = Substitute.For<log4net.ILog>();
+                errorLog.When(l => l.Error(Arg.Any<object>())).Do(ci => logged.Add(ci.ArgAt<object>(0)?.ToString()));
+                errorLog.When(l => l.Error(Arg.Any<object>(), Arg.Any<Exception>())).Do(ci => logged.Add(ci.ArgAt<object>(0) + " " + ci.ArgAt<Exception>(1)?.Message));
+                LogFactory.Register("ProgressLog", progressLog);
+                LogFactory.Register("ErrorLog", errorLog);
 
                 FactoryContainer.Register(_environment);
                 _environment.ClearReceivedCalls();
                 Program.Main(System.Array.Empty<string>());
 
                 _environment.Received(1).Exit(2);
+                Assert.That(logged, Has.Some.Contains("Divide by zero"), string.Join(Environment.NewLine, logged));
                 using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
                 conn.Open();
                 conn.ChangeDatabase(db);
@@ -285,6 +295,7 @@ public class FolderGateIntegrationTests
             }
             finally
             {
+                LogFactory.Clear();
                 FactoryContainer.Unregister<IEnvironment>();
                 DropDatabase(db);
             }

@@ -22,6 +22,18 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 [NonParallelizable]
 public class ZipPackageDeployTests
 {
+    // The three rows public.TestTable.tabledata carries, read from the zip.
+    private static long DeliveredRows(string database)
+    {
+        using var conn = Schema.DataAccess.DbConnectionFactory.ForPlatform(Schema.Domain.Platform.PostgreSQL)
+            .GetDbConnection(Schema.IntegrationTests.PostgreSQL.FixtureSetup.GetMainDbConnectionString());
+        conn.Open();
+        conn.ChangeDatabase(database);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM public.\"TestTable\" WHERE \"TestID\"::text IN ('1f1290c7-8e05-4d93-9080-2ee836b297ca', 'd18a72c7-94b1-4e90-8c07-882ab1339721', '4b68bc1e-afa6-41e2-b602-88829807b191')";
+        return Convert.ToInt64(cmd.ExecuteScalar());
+    }
+
     [Test]
     public void AZippedPackage_DeploysEveryTemplateLikeItsFolder()
     {
@@ -56,9 +68,10 @@ public class ZipPackageDeployTests
                 Assert.Multiple(() =>
                 {
                     var exits = environment.ReceivedCalls().Where(c => c.GetMethodInfo().Name == nameof(IEnvironment.Exit)).Select(c => (int)c.GetArguments()[0]!);
-                    Assert.That(exits, Has.None.Not.EqualTo(0), "the run failed: " + string.Join(" | ", errors));
+                    Assert.That(exits, Is.EqualTo(new[] { 0 }), "the run failed: " + string.Join(" | ", errors));
                     progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching Template: Main")));
                     progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching Template: Secondary")));
+                    Assert.That(DeliveredRows(config["ScriptTokens:MainDB"]!), Is.EqualTo(3), "the table data inside the zip was delivered");
                 });
             }
             finally

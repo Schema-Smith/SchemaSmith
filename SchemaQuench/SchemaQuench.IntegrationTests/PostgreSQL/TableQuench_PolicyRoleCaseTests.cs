@@ -44,6 +44,7 @@ public class TableQuench_PolicyRoleCaseTests : BaseTableQuenchTests
             RunTableQuenchProc(cmd, json);
             cmd.CommandText = $"SELECT oid FROM pg_policy WHERE polname = 'pol_{suffix}'";
             var before = cmd.ExecuteScalar();
+            Assert.That(before, Is.Not.Null, "setup: the first deploy created the policy");
 
             cmd.CommandText = "DELETE FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid()";
             cmd.ExecuteNonQuery();
@@ -61,6 +62,40 @@ public class TableQuench_PolicyRoleCaseTests : BaseTableQuenchTests
         finally
         {
             cmd.CommandText = $"DROP TABLE IF EXISTS public.{table}; DROP ROLE IF EXISTS \"{role}\"";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // Quoted "AppUser" and unquoted AppUser (appuser) are two roles: a policy moved from one to the other changes.
+    [Test]
+    public void APolicyMovedToTheUnquotedRole_IsChanged()
+    {
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var table = $"pol_move_{suffix}";
+        var role = $"AppUser_{suffix}";
+        string Json(string roles) => $$"""
+            { "Schema": "public", "Name": "{{table}}", "RowLevelSecurity": true,
+              "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false } ],
+              "Indexes": [ { "Name": "pk_{{table}}", "PrimaryKey": true, "IndexColumns": "id" } ],
+              "Policies": [ { "Name": "pol_{{suffix}}", "Command": "SELECT", "Roles": "{{roles}}", "UsingExpression": "id > 0" } ] }
+            """;
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        cmd.CommandText = $"CREATE ROLE \"{role}\"; CREATE ROLE {role.ToLowerInvariant()}";
+        cmd.ExecuteNonQuery();
+        try
+        {
+            RunTableQuenchProc(cmd, Json($"\\\"{role}\\\""));
+            RunTableQuenchProc(cmd, Json(role));
+            cmd.CommandText = $"SELECT STRING_AGG(r.rolname, ',') FROM pg_policy p CROSS JOIN LATERAL unnest(p.polroles) AS pr(oid) JOIN pg_roles r ON r.oid = pr.oid WHERE p.polname = 'pol_{suffix}'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo(role.ToLowerInvariant()));
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS public.{table}; DROP ROLE IF EXISTS \"{role}\"; DROP ROLE IF EXISTS {role.ToLowerInvariant()}";
             cmd.ExecuteNonQuery();
         }
     }
