@@ -162,7 +162,7 @@ public class ProductQuench
             _whatIfOnly = FormatWhatIfOnly(true);
         }
         _runScriptsTwice = _config[SettingsKeys.RunScriptsTwice]?.ToLower() == "true";
-        _primaryServer = _config[SettingsKeys.Target.Server] ?? "localhost";
+        _primaryServer = PrimaryServer(_config);
         _skipKindling = _config[SettingsKeys.KindleTheForge]?.ToLower() == "false";
         if (_drift) _driftTier = DriftTiers.Choose(_product.Platform, _skipKindling, _config[SettingsKeys.DriftHelperDatabase]);
         // CLI-overridable (unlike the other kindling flags): ForceReKindle is an ad-hoc operational
@@ -576,10 +576,13 @@ public class ProductQuench
 
     // --ConnectionString reaches every server: as given on the primary, and with the server substituted on a secondary,
     // which shares the primary's credentials and port settings.
+    // The server a run with no Target:Server deploys to; DatabaseQuench tells the primary from a secondary by it.
+    internal static string PrimaryServer(IConfiguration config) => config[SettingsKeys.Target.Server] ?? "localhost";
+
     private string ConnectionStringOverrideFor(string server)
     {
         var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
-        if (string.IsNullOrEmpty(connectionStringOverride) || server == _primaryServer) return connectionStringOverride;
+        if (string.IsNullOrEmpty(connectionStringOverride) || string.Equals(server, _primaryServer, StringComparison.OrdinalIgnoreCase)) return connectionStringOverride;
         return ConnectionString.RetargetServer(connectionStringOverride, server, _product.Platform);
     }
 

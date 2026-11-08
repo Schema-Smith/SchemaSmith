@@ -3021,6 +3021,48 @@ public class DatabaseQuenchTests
             "  42501: permission denied for schema SchemaSmith"
         }));
     }
+
+    // --ConnectionString with a settings file that leaves Target:Server out: the primary is then "localhost" to the
+    // product, and its database work must still take the override as given, not one retargeted to localhost.
+    [TestCase(null, "localhost", "prodpg")]
+    [TestCase("prodpg", "PRODPG", "prodpg")]
+    [TestCase("prodpg", "secondpg", "secondpg")]
+    public void AWorkUnitsConnections_GoToItsOwnServer_UnderAConnectionStringOverride(string targetServer, string unitServer, string expectedHost)
+    {
+        var env = Substitute.For<IEnvironment>();
+        env.CommandLine.Returns("schemaquench.exe --ConnectionString=\"Host=prodpg;Database=other;Username=u;Password=p\"");
+        FactoryContainer.Register<IEnvironment>(env);
+        FactoryContainer.Register<IFile>(Substitute.For<IFile>());
+        FactoryContainer.Register<IDirectory>(Substitute.For<IDirectory>());
+        var config = Substitute.For<IConfigurationRoot>();
+        config["Target:Server"].Returns(targetServer);
+        FactoryContainer.Register<IConfigurationRoot>(config);
+
+        var opened = new List<string>();
+        var command = CreateMockCommand();
+        command.ExecuteScalar().Returns("160000");
+        command.When(c => c.ExecuteNonQuery()).Do(_ =>
+        {
+            if (command.CommandText?.StartsWith("SET ", StringComparison.Ordinal) == true) return;
+            throw new InvalidOperationException("stop after connecting");
+        });
+        var connection = Substitute.For<IDbConnection>();
+        connection.CreateCommand().Returns(command);
+        var factory = Substitute.For<Schema.DataAccess.IDbConnectionFactory>();
+        factory.GetDbConnection(Arg.Any<string>()).Returns(ci => { opened.Add(ci.Arg<string>()); return connection; });
+        FactoryContainer.Register<Schema.DataAccess.IDbConnectionFactory>(factory);
+
+        var template = new Template { Name = "T" };
+        template.Tables.Add(new Schema.Domain.Table { Name = "Orders" });
+        var checkpointing = Substitute.For<ICheckpointing>();
+        checkpointing.GetDatabaseCheckpointSummary(Arg.Any<TrackingScope>()).Returns(DatabaseCheckpointSummary.Empty);
+        checkpointing.When(c => c.Track(Arg.Any<TrackingScope>(), Arg.Any<string>(), Arg.Any<Action>())).Do(ci => ci.ArgAt<Action>(2)());
+        var quench = new DatabaseQuench(new Product { Name = "P", Platform = Platform.PostgreSQL }, template,
+            new DatabaseQuenchOptions { Server = unitServer, DatabaseName = "pgdb", SuppressKindling = true, DeliverData = false }, checkpointing);
+
+        try { quench.Execute(); } catch (InvalidOperationException) { /* the stop above */ }
+
+        Assert.That(opened, Is.Not.Empty, "the work unit opened no connection");
+        Assert.That(opened.Select(c => new Npgsql.NpgsqlConnectionStringBuilder(c).Host), Has.All.EqualTo(expectedHost), string.Join(Environment.NewLine, opened));
+    }
 }
-
-

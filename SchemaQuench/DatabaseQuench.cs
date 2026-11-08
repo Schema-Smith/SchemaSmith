@@ -2231,7 +2231,7 @@ SET NOCOUNT ON
         // A secondary server takes the override with its own server name (B18): as given, it deployed the secondary's
         // databases on the primary.
         if (!string.IsNullOrEmpty(connectionStringOverride)
-            && !string.Equals(_server, config[SettingsKeys.Target.Server], StringComparison.OrdinalIgnoreCase))
+            && !string.Equals(_server, ProductQuench.PrimaryServer(config), StringComparison.OrdinalIgnoreCase))
             connectionStringOverride = ConnectionString.RetargetServer(connectionStringOverride, _server, _product.Platform);
         var connectionString = string.IsNullOrEmpty(connectionStringOverride)
             ? TargetConnectionString.Build(_product.Platform, _server, databaseName, config)
