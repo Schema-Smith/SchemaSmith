@@ -162,6 +162,8 @@ public static class SettingsKeys
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string SettingsOutput = "ShouldCast:SettingsOutput";
         [ReadBy(SettingsTool.SchemaTongs)]
+        public const string ServerObjects = "ShouldCast:ServerObjects";
+        [ReadBy(SettingsTool.SchemaTongs)]
         public const string StopLists = "ShouldCast:StopLists";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string Synonyms = "ShouldCast:Synonyms";

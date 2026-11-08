@@ -403,6 +403,7 @@ public class SchemaTongs
             RepositoryHelper.StampSchemaRef(_productPath, path, kind, _platform, _progressLog.Warn);
 
         CastDatabaseObjects(targetDb);
+        CastServerObjects(targetDb);
         CleanupResolvedSqulerrorFiles();
         ProcessOrphanedFiles();
 
@@ -640,6 +641,47 @@ SELECT STRING_AGG(i.indexrelid::regclass::text, ', ' ORDER BY 1)
         _settingsPolicy = ParseOrRefuse(config, SettingsKeys.ShouldCast.SettingsDefaultPolicy, SettingsPolicyDefault.Report);
         _settingsOutput = ParseOrRefuse(config, SettingsKeys.ShouldCast.SettingsOutput, SettingsOutput.Json);
         _settingsAllowlist = config[SettingsKeys.ShouldCast.SettingsAllowlist];
+        _castServerObjects = config[SettingsKeys.ShouldCast.ServerObjects]?.ToLower() == "true";
+    }
+
+    private bool _castServerObjects;
+
+    // SQL Server's server-level objects, one idempotent script each, in product After folders that run on every server the
+    // product deploys to (each instance carries its own jobs, audits and sessions).
+    private void CastServerObjects(string targetDb)
+    {
+        if (!_castServerObjects) return;
+        if (_platform != Platform.SqlServer)
+        {
+            _progressLog.Info("  ShouldCast:ServerObjects applies to SQL Server only; nothing to cast here.");
+            return;
+        }
+        using var connection = GetConnection(targetDb);
+        using var command = connection.CreateCommand();
+        var major = TargetVersionDetector.Detect(command, _platform).ServerComparable;
+        var scripts = SqlServerServerObjectCaster.Cast(command, major, message => _progressLog.Warn(message));
+        foreach (var group in scripts.GroupBy(s => s.Folder))
+        {
+            var folderPath = Path.Join(_productPath, group.Key);
+            DirectoryWrapper.GetFromFactory().CreateDirectory(folderPath);
+            foreach (var script in group)
+            {
+                _progressLog.Info($"  Casting {Path.Join(group.Key, script.FileName)}");
+                FileWrapper.GetFromFactory().WriteAllText(Path.Join(folderPath, script.FileName), script.Sql);
+            }
+        }
+
+        var productFile = Path.Join(_productPath, "Product.json");
+        var product = JsonHelper.Load<Product>(productFile);
+        var added = false;
+        foreach (var folder in SqlServerServerObjectCaster.Folders.Where(f => scripts.Any(s => s.Folder == f)))
+        {
+            if (product.ScriptFolders.Any(f => string.Equals(f.FolderPath, folder, StringComparison.OrdinalIgnoreCase))) continue;
+            product.ScriptFolders.Add(new ProductFolder { FolderPath = folder, QuenchSlot = ProductQuenchSlot.After, ServerToQuench = ServerToQuench.Both });
+            added = true;
+        }
+        if (added) WritePackageObject(productFile, product, "products");
+        _progressLog.Info($"  Cast {scripts.Count} server object(s)");
     }
 
     private static TEnum ParseOrRefuse<TEnum>(IConfigurationRoot config, string key, TEnum fallback) where TEnum : struct, Enum

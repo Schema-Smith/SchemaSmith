@@ -96,7 +96,8 @@
         "DatabaseSettings": false, // Write DatabaseSettings.json in the template folder (not for a schema template)
         "SettingsDefaultPolicy": "Report", // Report, EnforceWarn or EnforceError: the Fix and OnDrift every written setting gets
         "SettingsAllowlist": "", // A file of { "Server": [ { "Kind", "Name" } ], "Database": [ ... ] }: capture exactly these (blank = only settings changed from their defaults)
-        "SettingsOutput": "Json" // Json, Script (compare-then-set scripts in a folder the deploy runs) or Both (JSON deploys; scripts are a copy to review)
+        "SettingsOutput": "Json", // Json, Script (compare-then-set scripts in a folder the deploy runs) or Both (JSON deploys; scripts are a copy to review)
+        "ServerObjects": false // SQL Server only: server triggers, Agent jobs, operators and alerts, server audits, Extended Events sessions, as product After folders
     },
     "OrphanHandling": {
         "Mode": "Detect" // Detect, DetectWithCleanupScripts, or DetectDeleteAndCleanup
