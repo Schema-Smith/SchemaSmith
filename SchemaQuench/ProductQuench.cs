@@ -793,7 +793,7 @@ public class ProductQuench
     {
         var templates = LoadTemplates();
         TemplateTargetValidator.Validate(_templateTargets, templates, _targetTemplates);
-        if (!TryFilterTemplatesByTarget(templates, out var inScope)) return true;
+        if (!TryFilterTemplatesByTarget(templates, out var inScope)) return false;
 
         var previews = new List<TemplatePreview>();
         foreach (var template in inScope)

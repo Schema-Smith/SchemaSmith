@@ -31,6 +31,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Fixed
 
+- **`--PreviewTargets` fails when a target template does not exist.** A `Target.Templates` value that named no template in the package was logged as an error, but the preview still reported success and exited 0, so a pipeline gating on it went ahead. The preview now fails and exits non-zero, as a real run already did.
 - **A mistyped drop setting no longer turns dropping on.** An environment value for `DropTablesRemovedFromProduct` or another drop setting that was not `true` or `false` (`flase`, `0`, `yes`) was read as unset, so the run fell through to the package's setting or the default -- for most drop settings `true`, the opposite of what `flase` meant. The run now stops before any server is contacted, naming the setting and its value.
 - **A zipped package delivers its table data.** With `SchemaPackagePath` naming a `.zip`, a table's `DataDelivery` content file was looked for on disk under the working directory instead of inside the zip, so the deploy failed with "Error reading content file … not found in zip file". Content files now resolve inside the zip, with the same check that keeps a path within its template folder.
 - **SQL Server: a secondary XML index dropped with its selective index is reported dropped.** Changing a selective XML index's paths drops its secondary with it; the deployment summary recorded the secondary only as created again.
