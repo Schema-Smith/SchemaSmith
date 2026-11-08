@@ -26,6 +26,8 @@ using Schema.Domain.PostgreSQL;
 using Schema.Domain.SqlServer;
 using Schema.Utility;
 using Schema.Configuration;
+using Schema.Domain.Settings;
+using Schema.Settings;
 
 namespace SchemaTongs;
 
@@ -384,6 +386,8 @@ public class SchemaTongs
 
         LoadPackageTokens();
 
+        CastSettings(targetDb);
+
         RepositoryHelper.WriteSchemaFiles(_productPath, _platform, _progressLog.Warn);
 
         // Product.json and Template.json are written during init, before the schemas above exist, and
@@ -395,6 +399,8 @@ public class SchemaTongs
             "products", _platform, _progressLog.Warn);
         RepositoryHelper.StampSchemaRef(_productPath, Path.Join(_templatePath, "Template.json"),
             "templates", _platform, _progressLog.Warn);
+        foreach (var (path, kind) in _settingsFilesToStamp)
+            RepositoryHelper.StampSchemaRef(_productPath, path, kind, _platform, _progressLog.Warn);
 
         CastDatabaseObjects(targetDb);
         CleanupResolvedSqulerrorFiles();
@@ -619,12 +625,108 @@ SELECT STRING_AGG(i.indexrelid::regclass::text, ', ' ORDER BY 1)
             ? EncodeFileName(name, extension)
             : EncodeFileName(schema, name, extension);
 
+    // D12: settings extraction is opt-in, so without these keys nothing is read and nothing new is written.
+    private bool _castServerSettings;
+    private bool _castDatabaseSettings;
+    private SettingsPolicyDefault _settingsPolicy;
+    private SettingsOutput _settingsOutput;
+    private string _settingsAllowlist;
+    private readonly List<(string Path, string SchemaKind)> _settingsFilesToStamp = [];
+
+    private void LoadSettingsCastSettings(IConfigurationRoot config)
+    {
+        _castServerSettings = config[SettingsKeys.ShouldCast.ServerSettings]?.ToLower() == "true";
+        _castDatabaseSettings = config[SettingsKeys.ShouldCast.DatabaseSettings]?.ToLower() == "true";
+        _settingsPolicy = ParseOrRefuse(config, SettingsKeys.ShouldCast.SettingsDefaultPolicy, SettingsPolicyDefault.Report);
+        _settingsOutput = ParseOrRefuse(config, SettingsKeys.ShouldCast.SettingsOutput, SettingsOutput.Json);
+        _settingsAllowlist = config[SettingsKeys.ShouldCast.SettingsAllowlist];
+    }
+
+    private static TEnum ParseOrRefuse<TEnum>(IConfigurationRoot config, string key, TEnum fallback) where TEnum : struct, Enum
+    {
+        var raw = config[key];
+        if (string.IsNullOrWhiteSpace(raw)) return fallback;
+        if (Enum.TryParse<TEnum>(raw, true, out var value) && Enum.IsDefined(value)) return value;
+        throw new RunFailedException($"{key} is '{raw}'; use {string.Join(", ", Enum.GetNames<TEnum>())}.");
+    }
+
+    // Written before the editor schemas, so a settings file extracted for the first time gets its schema in the same run.
+    private void CastSettings(string targetDb)
+    {
+        if (!_castServerSettings && !_castDatabaseSettings) return;
+        var allowlist = string.IsNullOrWhiteSpace(_settingsAllowlist) ? null : SettingsAllowlist.Load(_settingsAllowlist);
+        using var connection = GetConnection(targetDb);
+        using var command = connection.CreateCommand();
+        var major = SettingDescriptors.MajorVersion(_platform, TargetVersionDetector.Detect(command, _platform).ServerComparable);
+        ISettingDescriptor DescriptorFor(SettingScope scope, string kind) => SettingDescriptors.For(_platform, scope, kind, major);
+
+        if (_castServerSettings) CastSettingsScope(command, SettingScope.Server, targetDb, allowlist, DescriptorFor);
+        if (!_castDatabaseSettings) return;
+        if (_isSchemaTemplate)
+        {
+            _progressLog.Warn("  ShouldCast:DatabaseSettings is skipped for a schema template: database settings run once per database, from a regular template.");
+            return;
+        }
+        CastSettingsScope(command, SettingScope.Database, targetDb, allowlist, DescriptorFor);
+    }
+
+    private void CastSettingsScope(IDbCommand command, SettingScope scope, string targetDb, SettingsAllowlist allowlist, Func<SettingScope, string, ISettingDescriptor> descriptorFor)
+    {
+        var captured = SettingKinds.For(_platform, scope).SelectMany(kind => descriptorFor(scope, kind).Enumerate(command, targetDb)).ToList();
+        if (allowlist == null && _platform == Platform.MySQL && scope == SettingScope.Server && captured.All(s => s.IsDefault))
+            _progressLog.Warn("  This server does not say which variables were changed from their defaults (MySQL 5.7): only ShouldCast:SettingsAllowlist captures server variables here.");
+        var (file, notOnServer) = SettingsCaster.Capture(captured, scope, allowlist?.For(scope), _settingsPolicy);
+        foreach (var missing in notOnServer)
+            _progressLog.Warn($"  {missing} is on the settings allowlist but this server does not have it.");
+
+        var server = scope == SettingScope.Server;
+        var baseDir = server ? _productPath : _templatePath;
+        var label = server ? "server" : "database";
+        if (_settingsOutput != SettingsOutput.Script)
+        {
+            var path = Path.Join(baseDir, server ? SettingsFile.ServerFileName : SettingsFile.DatabaseFileName);
+            JsonHelper.Write(path, file);
+            _settingsFilesToStamp.Add((path, server ? "serversettings" : "databasesettings"));
+        }
+        if (_settingsOutput != SettingsOutput.Json)
+        {
+            // Script alone: the folder runs (product Before, template Setup). Both: the JSON deploys and the scripts are a
+            // reviewable copy in a folder no slot runs, so nothing applies twice.
+            var folder = _settingsOutput == SettingsOutput.Script ? (server ? "ServerSettings" : "DatabaseSettings") : (server ? "ServerSettingsScripts" : "DatabaseSettingsScripts");
+            var folderPath = Path.Join(baseDir, folder);
+            DirectoryWrapper.GetFromFactory().CreateDirectory(folderPath);
+            foreach (var (fileName, sql) in SettingsCaster.Scripts(file, kind => descriptorFor(scope, kind), targetDb))
+                FileWrapper.GetFromFactory().WriteAllText(Path.Join(folderPath, fileName), sql);
+            if (_settingsOutput == SettingsOutput.Script) RegisterSettingsFolder(server, folder);
+        }
+        _progressLog.Info($"  Cast {file.Settings.Count} {label} setting(s)");
+    }
+
+    private void RegisterSettingsFolder(bool server, string folder)
+    {
+        if (server)
+        {
+            var productFile = Path.Join(_productPath, "Product.json");
+            var product = JsonHelper.Load<Product>(productFile);
+            if (product.ScriptFolders.Any(f => string.Equals(f.FolderPath, folder, StringComparison.OrdinalIgnoreCase))) return;
+            product.ScriptFolders.Insert(0, new ProductFolder { FolderPath = folder, QuenchSlot = ProductQuenchSlot.Before });
+            WritePackageObject(productFile, product, "products");
+            return;
+        }
+        var templateFile = Path.Join(_templatePath, "Template.json");
+        var template = JsonHelper.Load<Template>(templateFile);
+        if (template.ScriptFolders.Any(f => string.Equals(f.FolderPath, folder, StringComparison.OrdinalIgnoreCase))) return;
+        template.ScriptFolders.Insert(0, new TemplateFolder { FolderPath = folder, QuenchSlot = TemplateQuenchSlot.Setup });
+        WritePackageObject(templateFile, template, "templates");
+    }
+
     private void LoadShouldCastSettings(IConfigurationRoot config)
     {
         _orphanHandlingMode = Enum.TryParse<OrphanHandlingMode>(config[SettingsKeys.OrphanHandling.Mode], true, out var mode)
             ? mode : OrphanHandlingMode.Detect;
 
         _validateScripts = config[SettingsKeys.ShouldCast.ValidateScripts]?.ToLower() == "true";
+        LoadSettingsCastSettings(config);
         _saveInvalidScripts = config[SettingsKeys.ShouldCast.SaveInvalidScripts]?.ToLower() != "false";
 
         _includeTables = config[SettingsKeys.ShouldCast.Tables]?.ToLower() != "false";

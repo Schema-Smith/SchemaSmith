@@ -91,14 +91,23 @@ public sealed class PostgreSqlDatabaseParameterDescriptor : ISettingDescriptor
     public string RenderScript(string name, string value, string database) =>
         $"DO $$ BEGIN EXECUTE format('ALTER DATABASE %I SET {SettingSql.DoubleQuote(name.ToLowerInvariant()).Replace("'", "''")} = %L', current_database(), {SettingSql.StandardLiteral(value)}); END $$;\r\n";
 
-    // Every setting the database carries itself is one somebody chose.
-    public IEnumerable<CapturedSetting> Enumerate(IDbCommand cmd, string database) =>
-        SettingSql.Rows(cmd, """
+    // Every setting the database carries itself is one somebody chose. Every other parameter a database can set is listed at
+    // the server's value, as a default, so an allowlist can capture it too.
+    public IEnumerable<CapturedSetting> Enumerate(IDbCommand cmd, string database)
+    {
+        var own = SettingSql.Rows(cmd, """
             SELECT x FROM pg_db_role_setting r CROSS JOIN LATERAL unnest(r.setconfig) AS x
              WHERE r.setrole = 0 AND r.setdatabase = (SELECT oid FROM pg_database WHERE datname = @db)
             """, ("@db", database))
             .Select(r => r[0].Split('=', 2))
-            .Select(p => new CapturedSetting(Kind, p[0], p.Length > 1 ? p[1] : "", false, PostgreSqlServerParameterDescriptor.MachineIdentity.Contains(p[0])));
+            .Select(p => new CapturedSetting(Kind, p[0], p.Length > 1 ? p[1] : "", false, PostgreSqlServerParameterDescriptor.MachineIdentity.Contains(p[0])))
+            .ToList();
+        var named = own.Select(s => s.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var inherited = SettingSql.Rows(cmd, "SELECT name, setting FROM pg_settings WHERE context NOT IN ('postmaster', 'internal', 'sighup', 'backend', 'superuser-backend')")
+            .Where(r => !named.Contains(r[0]))
+            .Select(r => new CapturedSetting(Kind, r[0], r[1], true, PostgreSqlServerParameterDescriptor.MachineIdentity.Contains(r[0])));
+        return own.Concat(inherited);
+    }
 }
 
 /// <summary>MySQL / MariaDB <c>Option</c>: a database's default character set and collation.</summary>

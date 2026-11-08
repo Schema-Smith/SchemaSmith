@@ -152,6 +152,16 @@ public static class SettingsKeys
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string Sequences = "ShouldCast:Sequences";
         [ReadBy(SettingsTool.SchemaTongs)]
+        public const string ServerSettings = "ShouldCast:ServerSettings";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string DatabaseSettings = "ShouldCast:DatabaseSettings";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string SettingsDefaultPolicy = "ShouldCast:SettingsDefaultPolicy";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string SettingsAllowlist = "ShouldCast:SettingsAllowlist";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string SettingsOutput = "ShouldCast:SettingsOutput";
+        [ReadBy(SettingsTool.SchemaTongs)]
         public const string StopLists = "ShouldCast:StopLists";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string Synonyms = "ShouldCast:Synonyms";
