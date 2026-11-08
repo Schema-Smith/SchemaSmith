@@ -64,7 +64,8 @@ public class QuenchStepOrderTests
         => RunWith(platform, template, whatIf, updateTables, deliverData, checkpointing: null);
 
     internal static Recording RunWith(Platform platform, Template template, bool whatIf, bool updateTables = true, bool deliverData = false, ICheckpointing checkpointing = null,
-        Action<IConfigurationRoot> configure = null, Action<IDbCommand> onExecute = null, bool expectSuccess = true, Action<DatabaseQuench> capture = null)
+        Action<IConfigurationRoot> configure = null, Action<IDbCommand> onExecute = null, bool expectSuccess = true, Action<DatabaseQuench> capture = null,
+        Action<IDbConnectionFactory, IDbConnection> configureFactory = null)
     {
         var recording = new Recording();
         FactoryContainer.Register<IFile>(Substitute.For<IFile>());
@@ -106,6 +107,7 @@ public class QuenchStepOrderTests
 
         var factory = Substitute.For<IDbConnectionFactory>();
         factory.GetDbConnection(Arg.Any<string>()).Returns(connection);
+        configureFactory?.Invoke(factory, connection);
         FactoryContainer.Register<IDbConnectionFactory>(factory);
 
         var recorder = Substitute.For<ICheckpointing>();
@@ -121,6 +123,35 @@ public class QuenchStepOrderTests
         if (expectSuccess)
             Assert.That(quench.QuenchSuccessful, Is.True, $"the recorded run completed: {quench.LastFailure}");
         return recording;
+    }
+
+    // The work unit's extra connections open inside the try whose finally releases them: when one fails to open, those
+    // opened before it are released, not left open for the rest of the run.
+    [Test]
+    public void AConnectionThatFailsToOpen_ReleasesTheOnesOpenedBeforeIt()
+    {
+        var second = Substitute.For<IDbConnection>();
+        RunWith(Platform.SqlServer, TemplateWithATable(), whatIf: false, expectSuccess: false,
+            configureFactory: (factory, main) =>
+            {
+                var calls = 0;
+                factory.GetDbConnection(Arg.Any<string>()).Returns(_ => ++calls switch
+                {
+                    1 => main,
+                    2 => SharingCommand(second, main),
+                    _ => throw new InvalidOperationException("the third connection could not be opened")
+                });
+            });
+
+        second.Received().Dispose();
+    }
+
+    private static IDbConnection SharingCommand(IDbConnection connection, IDbConnection from)
+    {
+        var command = from.CreateCommand();
+        connection.CreateCommand().Returns(command);
+        connection.Database.Returns("db");
+        return connection;
     }
 
     internal static Template TemplateWithATable(Platform platform = Platform.SqlServer)

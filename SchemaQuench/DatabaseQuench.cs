@@ -553,44 +553,45 @@ public partial class DatabaseQuench
             IDbCommand silentCommand = null;
             QuenchLanes lanes = null;
 
-            if (_driftHelperDatabase != null)
-            {
-                if (string.Equals(_driftHelperDatabase, _databaseName, StringComparison.OrdinalIgnoreCase))
-                    throw new RunFailedException($"Target:DriftHelperDatabase is the target itself ({_databaseName}); name a separate database, so the target is left untouched.");
-                try
-                {
-                    _driftHelperConnection = GetConnection(ignoreInfoMessages: true, database: _driftHelperDatabase);
-                }
-                catch (DbException e)
-                {
-                    throw HelperDatabaseUnusable(e);
-                }
-                catch (RunFailedException e)
-                {
-                    throw HelperDatabaseUnusable(e);
-                }
-                _driftKindleCommand = Timeouts.NewCommand(_driftHelperConnection);
-            }
-
-            if (_driftInTransaction)
-            {
-                var sqlServer = _product.Platform.GetBasePlatform() == Platform.SqlServer;
-                _driftTransaction = new DriftTransaction(connection, savepointEachStatement: !sqlServer);
-                _driftTransaction.Control(DriftTransaction.BeginStatement(sqlServer));
-                (command, tableCommand, objectsCommand, silentCommand) = DriftLanes(connection, mainCommand, sqlServer);
-            }
-            else if (_product.Platform.GetBasePlatform() != Platform.MySQL)
-            {
-                tableConnection = GetConnection();
-                tableCommand = CheckServerErrors(Timeouts.NewCommand(tableConnection));
-                objectsConnection = GetConnection(fireInfoMessageEventOnUserErrors: false);
-                objectsCommand = Timeouts.NewCommand(objectsConnection);
-                silentConnection = GetConnection(ignoreInfoMessages: true);
-                silentCommand = Timeouts.NewCommand(silentConnection);
-            }
-
             try
             {
+                // Opened inside the try, so the finally closes whatever opened before one that failed.
+                if (_driftHelperDatabase != null)
+                {
+                    if (string.Equals(_driftHelperDatabase, _databaseName, StringComparison.OrdinalIgnoreCase))
+                        throw new RunFailedException($"Target:DriftHelperDatabase is the target itself ({_databaseName}); name a separate database, so the target is left untouched.");
+                    try
+                    {
+                        _driftHelperConnection = GetConnection(ignoreInfoMessages: true, database: _driftHelperDatabase);
+                    }
+                    catch (DbException e)
+                    {
+                        throw HelperDatabaseUnusable(e);
+                    }
+                    catch (RunFailedException e)
+                    {
+                        throw HelperDatabaseUnusable(e);
+                    }
+                    _driftKindleCommand = Timeouts.NewCommand(_driftHelperConnection);
+                }
+
+                if (_driftInTransaction)
+                {
+                    var sqlServer = _product.Platform.GetBasePlatform() == Platform.SqlServer;
+                    _driftTransaction = new DriftTransaction(connection, savepointEachStatement: !sqlServer);
+                    _driftTransaction.Control(DriftTransaction.BeginStatement(sqlServer));
+                    (command, tableCommand, objectsCommand, silentCommand) = DriftLanes(connection, mainCommand, sqlServer);
+                }
+                else if (_product.Platform.GetBasePlatform() != Platform.MySQL)
+                {
+                    tableConnection = GetConnection();
+                    tableCommand = CheckServerErrors(Timeouts.NewCommand(tableConnection));
+                    objectsConnection = GetConnection(fireInfoMessageEventOnUserErrors: false);
+                    objectsCommand = Timeouts.NewCommand(objectsConnection);
+                    silentConnection = GetConnection(ignoreInfoMessages: true);
+                    silentCommand = Timeouts.NewCommand(silentConnection);
+                }
+
                 // Schema-template existence check: run before slot 1 (kindling) so a missing
                 // schema fails fast with a clear error before any DDL is attempted. MySQL schema
                 // templates are rejected at load time (no namespace-inside-database concept);
@@ -693,11 +694,11 @@ public partial class DatabaseQuench
                 if (_product.Platform.GetBasePlatform() == Platform.MySQL)
                     CleanupMySqlTempTables(command);
                 connection.Close();
-                _driftHelperConnection?.Close();
-                tableConnection?.Close();
-                objectsConnection?.Close();
-                silentConnection?.Close();
-                lanes?.DeliveryConnection?.Close();
+                _driftHelperConnection?.Dispose();
+                tableConnection?.Dispose();
+                objectsConnection?.Dispose();
+                silentConnection?.Dispose();
+                lanes?.DeliveryConnection?.Dispose();
             }
 
             if (IsDrift && _driftAuditUnread)
