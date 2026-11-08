@@ -14,12 +14,12 @@ public static class LogBackup
     // as plain lines, so its Warning findings would otherwise never count.
     public static void BackupLogsAndExit(string appName, int exitCode = 0, int unloggedWarnings = 0)
     {
-        var warnings = WarningCounter.Count + unloggedWarnings;
-        if (exitCode == 0 && warnings > 0 && ExitNonZeroOnWarning())
+        var promoted = EffectiveExitCode(exitCode, unloggedWarnings);
+        if (promoted != exitCode)
         {
-            exitCode = 1;
+            exitCode = promoted;
             // Otherwise the run ends with its success line and exits 1, and nothing says why.
-            LogFactory.GetLogger("ProgressLog")?.Info($"Exit code 1: {warnings} warning(s) and ExitNonZeroOnWarning is on.");
+            LogFactory.GetLogger("ProgressLog")?.Info($"Exit code 1: {WarningCounter.Count + unloggedWarnings} warning(s) and ExitNonZeroOnWarning is on.");
         }
         var backupDir = "UNKNOWN";
         try
@@ -95,6 +95,11 @@ public static class LogBackup
         LogFactory.GetLogger("ErrorLog").Error(e.Message, e);
         BackupLogsAndExit(appName, 2);
     }
+
+    /// <summary>The code a run that would end with <paramref name="exitCode"/> exits with: 1 in place of 0 when it warned and
+    /// ExitNonZeroOnWarning is on. The deployment summary records this, not the code before it.</summary>
+    public static int EffectiveExitCode(int exitCode, int unloggedWarnings = 0) =>
+        exitCode == 0 && WarningCounter.Count + unloggedWarnings > 0 && ExitNonZeroOnWarning() ? 1 : exitCode;
 
     private static bool ExitNonZeroOnWarning() =>
         CommandLineParser.ContainsSwitch(SettingsKeys.ExitNonZeroOnWarning) ||

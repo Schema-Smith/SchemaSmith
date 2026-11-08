@@ -1134,7 +1134,7 @@ public class ProductQuench
             var resumed = _checkpointing.ResumedAny;
             var summary = DeploymentSummaryAssembler.Assemble(
                 _product.Name, _product.Platform.ToString(), ToolVersion(),
-                _startedUtc, DateTime.UtcNow, mode, outcome, exitCode, resumed,
+                _startedUtc, DateTime.UtcNow, mode, outcome, LogBackup.EffectiveExitCode(exitCode), resumed,
                 _targetResults.ToArray(), _runTiming, _migrationScripts.Snapshot(),
                 _whatIf.Snapshot(), _failureRecords.ToArray(), BottleneckThresholdMs(), _changeAudit,
                 protectedModeEnabled: _protectedMode, lockWaits: _contention.Snapshot(), settings: _timeouts,

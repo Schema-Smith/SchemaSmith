@@ -31,6 +31,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 ### Fixed
 
+- **The deployment summary's `exitCode` is the code the run exits with under `ExitNonZeroOnWarning`.** The summary is written before the run exits, and recorded `0` for a run that then exited `1` because it warned with `ExitNonZeroOnWarning` on.
 - **Object scripts in a schema template are skipped when unchanged on each tenant.** The record of what each module last deployed was kept per script, not per tenant schema, so the tenants of one database overwrote each other's record and none of them ever read as unchanged: every deploy ran every object script on every tenant. Each tenant now keeps its own; a template without a schema keeps the record it already has.
 - **SQL Server: a declared clustered key that replaces one other tables reference, and could not take those references back, stops by name.** The clustered primary key or unique constraint a declared clustered key replaces is dropped with the foreign keys that reference it, and each is put back on the declared key. When one the package does not declare references columns the declared table would have no primary key or unique constraint over, the drop failed with the raw "Could not drop constraint" (3727). The deploy now stops before anything is dropped, naming the foreign keys.
 - **`SchemaTongs --WriteSchemasOnly` with no `Product.json` exits 2.** A missing product file is something to fix and run again, which is exit 2; it exited 3, the code for an unexpected failure.

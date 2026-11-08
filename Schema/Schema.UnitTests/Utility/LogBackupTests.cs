@@ -96,6 +96,33 @@ public class LogBackupTests
         }
     }
 
+    // The deployment summary records the code the run exits with: the summary is written before the exit, and recorded 0
+    // for a run that then exited 1 under ExitNonZeroOnWarning.
+    [TestCase("true", true, 0, 1)]
+    [TestCase("true", false, 0, 0)]
+    [TestCase(null, true, 0, 0)]
+    [TestCase("true", true, 2, 2)]
+    public void EffectiveExitCode_IsTheCodeTheRunExitsWith(string setting, bool warned, int runCode, int expected)
+    {
+        var values = new System.Collections.Generic.Dictionary<string, string>();
+        if (setting != null) values["ExitNonZeroOnWarning"] = setting;
+        FactoryContainer.Register<Microsoft.Extensions.Configuration.IConfigurationRoot>(
+            new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(values).Build());
+        lock (FactoryContainer.SharedLockObject)
+        {
+            WarningCounter.Reset();
+            try
+            {
+                if (warned)
+                    new WarningCounter().DoAppend(new log4net.Core.LoggingEvent(
+                        new log4net.Core.LoggingEventData { Level = log4net.Core.Level.Warn, Message = "a warning" }));
+
+                Assert.That(LogBackup.EffectiveExitCode(runCode), Is.EqualTo(expected));
+            }
+            finally { WarningCounter.Reset(); }
+        }
+    }
+
     // --Validate prints its board as plain lines, so a board of warnings logged nothing at Warn and exited 0 with the
     // switch on. Its Warning findings are passed in and count the same.
     [TestCase(true, 2, 0, 1)]
