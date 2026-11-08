@@ -1639,7 +1639,9 @@ public sealed class CoherenceCheck : ISchemaCheck
     private static IEnumerable<Finding> CheckPgPartitioning(Table table, string location, Template template)
     {
         if (table is not PostgreSqlTable pg || pg.Partitioning == null) yield break;
-        var columns = pg.Columns.OfType<PostgreSqlColumn>().ToDictionary(c => NormalizeIdentifier(c.Name ?? ""), StringComparer.Ordinal);
+        // A column with variants (ShouldApplyExpression) is declared more than once; one of them stands for it here.
+        var columns = pg.Columns.OfType<PostgreSqlColumn>().GroupBy(c => NormalizeIdentifier(c.Name ?? ""), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
 
         if (string.Equals(pg.PersistenceType?.Trim(), "unlogged", StringComparison.OrdinalIgnoreCase))
             yield return new Finding(Severity.Error, PgPartitionedTableUnsupportedCode, Category, location,

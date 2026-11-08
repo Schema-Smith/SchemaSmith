@@ -148,6 +148,15 @@ public class CoherenceCheckTests
         Assert.That(PgPartCodes(table), Is.Empty);
     }
 
+    // Columns can carry variants (ShouldApplyExpression), so one name can be declared twice: the check reads one of them.
+    [Test]
+    public void PgPartitioning_AColumnWithVariants_IsReadNotACrash()
+    {
+        var table = PgPartitioned("RANGE", "d", ("e_rest", "DEFAULT"));
+        table.Columns.Add(new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "d", DataType = "timestamp", ShouldApplyExpression = "1 = 0" });
+        Assert.That(PgPartCodes(table), Is.Empty);
+    }
+
     [TestCase("RANGE", "FOR VALUES IN ('a')")]
     [TestCase("LIST", "FOR VALUES FROM (1) TO (2)")]
     [TestCase("HASH", "DEFAULT")]
