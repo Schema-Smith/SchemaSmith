@@ -1,0 +1,54 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "product",
+  "Columns": [
+    {
+      "Name": "name",
+      "DataType": "varchar(400)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "productid",
+      "DataType": "int4",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "sku",
+      "DataType": "varchar(100)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "unitprice",
+      "DataType": "numeric(19, 4)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_product",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "productid",
+      "ShouldApplyExpression": "",
+      "VariantName": ""
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": "",
+  "RebuildPolicy": {
+    "Mode": "THRESHOLD",
+    "Threshold": 3
+  }
+}

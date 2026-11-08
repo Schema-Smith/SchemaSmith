@@ -1,0 +1,23 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "productversion",
+  "Columns": [
+    {
+      "Name": "product",
+      "DataType": "varchar(50)"
+    },
+    {
+      "Name": "version",
+      "DataType": "varchar(20)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_productversion",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "product"
+    }
+  ]
+}

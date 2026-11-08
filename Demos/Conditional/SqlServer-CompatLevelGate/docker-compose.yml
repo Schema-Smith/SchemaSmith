@@ -50,9 +50,7 @@ services:
         condition: service_healthy
 
   quench:
-    build:
-      context: ../../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=sa

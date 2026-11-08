@@ -1,0 +1,20 @@
+{
+  "Target": {
+    "Server": "localhost",
+    "Port": "15432",
+    "User": "postgres",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": {},
+    "TemplateTargets": {
+      "Registry": {
+        "Databases": [
+          "fleet_control"
+        ],
+        "CreateIfMissing": true
+      }
+    }
+  },
+  "WhatIfONLY": false,
+  "SchemaPackagePath": "./Package",
+  "KindleTheForge": true
+}

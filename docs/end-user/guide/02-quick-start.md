@@ -25,7 +25,7 @@ cd SchemaSmith
 
 ## Step 1: Stand Up the Demo Databases
 
-Each platform has its own folder under `Demos/` holding the four demo packages and two ways to deploy them. The first uses the SchemaQuench you just installed; the second builds one from source.
+Each platform has its own folder under `Demos/` holding the four demo packages and two ways to deploy them. The first uses the SchemaQuench you just installed; the second runs the SchemaQuench container image published with each release.
 
 **On your own server.** This path uses the CLI you just installed. The `deploy-to-endpoint` helper creates the demo databases on the server you name and deploys each package with the `schemaquench` on your PATH. It needs your engine's command-line client (`sqlcmd` here) on the PATH as well. From the repository root:
 
@@ -41,7 +41,7 @@ cd Demos/SqlServer
 
 The helper lists the databases it is about to create, waits for you to type `yes`, and deploys. It only ever drops databases it created itself, so an existing `Northwind` of yours is refused, not replaced. Client installs, Windows Authentication, and renaming a colliding demo are in [Use your own server](use-your-own-server.md). For the rest of this walkthrough, substitute your server, login and password wherever you see `localhost,1440` and `TestUser`.
 
-**With Docker.** This path builds SchemaQuench from source: `run-demo.sh` / `run-demo.cmd` publishes SchemaQuench with `dotnet publish`, so this path needs the **.NET 10 SDK** installed in addition to Docker; it then runs `docker compose up --build`, starts a SQL Server on port `1440`, and deploys the demo databases inside the compose stack. The launcher blocks until the `completed` service exits, which signals the databases are ready.
+**With Docker.** This path needs nothing but Docker. `run-demo.sh` / `run-demo.cmd` pulls the published SchemaQuench image (`ghcr.io/schema-smith/schemaquench:2`), runs `docker compose up --build`, starts a SQL Server on port `1440`, and deploys the demo databases inside the compose stack. The launcher blocks until the `completed` service exits, which signals the databases are ready.
 
 ```bash
 cd Demos/SqlServer

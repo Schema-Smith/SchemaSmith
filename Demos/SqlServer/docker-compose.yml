@@ -2,9 +2,7 @@ name: schemasmith-sqlserver-demo
 
 services:
   quench-adventureworks:
-    build:
-      context: ../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MSSQL_SA_USERNAME}
@@ -18,9 +16,7 @@ services:
         condition: service_healthy
 
   quench-northwind:
-    build:
-      context: ../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MSSQL_SA_USERNAME}
@@ -34,9 +30,7 @@ services:
         condition: service_completed_successfully
 
   quench-sakila:
-    build:
-      context: ../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MSSQL_SA_USERNAME}
@@ -50,9 +44,7 @@ services:
         condition: service_completed_successfully
 
   quench-chinook:
-    build:
-      context: ../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MSSQL_SA_USERNAME}
@@ -66,9 +58,7 @@ services:
         condition: service_completed_successfully
 
   quench-tenantcrm:
-    build:
-      context: ../../SchemaQuench
-      dockerfile: Dockerfile.release
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MSSQL_SA_USERNAME}

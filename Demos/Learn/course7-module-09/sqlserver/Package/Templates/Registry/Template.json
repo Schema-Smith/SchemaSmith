@@ -1,0 +1,5 @@
+{
+  "$schema": "../../.json-schemas/templates.sqlserver.schema",
+  "Name": "Registry",
+  "DatabaseIdentificationScript": "SELECT [name] FROM sys.databases WHERE [name] = '{{ControlDb}}'"
+}

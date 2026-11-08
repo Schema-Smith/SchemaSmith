@@ -233,6 +233,80 @@ completed.` prints either way.
 (Before 2.7.2, DataTongs exited `0` however many tables it skipped or failed — so on 2.7.0 or 2.7.1 this run
 exits `0`.)
 
+## Step 6: Let DataTongs write the delivery block
+
+Step 1's `DataDelivery` block was written by hand. For a real table you'd rather not: DataTongs can cast the rows
+straight into the package **and** write the block. Take the block out of your engine's `IsoCurrency` table file
+(delete the whole `"DataDelivery": { … }` entry):
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Tables/*.json" del DataDelivery -->
+```bash
+# from level2-module-05/<engine>
+grep -c DataDelivery Package/Templates/Main/Tables/*.json
+# → 0
+```
+
+Now cast with `--ConfigureDataDelivery`, writing the content file into the package's `data/` folder:
+
+```bash
+# from level2-module-05/<engine>
+datatongs --ConfigFile:tongs.settings.json --ConfigureDataDelivery --ContentPath:./Package/Templates/Main/data
+```
+
+SQL Server:
+
+```
+  ConfigureDataDelivery is enabled; merge scripts will be suppressed for tables where data delivery is configured (OutputScripts defaulted).
+  ...
+  Casting data for: dbo.IsoCurrency
+    Extracted 5 row(s) from dbo.IsoCurrency.
+    Writing contents to : ./Package/Templates/Main/data\dbo.IsoCurrency.tabledata
+    Updated data delivery config for IsoCurrency
+```
+
+DataTongs walked up from `ContentPath` to the folder holding `Template.json`, found the table's file in
+`Tables/`, and wrote the block back:
+
+```bash
+# from level2-module-05/<engine>
+grep -A4 '"DataDelivery"' Package/Templates/Main/Tables/*.json
+```
+
+```json
+"DataDelivery": {
+  "ContentFile": "data/dbo.IsoCurrency.tabledata",
+  "MergeType": "Insert/Update",
+  "MatchColumns": "Code"
+}
+```
+
+The same block you started with. `ContentFile` is the path it just wrote, relative to the template. `MatchColumns`
+is the `KeyColumns` from `tongs.settings.json`. `MergeType` is `Insert/Update` because nothing in `ShouldCast` asked
+for deletes; add `"MergeDelete": true` and it would be `Insert/Update/Delete`, or set `MergeType` on the table's
+entry in `Tables` to choose it outright. PostgreSQL also writes `"MergeUpdateDescendents": true`, and MySQL and
+MariaDB write `"TimeZone": "+00:00"`, so a `TIMESTAMP` reads back in the zone it was cast in.
+
+No `Populate` script this time: once a table's delivery is configured, a merge script carrying the same rows would
+deliver them twice, so DataTongs writes only the content file. Deploy: the delivery runs as it did in Step 3, and
+the MERGE finds every row already matching, because the content file was cast from this table:
+
+```bash
+# from level2-module-05/<engine>
+schemaquench --ConfigFile:deploy.settings.json
+```
+
+```bash
+# from level2-module-05
+../lab-sql.sh sqlserver learn "SELECT COUNT(*) FROM dbo.IsoCurrency"
+../lab-sql.sh postgres learn "SELECT count(*) FROM public.isocurrency"
+../lab-sql.sh mysql learn "SELECT COUNT(*) FROM IsoCurrency"
+../lab-sql.sh mariadb learn "SELECT COUNT(*) FROM IsoCurrency"
+# → 5
+```
+
+That's the loop for every lookup table you bring under the package: list it in `Tables` with its key, cast with
+`--ConfigureDataDelivery`, commit what changed.
+
 ## Per-engine notes
 
 | | SQL Server | PostgreSQL | MySQL |

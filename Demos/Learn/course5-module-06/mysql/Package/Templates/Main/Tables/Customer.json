@@ -1,0 +1,36 @@
+{
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
+  "Name": "`Customer`",
+  "Columns": [
+    {
+      "Name": "`CustomerId`",
+      "DataType": "int"
+    },
+    {
+      "Name": "`Email`",
+      "DataType": "varchar(256)",
+      "CharacterSet": "utf8mb4"
+    },
+    {
+      "Name": "`FullName`",
+      "DataType": "varchar(200)",
+      "Nullable": true,
+      "CharacterSet": "utf8mb4"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "UniqueConstraint": true,
+      "IndexColumns": "`CustomerId`"
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "RowFormat": "Dynamic",
+  "CharacterSet": "utf8mb4",
+  "Collation": "utf8mb4_0900_ai_ci",
+  "FullTextIndexes": []
+}

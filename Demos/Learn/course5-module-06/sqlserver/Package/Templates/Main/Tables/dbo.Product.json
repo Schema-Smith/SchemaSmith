@@ -1,0 +1,36 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[Product]",
+  "Columns": [
+    {
+      "Name": "[ProductId]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[Sku]",
+      "DataType": "VARCHAR(64)"
+    },
+    {
+      "Name": "[Name]",
+      "DataType": "NVARCHAR(200)"
+    },
+    {
+      "Name": "[UnitPrice]",
+      "DataType": "DECIMAL(10, 2)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_Product]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "[ProductId]",
+      "Clustered": true
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "Schema": "[dbo]",
+  "XmlIndexes": [],
+  "Statistics": []
+}

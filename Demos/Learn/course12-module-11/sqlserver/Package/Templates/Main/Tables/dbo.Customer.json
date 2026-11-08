@@ -1,0 +1,33 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[Customer]",
+  "Columns": [
+    {
+      "Name": "[CustomerId]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[SSN]",
+      "DataType": "NVARCHAR(11)",
+      "Nullable": true,
+      "Collation": "Latin1_General_BIN2",
+      "EncryptionType": "DETERMINISTIC",
+      "EncryptionKey": "[CustomerCEK]",
+      "EncryptionAlgorithm": "AEAD_AES_256_CBC_HMAC_SHA_256"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_Customer]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "[CustomerId]",
+      "Clustered": true
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "Schema": "[dbo]",
+  "XmlIndexes": [],
+  "Statistics": []
+}

@@ -123,7 +123,69 @@ tenants, and Module 3 onboards `006` itself, so it must not exist when you start
 ../lab-sql.sh mariadb information_schema "DROP DATABASE IF EXISTS fleet_tenant_006"
 ```
 
-## Step 5: Do it on PostgreSQL, MySQL, and MariaDB
+## Step 5: Tenants that differ — a value each database answers for itself
+
+One template, one set of scripts, five databases. Tenants are rarely identical, though: a region, a plan, a
+retention period. A `<*Query*>` script token is how one template carries a value that differs by tenant. Its
+query runs **against each target database**, just before that database's scripts, so every tenant gets its own
+answer.
+
+Give the template a token that asks the database for its tenant code, the last three characters of its name. In
+your engine's `Package/Templates/Main/Template.json`, set `ScriptTokens`:
+
+<!-- walk[sqlserver]: python -I "$WALK_TOOLS/jedit.py" "sqlserver/Package/Templates/Main/Template.json" set ScriptTokens '{"TenantCode": "<*Query*>SELECT RIGHT(DB_NAME(), 3)"}' -->
+<!-- walk[postgres]: python -I "$WALK_TOOLS/jedit.py" "postgres/Package/Templates/Main/Template.json" set ScriptTokens '{"TenantCode": "<*Query*>SELECT right(current_database(), 3)"}' -->
+<!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "mysql/Package/Templates/Main/Template.json" set ScriptTokens '{"TenantCode": "<*Query*>SELECT RIGHT(DATABASE(), 3)"}' -->
+<!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "mariadb/Package/Templates/Main/Template.json" set ScriptTokens '{"TenantCode": "<*Query*>SELECT RIGHT(DATABASE(), 3)"}' -->
+```json
+"ScriptTokens": { "TenantCode": "<*Query*>SELECT RIGHT(DB_NAME(), 3)" }
+```
+
+That's SQL Server. PostgreSQL asks `SELECT right(current_database(), 3)`, and MySQL and MariaDB ask
+`SELECT RIGHT(DATABASE(), 3)`. Then add a view that uses it. Each engine folder ships one in `tenant-code/`:
+
+```bash
+# from course7-module-01/<engine>
+mkdir -p Package/Templates/Main/Views
+cp tenant-code/*.sql Package/Templates/Main/Views/
+cat Package/Templates/Main/Views/*.sql
+```
+
+```text
+CREATE OR ALTER VIEW dbo.TenantInfo AS SELECT '{{TenantCode}}' AS TenantCode;
+```
+
+Deploy, and read the view back from every tenant:
+
+```bash
+# from course7-module-01/<engine>
+schemaquench --ConfigFile:quench.settings.json
+```
+
+```bash
+# from course7-module-01
+for n in 001 002 003 004 005; do ../lab-sql.sh sqlserver fleet_tenant_$n "SELECT TenantCode FROM dbo.TenantInfo"; done
+for n in 001 002 003 004 005; do ../lab-sql.sh postgres fleet_tenant_$n "SELECT tenantcode FROM tenantinfo"; done
+for n in 001 002 003 004 005; do ../lab-sql.sh mysql fleet_tenant_$n "SELECT TenantCode FROM TenantInfo"; done
+for n in 001 002 003 004 005; do ../lab-sql.sh mariadb fleet_tenant_$n "SELECT TenantCode FROM TenantInfo"; done
+```
+
+Five tenants, five answers, `001` to `005`, from one view script. The token's query ran once per database, and
+the value it returned was written into that database's copy of the view. The database name keeps the lab
+self-contained; in a real fleet the same token reads a tenant's own settings row
+(`<*Query*>SELECT Region FROM dbo.TenantSettings`), and the template stays one template.
+
+Put the template back the way the next modules expect it:
+
+<!-- walk: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Templates/Main/Template.json" set ScriptTokens '{}' -->
+```bash
+# from course7-module-01/<engine>
+rm -r Package/Templates/Main/Views
+```
+
+and set `ScriptTokens` back to `{}`. The view stays in the tenants; nothing later in the course reads it.
+
+## Step 6: Do it on PostgreSQL, MySQL, and MariaDB
 
 Every command above already carries a line per engine, so run the same steps from `postgres/`, `mysql/`,
 and `mariadb/`. The package is native per engine, and only the catalog the `DatabaseIdentificationScript`

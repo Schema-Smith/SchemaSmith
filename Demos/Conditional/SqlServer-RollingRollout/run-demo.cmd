@@ -6,8 +6,7 @@ pushd "%SCRIPT_DIR%..\..\.."
 set "REPO_ROOT=%CD%"
 popd
 
-echo Publishing SchemaQuench...
-call "%REPO_ROOT%\build-schemaquench.cmd"
+call "%REPO_ROOT%\Demos\schemaquench-image.cmd" "%REPO_ROOT%" %1
 if errorlevel 1 exit /b %errorlevel%
 
 echo Starting SQL Server conditional-deployment demo...

@@ -1,11 +1,13 @@
 # Course 5 — Database Setup
 
 These scripts create and **seed** the Course 5 migration-track databases on the sandbox engines —
-17 databases in total. Each one is the *post-migration state* a source tool would have left behind:
+25 databases in total. Most are the *post-migration state* a source tool would have left behind:
 the shared e-commerce **shop schema** (`Customer`, `Product`, `SalesOrder`, `OrderItem`) plus that
 tool's own **bookkeeping table**. You do not run Flyway, Liquibase, or EF Core yourself — the setup
 hands you the database in the exact state those tools produce, so each lab can go straight to the
-"extract it into SchemaSmith" step.
+"extract it into SchemaSmith" step. Module 6 gets a dev/prod pair instead: the shop schema alone in
+`shop_brownfield_dev`, and in `shop_brownfield_prod` the shop schema plus the drift production
+collects.
 
 ## Prerequisite
 
@@ -37,6 +39,8 @@ SQL Server
   shop_from_efcore           PASS
   shop_from_scripts          PASS
   shop_from_dacpac           PASS
+  shop_brownfield_dev        PASS
+  shop_brownfield_prod       PASS
 PostgreSQL
   shop_from_flyway           PASS
   ...
@@ -47,12 +51,12 @@ MariaDB
   shop_from_flyway           PASS
   ...
 
-All 17 databases are seeded and ready (5 SQL Server, 4 PostgreSQL, 4 MySQL, 4 MariaDB).
+All 25 databases are seeded and ready (7 SQL Server, 6 PostgreSQL, 6 MySQL, 6 MariaDB).
 ```
 
 ## Databases created
 
-Every database carries the identical four-table shop schema. They differ only in the bookkeeping
+Every database carries the identical four-table shop schema. The migration-track ones differ only in the bookkeeping
 table the source tool leaves behind — the table each lab teaches you to leave *out* of the extract.
 
 | Module | Database | Source tool | Bookkeeping table left behind |
@@ -62,17 +66,18 @@ table the source tool leaves behind — the table each lab teaches you to leave 
 | 3 — EF Core     | `shop_from_efcore`    | EF Core    | `__EFMigrationsHistory` |
 | 4 — SSDT/DACPAC | `shop_from_dacpac`    | SSDT/DACPAC | *(none — DACPAC keeps no runtime history table)* |
 | 5 — hand-rolled | `shop_from_scripts`   | hand-rolled scripts | `schema_version` |
+| 6 — brownfield  | `shop_brownfield_dev`, `shop_brownfield_prod` | *(none)* | *(none — `prod` adds a column, a check, an index and a table)* |
 
-Engine coverage mirrors the course: Modules 1–3 and 5 are seeded on all four engines; **Module 4
+Engine coverage mirrors the course: Modules 1–3, 5 and 6 are seeded on all four engines; **Module 4
 (SSDT/DACPAC) is SQL Server only** — DACPAC is a SQL Server technology, so `shop_from_dacpac` is not
 created on PostgreSQL, MySQL, or MariaDB.
 
 | Engine     | Databases |
 | ---------- | --------- |
-| SQL Server | `shop_from_flyway`, `shop_from_liquibase`, `shop_from_efcore`, `shop_from_scripts`, `shop_from_dacpac` |
-| PostgreSQL | `shop_from_flyway`, `shop_from_liquibase`, `shop_from_efcore`, `shop_from_scripts` |
-| MySQL      | `shop_from_flyway`, `shop_from_liquibase`, `shop_from_efcore`, `shop_from_scripts` |
-| MariaDB    | `shop_from_flyway`, `shop_from_liquibase`, `shop_from_efcore`, `shop_from_scripts` |
+| SQL Server | `shop_from_flyway`, `shop_from_liquibase`, `shop_from_efcore`, `shop_from_scripts`, `shop_from_dacpac`, `shop_brownfield_dev`, `shop_brownfield_prod` |
+| PostgreSQL | `shop_from_flyway`, `shop_from_liquibase`, `shop_from_efcore`, `shop_from_scripts`, `shop_brownfield_dev`, `shop_brownfield_prod` |
+| MySQL      | `shop_from_flyway`, `shop_from_liquibase`, `shop_from_efcore`, `shop_from_scripts`, `shop_brownfield_dev`, `shop_brownfield_prod` |
+| MariaDB    | `shop_from_flyway`, `shop_from_liquibase`, `shop_from_efcore`, `shop_from_scripts`, `shop_brownfield_dev`, `shop_brownfield_prod` |
 
 ## Connection details
 

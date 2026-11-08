@@ -1,7 +1,8 @@
 # Create + seed the Course 5 migration-track databases on each sandbox engine, or on your
 # own server's single activated engine (LEARN_SERVER). Each database is the post-migration
 # state a source tool would have left behind: the shared shop schema plus that tool's own
-# bookkeeping table. Re-running is safe -- all DDL is idempotent. PASS is reported only
+# bookkeeping table; Module 6 adds a dev/prod pair, the second carrying production-only
+# drift. Re-running is safe -- all DDL is idempotent. PASS is reported only
 # after a shop table is confirmed to exist (a seed that silently fails reports FAIL, never
 # a false PASS).
 #
@@ -45,12 +46,14 @@ function Initialize-Db {
     }
 }
 
-# database -> tracker-file-stem  (empty tracker = no bookkeeping table, e.g. DACPAC)
+# database -> extra seed file  (a source tool's bookkeeping table, or Module 6's production drift; empty = none)
 $threeEngineDbs = [ordered]@{
     'shop_from_flyway'    = 'tracker_flyway'
     'shop_from_liquibase' = 'tracker_liquibase'
     'shop_from_efcore'    = 'tracker_efcore'
     'shop_from_scripts'   = 'tracker_scripts'
+    'shop_brownfield_dev' = ''
+    'shop_brownfield_prod' = 'prod_drift'
 }
 
 $total = 0

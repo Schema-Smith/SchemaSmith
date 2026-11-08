@@ -1,0 +1,33 @@
+{
+  "$schema": "../../.json-schemas/templates.mysql.schema",
+  "Name": "Main",
+  "DatabaseIdentificationScript": "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'declared_m4'",
+  "ScriptFolders": [
+    {
+      "FolderPath": "Views",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Views"
+    },
+    {
+      "FolderPath": "Functions",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Functions"
+    },
+    {
+      "FolderPath": "Procedures",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Procedures"
+    },
+    {
+      "FolderPath": "Triggers",
+      "QuenchSlot": "AfterTablesObjects",
+      "ObjectType": "Triggers"
+    },
+    {
+      "FolderPath": "Events",
+      "QuenchSlot": "Objects",
+      "ObjectType": "Events"
+    }
+  ],
+  "ScriptTokens": {}
+}

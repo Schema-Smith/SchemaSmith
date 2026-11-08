@@ -1,0 +1,9 @@
+{
+  "$schema": ".json-schemas/products.mysql.schema",
+  "Name": "Ledger",
+  "ValidationScript": "SELECT 1",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "Platform": "MySQL"
+}

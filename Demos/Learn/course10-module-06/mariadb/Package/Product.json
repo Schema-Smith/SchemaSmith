@@ -1,0 +1,9 @@
+{
+  "$schema": ".json-schemas/products.mariadb.schema",
+  "Name": "Ledger",
+  "ValidationScript": "SELECT 1",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "Platform": "MariaDb"
+}

@@ -1,0 +1,53 @@
+{
+  "$schema": "../../../.json-schemas/tables.mariadb.schema",
+  "Name": "`SalesOrder`",
+  "Columns": [
+    {
+      "Name": "`OrderId`",
+      "DataType": "int(11)"
+    },
+    {
+      "Name": "`CustomerId`",
+      "DataType": "int(11)"
+    },
+    {
+      "Name": "`OrderDate`",
+      "DataType": "datetime"
+    },
+    {
+      "Name": "`Status`",
+      "DataType": "varchar(20)",
+      "CharacterSet": "utf8mb4"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "FK_SalesOrder_Customer",
+      "IndexColumns": "`CustomerId`"
+    },
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "UniqueConstraint": true,
+      "IndexColumns": "`OrderId`"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "FK_SalesOrder_Customer",
+      "Columns": "`CustomerId`",
+      "RelatedTable": "`Customer`",
+      "RelatedColumns": "`CustomerId`",
+      "DeleteAction": "RESTRICT",
+      "UpdateAction": "RESTRICT",
+      "RelatedTableSchema": ""
+    }
+  ],
+  "CheckConstraints": [],
+  "RowFormat": "Dynamic",
+  "CharacterSet": "utf8mb4",
+  "Collation": "utf8mb4_uca1400_ai_ci",
+  "FullTextIndexes": [],
+  "Periods": []
+}

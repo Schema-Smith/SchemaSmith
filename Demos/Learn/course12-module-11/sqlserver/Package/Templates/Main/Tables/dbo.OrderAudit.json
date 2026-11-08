@@ -1,0 +1,32 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[OrderAudit]",
+  "Columns": [
+    {
+      "Name": "[AuditId]",
+      "DataType": "INT IDENTITY(1, 1)"
+    },
+    {
+      "Name": "[OrderId]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[Note]",
+      "DataType": "NVARCHAR(50)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_OrderAudit]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "[AuditId]",
+      "Clustered": true
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "Schema": "[dbo]",
+  "XmlIndexes": [],
+  "Statistics": []
+}

@@ -2,7 +2,7 @@
 
 *Terraform for SQL Server, Postgres, MySQL, and MariaDB databases*
 
-> **SchemaSmith v2.8.0 released.** Index and column changes without blocking the table (`OnlineApply`), a `Setup` script slot, `Description` on every engine, constraint enforcement and validation state, temporal keys, SQL Server spatial, selective XML and JSON indexes, MariaDB extraction, and patch-level MySQL and MariaDB floors (a breaking change — see the notes). [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) · [CHANGELOG](https://github.com/Schema-Smith/SchemaSmith/blob/main/CHANGELOG.md)
+> **SchemaSmith v2.8.0 released.** Index and column changes without blocking the table (`OnlineApply`), a `Setup` script slot, `Description` on every engine, constraint enforcement and validation state, temporal keys, SQL Server spatial, selective XML and JSON indexes, MariaDB extraction, and patch-level MySQL and MariaDB floors (a breaking change — see the notes). [Read the v2.8.0 announcement](https://github.com/Schema-Smith/SchemaSmith/discussions/615) · [Release notes](https://github.com/Schema-Smith/SchemaSmith/releases/tag/v2.8.0) · [CHANGELOG](https://github.com/Schema-Smith/SchemaSmith/blob/main/CHANGELOG.md)
 
 ![Build](https://github.com/Schema-Smith/SchemaSmith/actions/workflows/continuous-integration.yml/badge.svg)
 [![Latest Release](https://img.shields.io/github/v/release/Schema-Smith/SchemaSmith)](https://github.com/Schema-Smith/SchemaSmith/releases/latest)
@@ -174,7 +174,7 @@ cd Demos/MySQL && ./run-demo.sh
 cd Demos/MariaDB && ./run-demo.sh
 ```
 
-Each script builds SchemaQuench from source (if not already built), starts a containerized database server, and deploys the AdventureWorks, Chinook, Northwind, and Sakila demo products. Use `run-demo.cmd` on Windows. Connection details for each platform live in the `.env` file inside the platform folder.
+Each script pulls the published SchemaQuench image, starts a containerized database server, and deploys the AdventureWorks, Chinook, Northwind, and Sakila demo products. Docker is the only prerequisite. Use `run-demo.cmd` on Windows, and add `--from-source` to run a build of your own checkout instead. Connection details for each platform live in the `.env` file inside the platform folder.
 
 ## Running Tests
 

@@ -1,0 +1,32 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[Orders]",
+  "Columns": [
+    {
+      "Name": "[OrderId]",
+      "DataType": "INT"
+    },
+    {
+      "Name": "[Region]",
+      "DataType": "NVARCHAR(10)"
+    },
+    {
+      "Name": "[Amount]",
+      "DataType": "DECIMAL(10, 2)"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_Orders]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "[OrderId]",
+      "Clustered": true
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "Schema": "[dbo]",
+  "XmlIndexes": [],
+  "Statistics": []
+}

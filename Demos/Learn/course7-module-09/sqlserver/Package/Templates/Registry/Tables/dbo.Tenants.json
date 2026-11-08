@@ -1,0 +1,16 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "dbo",
+  "Name": "Tenants",
+  "Columns": [
+    { "Name": "DatabaseName", "DataType": "NVARCHAR(128)" }
+  ],
+  "Indexes": [
+    { "Name": "PK_Tenants", "PrimaryKey": true, "Clustered": true, "IndexColumns": "DatabaseName" }
+  ],
+  "DataDelivery": {
+    "ContentFile": "data/dbo.Tenants.tabledata",
+    "MergeType": "Insert/Update/Delete",
+    "MatchColumns": "DatabaseName"
+  }
+}

@@ -218,6 +218,44 @@ For deploying a partial package of migration scripts to fix a specific productio
 
 **Recommendation:** to vary a table's *structure* by target, prefer component-level variants inside a single table file (or give the structurally different tables distinct names). Two separate same-named whole-table variant files will deploy correctly, but SchemaTongs normalizes a table to one file per name on extraction, so a multi-file same-named-table layout isn't reproduced when you re-extract.
 
+### Staged rollouts
+
+Some changes cost too much to make inside a deployment window: moving a full-text index to a new catalog repopulates it, and converting a large table to columnstore rewrites it. Teams run these by hand, a few databases per maintenance window, over weeks. The hard part is the package in the meantime. Declare the new shape and the next deploy forces the conversion on every database at once; keep the old shape and the next deploy undoes the conversions already done. The usual escape is to pull the table out of source control until the rollout finishes -- and then remember to put it back.
+
+Conditional variants remove the dilemma. Declare both shapes, and let each database's current state pick the one that applies:
+
+```json
+"FullTextIndex": [
+  {
+    "VariantName": "Before conversion",
+    "FullTextCatalog": "[FT_Docs]",
+    "KeyIndex": "[PK_Document]",
+    "Columns": "[Title],[Body]",
+    "ShouldApplyExpression": "EXISTS (SELECT 1 FROM sys.fulltext_indexes fi JOIN sys.fulltext_catalogs c ON c.fulltext_catalog_id = fi.fulltext_catalog_id WHERE fi.object_id = OBJECT_ID('dbo.Document') AND c.name = 'FT_Docs')"
+  },
+  {
+    "VariantName": "Converted",
+    "FullTextCatalog": "[FT_Docs_v2]",
+    "KeyIndex": "[PK_Document]",
+    "Columns": "[Title],[Body]",
+    "ShouldApplyExpression": "NOT EXISTS (SELECT 1 FROM sys.fulltext_indexes fi JOIN sys.fulltext_catalogs c ON c.fulltext_catalog_id = fi.fulltext_catalog_id WHERE fi.object_id = OBJECT_ID('dbo.Document') AND c.name = 'FT_Docs')"
+  }
+]
+```
+
+The old shape applies only where the old shape is already deployed; the new shape applies everywhere else. Write the gates that way round. When no variant matches, the table gets no full-text index at all (see [Full-Text Index](../reference/schema-packages.md#full-text-index-sql-server)), so the two gates must cover every state a database can be in -- including a brand-new database with no index yet. The rollout then runs in four steps:
+
+1. **Ship both variants.** Every deploy leaves each database in the shape it already has. A database still on `FT_Docs` matches the first variant, a converted one matches the second, and on both the deploy does no full-text work: nothing dropped, nothing repopulated. The rest of the release deploys as usual.
+2. **Convert out of band.** DBAs run the conversion in their own maintenance windows, at their own pace -- here, drop the full-text index and create it again on `FT_Docs_v2`. No deploy has to wait for them, and none undoes their work.
+3. **New databases skip it.** A database with no full-text index does not match the old shape's gate, so its first deploy creates the index on the new catalog, logged as `Adding fulltext index on [dbo].[Document] (variant: Converted)`. It never needs converting.
+4. **Remove the old variant.** Once every database is converted, replace the array with the single new definition. The package holds the final shape, and source control was accurate the whole way through.
+
+> **Warning:** Removing the old variant while any database still has the old shape makes the next deploy convert it -- inside the deployment window, which is what the staged rollout exists to avoid. Run `--WhatIf` first: each database still on the old shape shows `Dropping fulltext index on [dbo].[Document]`.
+
+**When the deploy can convert.** If a deployment window *is* a safe slot for the conversion, the gates can read a control table instead of the live shape, so a DBA schedules each database by setting a row and the deploy performs the conversion itself. Keep the new shape's gate true once a database has converted -- for example, "the row is set or the new shape is already deployed" -- or clearing the row later would convert it back. Gating on the live shape, as above, keeps scheduling out of the package entirely, which suits a change that takes most of a window.
+
+The worked example is a full-text catalog move on SQL Server; the same two-variant shape applies to any component that takes conditional variants.
+
 ### Runtime sentinel skip
 
 Sometimes the skip decision can't be expressed as a static expression in the package at all -- it depends on something only the target server can answer at the moment the script runs. Is this database on a replica? Did a prior script's data migration land correctly? Is this a tenant that hasn't opted into a feature yet? `ShouldApplyExpression` covers those cases when the answer is a SQL query. But if the logic is inside the script itself -- reading row counts, calling a stored procedure, checking a role membership, branching on a version+edition combination -- you need the script to decide at runtime.

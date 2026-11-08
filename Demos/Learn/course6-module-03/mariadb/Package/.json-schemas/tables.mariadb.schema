@@ -294,10 +294,6 @@
               "type": "string",
               "pattern": "^[+-](0[0-9]|1[0-4]):[0-5][0-9]$",
               "description": "The session time zone (an offset such as +00:00) the ContentFile's TIMESTAMP values were extracted in. Delivery uses the same zone so the values arrive unchanged. DataTongs sets it; leave it unset for data written in the target server's own zone. MySQL and MariaDB only."
-            },
-            "Columns": {
-              "type": "string",
-              "description": "Optional. The comma-separated columns the ContentFile was extracted with. A column listed here is delivered even when no row carries it (written NULL), so a column that was NULL in every extracted row still updates the target. DataTongs writes it for SQL Server. Omitted, the columns are the ones present in the data."
             }
           },
           "additionalProperties": false
@@ -339,10 +335,6 @@
                 "type": "string",
                 "pattern": "^[+-](0[0-9]|1[0-4]):[0-5][0-9]$",
                 "description": "The session time zone (an offset such as +00:00) the ContentFile's TIMESTAMP values were extracted in. Delivery uses the same zone so the values arrive unchanged. DataTongs sets it; leave it unset for data written in the target server's own zone. MySQL and MariaDB only."
-              },
-              "Columns": {
-                "type": "string",
-                "description": "Optional. The comma-separated columns the ContentFile was extracted with. A column listed here is delivered even when no row carries it (written NULL), so a column that was NULL in every extracted row still updates the target. DataTongs writes it for SQL Server. Omitted, the columns are the ones present in the data."
               }
             },
             "additionalProperties": false
@@ -405,8 +397,7 @@
       "description": "When set, overrides the environment's OnlineApply for this table only. Off runs the plain statements; Prefer uses the engine's online or instant form where the version and edition allow it, and the plain form otherwise; Require uses the online or instant form or refuses the deploy, naming the statement. Null inherits the environment setting."
     },
     "Engine": {
-      "type": "string",
-      "description": "Storage engine. Omitted, a new table is created InnoDB and an existing table keeps its engine."
+      "type": "string"
     },
     "RowFormat": {
       "type": "string",

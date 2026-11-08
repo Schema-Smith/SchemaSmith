@@ -15,7 +15,7 @@ maps to a course like this:
 | **Course 1 · First deployment** | `module-01` … `module-04` | Install & connect, first package, WhatIf, extract an existing schema |
 | **Course 2 · Going deeper** | `level2-module-01` … `level2-module-06` | Products, template fan-out, conditional deployment, script tokens, data delivery, custom metadata |
 | **Course 3 · Ship it / operate it** | `course3-module-01` … `course3-module-06` | Team workflow, CI/CD gating, rollback, capstone (full dev→prod lifecycle + recyclebin recovery), drift (a hand-made prod hotfix vs the next deploy) |
-| **Course 4 · Recipes** | `course4-recipe-01` … `course4-recipe-19` | A cookbook of task-focused recipes |
+| **Course 4 · Recipes** | `course4-recipe-01` … `course4-recipe-11` | A cookbook of recipes where custom properties, script tokens and conditional variants drive the tools |
 | **Course 5 · Switching tools** | `course5-module-01` … `course5-module-05` | Migrating from another migration tool |
 | **Course 6 · Production & least privilege** | `course6-module-01` … `course6-module-07` | Operating in CI under least privilege |
 | **Course 7 · Fleet fan-out** | `course7-module-01` … `course7-module-08` | One schema across a fleet of per-tenant databases |
@@ -23,6 +23,7 @@ maps to a course like this:
 | **Course 9 · Polyglot shop** | `course9-module-01` … `course9-module-06` | All engines at once, each service independently deployable |
 | **Course 10 · Mixed-version fleet** | `course10-module-01` … `course10-module-05`, plus the `course10-xml-data-delivery` bonus recipe | One package across servers that are not all on the same version |
 | **Course 11 · What SchemaSmith Refuses To Do** | `course11-module-01` … `course11-module-05` | The boundary: what a declarative tool converges, refuses by name, and degrades-and-reports |
+| **Course 12 · Declare it, don't script it** | `course12-module-01` … `course12-module-09` | Objects you used to script, declared instead: types, events, index-only templates, full-text, temporal and ledger tables, plus extraction you can trust |
 
 > **Heads-up on the folder names** — they use three conventions. Course 1's labs are the bare
 > `module-*` folders; **Course 2's are the `level2-*` folders** (the site calls it "Course 2 · Going

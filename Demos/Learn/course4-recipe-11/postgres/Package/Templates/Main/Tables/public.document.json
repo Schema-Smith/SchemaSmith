@@ -1,0 +1,29 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Schema": "public",
+  "Name": "document",
+  "Columns": [
+    {
+      "Name": "documentid",
+      "DataType": "INT",
+      "Nullable": false
+    },
+    {
+      "Name": "attrs",
+      "DataType": "JSONB",
+      "Nullable": false
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_document",
+      "PrimaryKey": true,
+      "IndexColumns": "documentid"
+    },
+    {
+      "Name": "ix_document_attrs",
+      "AccessMethod": "gin",
+      "IndexColumns": "attrs"
+    }
+  ]
+}

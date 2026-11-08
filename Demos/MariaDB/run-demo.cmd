@@ -1,8 +1,7 @@
 @echo off
 setlocal
 
-echo Publishing SchemaQuench...
-call "%~dp0..\..\build-schemaquench.cmd"
+call "%~dp0..\schemaquench-image.cmd" "%~dp0..\.." %1
 if %ERRORLEVEL% neq 0 exit /b 1
 
 echo Starting MariaDB demo...

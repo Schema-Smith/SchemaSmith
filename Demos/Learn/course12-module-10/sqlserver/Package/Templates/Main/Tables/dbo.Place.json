@@ -1,0 +1,41 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Schema": "dbo",
+  "Name": "Place",
+  "Columns": [
+    {
+      "Name": "PlaceId",
+      "DataType": "INT"
+    },
+    {
+      "Name": "Name",
+      "DataType": "NVARCHAR(100)"
+    },
+    {
+      "Name": "Shape",
+      "DataType": "GEOMETRY"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PK_Place",
+      "PrimaryKey": true,
+      "Unique": true,
+      "Clustered": true,
+      "IndexColumns": "PlaceId"
+    }
+  ],
+  "SpatialIndexes": [
+    {
+      "Name": "SX_Place_Shape",
+      "Column": "Shape",
+      "Tessellation": "GEOMETRY_GRID",
+      "BoundingBox": {
+        "XMin": 0,
+        "YMin": 0,
+        "XMax": 1000,
+        "YMax": 1000
+      }
+    }
+  ]
+}

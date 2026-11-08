@@ -1,0 +1,25 @@
+{
+  "Source": {
+    "Server": "localhost",
+    "Port": "13307",
+    "User": "root",
+    "Password": "Learn!Passw0rd",
+    "Database": "shop_brownfield_dev",
+    "Platform": "MariaDb",
+    "ConnectionProperties": {}
+  },
+  "Product": {
+    "Path": "./Package",
+    "Name": "Shop"
+  },
+  "Template": {
+    "Name": "Main"
+  },
+  "ShouldCast": {
+    "Tables": true,
+    "ObjectList": "Customer,Product,SalesOrder,OrderItem"
+  },
+  "OrphanHandling": {
+    "Mode": "Detect"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
+  "Name": "`Document`",
+  "Columns": [
+    {
+      "Name": "`DocumentId`",
+      "DataType": "INT",
+      "Nullable": false
+    },
+    {
+      "Name": "`Title`",
+      "DataType": "VARCHAR(200)",
+      "Nullable": false
+    },
+    {
+      "Name": "`Body`",
+      "DataType": "TEXT",
+      "Nullable": true
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "IndexColumns": "`DocumentId`"
+    }
+  ],
+  "FullTextIndexes": [
+    {
+      "Name": "ft_document",
+      "Columns": "`Title`"
+    }
+  ]
+}

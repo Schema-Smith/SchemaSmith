@@ -1,5 +1,5 @@
 {
   "$schema": "../../.json-schemas/templates.mariadb.schema",
   "Name": "Main",
-  "DatabaseIdentificationScript": "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'cookbook_r11'"
+  "DatabaseIdentificationScript": "SELECT schema_name FROM information_schema.schemata WHERE schema_name LIKE 'cookbook_r11_t%'"
 }

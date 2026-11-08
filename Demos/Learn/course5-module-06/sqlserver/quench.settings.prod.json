@@ -1,0 +1,24 @@
+{
+  "Target": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": {
+      "TrustServerCertificate": "True"
+    }
+  },
+  "WhatIfONLY": false,
+  "SchemaPackagePath": "./Package",
+  "KindleTheForge": true,
+  "ScriptTokens": {
+    "MainDb": "shop_brownfield_prod"
+  },
+  "DropTablesRemovedFromProduct": false,
+  "DropColumnsRemovedFromProduct": false,
+  "DropForeignKeysRemovedFromProduct": false,
+  "DropCheckConstraintsRemovedFromProduct": false,
+  "DropIndexesRemovedFromProduct": false,
+  "DropStatisticsRemovedFromProduct": false,
+  "DropExcludeConstraintsRemovedFromProduct": false,
+  "DropUnknownIndexes": false
+}

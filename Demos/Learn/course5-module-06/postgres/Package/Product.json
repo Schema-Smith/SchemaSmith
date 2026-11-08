@@ -1,0 +1,13 @@
+{
+  "$schema": ".json-schemas/products.postgresql.schema",
+  "Name": "Shop",
+  "ValidationScript": "SELECT EXISTS(SELECT * FROM pg_database WHERE datname = '{{MainDb}}')",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "ScriptTokens": {
+    "MainDb": "shop_brownfield_dev"
+  },
+  "ScriptFolders": [],
+  "Platform": "PostgreSQL"
+}

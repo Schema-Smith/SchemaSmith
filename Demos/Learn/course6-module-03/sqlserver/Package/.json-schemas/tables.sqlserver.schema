@@ -369,10 +369,6 @@
             "ContentEncoding": {
               "type": "string",
               "pattern": "^(?:Json|Xml)$"
-            },
-            "Columns": {
-              "type": "string",
-              "description": "Optional. The comma-separated columns the ContentFile was extracted with. A column listed here is delivered even when no row carries it (written NULL), so a column that was NULL in every extracted row still updates the target. DataTongs writes it for SQL Server. Omitted, the columns are the ones present in the data."
             }
           },
           "additionalProperties": false
@@ -409,10 +405,6 @@
               "ContentEncoding": {
                 "type": "string",
                 "pattern": "^(?:Json|Xml)$"
-              },
-              "Columns": {
-                "type": "string",
-                "description": "Optional. The comma-separated columns the ContentFile was extracted with. A column listed here is delivered even when no row carries it (written NULL), so a column that was NULL in every extracted row still updates the target. DataTongs writes it for SQL Server. Omitted, the columns are the ones present in the data."
               }
             },
             "additionalProperties": false
@@ -587,10 +579,6 @@
           "ForPath": {
             "type": "string",
             "description": "SQL Server 2012 SP1+. Makes this a secondary selective XML index on the path of that name in the selective index named by PrimaryIndex (USING XML INDEX … FOR (path)). SecondaryIndexType does not apply to it."
-          },
-          "Description": {
-            "type": "string",
-            "description": "Optional. Stored as the MS_Description extended property. An omitted value leaves an existing description alone; \"\" removes it."
           },
           "Extensions": {}
         },
@@ -930,10 +918,6 @@
             "maxLength": 128,
             "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
           },
-          "Description": {
-            "type": "string",
-            "description": "Optional. Stored as the MS_Description extended property. An omitted value leaves an existing description alone; \"\" removes it."
-          },
           "Extensions": {}
         },
         "additionalProperties": false,
@@ -1015,10 +999,6 @@
             "type": "string",
             "maxLength": 128,
             "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
-          },
-          "Description": {
-            "type": "string",
-            "description": "Optional. Stored as the MS_Description extended property. An omitted value leaves an existing description alone; \"\" removes it."
           },
           "Extensions": {}
         },

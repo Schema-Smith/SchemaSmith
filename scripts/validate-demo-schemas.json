@@ -60,21 +60,6 @@
     "files": "Demos/SqlServer/Sakila/Templates/*/Template.json"
   },
   {
-    "name": "SqlServer-Tutorial-Product-ValidProduct-Tables",
-    "schema": "Demos/SqlServer/Tutorials/Product/ValidProduct/.json-schemas/tables.sqlserver.schema",
-    "files": "Demos/SqlServer/Tutorials/Product/ValidProduct/Templates/**/Tables/**/*.json"
-  },
-  {
-    "name": "SqlServer-Tutorial-Product-ValidProduct-Products",
-    "schema": "Demos/SqlServer/Tutorials/Product/ValidProduct/.json-schemas/products.sqlserver.schema",
-    "files": "Demos/SqlServer/Tutorials/Product/ValidProduct/Product.json"
-  },
-  {
-    "name": "SqlServer-Tutorial-Product-ValidProduct-Templates",
-    "schema": "Demos/SqlServer/Tutorials/Product/ValidProduct/.json-schemas/templates.sqlserver.schema",
-    "files": "Demos/SqlServer/Tutorials/Product/ValidProduct/Templates/*/Template.json"
-  },
-  {
     "name": "SqlServer-Tutorial-Template-SaasProduct-Tables",
     "schema": "Demos/SqlServer/Tutorials/Template/SaasProduct/.json-schemas/tables.sqlserver.schema",
     "files": "Demos/SqlServer/Tutorials/Template/SaasProduct/Templates/**/Tables/**/*.json"
@@ -88,21 +73,6 @@
     "name": "SqlServer-Tutorial-Template-SaasProduct-Templates",
     "schema": "Demos/SqlServer/Tutorials/Template/SaasProduct/.json-schemas/templates.sqlserver.schema",
     "files": "Demos/SqlServer/Tutorials/Template/SaasProduct/Templates/*/Template.json"
-  },
-  {
-    "name": "SqlServer-Tutorial-Template-ValidProduct-Tables",
-    "schema": "Demos/SqlServer/Tutorials/Template/ValidProduct/.json-schemas/tables.sqlserver.schema",
-    "files": "Demos/SqlServer/Tutorials/Template/ValidProduct/Templates/**/Tables/**/*.json"
-  },
-  {
-    "name": "SqlServer-Tutorial-Template-ValidProduct-Products",
-    "schema": "Demos/SqlServer/Tutorials/Template/ValidProduct/.json-schemas/products.sqlserver.schema",
-    "files": "Demos/SqlServer/Tutorials/Template/ValidProduct/Product.json"
-  },
-  {
-    "name": "SqlServer-Tutorial-Template-ValidProduct-Templates",
-    "schema": "Demos/SqlServer/Tutorials/Template/ValidProduct/.json-schemas/templates.sqlserver.schema",
-    "files": "Demos/SqlServer/Tutorials/Template/ValidProduct/Templates/*/Template.json"
   },
   {
     "name": "PostgreSQL-AdventureWorks-Tables",

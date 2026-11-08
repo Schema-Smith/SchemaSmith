@@ -1,0 +1,61 @@
+{
+  "$schema": "../../../.json-schemas/tables.postgresql.schema",
+  "Name": "salesorder",
+  "Columns": [
+    {
+      "Name": "orderid",
+      "DataType": "int4",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "customerid",
+      "DataType": "int4",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "orderdate",
+      "DataType": "timestamp",
+      "Generated": "NEVER",
+      "Storage": "PLAIN",
+      "Compression": "DEFAULT"
+    },
+    {
+      "Name": "status",
+      "DataType": "varchar(20)",
+      "Generated": "NEVER",
+      "Storage": "EXTENDED",
+      "Compression": "DEFAULT"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "pk_salesorder",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "orderid",
+      "AccessMethod": "btree"
+    }
+  ],
+  "ForeignKeys": [
+    {
+      "Name": "fk_salesorder_customer",
+      "Columns": "customerid",
+      "RelatedTable": "customer",
+      "RelatedColumns": "customerid",
+      "DeleteAction": "",
+      "UpdateAction": "",
+      "RelatedTableSchema": "public"
+    }
+  ],
+  "CheckConstraints": [],
+  "Statistics": [],
+  "ExcludeConstraints": [],
+  "Policies": [],
+  "AccessMethod": "heap",
+  "PersistenceType": "Logged",
+  "FillFactor": 100
+}

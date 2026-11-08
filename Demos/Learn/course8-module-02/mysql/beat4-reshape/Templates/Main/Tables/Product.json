@@ -1,0 +1,62 @@
+{
+  "$schema": "../../../.json-schemas/tables.mysql.schema",
+  "Name": "`Product`",
+  "Columns": [
+    {
+      "Name": "`ProductId`",
+      "DataType": "int",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    },
+    {
+      "Name": "`Sku`",
+      "DataType": "varchar(100)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "CharacterSet": "utf8mb4"
+    },
+    {
+      "Name": "`Name`",
+      "DataType": "varchar(400)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": "",
+      "CharacterSet": "utf8mb4"
+    },
+    {
+      "Name": "`UnitPrice`",
+      "DataType": "decimal(19,4)",
+      "ShouldApplyExpression": "",
+      "OldName": "",
+      "VariantName": ""
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PRIMARY",
+      "PrimaryKey": true,
+      "Unique": true,
+      "UniqueConstraint": true,
+      "IndexColumns": "`ProductId`",
+      "ShouldApplyExpression": "",
+      "VariantName": "",
+      "IndexType": "BTREE"
+    }
+  ],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "ShouldApplyExpression": "",
+  "VariantName": "",
+  "OldName": "",
+  "Engine": "InnoDB",
+  "RowFormat": "Dynamic",
+  "CharacterSet": "utf8mb4",
+  "Collation": "utf8mb4_0900_ai_ci",
+  "FullTextIndexes": [],
+  "RebuildPolicy": {
+    "Mode": "THRESHOLD",
+    "Threshold": 3
+  }
+}

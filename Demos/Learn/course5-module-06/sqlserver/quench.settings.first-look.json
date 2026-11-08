@@ -1,0 +1,16 @@
+{
+  "Target": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "ConnectionProperties": {
+      "TrustServerCertificate": "True"
+    }
+  },
+  "WhatIfONLY": true,
+  "SchemaPackagePath": "./Package",
+  "KindleTheForge": true,
+  "ScriptTokens": {
+    "MainDb": "shop_brownfield_prod"
+  }
+}

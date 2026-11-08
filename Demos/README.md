@@ -28,6 +28,10 @@ Demonstrations of `ShouldApplyExpression` (conditional deployment) on real engin
 
 These demos use a different docker layout than the products above (engine pairs, or one instance with several databases) and live in `Conditional/` rather than per-platform subdirectories.
 
+## Working Alongside Other Tools
+
+- [`MySQL-PtOsc-Coexistence`](MySQL-PtOsc-Coexistence) — MySQL with 2.5 million rows. SchemaQuench declares the change and prints the exact `ALTER` clause under WhatIf, `pt-online-schema-change` applies it online, and the next deploy finds the swapped table matching the package. Use it for a change MySQL can't make without blocking writes, such as a column type change, where `OnlineApply` has no lower-lock form to ask for.
+
 ## Quick Start
 
 Choose a platform and run the matching launcher.
@@ -64,7 +68,10 @@ cd MySQL && ./run-demo.sh
 cd MariaDB && ./run-demo.sh
 ```
 
-The launcher publishes SchemaQuench from source (via `build-schemaquench.cmd` / `.sh` — requires the .NET SDK on the host), then runs `docker compose up --build -d` to start the database server and deploy the demo schemas.
+The launcher pulls the SchemaQuench image published with every release (`ghcr.io/schema-smith/schemaquench:2`), then runs `docker compose up --build -d` to start the database server and deploy the demo schemas. Docker is all you need.
+
+- **Pin a release:** set `SCHEMAQUENCH_IMAGE` first, e.g. `SCHEMAQUENCH_IMAGE=ghcr.io/schema-smith/schemaquench:2.8.0 ./run-demo.sh`.
+- **Run your own changes:** `./run-demo.sh --from-source` (or `run-demo.cmd --from-source`) publishes SchemaQuench from this checkout and runs the demo on that build. This needs the .NET SDK.
 
 Each platform folder contains:
 - Demo schema packages (product folders)

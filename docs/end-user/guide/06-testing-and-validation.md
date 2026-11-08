@@ -10,13 +10,13 @@ The demo included with SchemaSmith ships Docker Compose files that stand up comp
 cd Demos/SqlServer && ./run-demo.sh
 ```
 
-That single command does everything: publishes SchemaQuench from source (the launcher needs the .NET 10 SDK), starts a database server (SQL Server, PostgreSQL, MySQL, or MariaDB depending on which `Demos/` folder you launched), waits for it to be healthy, then deploys the matching schema package. When it finishes, you have a fully quenched database running locally. Swap `Demos/SqlServer` for `Demos/PostgreSQL`, `Demos/MySQL`, or `Demos/MariaDB` to target a different engine.
+That single command does everything: pulls the published SchemaQuench image, starts a database server (SQL Server, PostgreSQL, MySQL, or MariaDB depending on which `Demos/` folder you launched), waits for it to be healthy, then deploys the matching schema package. When it finishes, you have a fully quenched database running locally. Swap `Demos/SqlServer` for `Demos/PostgreSQL`, `Demos/MySQL`, or `Demos/MariaDB` to target a different engine.
 
 Here's how the compose pattern is structured:
 
 **db server** starts a database container with a health check that polls readiness. Nothing else starts until the server reports healthy. Environment variables configure the credentials, and the port maps to a non-default value on the host so it doesn't collide with any existing local database.
 
-**quench** builds SchemaQuench (or uses a prebuilt image), mounts the schema package as a volume at `/metadata`, and deploys it to the database server. All configuration flows through environment variables -- target server, credentials, package path, and any tokens the package expects. It depends on the database container with a `service_healthy` condition, so it waits for the server to be ready before attempting deployment.
+**quench** runs the published SchemaQuench image, mounts the schema package as a volume at `/metadata`, and deploys it to the database server. All configuration flows through environment variables -- target server, credentials, package path, and any tokens the package expects. It depends on the database container with a `service_healthy` condition, so it waits for the server to be ready before attempting deployment.
 
 **completed** is a lightweight marker container that runs only if every earlier step succeeds. If any step fails, `completed` never runs and the exit code tells you something broke.
 

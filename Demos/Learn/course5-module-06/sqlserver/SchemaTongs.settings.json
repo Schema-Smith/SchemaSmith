@@ -1,0 +1,26 @@
+{
+  "Source": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "Database": "shop_brownfield_dev",
+    "Platform": "SqlServer",
+    "ConnectionProperties": {
+      "TrustServerCertificate": "True"
+    }
+  },
+  "Product": {
+    "Path": "./Package",
+    "Name": "Shop"
+  },
+  "Template": {
+    "Name": "Main"
+  },
+  "ShouldCast": {
+    "Tables": true,
+    "ObjectList": "dbo.Customer,dbo.Product,dbo.SalesOrder,dbo.OrderItem"
+  },
+  "OrphanHandling": {
+    "Mode": "Detect"
+  }
+}

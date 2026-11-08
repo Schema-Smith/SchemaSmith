@@ -1,0 +1,9 @@
+{
+  "$schema": ".json-schemas/products.sqlserver.schema",
+  "Name": "Indexes",
+  "ValidationScript": "SELECT CAST(1 AS BIT)",
+  "TemplateOrder": [
+    "Main"
+  ],
+  "Platform": "SqlServer"
+}

@@ -1,0 +1,12 @@
+{
+  "Source": {
+    "Server": "localhost,11433",
+    "User": "sa",
+    "Password": "Learn!Passw0rd",
+    "Database": "declared_m11",
+    "Platform": "SqlServer",
+    "ConnectionProperties": { "TrustServerCertificate": "True" }
+  },
+  "Product": { "Path": "./Package", "Name": "Orders" },
+  "Template": { "Name": "Main" }
+}
