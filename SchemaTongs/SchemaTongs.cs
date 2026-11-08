@@ -1434,7 +1434,7 @@ SELECT s.name, s.schema_id
             {
                 var name = reader.GetString(0);
                 var schemaId = reader.GetInt32(1);
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
+                if (NotListedToCast(name)) continue;
                 schemas.Add((name, schemaId));
             }
         }
@@ -1551,7 +1551,7 @@ SELECT s.name AS SchemaName, t.name AS TypeName,
                 var schema = reader.GetString(0);
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
+                if (NotListedToCast(name, schema)) continue;
                 types.Add((schema, name, reader.GetString(2), reader.GetInt16(3), reader.GetByte(4), reader.GetByte(5), reader.GetBoolean(6)));
             }
         }
@@ -1595,7 +1595,7 @@ SELECT s.name AS SchemaName, tt.name AS TypeName, tt.type_table_object_id,
                 var schema = reader.GetString(0);
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
+                if (NotListedToCast(name, schema)) continue;
                 tableTypes.Add((schema, name, reader.GetInt32(2), reader.GetBoolean(3), reader.IsDBNull(4) ? "" : reader.GetString(4)));
             }
         }
@@ -1762,7 +1762,7 @@ SELECT s.name AS SchemaName, sq.name AS SequenceName,
                 var schema = reader.GetString(0);
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
+                if (NotListedToCast(name, schema)) continue;
                 var isCached = reader.GetBoolean(8);
                 int? cacheSize = reader.IsDBNull(9) ? null : reader.GetInt32(9);
                 sequences.Add((schema, new SqlServerSequence
@@ -1823,7 +1823,7 @@ SELECT SCHEMA_NAME(p.[schema_id]), p.[name], p.is_enabled, p.is_schema_bound, p.
 
         foreach (var policy in rows.GroupBy(r => (r.Schema, r.Name))
                      .Where(g => ShouldExtractFromSchema(g.Key.Schema))
-                     .Where(g => _objectsToCast.Length == 0 || _objectsToCast.Contains(g.Key.Name.ToLower()) || _objectsToCast.Contains($"{g.Key.Schema}.{g.Key.Name}".ToLower())))
+                     .Where(g => !NotListedToCast(g.Key.Name, g.Key.Schema)))
         {
             var qualified = $"[{Identifier.EscapeDelimited(policy.Key.Schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(policy.Key.Name, Platform.SqlServer)}]";
             command.CommandText = "DECLARE @policy NVARCHAR(600) = @p; " + SecurityPolicySignatureSql;
@@ -1924,7 +1924,7 @@ SELECT s.name AS SchemaName, sy.name AS SynonymName, sy.base_object_name
                 var schema = reader.GetString(0);
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
+                if (NotListedToCast(name, schema)) continue;
                 synonyms.Add((schema, name, reader.GetString(2)));
             }
         }
@@ -1973,7 +1973,7 @@ SELECT s.name AS SchemaName, o.name AS ObjectName, CONVERT(BIT, ISNULL(sm.is_sch
                 var schema = reader.GetString(0);
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
+                if (NotListedToCast(name, schema)) continue;
                 functions.Add((schema, name, reader.GetBoolean(2)));
             }
         }
@@ -2025,7 +2025,7 @@ SELECT s.name AS SchemaName, o.name AS ObjectName, CONVERT(BIT, ISNULL(sm.is_sch
                 var schema = reader.GetString(0);
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
+                if (NotListedToCast(name, schema)) continue;
                 views.Add((schema, name, reader.GetBoolean(2)));
             }
         }
@@ -2069,7 +2069,7 @@ SELECT s.name AS SchemaName, o.name AS ObjectName
                 var schema = reader.GetString(0);
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
+                if (NotListedToCast(name, schema)) continue;
                 procedures.Add((schema, name));
             }
         }
@@ -2155,7 +2155,7 @@ SELECT s.name AS TableSchema, pt.name AS TableName, tr.name AS TriggerName
                 var triggerName = reader.GetString(2);
                 var schemaName = reader.GetString(0);
                 if (!ShouldExtractFromSchema(schemaName)) continue;
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(triggerName.ToLower())) continue;
+                if (NotListedToCast(triggerName)) continue;
                 triggers.Add((schemaName, reader.GetString(1), triggerName));
             }
         }
@@ -2389,7 +2389,7 @@ SELECT name, is_accent_sensitivity_on, is_default
             while (reader.Read())
             {
                 var name = reader.GetString(0);
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
+                if (NotListedToCast(name)) continue;
                 catalogs.Add((name, reader.GetBoolean(1), reader.GetBoolean(2)));
             }
         }
@@ -2423,7 +2423,7 @@ SELECT stoplist_id, name
             while (reader.Read())
             {
                 var name = reader.GetString(1);
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
+                if (NotListedToCast(name)) continue;
                 stopLists.Add((reader.GetInt32(0), name));
             }
         }
@@ -2512,7 +2512,7 @@ SELECT tr.name AS TriggerName
             while (reader.Read())
             {
                 var name = reader.GetString(0);
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
+                if (NotListedToCast(name)) continue;
                 triggers.Add(name);
             }
         }
@@ -2613,7 +2613,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier, tr.is_disab
         foreach (var (schema, name) in collections)
         {
             if (!ShouldExtractFromSchema(schema)) continue;
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && !_objectsToCast.Contains($"{schema}.{name}".ToLower())) continue;
+            if (NotListedToCast(name, schema)) continue;
 
             command.CommandText = $"SELECT CAST(XML_SCHEMA_NAMESPACE(N'{EscapeSql(schema)}', N'{EscapeSql(name)}') AS NVARCHAR(MAX))";
             var xmlContent = (string)command.ExecuteScalar();
@@ -2903,7 +2903,7 @@ SELECT s.name AS SchemaName, v.name AS ViewName
 
         foreach (var (schema, name) in indexedViews)
         {
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains($"{schema}.{name}".ToLower()) && !_objectsToCast.Contains(name.ToLower())) continue;
+            if (NotListedToCast(name, schema)) continue;
 
             _progressLog.Info($"  Cast {_ingestEncoding} for {schema}.{name}");
             var viewJson = ExtractIndexedViewModel(command, schema, name);
@@ -3119,7 +3119,7 @@ SELECT t.schemaname, t.tablename, c.relkind, c.relispartition,
 
         foreach (var (schema, table, relKind, isPartitionChild, refusal) in tables)
         {
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains($"{schema}.{table}".ToLower()) && !_objectsToCast.Contains(table.ToLower())) continue;
+            if (NotListedToCast(table, schema)) continue;
 
             // A warning and a skip, not an error: the rest of the database extracts, and the run exits 1 as for any skip.
             if (refusal != null)
@@ -3293,7 +3293,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
 
         foreach (var (schema, name) in types)
         {
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains($"{schema}.{name}".ToLower()) && !_objectsToCast.Contains(name.ToLower())) continue;
+            if (NotListedToCast(name, schema)) continue;
 
             _progressLog.Info($"  Cast Json for domain type {schema}.{name}");
             command.CommandText = $"SELECT \"SchemaSmith\".\"GenerateDomainTypeJSON\"('{EscapeSql(schema)}', '{EscapeSql(name)}')";
@@ -3357,7 +3357,7 @@ SELECT n.nspname AS SchemaName, t.typname AS TypeName
 
         foreach (var (schema, name) in types)
         {
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains($"{schema}.{name}".ToLower()) && !_objectsToCast.Contains(name.ToLower())) continue;
+            if (NotListedToCast(name, schema)) continue;
 
             _progressLog.Info($"  Cast Json for enum type {schema}.{name}");
             command.CommandText = $"SELECT \"SchemaSmith\".\"GenerateEnumTypeJSON\"('{EscapeSql(schema)}', '{EscapeSql(name)}')";
@@ -3599,7 +3599,7 @@ SELECT n.nspname AS SchemaName, s.relname AS SequenceName
 
         foreach (var (schema, name) in sequences)
         {
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains($"{schema}.{name}".ToLower()) && !_objectsToCast.Contains(name.ToLower())) continue;
+            if (NotListedToCast(name, schema)) continue;
 
             _progressLog.Info($"  Cast Json for sequence {schema}.{name}");
             command.CommandText = $"SELECT \"SchemaSmith\".\"GenerateSequenceJSON\"('{EscapeSql(schema)}', '{EscapeSql(name)}')";
@@ -3949,7 +3949,7 @@ SELECT mv.schemaname, mv.matviewname
 
         foreach (var (schema, name) in matViews)
         {
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains($"{schema}.{name}".ToLower()) && !_objectsToCast.Contains(name.ToLower())) continue;
+            if (NotListedToCast(name, schema)) continue;
 
             _progressLog.Info($"  Cast Json for {schema}.{name}");
             command.CommandText = $"SELECT \"SchemaSmith\".\"GenerateMaterializedViewJson\"('{EscapeSql(schema)}', '{EscapeSql(name)}')";
@@ -3981,6 +3981,10 @@ SELECT mv.schemaname, mv.matviewname
 
     // An overloaded routine is named with its argument types (public.f(integer)), so listing public.f, or f, takes every
     // overload as it takes a routine that has none; the full signature takes that one alone.
+    // ShouldCast:ObjectList: true when a list is given and names neither the object nor (with a schema) schema.object.
+    private bool NotListedToCast(string name, string schema = null) =>
+        _objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower()) && (schema == null || !_objectsToCast.Contains($"{schema}.{name}".ToLower()));
+
     private bool IsListedToCast(string fullName)
     {
         var open = fullName.IndexOf('(');
@@ -4269,7 +4273,7 @@ SELECT COUNT(*)
         var count = 0;
         foreach (var name in names)
         {
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
+            if (NotListedToCast(name)) continue;
             var fileName = ResolveOutputPath(castPath, EncodeFullName(name, ".sql"));
             if (ShouldSkipKnownBadScript(fileName)) { count++; continue; }
 
@@ -4333,7 +4337,7 @@ SELECT EVENT_NAME
 
         foreach (var name in names)
         {
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
+            if (NotListedToCast(name)) continue;
 
             _progressLog.Info($"  Cast Json for event {name}");
             command.CommandText = $"CALL SchemaSmith_GenerateEventJSON({MySqlLiteral(targetSchema)}, {MySqlLiteral(name)})";
@@ -4479,7 +4483,7 @@ SELECT TABLE_NAME, TABLE_COMMENT
 
         foreach (var name in sequenceNames)
         {
-            if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(name.ToLower())) continue;
+            if (NotListedToCast(name)) continue;
 
             command.CommandText = $"SHOW CREATE SEQUENCE `{targetSchema.Replace("`", "``")}`.`{name.Replace("`", "``")}`";
             string createStatement;
@@ -4602,7 +4606,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
 
             var totalTables = tables.Count;
             var filteredCount = _objectsToCast.Length > 0
-                ? tables.Count(t => _objectsToCast.Contains(t.Table.ToLower()) || _objectsToCast.Contains($"{t.Schema}.{t.Table}".ToLower()))
+                ? tables.Count(t => !NotListedToCast(t.Table, t.Schema))
                 : totalTables;
 
             _progressLog.Info($"Casting Table Structures ({filteredCount} of {totalTables} tables)");
@@ -4617,7 +4621,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
             var extracted = new List<Table>();
             foreach (var (schema, table) in tables)
             {
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(table.ToLower()) && !_objectsToCast.Contains($"{schema}.{table}".ToLower())) continue;
+                if (NotListedToCast(table, schema)) continue;
 
                 _progressLog.Info($"  Cast Json for {table}");
 
@@ -4802,7 +4806,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                 var tableSchema = $"{reader["TABLE_SCHEMA"]}";
                 var tableName = $"{reader["TABLE_NAME"]}";
                 if (!ShouldExtractFromSchema(tableSchema)) continue;
-                if (_objectsToCast.Length > 0 && !_objectsToCast.Contains(tableName.ToLower()) && !_objectsToCast.Contains($"{tableSchema}.{tableName}".ToLower())) continue;
+                if (NotListedToCast(tableName, tableSchema)) continue;
 
                 _progressLog.Info($"  Cast {_ingestEncoding} for {tableSchema}.{tableName}");
                 // One bad table (e.g. a partitioned table hitting an engine-side extraction defect)
