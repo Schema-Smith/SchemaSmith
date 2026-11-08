@@ -166,6 +166,15 @@ public class CoherenceCheckTests
         Assert.That(PgPartCodes(PgPartitioned(method, "id", ("p1", bound))), Does.Contain("SS-PART-017"));
     }
 
+    // A comma inside a quoted bound value is part of the value, not a separator between key columns.
+    [Test]
+    public void PgPartitioning_ARangeBoundWithACommaInAQuotedValue_HasTheRightArity()
+    {
+        var table = PgPartitioned("RANGE", "id, d", ("p1", "FOR VALUES FROM (1, 'a,b') TO (2, 'c')"));
+        table.Columns[1].DataType = "text";
+        Assert.That(PgPartCodes(table), Does.Not.Contain("SS-PART-017"));
+    }
+
     [Test]
     public void PgPartitioning_ARangeBoundWithTheWrongArity_IsSS_PART_017()
     {

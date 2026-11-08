@@ -1162,12 +1162,24 @@ public sealed class CoherenceCheck : ISchemaCheck
         {
             var depth = 0;
             var inBacktick = false;
+            // A comma inside a string literal or a double-quoted identifier is part of it ('a,b' in a partition bound).
+            // A doubled quote toggles twice, so it stays inside.
+            var inSingle = false;
+            var inDouble = false;
             var comma = -1;
 
             for (var scan = pos; scan < len; scan++)
             {
                 var c = text[scan];
-                if (c == '`')
+                if (inSingle)
+                    inSingle = c != '\'';
+                else if (inDouble)
+                    inDouble = c != '"';
+                else if (!inBacktick && c == '\'')
+                    inSingle = true;
+                else if (!inBacktick && c == '"')
+                    inDouble = true;
+                else if (c == '`')
                     inBacktick = !inBacktick;
                 else if (!inBacktick && c == '(')
                     depth++;
