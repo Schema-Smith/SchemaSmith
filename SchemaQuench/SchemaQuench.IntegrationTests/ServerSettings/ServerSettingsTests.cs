@@ -82,14 +82,19 @@ public class MySqlServerSettingsTests : ServerSettingsSharedTests
     protected override string Kind => "Variable";
     protected override string DynamicName => "max_connections";
     protected override string DynamicValue => "180";
-    protected override (string Name, string Value)? PendingRestart => ("back_log", "100");
+    // MySQL 5.7 has only SET GLOBAL: no persisted value, so nothing waits for a restart and a fix is lost at one.
+    private bool? _persists;
+    private bool Persists => _persists ??= !Scalar("SELECT VERSION()").ToString()!.StartsWith("5.", StringComparison.Ordinal);
+
+    protected override (string Name, string Value)? PendingRestart => Persists ? ("back_log", "100") : null;
+    protected override bool FixPersists => Persists;
     protected override string[] ReadOnlyNames => ["lower_case_table_names", "log_bin"];
 
     protected override string ReadValue(string name) => Scalar($"SELECT @@GLOBAL.{name}")?.ToString();
 
     protected override void ResetSetting(string name)
     {
-        Exec($"RESET PERSIST IF EXISTS {name}");
+        if (Persists) Exec($"RESET PERSIST IF EXISTS {name}");
         if (name == "max_connections") Exec("SET GLOBAL max_connections = 151");
     }
 }
