@@ -251,16 +251,26 @@ public sealed class MySqlVariableDescriptor(Platform platform, int serverMajorVe
         {
             // performance_schema off: the running value is all there is to compare.
         }
-        var pending = persisted != null && !SettingValueComparer.Boolish(persisted, running);
+        var pending = persisted != null && !Same(persisted, running);
         return new SettingReading(true, persisted ?? running, running, pending, null);
     }
 
-    // A comma list (sql_mode, optimizer_switch) is a set: the server reorders it.
-    public bool Equivalent(string declared, SettingReading current)
+    public bool Equivalent(string declared, SettingReading current) => Same(declared, current.Configured);
+
+    // A comma list (sql_mode) is a set: the server reorders it. A list of flag=value pairs (optimizer_switch) is merged into
+    // the flags the server already has, so the flags declared are what must hold.
+    private static bool Same(string declared, string current)
     {
-        if ((declared ?? "").Contains(',') || (current.Configured ?? "").Contains(','))
-            return Items(declared).SetEquals(Items(current.Configured));
-        return SettingValueComparer.Boolish(declared, current.Configured);
+        var flags = Items(declared);
+        if (flags.Count > 0 && flags.All(f => f.Contains('=')))
+        {
+            var held = Items(current).Select(i => i.Split('=', 2)).Where(p => p.Length == 2)
+                .GroupBy(p => p[0].Trim(), StringComparer.OrdinalIgnoreCase).ToDictionary(g => g.Key, g => g.Last()[1].Trim(), StringComparer.OrdinalIgnoreCase);
+            return flags.Select(f => f.Split('=', 2)).All(p => held.TryGetValue(p[0].Trim(), out var v) && string.Equals(v, p[1].Trim(), StringComparison.OrdinalIgnoreCase));
+        }
+        if ((declared ?? "").Contains(',') || (current ?? "").Contains(','))
+            return flags.SetEquals(Items(current));
+        return SettingValueComparer.Boolish(declared, current);
     }
 
     private static HashSet<string> Items(string value) =>

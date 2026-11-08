@@ -86,6 +86,11 @@ public class ServerDescriptorTests
 
     [TestCase("STRICT_TRANS_TABLES,NO_ZERO_DATE", "NO_ZERO_DATE,STRICT_TRANS_TABLES", true)]
     [TestCase("STRICT_TRANS_TABLES", "STRICT_TRANS_TABLES,NO_ZERO_DATE", false)]
+    // optimizer_switch takes flag=value pairs and SET merges them into the rest: the declared flags are what must hold.
+    [TestCase("index_merge=off", "index_merge=off,index_merge_union=on,mrr=on", true)]
+    [TestCase("mrr=on, index_merge=off", "index_merge=off,index_merge_union=on,mrr=on", true)]
+    [TestCase("index_merge=off", "index_merge=on,index_merge_union=on,mrr=on", false)]
+    [TestCase("no_such_flag=on", "index_merge=on,mrr=on", false)]
     public void MySqlVariable_AListComparesAsASet(string declared, string current, bool equal)
     {
         Assert.That(new MySqlVariableDescriptor(Platform.MySQL, 8).Equivalent(declared, new SettingReading(true, current, current, false, null)), Is.EqualTo(equal));
