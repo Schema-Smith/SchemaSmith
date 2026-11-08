@@ -795,6 +795,8 @@ A table the package dropped, under `DropTablesRemovedFromProduct: false`, is not
 - **Counted:** every table, column, index, constraint, key, sequence, type, CDC, change-tracking and temporal change
   the preview would make (`wouldCreate`, `wouldModify`, `wouldRebuild`, `wouldDrop`), and every object script whose
   [stamp](#unchanged-object-scripts) says it changed, or whose object is missing.
+  A database the deploy would create, and a server or database setting with `Fix: true` it would change, count too;
+  a server setting counts on every target on that server.
 - **Reported, not counted:** a run-once migration not yet run (`pendingMigrations`) -- this release is not deployed
   yet; an object script never stamped, so whether it changed cannot be said (`unverifiable`); and a drop
   [`PreventDrop`](#preventdrop) kept (`extra`).
@@ -804,7 +806,7 @@ A table the package dropped, under `DropTablesRemovedFromProduct: false`, is not
 **Narrowing it -- `--DriftFailOn:<list>`.** A comma list of actions (`create`, `modify`, `drop`) and object types
 (`table`, `column`, `index`, `constraint`, `foreignKey`, `statistic`, `xmlIndex`, `fullTextIndex`, `sequence`,
 `domainType`, `domainConstraint`, `enumType`, `enumValue`, `temporal`, `changeDataCapture`, `changeTracking`,
-`database`, `schema`, `indexedView`, `materializedView`, `event`, `period`, `modules`, `migrations`). A change counts
+`database`, `schema`, `indexedView`, `materializedView`, `event`, `period`, `serverSetting`, `databaseSetting`, `modules`, `migrations`). A change counts
 when its action and its type are both listed; each side defaults to all, except `migrations`, which counts only when
 named. The default is `create,modify,drop,modules`. `--DriftFailOn:drop` gates on removals only;
 `--DriftFailOn:migrations` fails a target whose release is not deployed yet. An unknown word stops the run, exit `2`.

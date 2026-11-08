@@ -214,6 +214,39 @@ public class ResolvedSqlArtifactIntegrationTests
         }
     }
 
+    // A --Drift run that finishes its check (exit 0 or 5) leaves none of its own files behind either.
+    [Test]
+    public void ADriftRun_DeletesItsOwnFiles()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            SetupSharedMocks(null, null);
+            _environment.CommandLine.Returns("SchemaQuench.exe --Drift");
+            var cfg = FactoryContainer.Resolve<IConfigurationRoot>();
+            cfg["SchemaPackagePath"] = TestHelper.GetTestProductPath("PostgreSQL", "ValidProduct");
+            cfg["ArtifactPath"] = _artifactDir;
+            cfg["WriteDebugSql"] = "true";
+            File.WriteAllText(Path.Join(_artifactDir, "SchemaQuench - Mine.sql"), Schema.Utility.ResolvedSqlArtifactWriter.OwnerLine("ValidProduct", "elsewhere", "elsewhere", ""));
+
+            try
+            {
+                RunSchemaQuench();
+
+                _environment.Received(1).Exit(Arg.Is<int>(code => code == 0 || code == 5));
+                Assert.That(Directory.GetFiles(_artifactDir, "*.sql").Select(Path.GetFileName), Is.Empty, "every file this run wrote is gone");
+            }
+            finally
+            {
+                _environment.CommandLine.Returns("SchemaQuench.exe");
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                cfg["ArtifactPath"] = null;
+                cfg["WriteDebugSql"] = null;
+                cfg["SchemaPackagePath"] = null;
+            }
+        }
+    }
+
     // #576: without WriteDebugSql no .sql file is written -- every deploy used to write one per table pass into the working
     // folder -- and the failure says how to get it.
     [Test]

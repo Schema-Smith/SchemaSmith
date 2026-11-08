@@ -123,13 +123,13 @@ public static class Program
         {
             // A preview took up no checkpoint, so a failed deploy's resume point is still the real run's to use.
             if (!productQuench.IsWhatIfOnly) CleanupCheckpoints();
+            // #576: a clean run leaves none of its debug files behind; a drift check that finished is one.
+            ResolvedSqlArtifactWriter.DeleteOwned(DebugSql.ArtifactDirectory, o => o.Run == ResolvedSqlArtifactWriter.RunId);
             if (productQuench.IsDrift)
             {
                 LogBackup.BackupLogsAndExit("SchemaQuench", productQuench.ExitCode);
                 return;
             }
-            // #576: a clean run leaves none of its debug files behind.
-            ResolvedSqlArtifactWriter.DeleteOwned(DebugSql.ArtifactDirectory, o => o.Run == ResolvedSqlArtifactWriter.RunId);
             // 1 when a feature was downgraded on a target that lacks it: the deploy finished, but not everything the
             // package declares is in place. The summary lists each downgrade.
             LogBackup.BackupLogsAndExit("SchemaQuench", productQuench.Incomplete ? 1 : 0);
