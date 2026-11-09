@@ -29,6 +29,7 @@ public abstract class HostileNameExtractionSharedTests
     private const string H = "a'b%c`d.e\\f,g h éΩ";
     private const string Table = "t" + H, Column = "c" + H;
     private string _db = "";
+    private string _extractedTable = Table;
     private string _serverConnection = "";
     private string _productPath = "";
 
@@ -43,6 +44,8 @@ public abstract class HostileNameExtractionSharedTests
         _db = $"th'q_{Guid.NewGuid():N}"[..24];
         Run($"CREATE DATABASE {B(_db)}");
         Run($"CREATE TABLE {B(_db)}.{B(Table)} ({B(Column)} INT NOT NULL PRIMARY KEY) DEFAULT CHARSET=utf8mb4");
+        // Under lower_case_table_names=1 the server stores the table name in lower case, so that is the name it has.
+        if (Scalar("SELECT @@lower_case_table_names") == "1") _extractedTable = Table.ToLowerInvariant();
     }
 
     [OneTimeTearDown]
@@ -94,13 +97,22 @@ public abstract class HostileNameExtractionSharedTests
 
         var tablesDir = Path.Join(_productPath, "Templates", "Main", "Tables");
         var tables = Directory.Exists(tablesDir) ? Directory.GetFiles(tablesDir, "*.json").Select(File.ReadAllText).ToList() : [];
-        var table = tables.SingleOrDefault(t => t.Contains("\"Name\": \"" + B(Table).Replace("\\", "\\\\")));
+        var table = tables.SingleOrDefault(t => t.Contains("\"Name\": \"" + B(_extractedTable).Replace("\\", "\\\\")));
         Assert.Multiple(() =>
         {
             Assert.That(errors, Is.Empty, "the extraction reported errors");
             Assert.That(table, Is.Not.Null, $"no table file holds the name; written: {string.Join(" || ", tables)}");
             Assert.That(table ?? "", Does.Contain("\"Name\": \"" + B(Column).Replace("\\", "\\\\")), "the column");
         });
+    }
+
+    private string Scalar(string sql)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_serverConnection);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        return cmd.ExecuteScalar()?.ToString() ?? "";
     }
 
     private void Run(string sql)

@@ -507,9 +507,10 @@ INSERT INTO `{child}` (`Id`, `ParentId`) VALUES (10, 1), (11, 2);");
             // The key -- not declared by this package -- is set aside for the foreign-key pass to put back; dropped and
             // left to the child's JSON, a key no package declares was gone for good. Any deploy in this database restores
             // a set-aside key, and the suite deploys concurrently, so by now it is either still recorded or already back
-            // on the child against the replacement.
+            // on the child against the replacement. The record holds the name as the server reports it, folded to lower
+            // case under lower_case_table_names=1, so it is looked up without regard to case.
             var recorded = Scalar(cmd, "SELECT CONCAT(Declared, '|', Definition) FROM SchemaSmith_RebuildSetAsideForeignKeys "
-                                       + $"WHERE ChildTable = {Lit(child)} AND KeyName = {Lit(fkName)}")?.ToString();
+                                       + $"WHERE LOWER(ChildTable) = LOWER({Lit(child)}) AND KeyName = {Lit(fkName)}")?.ToString();
             if (recorded != null)
                 Assert.That(recorded, Does.StartWith($"0|FOREIGN KEY (`ParentId`) REFERENCES `{_mainDb}`.`{parent}` (`Id`) ON DELETE "));
             else
@@ -521,7 +522,7 @@ INSERT INTO `{child}` (`Id`, `ParentId`) VALUES (10, 1), (11, 2);");
         finally
         {
             Exec(cmd, $"DROP TABLE IF EXISTS `{child}`");
-            Exec(cmd, $"DELETE FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE ChildTable = {Lit(child)}");
+            Exec(cmd, $"DELETE FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE LOWER(ChildTable) = LOWER({Lit(child)})");
             Exec(cmd, $"DROP TABLE IF EXISTS `{parent}`, `{parent}_SchemaSmithRebuild`, `{parent}_SchemaSmithOld`");
             conn.Close();
         }
