@@ -543,6 +543,25 @@ SchemaSmith surfaces the database engine's informational output -- notices, prin
 
 ---
 
+## Run identity settings
+
+SchemaQuench writes the [run identity](deployment-summary-report.md#run-identity) into every deployment summary. On GitHub Actions, Azure DevOps, GitLab and Jenkins it is read from the pipeline's environment with no setup. These settings override what was detected, field by field, or supply it where nothing is detected. They usually change with every run, so they are passed as a switch or an environment variable more often than in a file:
+
+```bash
+SchemaQuench --RunLabel:2026.11.3 --RunEnvironment:production
+export SmithySettings_RunLabel=2026.11.3
+```
+
+| Setting | Fills |
+| --- | --- |
+| `RunLabel` | `run.label`: a release number, a ticket. |
+| `RunCommit`, `RunBranch`, `RunRepository` | `run.source`. |
+| `RunPipeline`, `RunPipelineRunId`, `RunUrl`, `RunActor`, `RunEnvironment` | `run.ci`. With no CI system detected, `run.ci.provider` is `Other`. |
+
+On Octopus Deploy, whose variables are not in the environment, pass them in the step's command line: `--RunLabel:#{Octopus.Release.Number} --RunEnvironment:#{Octopus.Environment.Name} --RunPipeline:#{Octopus.Project.Name}`.
+
+---
+
 ## Exit Codes
 
 | Code | Condition | Recommended action |

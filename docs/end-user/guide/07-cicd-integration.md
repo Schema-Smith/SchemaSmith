@@ -334,6 +334,16 @@ Runs every object script and `[ALWAYS]` script twice in sequence and requires bo
 
 Run this against a disposable database in CI — it is not meant for production targets. `RunScriptsTwice` is an idempotency check, not a dependency-resolution mechanism: the retry loop already handles inter-object dependencies. Run-once migration scripts are excluded from the double-run.
 
+## Tracing a run
+
+Every deployment summary names the run that wrote it: a run id, the package's content hash, the commit and branch, and the pipeline run with its link. On GitHub Actions, Azure DevOps, GitLab and Jenkins that needs no setup. Add a label your team recognises, and on any other system the pipeline facts, with the [run identity settings](../reference/configuration.md#run-identity-settings):
+
+```bash
+SchemaQuench --RunLabel:2026.11.3
+```
+
+Archive `SchemaQuench - Summary.json` with the build, and any summary found later says which release, commit and pipeline run it came from. Two targets whose `run.package.contentHash` match received the same package, even when it was deployed from an artifact with no commit to compare. The fields: [Run identity](../reference/deployment-summary-report.md#run-identity).
+
 ## Secret management
 
 Every CI/CD platform has a built-in secret store. SchemaSmith's environment variable model was designed to work with all of them -- every sensitive setting injected at runtime, nothing stored in files committed to source control.

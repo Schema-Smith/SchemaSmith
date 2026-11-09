@@ -53,7 +53,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 
 ```jsonc
 {
-  "schemaVersion": "1.3",           // contract version of this report shape
+  "schemaVersion": "1.4",           // contract version of this report shape
   "tool": "SchemaQuench",
   "toolVersion": "2.2.0.0",
   "run": {
@@ -66,7 +66,17 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     "outcome": "Success",           // Success | Incomplete | PartialFailure | Aborted
     "exitCode": 0,
     "resumedFromCheckpoint": false,
-    "settings": { "commandTimeoutSeconds": 0, "lockTimeoutSeconds": 10, "contentionRetryAttempts": 20 }
+    "settings": { "commandTimeoutSeconds": 0, "lockTimeoutSeconds": 10, "contentionRetryAttempts": 20 },
+    "id": "5d2c1a0e-7f3b-4a55-9a0c-1c2f6f0e8b11",   // this run; the progress log's "Run <id>" line too
+    "label": "2026.11.3",           // RunLabel, when the pipeline supplies one
+    "resumesRunId": null,           // on a --ResumeQuench run, the run whose checkpoint it took up
+    "package": { "contentHash": "sha256:9b1f…", "fileCount": 412 },
+    "source": { "repository": "acme/northwind-db", "commit": "4f2a9c1e…", "branch": "main", "from": "ci" },
+    "ci": {
+      "provider": "GitHubActions", "pipeline": "Deploy production", "runId": "9912345678", "runAttempt": "1",
+      "url": "https://github.com/acme/northwind-db/actions/runs/9912345678", "actor": "octocat", "environment": "production"
+    },
+    "host": { "machine": "BUILD01", "user": "svc-deploy" }
   },
   "targets": [
     {
@@ -78,6 +88,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
       "durationMs": 14820,
       "databaseSource": "DatabaseIdentificationScript",
       "schemaSource": "TemplateTargets:Tenant:Schemas",
+      "connectedAs": "deploy_user",  // the login the engine saw
       "slots": [
         { "slot": "ModifiedTables", "durationMs": 9120, "scriptsRun": 3 },
         { "slot": "ObjectScripts",  "durationMs": 4110, "scriptsRun": 12 }
@@ -139,7 +150,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 
 | Key | Meaning |
 | --- | --- |
-| `schemaVersion` | Contract version of the report shape — currently `"1.3"`. |
+| `schemaVersion` | Contract version of the report shape — currently `"1.4"`. |
 | `tool` | Always `"SchemaQuench"`. |
 | `toolVersion` | The CLI version that wrote the report — the same string `--version` prints. |
 | `run` | Run-level facts: product, platform, timing, mode, outcome. |
@@ -169,6 +180,32 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `resumedFromCheckpoint` | `true` when the run resumed a prior interrupted deployment. |
 | `driftTier` | On a `Drift` run, how it read the targets: `0` against the helpers already there, `1` in a rolled-back transaction, `2` through a helper database. `null` otherwise. Schema version 1.3 added it. |
 | `settings` | The limits the run used: `commandTimeoutSeconds` (`0` = none), `lockTimeoutSeconds` (`null` = the engine's own wait) and `contentionRetryAttempts`. See [Timeouts and contention](configuration.md#timeouts-and-contention). Schema version 1.3 added it. |
+| `id` | A new id for every run. The progress log says `Run <id>` just after `Begin Quench`, and every checkpoint the run saves carries it. Schema version 1.4 added it, with the rest of the run identity below. |
+| `label` | Free text the pipeline supplied as `RunLabel`: a release number, a ticket. `null` when none was. |
+| `resumesRunId` | On a `--ResumeQuench` run, the `id` of the run whose checkpoint it took up. `null` otherwise, and for a checkpoint written before 1.4. |
+| `package` | `contentHash` (`sha256:` and 64 hex digits) and `fileCount`: the package's identity, the same for a Windows and a Linux checkout and for a folder and its zip. See [Run identity](#run-identity). `null` when the package could not be hashed. |
+| `source` | `repository`, `commit` and `branch` the package came from, and `from`: whether the commit came from a `setting`, the `ci` system or the package's own `git` repository. `null` when none was found. |
+| `ci` | The pipeline run: `provider` (`GitHubActions`, `AzureDevOps`, `GitLab`, `Jenkins`, or `Other` when only settings supplied it), `pipeline`, `runId`, `runAttempt`, `url`, `actor` and `environment`. `null` when the run was not under a recognised CI system and no setting supplied it. |
+| `host` | `machine` and `user` of the process that ran, with the user's domain where it has one. Names only, never a credential. Not printed in `Summary.md`, which is the file that gets pasted into tickets. |
+
+### Run identity
+
+The run identity ties a summary found in an artifact store to the package and the pipeline run that produced it.
+
+**The package's content.** `package.contentHash` covers every file under the product folder, taken in order of its path, with Windows line ends read as Unix ones. Directories whose names start with `.` (`.git`, `.json-schemas`), `.sqlerror` files and a log directory inside the package are left out, since the tools and editors write those. A package deployed from a zip hashes the same as its folder. Two targets with the same hash received the same package, even where there is no commit to compare, as with a package deployed from a build artifact.
+
+**Where the source comes from.** Each of `repository`, `commit` and `branch` is taken from the first of these that has it: a `Run*` setting, the CI system's environment, then the package's own repository (read from the files under `.git`, worktrees included; no `git` executable is run).
+
+**Recognised CI systems.** Detected from the variables each one sets for every job:
+
+| Provider | Recognised by | Run id (attempt) | Environment |
+| --- | --- | --- | --- |
+| `GitHubActions` | `GITHUB_ACTIONS=true` | `GITHUB_RUN_ID` (`GITHUB_RUN_ATTEMPT`) | none; set `RunEnvironment` |
+| `AzureDevOps` | `TF_BUILD=True` | `BUILD_BUILDID` (`SYSTEM_JOBATTEMPT`) | `ENVIRONMENT_NAME` in a deployment job, else `RELEASE_ENVIRONMENTNAME` |
+| `GitLab` | `GITLAB_CI=true` | `CI_PIPELINE_ID` | `CI_ENVIRONMENT_NAME` |
+| `Jenkins` | `JENKINS_URL` or `JENKINS_HOME` | `BUILD_NUMBER` | none; set `RunEnvironment` |
+
+Octopus Deploy does not put its variables in the environment, so pass them as settings: see [Run identity settings](configuration.md#run-identity-settings).
 
 ### `targets[]`
 
@@ -179,6 +216,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `outcome` | `Success`, `Failed`, or `Skipped`. A target skipped because a `TemplateTargets` database or schema does not exist and `CreateIfMissing` is `false` is listed as `Skipped`. |
 | `durationMs` | Milliseconds spent on this target. |
 | `slots[]` | Per-slot timing for this target: `slot`, `durationMs`, `scriptsRun`. |
+| `connectedAs` | The login the engine reported for this target's session: `ORIGINAL_LOGIN()` on SQL Server, `session_user` on PostgreSQL, `USER()` without its host on MySQL and MariaDB. Asked of the engine, not read from the settings file, so it names the real identity under Windows authentication or a cloud identity too. A name, never a credential. `null` when it could not be read. Schema version 1.4 added it. |
 | `databaseSource` / `schemaSource` | Where each axis of this target came from — the discovery script, or a `TemplateTargets` override naming the template and key. This is the run's source-disclosure audit trail: it answers "was this tenant selected by the script, or overridden in config?" per target. A regular template has no schema axis, so its targets carry `schemaSource: "(regular template)"` -- which is every target on MySQL and MariaDB, where schema templates do not apply. Empty on a run with no source information recorded. |
 
 ### `migrationScripts[]`
