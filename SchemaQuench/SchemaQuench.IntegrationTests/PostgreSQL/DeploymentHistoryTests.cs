@@ -16,6 +16,7 @@ public class DeploymentHistoryTests : DeploymentHistorySharedTests
     protected override string MainConnectionString => TestConnection("postgres");
     protected override string ConfigPrefix => "PostgreSQL";
     protected override string ProductName => "HistoryProduct";
+    protected override string ReferenceQueriesMarker => "-- PostgreSQL";
 
     protected override string ViewScript(string view, int value) => $"CREATE OR REPLACE VIEW public.{view} AS SELECT {value} AS x";
     protected override string DropView(string view) => $"DROP VIEW IF EXISTS public.{view}";

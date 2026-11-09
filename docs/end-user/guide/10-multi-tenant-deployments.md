@@ -277,6 +277,8 @@ If one tenant's iteration fails and `ContinueOnSchemaFailure: true` is set, the 
 
 > **WhatIf at scale:** WhatIf output for large-N schema-template deployments is verbose -- one full diff section per tenant, in the tenant's schema. It is most useful here while you develop a new migration, to confirm the generated SQL for one or two tenants before the full fan-out. To ask whether the fleet matches its package, run a [drift check](../reference/schemaquench.md#drift-checks) instead: tenants that need the same change share one line (`Tenant: drift, plan a41c… on 48 of 50 target(s)`), the two that differ are named, and the exit code says whether anything drifted.
 
+Each tenant also answers for itself afterwards. Its [deployment record](../reference/schemaquench.md#deployment-record) holds a row per deployment, with the schema for a schema template, so the question "why does this tenant differ from its neighbours" starts with a query on that tenant: when it was last deployed, from which commit, and how that run ended.
+
 ## Picking the pattern
 
 Both patterns deploy from the same schema package format. The choice is a database-design and operational decision, not a tooling one.

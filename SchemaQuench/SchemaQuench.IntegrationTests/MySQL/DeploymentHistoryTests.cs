@@ -16,6 +16,7 @@ public class DeploymentHistoryTests : DeploymentHistorySharedTests
     protected override string MainConnectionString => FixtureSetup.GetMainDbConnectionString();
     protected override string ConfigPrefix => "MySQL";
     protected override string ProductName => "HistoryProduct";
+    protected override string ReferenceQueriesMarker => "-- MySQL and MariaDB";
 
     protected override string ViewScript(string view, int value) => $"CREATE OR REPLACE VIEW `{MainDb}`.{view} AS SELECT {value} AS x";
     protected override string DropView(string view) => $"DROP VIEW IF EXISTS `{MainDb}`.{view}";

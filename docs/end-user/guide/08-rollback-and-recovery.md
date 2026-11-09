@@ -41,6 +41,8 @@ A deployment can stop in the middle -- a migration script trips on unexpected da
 - **Other targets continue.** The rest of that database's deploy stops. With `ContinueOnDatabaseFailure` at its default of `true`, the other databases in the template keep deploying and the run exits `2` when they are done. `SchemaQuench - Failures.log` names every scope that failed, with its error and the lines leading up to it, so you are not grepping an interleaved log. The product's `After` scripts and version stamp are skipped, so the next run is not told this version is deployed.
 - **Recovery is a re-run.** Fix the cause and run the same package again. SchemaQuench computes the delta from where the database actually is, so everything that already landed is a no-op and the deploy converges -- there is nothing to undo first. On a long deployment, `--ResumeQuench` skips the steps and scripts the failed run already recorded instead of re-checking them.
 
+The target keeps its own account of the run: its [deployment record](../reference/schemaquench.md#deployment-record) has a row for each template deployed to it, `Failed` with a finish time where the deploy stopped, or still `Started` if the run died before it could say. The row's `RunId` finds that run's `Summary.json`.
+
 Read the failure with [My deployment failed](12-troubleshooting.md#my-deployment-failed), resume with [Resuming a failed deployment](09-power-workflows.md#resuming-a-failed-deployment), and set the failure routing with [ContinueOnDatabaseFailure](../reference/schemaquench.md#continueondatabasefailure).
 
 ## What needs migration scripts

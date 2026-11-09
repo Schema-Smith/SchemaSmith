@@ -190,7 +190,7 @@ Pick the file by the summary's `schemaVersion`.
 | `resumedFromCheckpoint` | `true` when the run resumed a prior interrupted deployment. |
 | `driftTier` | On a `Drift` run, how it read the targets: `0` against the helpers already there, `1` in a rolled-back transaction, `2` through a helper database. `null` otherwise. Schema version 1.3 added it. |
 | `settings` | The limits the run used: `commandTimeoutSeconds` (`0` = none), `lockTimeoutSeconds` (`null` = the engine's own wait) and `contentionRetryAttempts`. See [Timeouts and contention](configuration.md#timeouts-and-contention). Schema version 1.3 added it. |
-| `id` | A new id for every run. The progress log says `Run <id>` just after `Begin Quench`, and every checkpoint the run saves carries it. Schema version 1.4 added it, with the rest of the run identity below. |
+| `id` | A new id for every run. The progress log says `Run <id>` just after `Begin Quench`, every checkpoint the run saves carries it, and so does each row the run writes in a target's [deployment record](schemaquench.md#deployment-record). Schema version 1.4 added it, with the rest of the run identity below. |
 | `label` | Free text the pipeline supplied as `RunLabel`: a release number, a ticket. `null` when none was. |
 | `resumesRunId` | On a `--ResumeQuench` run, the `id` of the run whose checkpoint it took up. `null` otherwise, and for a checkpoint written before 1.4. |
 | `package` | `contentHash` (`sha256:` and 64 hex digits) and `fileCount`: the package's identity, the same for a Windows and a Linux checkout and for a folder and its zip. See [Run identity](#run-identity). `null` when the package could not be hashed. |

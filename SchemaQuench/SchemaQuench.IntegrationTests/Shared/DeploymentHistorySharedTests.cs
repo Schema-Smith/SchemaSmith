@@ -2,6 +2,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -18,6 +20,8 @@ public abstract class DeploymentHistorySharedTests : ObjectScriptDeployFixture
 {
     protected abstract string ViewScript(string view, int value);
     protected abstract string DropView(string view);
+    /// <summary>The comment that opens this engine's block of example queries on the reference page.</summary>
+    protected abstract string ReferenceQueriesMarker { get; }
 
     private const string View = "history_v";
     private const string OtherProduct = "HistoryOtherProduct";
@@ -181,6 +185,33 @@ public abstract class DeploymentHistorySharedTests : ObjectScriptDeployFixture
 
         Assert.That(Count($"SELECT COUNT(*) FROM {Table} WHERE {C("Product")} = '{ProductName}'"), Is.EqualTo(2), "both runs' rows");
         Assert.That(Rows(second), Is.EqualTo(1));
+    }
+
+    // The reference page's example queries for this engine run against a database that has the record.
+    [Test]
+    public void TheReferencePagesQueries_Run()
+    {
+        NewRun();
+        Assert.That(RunDrift(switches: "").ExitCode, Is.EqualTo(0));
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir != null && !File.Exists(Path.Join(dir.FullName, "SchemaSmith.sln"))) dir = dir.Parent;
+        var page = File.ReadAllText(Path.Join(dir!.FullName, "docs", "end-user", "reference", "schemaquench.md")).Replace("\r\n", "\n");
+        var section = page[page.IndexOf("## Deployment Record", StringComparison.Ordinal)..];
+        var start = section.IndexOf(ReferenceQueriesMarker + "\n", StringComparison.Ordinal);
+        Assert.That(start, Is.GreaterThan(0), $"the page's '{ReferenceQueriesMarker}' block");
+        var block = section[start..section.IndexOf("```", start, StringComparison.Ordinal)];
+        var statements = block.Split(';').Select(q => string.Join("\n", q.Split('\n').Where(l => !l.TrimStart().StartsWith("--")))).Where(q => q.Trim().Length > 0).ToList();
+        Assert.That(statements, Has.Count.EqualTo(3), "the last deployments, the last 30 days, and runs never finished");
+
+        foreach (var statement in statements)
+        {
+            using var command = Connection.CreateCommand();
+            command.CommandText = statement;
+            using var reader = command.ExecuteReader();
+            Assert.That(reader.FieldCount, Is.GreaterThan(0), statement);
+        }
+        Assert.That(Scalar(statements[0].Replace("SELECT TOP (5) StartedUtc", "SELECT TOP (5) Outcome").Replace("SELECT \"StartedUtc\"", "SELECT \"Outcome\"").Replace("SELECT StartedUtc", "SELECT Outcome")), Is.EqualTo("Success"),
+            "the first query finds the latest deployment");
     }
 
     private Guid OldRow(string product)

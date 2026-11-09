@@ -1005,6 +1005,8 @@ SchemaQuench does its comparing and changing from inside the target: the procedu
 | `ExpressionMap` | For each check, computed or generated column, default or predicate SchemaSmith applied: the text you declared, the text the engine stored, and the engine version (and compatibility level) at the time. See [Expression change detection](#expression-change-detection). |
 | `ProductOwnership` | Which product (and template) owns a table, index, materialized view or event, and the table's sticky `PreventDrop` marker. On SQL Server only memory-optimized tables are recorded here; everything else carries its ownership as an extended property. See [Table Ownership](#table-ownership). |
 | `ChangeAudit` | A working queue, not a history: each procedure writes a row per object it changed (or, under WhatIf, would change) tagged with its session id, and SchemaQuench reads and deletes its own session's rows at the end of each work unit to build the [deployment summary](deployment-summary-report.md). Rows a session that died left behind are discarded at the start of the next run that reuses its id. |
+| `DeploymentHistory` | One row per deployment of a template to the database: when, from what, by whom and how it ended. See [Deployment Record](#deployment-record). |
+| `RebuildSetAsideForeignKeys` | During a [table rebuild](configuration.md#rebuildpolicy), the foreign keys other tables hold against the table, set aside until the foreign-key pass puts them back. Empty between deployments. |
 | `StatusMessages` (MySQL and MariaDB only) | The progress lines the procedures write as they go, since a procedure on these engines cannot print to the client. SchemaQuench reads them during a step and deletes its session's rows afterwards; anything older than an hour is cleared at kindle. |
 
 On MySQL and MariaDB the names are `SchemaSmith_KindleStamp`, `SchemaSmith_CompletedMigrationScripts`, and so on; the quench steps also create session temporary tables with a `_SchemaSmith_` prefix, which exist only for the connection and are dropped as each work unit ends.
@@ -1047,6 +1049,54 @@ On MySQL and MariaDB the names are `SchemaSmith_KindleStamp`, `SchemaSmith_Compl
 The deploy machine keeps its own traces: the log directories and the [checkpoint files](#checkpoint-and-resume) under the checkpoint directory, which a clean run removes for its own targets.
 
 ---
+
+## Deployment Record
+
+Every deployment leaves a row in the target's `SchemaSmith.DeploymentHistory` table (`SchemaSmith_DeploymentHistory` on MySQL and MariaDB): one row per template deployed to a database, or per schema for a schema template. It answers, with a query on the database itself, when it was last deployed, from which release, by whom and how that ended, when the deployment summary from that day is somewhere else.
+
+A row is written as `Started` before the first change, on its own connection, so a run that dies a moment later still leaves it. When the target finishes it becomes `Success`, `Failed`, or `Incomplete` (a feature the target could not take was downgraded), with the finish time and how many changes the run applied. `--WhatIf`, `--Drift`, `--Validate`, `--TestConnection` and `--PreviewTargets` write nothing. SchemaQuench never reads the table to decide anything, and writing it never fails a deployment: a write that does not go through is one warning.
+
+| Column | Holds |
+|---|---|
+| `RunId` | The deployment summary's `run.id`: the key that joins this row to a `Summary.json` |
+| `Product`, `Template`, `SchemaName` | What was deployed where; `SchemaName` only for a schema template |
+| `StartedUtc`, `FinishedUtc` | UTC, from the machine that ran SchemaQuench; `FinishedUtc` is null until the target finishes |
+| `Outcome`, `ChangesApplied` | `Started`, `Success`, `Failed` or `Incomplete`; the changes this run made to this target (`0`: it found nothing to do) |
+| `ToolVersion`, `PackageHash` | The SchemaQuench version and the package's content hash (`run.package.contentHash`) |
+| `SourceCommit`, `SourceBranch`, `RunLabel`, `PipelineUrl` | The [run identity](deployment-summary-report.md#run-identity) |
+| `Actor`, `DeployedAs` | Who ran it (the CI actor, or the operating-system user) and the login the database saw, asked of the engine. Names, never credentials |
+| `ResumedFromRunId` | On a `--ResumeQuench` run, the run whose checkpoint it took up; that run's own row stays `Started` |
+
+| Setting | Default | Effect |
+|---|---|---|
+| `DeploymentHistory` | `on` | `off` writes nothing. The table is there either way, as an empty helper table. |
+| `DeploymentHistoryRetentionDays` | `400` | After each deployment, this product's rows that started longer ago than this are removed. `0` keeps everything. |
+
+The last five deployments, the last 30 days, and runs that started and never finished (a `Started` row may also be a run still going):
+
+```sql
+-- SQL Server
+SELECT TOP (5) StartedUtc, FinishedUtc, Outcome, Template, SchemaName, ToolVersion, RunLabel, SourceCommit, DeployedAs
+  FROM SchemaSmith.DeploymentHistory ORDER BY StartedUtc DESC;
+SELECT * FROM SchemaSmith.DeploymentHistory WHERE StartedUtc >= DATEADD(DAY, -30, SYSUTCDATETIME()) ORDER BY StartedUtc DESC;
+SELECT RunId, StartedUtc, Template, SchemaName FROM SchemaSmith.DeploymentHistory WHERE Outcome = 'Started' ORDER BY StartedUtc DESC;
+```
+
+```sql
+-- PostgreSQL
+SELECT "StartedUtc", "FinishedUtc", "Outcome", "Template", "SchemaName", "ToolVersion", "RunLabel", "SourceCommit", "DeployedAs"
+  FROM "SchemaSmith"."DeploymentHistory" ORDER BY "StartedUtc" DESC LIMIT 5;
+SELECT * FROM "SchemaSmith"."DeploymentHistory" WHERE "StartedUtc" >= (now() AT TIME ZONE 'utc') - interval '30 days' ORDER BY "StartedUtc" DESC;
+SELECT "RunId", "StartedUtc", "Template", "SchemaName" FROM "SchemaSmith"."DeploymentHistory" WHERE "Outcome" = 'Started' ORDER BY "StartedUtc" DESC;
+```
+
+```sql
+-- MySQL and MariaDB
+SELECT StartedUtc, FinishedUtc, Outcome, Template, ToolVersion, RunLabel, SourceCommit, DeployedAs
+  FROM SchemaSmith_DeploymentHistory ORDER BY StartedUtc DESC LIMIT 5;
+SELECT * FROM SchemaSmith_DeploymentHistory WHERE StartedUtc >= UTC_TIMESTAMP() - INTERVAL 30 DAY ORDER BY StartedUtc DESC;
+SELECT RunId, StartedUtc, Template FROM SchemaSmith_DeploymentHistory WHERE Outcome = 'Started' ORDER BY StartedUtc DESC;
+```
 
 ## Permissions
 
