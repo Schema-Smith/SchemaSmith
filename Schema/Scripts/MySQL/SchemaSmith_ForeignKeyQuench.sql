@@ -184,7 +184,7 @@ BEGIN
         -- the FK drop). Reading INFORMATION_SCHEMA once into the temp table keeps it out of the
         -- execution loop; Ord guarantees every FK drop runs before the matching index drop.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKModStmts;
-        CREATE TEMPORARY TABLE _SchemaSmith_FKModStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+        CREATE TEMPORARY TABLE _SchemaSmith_FKModStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT, IndexName VARCHAR(512) NULL)
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         -- Two separate INSERTs (not one UNION) because a MySQL TEMPORARY table cannot be
         -- referenced twice in one statement. AUTO_INCREMENT RowId is monotonic across the two,
@@ -194,9 +194,11 @@ BEGIN
                       GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', SchemaSmith_EscapeBackticks(ConstraintName), '`') ORDER BY ConstraintName SEPARATOR ', '))
         FROM _SchemaSmith_ModifiedFKs
         GROUP BY TableName;
-        INSERT INTO _SchemaSmith_FKModStmts (Stmt)
+        -- One index to a statement: another key can need the index, and the rest of the table's drops still run.
+        INSERT INTO _SchemaSmith_FKModStmts (Stmt, IndexName)
         SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(m.TableName), '` ',
-                      GROUP_CONCAT(CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(m.ConstraintName), '`') ORDER BY m.ConstraintName SEPARATOR ', '))
+                      'DROP INDEX `', SchemaSmith_EscapeBackticks(m.ConstraintName), '`'),
+               CONCAT(m.TableName, '.', m.ConstraintName)
         FROM _SchemaSmith_ModifiedFKs m
         JOIN INFORMATION_SCHEMA.STATISTICS s
             ON s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
@@ -207,15 +209,23 @@ BEGIN
         -- it was gone until the next deploy put it back.
         WHERE NOT EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
                            WHERE i.TableKey = SchemaSmith_IdentifierKey(m.TableName)
-                             AND i.IndexKey = SchemaSmith_NameKeyCI(m.ConstraintName))
-        GROUP BY m.TableName;
+                             AND i.IndexKey = SchemaSmith_NameKeyCI(m.ConstraintName));
 
         SET @v_fkmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKModStmts);
         WHILE @v_fkmod_id IS NOT NULL DO
-            SELECT Stmt INTO @exec_sql FROM _SchemaSmith_FKModStmts WHERE RowId = @v_fkmod_id;
+            SELECT Stmt, IndexName INTO @exec_sql, @ss_fk_index FROM _SchemaSmith_FKModStmts WHERE RowId = @v_fkmod_id;
             PREPARE stmt FROM @exec_sql;
-            EXECUTE stmt;
+            SET @ss_fk_needs_index := 0;
+            BEGIN
+                -- A key the package does not own can use the dropped key's index; the index stays while it does.
+                DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                EXECUTE stmt;
+            END;
             DEALLOCATE PREPARE stmt;
+            IF @ss_fk_needs_index = 1 THEN
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_fk_index, ': a foreign key needs it'));
+            END IF;
             SET @v_fkmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKModStmts WHERE RowId > @v_fkmod_id);
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKModStmts;
@@ -592,7 +602,7 @@ BEGIN
 
             -- Same folded pattern as STEP 1: FK drops (Ord 0) then leftover auto-index drops (Ord 1).
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKDropStmts;
-            CREATE TEMPORARY TABLE _SchemaSmith_FKDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT)
+            CREATE TEMPORARY TABLE _SchemaSmith_FKDropStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT, IndexName VARCHAR(512) NULL)
                 ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             -- Two separate INSERTs (MySQL TEMPORARY table can't be referenced twice per statement);
             -- FK drops inserted first get lower RowIds than the index drops.
@@ -601,9 +611,11 @@ BEGIN
                           GROUP_CONCAT(CONCAT('DROP FOREIGN KEY `', SchemaSmith_EscapeBackticks(ConstraintName), '`') ORDER BY ConstraintName SEPARATOR ', '))
             FROM _SchemaSmith_FKsToDrop
             GROUP BY TableName;
-            INSERT INTO _SchemaSmith_FKDropStmts (Stmt)
+            -- One index to a statement: another key can need the index, and the rest of the table's drops still run.
+            INSERT INTO _SchemaSmith_FKDropStmts (Stmt, IndexName)
             SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(d.TableName), '` ',
-                          GROUP_CONCAT(CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(d.ConstraintName), '`') ORDER BY d.ConstraintName SEPARATOR ', '))
+                          'DROP INDEX `', SchemaSmith_EscapeBackticks(d.ConstraintName), '`'),
+                   CONCAT(d.TableName, '.', d.ConstraintName)
             FROM _SchemaSmith_FKsToDrop d
             JOIN INFORMATION_SCHEMA.STATISTICS s
                 ON s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
@@ -612,8 +624,7 @@ BEGIN
                 AND s.SEQ_IN_INDEX = 1
             WHERE NOT EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
                                WHERE i.TableKey = SchemaSmith_IdentifierKey(d.TableName)
-                                 AND i.IndexKey = SchemaSmith_NameKeyCI(d.ConstraintName))
-            GROUP BY d.TableName;
+                                 AND i.IndexKey = SchemaSmith_NameKeyCI(d.ConstraintName));
 
             -- Object-change audit (#243 E5): one row per FK about to be dropped. Set-based over the
             -- computed _SchemaSmith_FKsToDrop temp (no INFORMATION_SCHEMA — not the #337 shape); the
@@ -624,10 +635,19 @@ BEGIN
 
             SET @v_fkdrop_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKDropStmts);
             WHILE @v_fkdrop_id IS NOT NULL DO
-                SELECT Stmt INTO @exec_sql FROM _SchemaSmith_FKDropStmts WHERE RowId = @v_fkdrop_id;
+                SELECT Stmt, IndexName INTO @exec_sql, @ss_fk_index FROM _SchemaSmith_FKDropStmts WHERE RowId = @v_fkdrop_id;
                 PREPARE stmt FROM @exec_sql;
-                EXECUTE stmt;
+                SET @ss_fk_needs_index := 0;
+                BEGIN
+                    -- A key the package does not own can use the dropped key's index; the index stays while it does.
+                    DECLARE CONTINUE HANDLER FOR 1553 SET @ss_fk_needs_index := 1;
+                    EXECUTE stmt;
+                END;
                 DEALLOCATE PREPARE stmt;
+                IF @ss_fk_needs_index = 1 THEN
+                    INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                    VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_fk_index, ': a foreign key needs it'));
+                END IF;
                 SET @v_fkdrop_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKDropStmts WHERE RowId > @v_fkdrop_id);
             END WHILE;
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKDropStmts;
