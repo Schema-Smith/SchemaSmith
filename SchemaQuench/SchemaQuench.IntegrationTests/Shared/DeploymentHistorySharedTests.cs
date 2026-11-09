@@ -169,6 +169,20 @@ public abstract class DeploymentHistorySharedTests : ObjectScriptDeployFixture
         Assert.That(Rows(old), Is.EqualTo(1));
     }
 
+    // A helper table, so the package never declares it and dropping what the package no longer declares leaves it.
+    [Test]
+    public void DroppingTablesRemovedFromTheProduct_LeavesTheRecord()
+    {
+        NewRun();
+        Assert.That(RunDrift(switches: "").ExitCode, Is.EqualTo(0));
+        var second = NewRun();
+        var run = RunDrift(switches: "", settings: new Dictionary<string, string> { ["DropTablesRemovedFromProduct"] = "true" });
+        Assert.That(run.ExitCode, Is.EqualTo(0), run.Describe());
+
+        Assert.That(Count($"SELECT COUNT(*) FROM {Table} WHERE {C("Product")} = '{ProductName}'"), Is.EqualTo(2), "both runs' rows");
+        Assert.That(Rows(second), Is.EqualTo(1));
+    }
+
     private Guid OldRow(string product)
     {
         var runId = Guid.NewGuid();
