@@ -167,6 +167,26 @@ public class PackageContentHashTests
             Is.Not.EqualTo(PackageContentHash.ForFolder(Package(("Product.json", without))).ContentHash));
     }
 
+    // A run writes into the package folder when --LogPath or ArtifactPath points there: its logs, its summary, its debug SQL
+    // and its log backups change while the hash is read, and are not the package.
+    [Test]
+    public void TheToolsOwnOutput_IsNotHashed_WhereverItIs()
+    {
+        var plain = PackageContentHash.ForFolder(Package(Standard));
+        var withOutput = PackageContentHash.ForFolder(Package(Standard.Concat(new[]
+        {
+            ("SchemaQuench - Progress.log", "a line"),
+            ("SchemaQuench - Summary.json", "{}"),
+            ("SchemaQuench - Main TestMain dbo.Get.sql", "-- SchemaSmith debug SQL"),
+            ("SchemaTongs - Errors.log", ""),
+            ("SchemaQuench.0003/SchemaQuench - Progress.log", "an older run"),
+            ("Templates/Main/DataTongs - Progress.log", "")
+        }).ToArray()));
+
+        Assert.That(withOutput.ContentHash, Is.EqualTo(plain.ContentHash));
+        Assert.That(withOutput.FileCount, Is.EqualTo(3));
+    }
+
     [Test]
     public void AMissingFolder_GivesNull()
     {

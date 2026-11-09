@@ -12,7 +12,19 @@ public sealed record RunSource(string Repository, string Commit, string Branch, 
 /// <summary>Who ran the process: names only, never a credential.</summary>
 public sealed record RunHost(string Machine, string User)
 {
-    public static RunHost Current() => From(System.Environment.MachineName, System.Environment.UserDomainName, System.Environment.UserName);
+    public static RunHost Current()
+    {
+        string domain;
+        try
+        {
+            domain = System.Environment.UserDomainName;
+        }
+        catch (InvalidOperationException)
+        {
+            domain = null; // Windows cannot always resolve the domain; the user's name alone still says who ran it.
+        }
+        return From(System.Environment.MachineName, domain, System.Environment.UserName);
+    }
 
     // A local account's "domain" is the machine itself, which adds nothing.
     public static RunHost From(string machine, string domain, string user) =>

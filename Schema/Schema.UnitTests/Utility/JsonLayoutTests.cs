@@ -11,6 +11,8 @@ using log4net.Layout;
 using log4net.Repository.Hierarchy;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json.Linq;
+using NSubstitute;
+using Schema.Isolators;
 using Schema.Utility;
 
 namespace Schema.UnitTests.Utility;
@@ -187,6 +189,30 @@ public class JsonLayoutTests
         var lines = File.ReadAllLines(file);
         File.Delete(file);
         Assert.That(lines.Single(), Does.Match(@"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2},\d{3} - plain$"));
+    }
+
+    // The path a tool takes: its settings load, and the format they name is applied before the first line is written.
+    [Test]
+    public void LoadingTheSettings_AppliesTheLogFormatTheyName()
+    {
+        var environment = NSubstitute.Substitute.For<Schema.Isolators.IEnvironment>();
+        environment.CommandLine.Returns("SchemaQuench.exe --LogFormat:json");
+        var oldOut = Console.Out;
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Clear();
+            FactoryContainer.Register(environment);
+            try
+            {
+                ConfigHelper.GetAppSettingsAndUserSecrets("SchemaQuench", null);
+                Assert.That(ConfigHelper.JsonLogs, Is.True, "--LogFormat:json reached the log configuration");
+            }
+            finally
+            {
+                FactoryContainer.Clear();
+                Console.SetOut(oldOut);
+            }
+        }
     }
 
     [Test]

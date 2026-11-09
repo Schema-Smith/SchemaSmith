@@ -6,7 +6,7 @@ description: Write a GitHub Actions workflow that uses the SchemaSmith Deploy ac
 # Set up the GitHub Action
 
 1. Ask for the package folder in the repository, the target server and user, and which branch deploys. Never ask for the password: it is a repository or environment secret the user creates.
-2. Find the latest release tag at https://github.com/Schema-Smith/SchemaSmith/releases and pin the action to it: `Schema-Smith/schemasmith-deploy@<tag>`. The tag also chooses the SchemaQuench version the action runs.
+2. Find the latest release tag at https://github.com/Schema-Smith/SchemaSmith/releases and pin the action to it: `Schema-Smith/schemasmith-deploy@<tag>`. The tag also chooses the SchemaQuench version the action runs. `mode: drift`, `pr-comment`, `step-summary` and `summary-json-path` need 2.9 or later; with an earlier tag, leave them out.
 3. Write `.github/workflows/schemasmith.yml` with three jobs:
    - **pull requests:** `mode: validate`, then `mode: whatif`, with `pr-comment: true` so the preview is posted on the pull request. The job needs `permissions: pull-requests: write`.
    - **pushes to the deploy branch:** `mode: deploy`, in a GitHub environment the user can protect with required reviewers.

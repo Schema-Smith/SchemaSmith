@@ -137,6 +137,11 @@ pr_comment_body() {
   printf '%s' "$body"
 }
 
+# The id of the first comment in a page of them (JSON on stdin) whose body starts with the marker; empty when none does.
+comment_with_marker() {
+  jq -r --arg m "$1" '[.[] | select((.body // "") | startswith($m))][0].id // empty' 2>/dev/null
+}
+
 # When sourced with --lib-only, expose functions and stop (no main run).
 if [ "${1:-}" = "--lib-only" ]; then return 0 2>/dev/null || exit 0; fi
 
@@ -160,8 +165,15 @@ post_pr_comment() {
   marker="<!-- schemasmith-deploy:$mode:${SS_PRODUCT_PATH:-.} -->"
   payload="$(jq -n --arg body "$(pr_comment_body "$md" "$marker")" '{body: $body}')"
   auth=(-H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json")
-  existing="$(curl -sf "${auth[@]}" "$api/repos/$repo/issues/$pr/comments?per_page=100" \
-    | jq -r --arg m "$marker" '[.[] | select(.body | startswith($m))][0].id // empty' 2>/dev/null)"
+  # A busy pull request has more comments than one page holds; the marker may be on any of them.
+  local page body
+  existing=""
+  for page in $(seq 1 30); do
+    body="$(curl -sf "${auth[@]}" "$api/repos/$repo/issues/$pr/comments?per_page=100&page=$page")" || break
+    existing="$(printf '%s' "$body" | comment_with_marker "$marker")"
+    [ -n "$existing" ] && break
+    [ "$(printf '%s' "$body" | jq 'length' 2>/dev/null)" = "100" ] || break
+  done
   if [ -n "$existing" ]; then
     curl -sf -X PATCH "${auth[@]}" "$api/repos/$repo/issues/comments/$existing" -d "$payload" >/dev/null
   else

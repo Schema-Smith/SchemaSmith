@@ -919,11 +919,12 @@ public class ProductQuench
         _checkpointing.StampRunId(_runId);
         // A package with table data can be large; the hash is only needed when the summary is written.
         _packageIdentity = Task.Run(ComputePackageIdentity);
-        _deploymentRecord = BuildDeploymentRecord();
 
         _runTiming.Start();
         try
         {
+            // Inside the try: whatever reading the run's identity throws ends in an Aborted summary, not a bare crash.
+            _deploymentRecord = BuildDeploymentRecord();
             QuenchProductCore(suppressKindlingForTesting);
         }
         catch (RunFailedException)

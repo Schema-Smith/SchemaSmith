@@ -29,7 +29,7 @@ public static class CiEnvironment
             return (new CiInfo("GitHubActions", Get("GITHUB_WORKFLOW"), Get("GITHUB_RUN_ID"), Get("GITHUB_RUN_ATTEMPT"),
                     Compose(Get("GITHUB_SERVER_URL"), Get("GITHUB_REPOSITORY"), "actions/runs", Get("GITHUB_RUN_ID")),
                     Get("GITHUB_ACTOR"), null),
-                Source(Get("GITHUB_REPOSITORY"), Get("GITHUB_SHA"), Get("GITHUB_REF_NAME")));
+                Source(Get("GITHUB_REPOSITORY"), Get("GITHUB_SHA"), Get("GITHUB_HEAD_REF") ?? Get("GITHUB_REF_NAME")));
 
         if (IsTrue("TF_BUILD"))
         {

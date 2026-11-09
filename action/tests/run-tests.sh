@@ -117,4 +117,11 @@ assert_eq "$([ "${#BODY}" -le 1000 ] && echo fits)" "fits" "long comment fits th
 assert_eq "$(printf '%s' "$BODY" | grep -c 'full summary is in the log directory')" "1" "long comment says where the rest is"
 rm -f "$SRC"
 
+# finding an earlier run's comment by its marker
+PAGE='[{"id":1,"body":"a reviewer"},{"id":7,"body":"<!-- schemasmith-deploy:whatif:pkg -->\n# Summary"},{"id":9,"body":null}]'
+assert_eq "$(printf '%s' "$PAGE" | comment_with_marker '<!-- schemasmith-deploy:whatif:pkg -->')" "7" "comment found by its marker"
+assert_eq "$(printf '%s' "$PAGE" | comment_with_marker '<!-- schemasmith-deploy:deploy:pkg -->')" "" "another mode's marker is another comment"
+assert_eq "$(printf '%s' '[]' | comment_with_marker '<!-- m -->')" "" "an empty page finds nothing"
+assert_eq "$(grep -c 'page=\$page' "$DIR/../schemasmith-deploy.sh")" "1" "the lookup pages through the comments"
+
 echo "---"; [ "$fails" -eq 0 ] && echo "ALL PASS" || { echo "$fails FAILED"; exit 1; }

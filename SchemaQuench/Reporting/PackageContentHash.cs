@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 using Schema.Isolators;
 
 namespace SchemaQuench.Reporting;
@@ -78,9 +79,18 @@ public static class PackageContentHash
         return relative == "." || relative.StartsWith("..", StringComparison.Ordinal) || Path.IsPathRooted(relative) ? null : relative.TrimEnd('/');
     }
 
-    private static bool Included(string relativePath) =>
-        !relativePath.Split('/').Any(segment => segment.StartsWith('.'))
-        && !relativePath.EndsWith(".sqlerror", StringComparison.OrdinalIgnoreCase);
+    private static bool Included(string relativePath)
+    {
+        var segments = relativePath.Split('/');
+        return !segments.Any(segment => segment.StartsWith('.') || ToolBackupFolder.IsMatch(segment))
+               && !ToolOutputFile.IsMatch(segments[^1])
+               && !relativePath.EndsWith(".sqlerror", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // What the tools write: "<Tool> - Progress.log", "<Tool> - Summary.json", debug SQL ("SchemaQuench - ....sql"), and the
+    // numbered folders the previous runs' logs are backed up into ("SchemaQuench.0003").
+    private static readonly Regex ToolOutputFile = new(@"^(SchemaQuench|SchemaTongs|DataTongs|SchemaShears) - ", RegexOptions.CultureInvariant);
+    private static readonly Regex ToolBackupFolder = new(@"^(SchemaQuench|SchemaTongs|DataTongs|SchemaShears)\.\d+$", RegexOptions.CultureInvariant);
 
     private static PackageIdentity Hash(IEnumerable<(string Relative, Func<Stream> Open)> files)
     {

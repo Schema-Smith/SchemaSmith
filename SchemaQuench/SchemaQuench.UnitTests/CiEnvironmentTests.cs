@@ -33,6 +33,18 @@ public class CiEnvironmentTests
         Assert.That(source, Is.EqualTo(new CiSource("acme/billing-db", "4f2a9c1e", "main")));
     }
 
+    // On a pull request GITHUB_REF_NAME is "<number>/merge"; the branch is the pull request's own.
+    [Test]
+    public void GitHubActions_OnAPullRequest_TheBranchIsThePullRequests()
+    {
+        var (_, source) = CiEnvironment.Detect(Env(new()
+        {
+            ["GITHUB_ACTIONS"] = "true", ["GITHUB_REF_NAME"] = "12/merge", ["GITHUB_HEAD_REF"] = "feature/orders", ["GITHUB_SHA"] = "abc"
+        }));
+
+        Assert.That(source.Branch, Is.EqualTo("feature/orders"));
+    }
+
     [TestCase("https://dev.azure.com/acme/")]
     [TestCase("https://dev.azure.com/acme")]
     public void AzureDevOps_ComposesTheRunUrl_WithOrWithoutATrailingSlash(string collection)
