@@ -13,6 +13,7 @@ using Schema.Domain;
 using Schema.IntegrationTests;
 using Schema.Isolators;
 using Schema.Utility;
+using SchemaQuench.Reporting;
 
 namespace SchemaQuench.IntegrationTests.Shared;
 
@@ -397,6 +398,17 @@ ModifiedTables
                 // And its summary says it resumed: the training certification saw false on a run where every unit resumed.
                 var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
                 Assert.That(summary.SelectToken("run.resumedFromCheckpoint")?.Value<bool>(), Is.True);
+
+                // 1.4 run identity: the summary names the run the progress log opened with and the package content it
+                // deployed; the seeded checkpoint predates 2.9, so it names no earlier run.
+                var runId = (string)summary.SelectToken("run.id");
+                Assert.That(runId, Is.Not.Null.And.Not.Empty, "run.id");
+                _progressLog.Received(1).Info(Arg.Is<object>(o => o.ToString() == $"Run {runId}"));
+                var expected = PackageContentHash.ForFolder(Path.GetDirectoryName(product.FilePath), ConfigHelper.ResolveLogPath());
+                Assert.That((string)summary.SelectToken("run.package.contentHash"), Is.EqualTo(expected.ContentHash));
+                Assert.That((int?)summary.SelectToken("run.package.fileCount"), Is.EqualTo(expected.FileCount));
+                Assert.That(summary.SelectToken("run.resumesRunId")?.Type, Is.EqualTo(JTokenType.Null));
+                Assert.That((string)summary.SelectToken("run.host.machine"), Is.EqualTo(Environment.MachineName));
             }
             finally
             {

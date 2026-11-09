@@ -27,6 +27,12 @@ public class FileCheckpointManager : ICheckpointing
     private readonly ConcurrentDictionary<string, DatabaseCheckpoint> _dbCheckpoints = new();
     private readonly ConcurrentDictionary<string, ProductCheckpoint> _productCheckpoints = new();
     private static readonly ConcurrentDictionary<string, object> FileLocks = new();
+    private const string RunIdLine = "# RunId:";
+    private Guid? _runId;
+
+    public void StampRunId(Guid runId) => _runId = runId;
+
+    public Guid? ResumedRunId { get; private set; }
 
     public FileCheckpointManager() : this(GetDefaultCheckpointDirectory()) { }
 
@@ -272,6 +278,7 @@ public class FileCheckpointManager : ICheckpointing
         {
             var content = FileWrapper.GetFromFactory().ReadAllText(filePath);
             var checkpoint = ParseDatabaseCheckpoint(content, scope.ProductName, scope.TemplateName, scope.Server, scope.DatabaseName, scope.SchemaName);
+            ResumedRunId ??= checkpoint.RunId;
             // TRANSITIONAL (pre-2.9 checkpoints may carry --WhatIf steps, A16): before 2.9 a preview recorded steps it never
             // applied. Such a file is still honoured, so a real resume across the upgrade keeps its progress, but the resume
             // says so. Roadmap: delete the release after 2.9, when no checkpoint written before it can still be on disk.
@@ -297,6 +304,7 @@ public class FileCheckpointManager : ICheckpointing
     private void SaveDatabaseCheckpoint(DatabaseCheckpoint checkpoint)
     {
         var filePath = GetDatabaseCheckpointPath(checkpoint.ProductName, checkpoint.TemplateName, checkpoint.Server, checkpoint.DatabaseName, checkpoint.SchemaName);
+        checkpoint.RunId = _runId ?? checkpoint.RunId;
         WriteFileThreadSafe(filePath, FormatDatabaseCheckpoint(checkpoint));
     }
 
@@ -351,6 +359,12 @@ public class FileCheckpointManager : ICheckpointing
                 continue;
             }
 
+            if (trimmedLine.StartsWith(RunIdLine, StringComparison.Ordinal))
+            {
+                if (Guid.TryParse(trimmedLine[RunIdLine.Length..].Trim(), out var runId)) checkpoint.RunId = runId;
+                continue;
+            }
+
             if (trimmedLine.StartsWith("#", StringComparison.Ordinal)) continue;
 
             if (trimmedLine.StartsWith("[", StringComparison.Ordinal) && trimmedLine.EndsWith("]", StringComparison.Ordinal))
@@ -396,6 +410,7 @@ public class FileCheckpointManager : ICheckpointing
         if (!string.IsNullOrEmpty(checkpoint.SchemaName))
             sb.AppendLine($"# Schema: {checkpoint.SchemaName}");
         sb.AppendLine($"# Started: {checkpoint.StartedAt:yyyy-MM-dd HH:mm:ss}Z");
+        if (checkpoint.RunId != null) sb.AppendLine($"{RunIdLine} {checkpoint.RunId}");
         sb.AppendLine();
 
         sb.AppendLine("[Completed Steps]");
@@ -441,7 +456,9 @@ public class FileCheckpointManager : ICheckpointing
         try
         {
             var content = FileWrapper.GetFromFactory().ReadAllText(filePath);
-            return ParseProductCheckpoint(content, productName);
+            var checkpoint = ParseProductCheckpoint(content, productName);
+            ResumedRunId ??= checkpoint.RunId;
+            return checkpoint;
         }
         catch
         {
@@ -452,6 +469,7 @@ public class FileCheckpointManager : ICheckpointing
     private void SaveProductCheckpoint(ProductCheckpoint checkpoint)
     {
         var filePath = GetProductCheckpointPath(checkpoint.ProductName);
+        checkpoint.RunId = _runId ?? checkpoint.RunId;
         WriteFileThreadSafe(filePath, FormatProductCheckpoint(checkpoint));
     }
 
@@ -484,6 +502,12 @@ public class FileCheckpointManager : ICheckpointing
                 var dateStr = trimmedLine.Substring("# Started:".Length).Trim();
                 if (DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var startedAt))
                     checkpoint.StartedAt = startedAt;
+                continue;
+            }
+
+            if (trimmedLine.StartsWith(RunIdLine, StringComparison.Ordinal))
+            {
+                if (Guid.TryParse(trimmedLine[RunIdLine.Length..].Trim(), out var runId)) checkpoint.RunId = runId;
                 continue;
             }
 
@@ -534,6 +558,7 @@ public class FileCheckpointManager : ICheckpointing
         sb.AppendLine("# SchemaQuench Product Checkpoint");
         sb.AppendLine($"# Product: {checkpoint.ProductName}");
         sb.AppendLine($"# Started: {checkpoint.StartedAt:yyyy-MM-dd HH:mm:ss}Z");
+        if (checkpoint.RunId != null) sb.AppendLine($"{RunIdLine} {checkpoint.RunId}");
         sb.AppendLine();
 
         foreach (var serverScripts in checkpoint.CompletedBeforeScripts.OrderBy(kvp => kvp.Key))

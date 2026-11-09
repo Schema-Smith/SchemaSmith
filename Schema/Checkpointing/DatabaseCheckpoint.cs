@@ -15,6 +15,7 @@ internal class DatabaseCheckpoint
     public string SchemaName { get; set; } = "";
     // UTC, as the deployment summary reports times.
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;
+    public Guid? RunId { get; set; }
 
     public List<string> CompletedSteps { get; set; } = [];
     public Dictionary<DatabaseScriptSlot, List<string>> CompletedScripts { get; set; } = new();

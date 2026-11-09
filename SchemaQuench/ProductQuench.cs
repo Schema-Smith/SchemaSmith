@@ -6,8 +6,10 @@ using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using log4net;
 using Microsoft.Extensions.Configuration;
 using Schema.DataAccess;
@@ -99,6 +101,8 @@ public class ProductQuench
     // WriteDeploymentSummary so an abort-path write can never double-fire alongside the
     // normal-completion write.
     private DateTime _startedUtc;
+    private readonly Guid _runId = Guid.NewGuid();
+    private Task<PackageIdentity> _packageIdentity;
     private bool _summaryWritten;
     // Captured pre-run (before this run marks any of its own steps complete) so the report
     // reflects whether the run RESUMED — reading the checkpoint at emit time would see this
@@ -910,6 +914,9 @@ public class ProductQuench
     public void QuenchProduct(bool suppressKindlingForTesting = false)
     {
         _startedUtc = DateTime.UtcNow;
+        _checkpointing.StampRunId(_runId);
+        // A package with table data can be large; the hash is only needed when the summary is written.
+        _packageIdentity = Task.Run(ComputePackageIdentity);
 
         _runTiming.Start();
         try
@@ -962,6 +969,7 @@ public class ProductQuench
     private void QuenchProductCore(bool suppressKindlingForTesting)
     {
         _progressLog.Info($"Begin Quench of {_product.Name}");
+        _progressLog.Info($"Run {_runId}");
 
         if (_protectedMode)
             _progressLog.Info("PreventDrop is ENABLED — this environment will skip every drop-by-absence and report the suppressed drops (no objects are dropped for being absent from the product).");
@@ -1138,7 +1146,8 @@ public class ProductQuench
                 _targetResults.ToArray(), _runTiming, _migrationScripts.Snapshot(),
                 _whatIf.Snapshot(), _failureRecords.ToArray(), BottleneckThresholdMs(), _changeAudit,
                 protectedModeEnabled: _protectedMode, lockWaits: _contention.Snapshot(), settings: _timeouts,
-                destructivePolicy: _destructive.Policy, drift: DriftReport, driftTier: _drift ? _driftTier : null);
+                destructivePolicy: _destructive.Policy, drift: DriftReport, driftTier: _drift ? _driftTier : null,
+                identity: BuildRunIdentity());
             var (jsonPath, mdPath) = ResolveReportPaths(CommandLineParser.ValueOfSwitch("report", null), ConfigHelper.ResolveLogPath(), "SchemaQuench");
             EnsureReportDirectory(jsonPath);
             var file = FileWrapper.GetFromFactory();
@@ -1192,6 +1201,34 @@ public class ProductQuench
 
     // Mirrors CommandLineParser.ShowVersionAndExit's reflection so the deployment summary
     // reports the same tool version the CLI's --version switch shows.
+    private bool IsZipPackage => ZipFileWrapper.IsValidZipFile(_config[SettingsKeys.SchemaPackagePath]);
+
+    // A zipped package is read through its own archive: the shared one is in use by the load on another thread.
+    private PackageIdentity ComputePackageIdentity()
+    {
+        PackageIdentity identity;
+        if (IsZipPackage)
+        {
+            using var archive = ZipFile.OpenRead(_config[SettingsKeys.SchemaPackagePath]!);
+            identity = PackageContentHash.ForZip(archive.Entries.Select(e => (IZipEntry)new ZipEntryWrapper(e)));
+        }
+        else
+        {
+            identity = PackageContentHash.ForFolder(Path.GetDirectoryName(_product.FilePath), ConfigHelper.ResolveLogPath());
+        }
+        if (identity == null) _progressLog.Warn("Could not hash the package's content; the deployment summary will not name it.");
+        else _progressLog.Info($"Package {identity.ContentHash} ({identity.FileCount} files)");
+        return identity;
+    }
+
+    private RunIdentity BuildRunIdentity()
+    {
+        var package = _packageIdentity?.GetAwaiter().GetResult();
+        var git = IsZipPackage ? null : GitSourceReader.Read(Path.GetDirectoryName(Path.GetFullPath(_product.FilePath)));
+        return RunIdentity.Build(_runId, key => _config[key], EnvironmentWrapper.GetFromFactory(), git, package, RunHost.Current())
+            .WithResume(_checkpointing.ResumedRunId);
+    }
+
     private static string ToolVersion()
     {
         var assembly = Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly();

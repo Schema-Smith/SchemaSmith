@@ -2,12 +2,14 @@
 
 using log4net;
 using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json.Linq;
 using NSubstitute;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.IntegrationTests;
 using Schema.Isolators;
 using Schema.Utility;
+using SchemaQuench.Reporting;
 using System;
 using System.Data;
 using System.IO;
@@ -453,6 +455,18 @@ ModifiedTables
             // Parity signal: a resumed run that skipped ModifiedTables must not crash on missing
             // session temp state — the run converges to a clean (zero) exit.
             _environment.DidNotReceive().Exit(Arg.Is<int>(c => c != 0));
+
+            // 1.4 run identity: the summary names the run the progress log opened with and the package content it
+            // deployed; the seeded checkpoint predates 2.9, so it names no earlier run.
+            var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+            var runId = (string)summary.SelectToken("run.id");
+            Assert.That(runId, Is.Not.Null.And.Not.Empty, "run.id");
+            _progressLog.Received(1).Info(Arg.Is<object>(o => o.ToString() == $"Run {runId}"));
+            var expected = PackageContentHash.ForFolder(Path.GetDirectoryName(product.FilePath), ConfigHelper.ResolveLogPath());
+            Assert.That((string)summary.SelectToken("run.package.contentHash"), Is.EqualTo(expected.ContentHash));
+            Assert.That((int?)summary.SelectToken("run.package.fileCount"), Is.EqualTo(expected.FileCount));
+            Assert.That(summary.SelectToken("run.resumesRunId")?.Type, Is.EqualTo(JTokenType.Null));
+            Assert.That((string)summary.SelectToken("run.host.machine"), Is.EqualTo(Environment.MachineName));
 
             LogFactory.Clear();
             FactoryContainer.Unregister<IEnvironment>();

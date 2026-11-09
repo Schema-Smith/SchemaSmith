@@ -11,6 +11,7 @@ internal class ProductCheckpoint
     public string ProductName { get; set; } = "";
     // UTC, as the deployment summary reports times.
     public DateTime StartedAt { get; set; } = DateTime.UtcNow;
+    public Guid? RunId { get; set; }
     public Dictionary<string, List<string>> CompletedBeforeScripts { get; set; } = new();
     public List<string> CompletedTemplates { get; set; } = [];
     public Dictionary<string, List<string>> CompletedAfterScripts { get; set; } = new();

@@ -68,8 +68,23 @@ public static class DeploymentSummaryText
         lines.Add($"- Duration: {run.DurationMs}ms");
         lines.Add($"- Started (UTC): {FormatUtc(run.StartedUtc)}");
         lines.Add($"- Finished (UTC): {FormatUtc(run.FinishedUtc)}");
+        if (run.Id != null) lines.Add($"- Run: {RunLine(run)}");
         lines.Add("");
     }
+
+    // The host is left out: this file is what gets pasted into pull requests and tickets.
+    private static string RunLine(RunInfo run)
+    {
+        var parts = new List<string> { Short(run.Id.ToString(), 8) };
+        if (run.Label != null) parts.Add(run.Label);
+        var where = Short(run.Source?.Commit, 7) ?? run.Source?.Branch;
+        if (where != null) parts.Add(run.Source?.Repository == null ? where : $"{run.Source.Repository}@{where}");
+        if (run.Ci?.Pipeline != null) parts.Add(run.Ci.RunId == null ? run.Ci.Pipeline : $"{run.Ci.Pipeline} #{run.Ci.RunId}");
+        if (run.ResumesRunId != null) parts.Add($"resumes {Short(run.ResumesRunId.ToString(), 8)}");
+        return string.Join(" · ", parts);
+    }
+
+    private static string Short(string value, int length) => value == null || value.Length <= length ? value : value[..length];
 
     private static void RenderTargets(DeploymentSummary summary, List<string> lines)
     {

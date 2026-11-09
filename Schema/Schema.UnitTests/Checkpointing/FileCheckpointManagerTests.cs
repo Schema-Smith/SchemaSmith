@@ -631,4 +631,66 @@ public class FileCheckpointManagerTests
             Schema.Utility.LogFactory.Clear();
         }
     }
+
+    // 1.4 run identity: a resumed run's summary names the run whose checkpoint it took up.
+    [Test]
+    public void AResume_ReportsTheRunIdTheCheckpointWasWrittenBy_AndTheFileThenCarriesTheResumingRunsId()
+    {
+        var first = Guid.NewGuid();
+        var second = Guid.NewGuid();
+        var writer = new FileCheckpointManager(_tempDir, adoptExisting: false);
+        writer.StampRunId(first);
+        writer.Track(DbScope(), "ModifiedTables", () => { });
+
+        var resume = new FileCheckpointManager(_tempDir, adoptExisting: true);
+        resume.StampRunId(second);
+        resume.Track(DbScope(), "ForeignKeys", () => { });
+
+        Assert.That(resume.ResumedRunId, Is.EqualTo(first));
+        Assert.That(File.ReadAllText(Directory.GetFiles(_tempDir, "*.checkpoint").Single()), Does.Contain($"# RunId: {second}"));
+    }
+
+    [Test]
+    public void AResumeOfOnlyAProductCheckpoint_ReportsItsRunId()
+    {
+        var first = Guid.NewGuid();
+        var writer = new FileCheckpointManager(_tempDir, adoptExisting: false);
+        writer.StampRunId(first);
+        writer.Track(ProductScope(), "Main", () => { });
+
+        var resume = new FileCheckpointManager(_tempDir, adoptExisting: true);
+        resume.StampRunId(Guid.NewGuid());
+
+        Assert.That(resume.HasCompleted(ProductScope(), "Main"), Is.True);
+        Assert.That(resume.ResumedRunId, Is.EqualTo(first));
+    }
+
+    [Test]
+    public void ACheckpointWrittenBefore29HasNoRunId_AndStillResumes_WithANullResumedRunId()
+    {
+        var writer = new FileCheckpointManager(_tempDir, adoptExisting: false);
+        writer.StampRunId(Guid.NewGuid());
+        writer.Track(DbScope(), "ModifiedTables", () => { });
+        var file = Directory.GetFiles(_tempDir, "*.checkpoint").Single();
+        File.WriteAllLines(file, File.ReadAllLines(file).Where(l => !l.StartsWith("# RunId:")));
+
+        var resume = new FileCheckpointManager(_tempDir, adoptExisting: true);
+
+        Assert.That(resume.HasCompleted(DbScope(), "ModifiedTables"), Is.True);
+        Assert.That(resume.ResumedAny, Is.True);
+        Assert.That(resume.ResumedRunId, Is.Null);
+    }
+
+    [Test]
+    public void ARunThatIsNotResuming_HasNoResumedRunId()
+    {
+        var writer = new FileCheckpointManager(_tempDir, adoptExisting: false);
+        writer.StampRunId(Guid.NewGuid());
+        writer.Track(DbScope(), "ModifiedTables", () => { });
+
+        var next = new FileCheckpointManager(_tempDir, adoptExisting: false);
+        next.Track(DbScope(), "ModifiedTables", () => { });
+
+        Assert.That(next.ResumedRunId, Is.Null);
+    }
 }

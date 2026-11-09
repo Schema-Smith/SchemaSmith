@@ -72,6 +72,12 @@ public interface ICheckpointing
 
     /// <summary>Whether any database in this run continued from a checkpoint a failed run left.</summary>
     bool ResumedAny => false;
+
+    /// <summary>Writes this run's id into every checkpoint it saves, so a later resume can name the run it continues.</summary>
+    void StampRunId(Guid runId) { }
+
+    /// <summary>The id of the run whose checkpoint this run took up; null when not resuming or the checkpoint predates 2.9.</summary>
+    Guid? ResumedRunId => null;
 }
 
 /// <summary>
