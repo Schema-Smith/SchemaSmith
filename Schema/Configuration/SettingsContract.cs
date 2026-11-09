@@ -80,7 +80,7 @@ public static class SettingsContract
             SettingsKeys.PruneObsoleteMigrationTracking,
             SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.WriteDebugSql, SettingsKeys.ScriptTokens,
             SettingsKeys.LogHygiene, SettingsKeys.ExitNonZeroOnWarning
-        ]), StringComparer.OrdinalIgnoreCase),
+        ]).Concat(SettingsKeys.Run.All), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.SchemaTongs)).Concat(
         [

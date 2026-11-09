@@ -118,6 +118,14 @@
     "RunScriptsTwice": false, // Run object/[ALWAYS] scripts twice; both passes must succeed — an idempotency check, NOT dependency resolution (the retry loop handles dependencies)
     "CheckpointDirectory": "", // Directory for checkpoint files to enable resuming interrupted quenches
 
+    // --- Run identity ------------------------------------------------------------------------------
+    // Written into the deployment summary's run block. Detected on GitHub Actions, Azure DevOps, GitLab and Jenkins; set
+    // these to override what was detected or to supply it elsewhere. Usually passed per run: --RunLabel:2026.11.3
+    // or the SmithySettings_RunLabel environment variable.
+    // "RunLabel": "", // Free text naming the run: a release number, a ticket.
+    // "RunCommit": "", "RunBranch": "", "RunRepository": "", // Where the package came from. Otherwise the CI system's, then the package's own .git.
+    // "RunPipeline": "", "RunPipelineRunId": "", "RunUrl": "", "RunActor": "", "RunEnvironment": "", // The pipeline run.
+
     // --- Diagnostics --------------------------------------------------------------------------------
     "FailureContextLines": 25, // Lines of per-scope context captured and shown for each failure in SchemaQuench - Failures.log (0 = disable capture)
     "BottleneckThresholdMs": 30000, // Slot operations slower than this (ms) are highlighted as bottlenecks in the deployment summary report

@@ -38,7 +38,8 @@ public static class DeploymentSummaryAssembler
         SessionTimeouts settings = null,
         string destructivePolicy = null,
         DriftReport drift = null,
-        int? driftTier = null)
+        int? driftTier = null,
+        RunIdentity identity = null)
     {
         var run = new RunInfo(
             Product: product,
@@ -51,7 +52,14 @@ public static class DeploymentSummaryAssembler
             ExitCode: exitCode,
             ResumedFromCheckpoint: resumedFromCheckpoint,
             Settings: settings is null ? null : new RunSettings(settings.CommandTimeoutSeconds, settings.LockTimeoutSeconds, settings.ContentionRetryAttempts),
-            DriftTier: mode == RunMode.Drift ? driftTier : null);
+            DriftTier: mode == RunMode.Drift ? driftTier : null,
+            Id: identity?.Id,
+            Label: identity?.Label,
+            ResumesRunId: identity?.ResumesRunId,
+            Package: identity?.Package,
+            Source: identity?.Source,
+            Ci: identity?.Ci,
+            Host: identity?.Host);
 
         var mappedTargets = targets
             .Select(tr => new TargetSummary(
@@ -92,7 +100,7 @@ public static class DeploymentSummaryAssembler
         var unsupportedDowngrade = BuildUnsupportedDowngrade(changeAudit);
 
         return new DeploymentSummary(
-            SchemaVersion: "1.3",
+            SchemaVersion: "1.4",
             Tool: "SchemaQuench",
             ToolVersion: toolVersion,
             Run: run,

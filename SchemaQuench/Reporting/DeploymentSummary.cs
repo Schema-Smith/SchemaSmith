@@ -61,7 +61,15 @@ public sealed record RunInfo(
     RunSettings Settings = null,
     // 1.3: how a drift check read the targets -- 0 against helpers already there, 1 in a rolled-back transaction, 2 through a
     // helper database; null for any other run.
-    int? DriftTier = null);
+    int? DriftTier = null,
+    // 1.4: which run this is, which package content it deployed and where it came from.
+    Guid? Id = null,
+    string Label = null,
+    Guid? ResumesRunId = null,
+    PackageIdentity Package = null,
+    RunSource Source = null,
+    CiInfo Ci = null,
+    RunHost Host = null);
 
 public sealed record RunSettings(int CommandTimeoutSeconds, int? LockTimeoutSeconds, int ContentionRetryAttempts);
 

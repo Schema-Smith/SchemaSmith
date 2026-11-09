@@ -122,7 +122,7 @@ public class ContentionReportingTests
 
         Assert.Multiple(() =>
         {
-            Assert.That((string)json["schemaVersion"], Is.EqualTo("1.3"));
+            Assert.That((string)json["schemaVersion"], Is.EqualTo("1.4"));
             Assert.That((string)json.SelectToken("failures[0].kind"), Is.EqualTo("lockTimeout"));
             Assert.That((int)json.SelectToken("lockWaits[0].attempts"), Is.EqualTo(3));
             Assert.That((string)json.SelectToken("lockWaits[0].step"), Is.EqualTo("ModifiedTables"));

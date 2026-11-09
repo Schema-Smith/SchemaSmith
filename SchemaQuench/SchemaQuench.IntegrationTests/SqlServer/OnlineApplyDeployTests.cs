@@ -73,7 +73,7 @@ public class OnlineApplyDeployTests
                 var created = details.Single(d => (string)d["objectName"]! == "[dbo].[KeeperTable].[IX_KeeperTable_Notes]" && (string)d["action"]! == "created");
                 Assert.Multiple(() =>
                 {
-                    Assert.That((string)summary["schemaVersion"]!, Is.EqualTo("1.3"));
+                    Assert.That((string)summary["schemaVersion"]!, Is.EqualTo("1.4"));
                     Assert.That((string)created["mode"]!, Is.EqualTo("online"));
                     Assert.That(details.Where(d => ((JObject)d).ContainsKey("mode")).All(d => (string)d["mode"]! is "online" or "unavailable" or "resumable"), Is.True);
                 });

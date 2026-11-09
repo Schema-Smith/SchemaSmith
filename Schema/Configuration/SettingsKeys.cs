@@ -270,6 +270,25 @@ public static class SettingsKeys
     public const string ScrubArtifacts = "ScrubArtifacts";
     public const string WriteDebugSql = "WriteDebugSql";
 
+    /// <summary>
+    /// What a pipeline says about the run, written into the deployment summary. Flat keys, because a nested one
+    /// (<c>--Run:Label:x</c>) would reach the command-line parser as key <c>Run</c> with value <c>Label:x</c>.
+    /// </summary>
+    public static class Run
+    {
+        public const string Label = "RunLabel";
+        public const string Commit = "RunCommit";
+        public const string Branch = "RunBranch";
+        public const string Repository = "RunRepository";
+        public const string Pipeline = "RunPipeline";
+        public const string PipelineRunId = "RunPipelineRunId";
+        public const string Url = "RunUrl";
+        public const string Actor = "RunActor";
+        public const string Environment = "RunEnvironment";
+
+        public static readonly string[] All = [Label, Commit, Branch, Repository, Pipeline, PipelineRunId, Url, Actor, Environment];
+    }
+
     // ---- DataTongs -------------------------------------------------------------------------------
     public const string ContentPath = "ContentPath";
     public const string ScriptPath = "ScriptPath";

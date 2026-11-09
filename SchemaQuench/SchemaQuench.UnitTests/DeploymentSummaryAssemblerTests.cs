@@ -38,7 +38,8 @@ public class DeploymentSummaryAssemblerTests
         IReadOnlyList<FailureRecord> failures = null,
         long bottleneckThresholdMs = 5000,
         ChangeAuditCapture changeAudit = null,
-        bool protectedModeEnabled = false)
+        bool protectedModeEnabled = false,
+        RunIdentity identity = null)
     {
         targets ??= new List<TargetResult>
         {
@@ -68,7 +69,36 @@ public class DeploymentSummaryAssemblerTests
             failures: failures,
             bottleneckThresholdMs: bottleneckThresholdMs,
             changeAudit: changeAudit,
-            protectedModeEnabled: protectedModeEnabled);
+            protectedModeEnabled: protectedModeEnabled,
+            identity: identity);
+    }
+
+    [Test]
+    public void Assemble_CarriesTheRunIdentity()
+    {
+        var id = Guid.NewGuid();
+        var resumed = Guid.NewGuid();
+        var identity = new RunIdentity(id, "2026.11.3", resumed, new PackageIdentity("sha256:ab", 4),
+            new RunSource("acme/db", "4f2a9c1", "main", "git"), new CiInfo("Other", "p", "7", null, null, null, null),
+            new RunHost("BUILD01", "svc"));
+
+        var run = AssembleWith(identity: identity).Run;
+
+        Assert.That(run.Id, Is.EqualTo(id));
+        Assert.That(run.Label, Is.EqualTo("2026.11.3"));
+        Assert.That(run.ResumesRunId, Is.EqualTo(resumed));
+        Assert.That(run.Package, Is.EqualTo(identity.Package));
+        Assert.That(run.Source, Is.EqualTo(identity.Source));
+        Assert.That(run.Ci, Is.EqualTo(identity.Ci));
+        Assert.That(run.Host, Is.EqualTo(identity.Host));
+    }
+
+    [Test]
+    public void Assemble_WithoutAnIdentity_LeavesTheRunIdentityPropertiesNull()
+    {
+        var run = AssembleWith().Run;
+
+        Assert.That(new object[] { run.Id, run.Label, run.ResumesRunId, run.Package, run.Source, run.Ci, run.Host }, Is.All.Null);
     }
 
     // D12: what the settings steps found, counted per scope; absent when the package declares no settings.
@@ -270,7 +300,7 @@ public class DeploymentSummaryAssemblerTests
 
         // Pinned deliberately: the version is the contract's own statement that its shape changed,
         // so a field added without bumping it should redden here rather than ship silently.
-        Assert.That(summary.SchemaVersion, Is.EqualTo("1.3"));
+        Assert.That(summary.SchemaVersion, Is.EqualTo("1.4"));
         Assert.That(summary.Tool, Is.EqualTo("SchemaQuench"));
         Assert.That(summary.ToolVersion, Is.EqualTo("2.3.0"));
 
