@@ -406,6 +406,7 @@ ModifiedTables
 
             // 1.4 run identity: the summary names the run the progress log opened with and the package content it
             // deployed; the seeded checkpoint predates 2.9, so it names no earlier run.
+            SummaryConformance.AssertConforms(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json"));
             var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
             var runId = (string)summary.SelectToken("run.id");
             Assert.That(runId, Is.Not.Null.And.Not.Empty, "run.id");

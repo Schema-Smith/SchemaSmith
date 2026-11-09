@@ -12,11 +12,15 @@ on:
     branches: [main]
     paths:
       - 'docs/end-user/reference/schemaquench.md'
+      - 'docs/end-user/reference/deployment-summary-report.md'
+      - 'docs/end-user/reference/schemas/**'
       - '.github/workflows/ci-doc-contract.yml'
   pull_request:
     branches: [main]
     paths:
       - 'docs/end-user/reference/schemaquench.md'
+      - 'docs/end-user/reference/deployment-summary-report.md'
+      - 'docs/end-user/reference/schemas/**'
       - '.github/workflows/ci-doc-contract.yml'
 
 permissions:
@@ -40,3 +44,9 @@ jobs:
           dotnet test Schema/Schema.UnitTests/Schema.UnitTests.csproj -c Debug --filter "FullyQualifiedName~CapabilityDocumentationTests" | tee doc-contract.log
           # A filter that selects nothing exits 0, which would read as a pass.
           grep -Eq 'Total: +[1-9]' doc-contract.log || { echo '::error::the filter selected no tests'; exit 1; }
+
+      - name: Tests that read the deployment summary's schema and reference page
+        run: |
+          set -o pipefail
+          dotnet test SchemaQuench/SchemaQuench.UnitTests/SchemaQuench.UnitTests.csproj -c Debug --filter "FullyQualifiedName~DeploymentSummarySchemaTests|FullyQualifiedName~DeploymentSummaryDocumentationTests" | tee summary-contract.log
+          grep -Eq 'Total: +[1-9]' summary-contract.log || { echo '::error::the filter selected no tests'; exit 1; }

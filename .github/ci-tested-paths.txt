@@ -46,9 +46,13 @@ coverage.runsettings
 .gitattributes
 
 # Files only unit tests read. CapabilityDocumentationTests parses the reference page's Engine Version Compatibility
-# section; a doc edit there runs that test alone. A change that also touches [tested] runs it inside the matrix.
+# section; DeploymentSummarySchemaTests and DeploymentSummaryDocumentationTests hold the published summary schema and
+# its reference page to the model. A doc edit there runs those tests alone. A change that also touches [tested] runs
+# them inside the matrix.
 [unit-tested]
 docs/end-user/reference/schemaquench.md
+docs/end-user/reference/deployment-summary-report.md
+docs/end-user/reference/schemas/**
 .github/workflows/ci-doc-contract.yml
 
 # Top-level paths CI does not test, each a decision rather than a default: CiTestedPathsTests fails for a tracked

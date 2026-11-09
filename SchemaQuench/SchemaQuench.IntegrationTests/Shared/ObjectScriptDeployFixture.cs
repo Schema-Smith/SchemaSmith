@@ -236,8 +236,10 @@ public abstract class ObjectScriptDeployFixture
                 }
                 catch (RunFailedException e)
                 {
+                    SummaryConformance.AssertConforms(reportBase + ".json");
                     return new DriftRun(2, product.DriftReport, log, e.Message, product.DriftTier);
                 }
+                SummaryConformance.AssertConforms(reportBase + ".json");
                 return new DriftRun(exited ?? product.ExitCode, product.DriftReport, log, null, product.DriftTier);
             }
             finally
