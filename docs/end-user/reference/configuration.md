@@ -426,6 +426,31 @@ When a script fails, you see a short error summary on the console and in the pro
 
 > **Tip:** CI agents that capture stdout get the progress stream for free. If your pipeline step only saves stdout, you still have a readable transcript of successes and error summaries; archive the error log separately to keep the failed-batch detail.
 
+### Structured logs
+
+Set `LogFormat` to `json` and every tool writes one JSON object per line, to the console and to its log files, so a log platform (Datadog, New Relic, Sumo Logic, Splunk) ingests a run with no parse rules. The default, `text`, is the format described above. The setting applies to all four tools, and like any setting it can come from the settings file, `SmithySettings_LogFormat`, or the command line:
+
+```bash
+SchemaQuench --LogFormat:json
+```
+
+```json
+{"timestamp":"2026-11-09T14:03:22.123Z","level":"info","message":"Quenching tables","tool":"SchemaQuench","runId":"5d2c1a0e-7f3b-4a55-9a0c-1c2f6f0e8b11","logger":"progress","server":"sql01","database":"Billing_0042","schema":"tenant_0042","template":"Tenant"}
+```
+
+| Field | Present | Meaning |
+| --- | --- | --- |
+| `timestamp` | always | UTC, ISO 8601 with milliseconds. |
+| `level` | always | `debug`, `info`, `warn` or `error`. |
+| `message` | always | The line's text. A message several lines long is still one JSON line. The `[server].[database] [Schema: x]` prefix the text format starts a target's lines with is left out, because the fields below carry it. |
+| `tool` | always | `SchemaQuench`, `SchemaTongs`, `DataTongs` or `SchemaShears`. |
+| `runId` | always | The run's id. In SchemaQuench it is the deployment summary's `run.id`, so a summary and its log lines join on it. |
+| `logger` | always | `progress`, `error` or `failure`: the log file the line belongs to. |
+| `server`, `database`, `schema`, `template` | on a target's lines | The target the line is about. `schema` only for a schema template. |
+| `error` | on an exception | Its type, message and stack trace. |
+
+The files keep their names, so a collector already reading `SchemaQuench - Progress.log` keeps working when the format changes. Standard output carries nothing but these lines, in UTF-8; the few lines a tool prints outside its logs (a log backup that failed, `--WriteSchemasOnly`'s report) go to standard error. `--help`, `--version` and the first-run screen print as usual. The JSON lines say exactly what the text lines say, no more.
+
 ### Failure triage roll-up
 
 When a run finishes with one or more failures, SchemaQuench writes a third log alongside the progress and error logs — `SchemaQuench - Failures.log` — a consolidated, phase-grouped summary of *which* targets failed, so a single failure among many parallel targets isn't buried in one interleaved stream. Each failure is recorded with its scope, the engine error, the resolved-SQL artifact path (or, with `WriteDebugSql` off, the hint to rerun with it), and a captured tail of the lines leading up to it; a loud `*** FAILED` banner also marks each failure live on the console. A clean run writes nothing extra. The full behavior is described in [Error Codes & Reporting](error-codes-and-reporting.md#failure-triage-roll-up).
