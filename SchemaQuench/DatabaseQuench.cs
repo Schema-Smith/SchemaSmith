@@ -511,6 +511,7 @@ public partial class DatabaseQuench
     internal DeploymentRecordRun DeploymentRecord { get; set; }
 
     private long? _deploymentRecordId;
+    private bool _resumedFromCheckpoint;
 
     public void Execute()
     {
@@ -527,19 +528,35 @@ public partial class DatabaseQuench
     }
 
     // On its own connection, committed at once: a run that dies a moment later leaves the Started row.
-    private void StartDeploymentRecord()
+    // On the silent connection, which is open already and throws an engine error rather than logging it as the deploy's: a
+    // connection of its own here would raise the most the deploy holds at once by one.
+    private void StartDeploymentRecord(IDbCommand command)
     {
         try
         {
-            using var connection = GetConnection();
-            using var command = Timeouts.NewCommand(connection);
-            _deploymentRecordId = DeploymentHistory.Start(command, _product.Platform, DeploymentRecord, _template?.Name, _schemaName, ConnectedAs, DateTime.UtcNow);
+            _deploymentRecordId = DeploymentHistory.Start(command, _product.Platform, DeploymentRecord, _template?.Name, _schemaName, ConnectedAs,
+                ResumedRunIdForThisTarget(), DateTime.UtcNow);
         }
-        catch (DbException e)
-        {
-            SafeProgressLogWarn($"The deployment record could not be started ({e.Message}); the deploy goes on without it.");
-        }
+        catch (DbException e) { RecordWarning("started", e); }
+        catch (RunFailedException e) { RecordWarning("started", e); }
+        catch (InvalidOperationException e) { RecordWarning("started", e); }
+        catch (TimeoutException e) { RecordWarning("started", e); }
     }
+
+    // The finish's own connection, opened once the deploy's are closed: an engine error throws instead of reaching the deploy's
+    // message handler (which logs it as the deploy's error), and no step-message monitor is started for it, since nothing would stop one.
+    private IDbConnection OpenRecordConnection() =>
+        GetConnection(fireInfoMessageEventOnUserErrors: false, ignoreInfoMessages: true, startStatusMonitor: false);
+
+    // A connect failure reaches the record wrapped as RunFailedException; a pool that cannot hand out a connection throws
+    // InvalidOperationException. None of them is a reason to fail the deploy.
+    private void RecordWarning(string what, Exception e) =>
+        SafeProgressLogWarn(what == "started"
+            ? $"The deployment record could not be started ({e.Message}); the deploy goes on without it."
+            : $"The deployment record could not be finished ({e.Message}); its row stays Started.");
+
+    // Only a target that took up its own checkpoint continues the earlier run; one that started fresh in a resumed run does not.
+    private Guid? ResumedRunIdForThisTarget() => _resumedFromCheckpoint ? DeploymentRecord.ResumedFromRunId?.Invoke() : null;
 
     // A fresh connection, so a target whose working connection broke still records how it ended; if even that fails, the
     // row stays Started, which is still true. The record is evidence, never a reason to fail the deploy.
@@ -550,17 +567,17 @@ public partial class DatabaseQuench
         var outcome = !QuenchSuccessful ? "Failed" : audit?.Any(r => r.Action == "downgraded") == true ? "Incomplete" : "Success";
         try
         {
-            using var connection = GetConnection();
+            using var connection = OpenRecordConnection();
             using var command = Timeouts.NewCommand(connection);
             var now = DateTime.UtcNow;
             DeploymentHistory.Finish(command, _product.Platform, id, outcome, audit?.Count(r => DeploymentHistory.ExecutedActions.Contains(r.Action)),
-                now, DeploymentRecord.PackageHash?.Invoke(true), DeploymentRecord.ResumedFromRunId?.Invoke());
+                now, DeploymentRecord.PackageHash?.Invoke(true), ResumedRunIdForThisTarget());
             DeploymentHistory.Prune(command, _product.Platform, DeploymentRecord.Product, DeploymentRecord.RetentionDays, now);
         }
-        catch (DbException e)
-        {
-            SafeProgressLogWarn($"The deployment record could not be finished ({e.Message}); its row stays Started.");
-        }
+        catch (DbException e) { RecordWarning("finished", e); }
+        catch (RunFailedException e) { RecordWarning("finished", e); }
+        catch (InvalidOperationException e) { RecordWarning("finished", e); }
+        catch (TimeoutException e) { RecordWarning("finished", e); }
     }
 
     private void ExecuteUnit()
@@ -572,6 +589,7 @@ public partial class DatabaseQuench
             && o.Schema == (_schemaName ?? "") && o.Run != ResolvedSqlArtifactWriter.RunId);
 
         var checkpointSummary = _checkpointing?.GetDatabaseCheckpointSummary(DbScope) ?? DatabaseCheckpointSummary.Empty;
+        _resumedFromCheckpoint = checkpointSummary.HasAnyCompleted;
         if (checkpointSummary.HasAnyCompleted)
             SafeProgressLog($"  [{_databaseName}] Resuming from checkpoint (Completed Steps: {checkpointSummary.CompletedSteps}, Completed Scripts: {checkpointSummary.TotalCompletedScripts})");
 
@@ -2284,7 +2302,8 @@ SET NOCOUNT ON
         return error;
     }
 
-    private IDbConnection GetConnection(bool fireInfoMessageEventOnUserErrors = true, bool ignoreInfoMessages = false, string database = null)
+    private IDbConnection GetConnection(bool fireInfoMessageEventOnUserErrors = true, bool ignoreInfoMessages = false, string database = null,
+        bool startStatusMonitor = true)
     {
         var databaseName = database ?? _databaseName;
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
@@ -2359,7 +2378,7 @@ SET NOCOUNT ON
         }
 
         // MySQL: start status message monitor
-        if (_product.Platform.GetBasePlatform() == Platform.MySQL && _statusMonitor == null)
+        if (startStatusMonitor && _product.Platform.GetBasePlatform() == Platform.MySQL && _statusMonitor == null)
         {
             try
             {

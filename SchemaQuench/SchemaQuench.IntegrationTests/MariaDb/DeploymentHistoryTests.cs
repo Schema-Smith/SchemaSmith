@@ -1,5 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System.Text.RegularExpressions;
+using System;
 using NUnit.Framework;
 using Schema.Domain;
 using Schema.IntegrationTests.MariaDb;
@@ -21,4 +23,14 @@ public class DeploymentHistoryTests : DeploymentHistorySharedTests
 
     protected override string ViewScript(string view, int value) => $"CREATE OR REPLACE VIEW `{MainDb}`.{view} AS SELECT {value} AS x";
     protected override string DropView(string view) => $"DROP VIEW IF EXISTS `{MainDb}`.{view}";
+
+    // An ignored (invisible) index arrived in MariaDB 10.6.
+    protected override (string File, string Json, string Drop)? DowngradedTable(string table) =>
+        Version.Parse(Regex.Match(Convert.ToString(Scalar("SELECT VERSION()")), @"^\d+\.\d+").Value) >= new Version(10, 6) ? null : InvisibleIndexTable(table);
+
+    private (string File, string Json, string Drop) InvisibleIndexTable(string table) => ($"{table}.json", $$"""
+        { "Name": "{{table}}",
+          "Columns": [ { "Name": "a", "DataType": "INT", "Nullable": false } ],
+          "Indexes": [ { "Name": "IX_{{table}}", "IndexColumns": "a", "Visible": false } ] }
+        """, $"DROP TABLE IF EXISTS `{MainDb}`.{table}");
 }

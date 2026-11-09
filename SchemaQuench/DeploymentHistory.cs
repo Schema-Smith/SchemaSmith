@@ -42,7 +42,7 @@ internal static class DeploymentHistory
     };
 
     internal static long Start(IDbCommand command, Platform platform, DeploymentRecordRun run, string template, string schema,
-        string deployedAs, DateTime startedUtc)
+        string deployedAs, Guid? resumedFromRunId, DateTime startedUtc)
     {
         var values = new (string Column, object Value)[]
         {
@@ -50,7 +50,7 @@ internal static class DeploymentHistory
             ("SchemaName", string.IsNullOrEmpty(schema) ? null : schema), ("StartedUtc", Unkinded(startedUtc)), ("Outcome", "Started"),
             ("ToolVersion", run.ToolVersion ?? ""), ("PackageHash", run.PackageHash?.Invoke(false)), ("SourceCommit", run.SourceCommit),
             ("SourceBranch", run.SourceBranch), ("RunLabel", run.RunLabel), ("PipelineUrl", run.PipelineUrl), ("Actor", run.Actor),
-            ("DeployedAs", deployedAs ?? ""), ("ResumedFromRunId", run.ResumedFromRunId?.Invoke()?.ToString())
+            ("DeployedAs", deployedAs ?? ""), ("ResumedFromRunId", resumedFromRunId?.ToString())
         };
         command.Parameters.Clear();
         foreach (var (column, value) in values) Add(command, column, value);

@@ -24,6 +24,13 @@ internal static class SessionLogin
         _ => "SELECT SUBSTRING_INDEX(USER(), '@', 1)"
     };
 
+    private static string Unread(string server, Exception ex, Action<string> warn)
+    {
+        if (WarnedServers.TryAdd(server ?? "", true))
+            warn($"[{server}] Could not read the session's login for the deployment summary: {ex.Message}");
+        return null;
+    }
+
     internal static string Read(IDbCommand command, Platform platform, string server, Action<string> warn)
     {
         try
@@ -34,9 +41,11 @@ internal static class SessionLogin
         }
         catch (DbException ex)
         {
-            if (WarnedServers.TryAdd(server ?? "", true))
-                warn($"[{server}] Could not read the session's login for the deployment summary: {ex.Message}");
-            return null;
+            return Unread(server, ex, warn);
+        }
+        catch (SqlServerErrorException ex)
+        {
+            return Unread(server, ex, warn);
         }
     }
 }

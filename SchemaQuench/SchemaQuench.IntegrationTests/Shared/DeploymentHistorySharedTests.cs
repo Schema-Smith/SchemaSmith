@@ -22,6 +22,8 @@ public abstract class DeploymentHistorySharedTests : ObjectScriptDeployFixture
     protected abstract string DropView(string view);
     /// <summary>The comment that opens this engine's block of example queries on the reference page.</summary>
     protected abstract string ReferenceQueriesMarker { get; }
+    /// <summary>A table using a feature this server lacks, so the deploy downgrades it; null when the server takes it.</summary>
+    protected abstract (string File, string Json, string Drop)? DowngradedTable(string table);
 
     private const string View = "history_v";
     private const string OtherProduct = "HistoryOtherProduct";
@@ -130,7 +132,7 @@ public abstract class DeploymentHistorySharedTests : ObjectScriptDeployFixture
         Assert.That(Rows(runId), Is.EqualTo(0));
     }
 
-    // Written on its own connection and committed at once, so a run that dies before the finish leaves this row.
+    // Committed at once, so a run that dies before the finish leaves this row.
     [Test]
     public void TheStartedRow_IsCommittedByItself()
     {
@@ -140,7 +142,7 @@ public abstract class DeploymentHistorySharedTests : ObjectScriptDeployFixture
             own.Open();
             if (Platform.GetBasePlatform() != Schema.Domain.Platform.MySQL) own.ChangeDatabase(MainDb);
             using var command = own.CreateCommand();
-            DeploymentHistory.Start(command, Platform, Record(runId, ProductName), "Main", null, "someone", DateTime.UtcNow);
+            DeploymentHistory.Start(command, Platform, Record(runId, ProductName), "Main", null, "someone", null, DateTime.UtcNow);
         }
 
         Assert.That(Field(runId, "Outcome"), Is.EqualTo("Started"));
@@ -214,11 +216,150 @@ public abstract class DeploymentHistorySharedTests : ObjectScriptDeployFixture
             "the first query finds the latest deployment");
     }
 
+    // A record that cannot be written is one warning, never a failed deploy and never an error line. The table is dropped and
+    // the helpers left as they are (KindleTheForge false), as on a database kindled before the record existed.
+    [Test]
+    public void AFailedRecordWrite_IsOneWarning_AndTheDeploySucceeds()
+    {
+        Assert.That(RunDrift(switches: "").ExitCode, Is.EqualTo(0));
+        Exec($"DROP TABLE {Table}");
+        try
+        {
+            NewRun();
+            var run = RunDrift(switches: "", settings: new Dictionary<string, string> { ["KindleTheForge"] = "false" });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(run.ExitCode, Is.EqualTo(0), run.Describe());
+                Assert.That(run.Log.Where(l => l != null && l.StartsWith("ERROR")), Is.Empty, "a record write is no deploy error");
+                Assert.That(run.Log.Count(l => l != null && l.StartsWith("WARN") && l.Contains("deployment record could not be started")), Is.EqualTo(1));
+            });
+        }
+        finally
+        {
+            Assert.That(RunDrift(switches: "", settings: new Dictionary<string, string> { ["ForceReKindle"] = "true" }).ExitCode, Is.EqualTo(0), "put the table back");
+        }
+    }
+
+    // The finish fails too without failing the deploy: a script drops the table after the Started row is in, so only the
+    // finish's write meets the missing table.
+    [Test]
+    public void AFailedFinish_IsOneWarning_AndTheDeploySucceeds()
+    {
+        WriteFile("Views", "zz_drop_record.sql", $"DROP TABLE {Table}");
+        try
+        {
+            NewRun();
+            var run = RunDrift(switches: "");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(run.ExitCode, Is.EqualTo(0), run.Describe());
+                Assert.That(run.Log.Where(l => l != null && l.StartsWith("ERROR")), Is.Empty, "a record write is no deploy error");
+                Assert.That(run.Log.Count(l => l != null && l.StartsWith("WARN") && l.Contains("deployment record could not be finished")), Is.EqualTo(1));
+            });
+        }
+        finally
+        {
+            File.Delete(Path.Join(TemplateDir, "Views", "zz_drop_record.sql"));
+            Assert.That(RunDrift(switches: "", settings: new Dictionary<string, string> { ["ForceReKindle"] = "true" }).ExitCode, Is.EqualTo(0), "put the table back");
+        }
+    }
+
+    // Each column named for what fills it, so a value written into its neighbour's column is caught.
+    [Test]
+    public void TheRunsProvenance_FillsItsColumns()
+    {
+        var runId = NewRun();
+        var run = RunDrift(switches: "", settings: new Dictionary<string, string>
+        {
+            ["RunLabel"] = "label-2026.11.3", ["RunCommit"] = "commit-4f2a9c1e", ["RunBranch"] = "branch-release",
+            ["RunUrl"] = "https://ci.example/runs/42", ["RunActor"] = "actor-octocat"
+        });
+        Assert.That(run.ExitCode, Is.EqualTo(0), run.Describe());
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Field(runId, "RunLabel"), Is.EqualTo("label-2026.11.3"));
+            Assert.That(Field(runId, "SourceCommit"), Is.EqualTo("commit-4f2a9c1e"));
+            Assert.That(Field(runId, "SourceBranch"), Is.EqualTo("branch-release"));
+            Assert.That(Field(runId, "PipelineUrl"), Is.EqualTo("https://ci.example/runs/42"));
+            Assert.That(Field(runId, "Actor"), Is.EqualTo("actor-octocat"));
+            Assert.That(Field(runId, "PackageHash")?.ToString(), Does.Match("^sha256:[0-9a-f]{64}$"), "filled when the record finishes");
+            Assert.That(Field(runId, "ResumedFromRunId"), Is.EqualTo(DBNull.Value), "not a resume");
+        });
+    }
+
+    // A schema template deploys each schema as its own unit, and each unit writes its own row, named for its schema.
+    [Test]
+    public void ASchemaTemplate_WritesOneRowPerSchema()
+    {
+        if (Platform.GetBasePlatform() == Schema.Domain.Platform.MySQL) Assert.Ignore("Schema templates are SQL Server and PostgreSQL only.");
+        string[] schemas = ["hist_a", "hist_b"];
+        foreach (var schema in schemas)
+            Exec(Platform == Schema.Domain.Platform.SqlServer
+                ? $"IF SCHEMA_ID('{schema}') IS NULL EXEC('CREATE SCHEMA {schema}')"
+                : $"CREATE SCHEMA IF NOT EXISTS {schema}");
+        WritePackage("");
+        File.WriteAllText(Path.Join(TemplateDir, "Template.json"), $$"""
+            { "Name": "Main", "DatabaseIdentificationScript": "SELECT '{{MainDb}}'",
+              "SchemaIdentificationScript": "SELECT 'hist_a' UNION ALL SELECT 'hist_b'", "ScriptFolders": [] }
+            """);
+        try
+        {
+            var runId = NewRun();
+            var run = RunDrift(switches: "");
+            Assert.That(run.ExitCode, Is.EqualTo(0), run.Describe());
+
+            var named = new List<string>();
+            using (var command = Connection.CreateCommand())
+            {
+                command.CommandText = $"SELECT {C("SchemaName")} FROM {Table} WHERE {C("RunId")} = '{runId}' ORDER BY {C("SchemaName")}";
+                using var reader = command.ExecuteReader();
+                while (reader.Read()) named.Add(reader.GetString(0));
+            }
+            Assert.That(named, Is.EqualTo(schemas));
+        }
+        finally
+        {
+            foreach (var schema in schemas)
+                Exec(Platform == Schema.Domain.Platform.SqlServer ? $"DROP SCHEMA IF EXISTS {schema}" : $"DROP SCHEMA IF EXISTS {schema} CASCADE");
+        }
+    }
+
+    // A feature the target cannot take is downgraded, and the target's row says Incomplete. Each engine names a feature its
+    // older servers lack, so some leg of the matrix runs this on every engine.
+    [Test]
+    public void ADowngradeOnTheTarget_FinishesTheRowIncomplete()
+    {
+        const string table = "history_down";
+        if (DowngradedTable(table) is not { } down)
+        {
+            Assert.Ignore("This server takes the feature, so nothing is downgraded.");
+            return;
+        }
+        Exec(down.Drop);
+        WritePackage("");
+        WriteFile("Tables", down.File, down.Json);
+        try
+        {
+            var runId = NewRun();
+            var run = RunDrift(switches: "");
+            Assert.That(run.ExitCode, Is.EqualTo(1), run.Describe());
+
+            Assert.That(Field(runId, "Outcome"), Is.EqualTo("Incomplete"));
+        }
+        finally
+        {
+            Exec(down.Drop);
+        }
+    }
+
     private Guid OldRow(string product)
     {
         var runId = Guid.NewGuid();
         using var command = Connection.CreateCommand();
-        DeploymentHistory.Start(command, Platform, Record(runId, product), "Main", null, "someone", DateTime.UtcNow.AddDays(-500));
+        DeploymentHistory.Start(command, Platform, Record(runId, product), "Main", null, "someone", null, DateTime.UtcNow.AddDays(-500));
         return runId;
     }
 

@@ -421,12 +421,14 @@ KindleForge
             }
 
             var product = Product.Load();
+            var seededRunId = Guid.NewGuid();
             var dbCheckpointContent = $@"# SchemaQuench Database Checkpoint
 # Product: {product.Name}
 # Template: Main
 # Server: {_server}
 # Database: {_mainDb}
 # Started: {DateTime.Now:yyyy-MM-dd HH:mm:ss}
+# RunId: {seededRunId}
 
 [Completed Steps]
 MissingTablesAndColumns
@@ -467,7 +469,16 @@ ModifiedTables
             var expected = PackageContentHash.ForFolder(Path.GetDirectoryName(product.FilePath), ConfigHelper.ResolveLogPath());
             Assert.That((string)summary.SelectToken("run.package.contentHash"), Is.EqualTo(expected.ContentHash));
             Assert.That((int?)summary.SelectToken("run.package.fileCount"), Is.EqualTo(expected.FileCount));
-            Assert.That(summary.SelectToken("run.resumesRunId")?.Type, Is.EqualTo(JTokenType.Null));
+            // The seeded checkpoint names the run that wrote it, so the summary and this target's record name it too.
+            Assert.That((string)summary.SelectToken("run.resumesRunId"), Is.EqualTo(seededRunId.ToString()));
+            using (var recordConn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString))
+            {
+                recordConn.Open();
+                recordConn.ChangeDatabase(_mainDb);
+                using var recordCmd = recordConn.CreateCommand();
+                recordCmd.CommandText = $"SELECT ResumedFromRunId FROM SchemaSmith.DeploymentHistory WHERE RunId = '{runId}'";
+                Assert.That(recordCmd.ExecuteScalar()?.ToString(), Is.EqualTo(seededRunId.ToString()), "the record's ResumedFromRunId");
+            }
             Assert.That((string)summary.SelectToken("run.host.machine"), Is.EqualTo(Environment.MachineName));
             // The login the engine saw for the session, asked of the engine and never read from the settings.
             var expectedLogin = FactoryContainer.Resolve<IConfigurationRoot>()["Target:User"];
