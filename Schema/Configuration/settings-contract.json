@@ -6,6 +6,8 @@
       "BottleneckThresholdMs",
       "CheckpointDirectory",
       "DeliverData",
+      "DeploymentHistory",
+      "DeploymentHistoryRetentionDays",
       "DropCheckConstraintsRemovedFromProduct",
       "DropColumnsRemovedFromProduct",
       "DropEventsRemovedFromProduct",

@@ -271,6 +271,10 @@ public static class SettingsKeys
     public const string WriteDebugSql = "WriteDebugSql";
     /// <summary>All four tools: text (default) or json, one JSON object per log line.</summary>
     public const string LogFormat = "LogFormat";
+    /// <summary>SchemaQuench: on (default) or off, the row each deployment writes in the target's deployment record.</summary>
+    public const string DeploymentHistory = "DeploymentHistory";
+    /// <summary>SchemaQuench: days the deployment record keeps a product's rows (default 400; 0 keeps all).</summary>
+    public const string DeploymentHistoryRetentionDays = "DeploymentHistoryRetentionDays";
 
     /// <summary>
     /// What a pipeline says about the run, written into the deployment summary. Flat keys, because a nested one

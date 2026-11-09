@@ -79,7 +79,8 @@ public static class SettingsContract
             SettingsKeys.BottleneckThresholdMs, SettingsKeys.TrackRunOnceMigrations,
             SettingsKeys.PruneObsoleteMigrationTracking,
             SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.WriteDebugSql, SettingsKeys.ScriptTokens,
-            SettingsKeys.LogHygiene, SettingsKeys.ExitNonZeroOnWarning, SettingsKeys.LogFormat
+            SettingsKeys.LogHygiene, SettingsKeys.ExitNonZeroOnWarning, SettingsKeys.LogFormat,
+            SettingsKeys.DeploymentHistory, SettingsKeys.DeploymentHistoryRetentionDays
         ]).Concat(SettingsKeys.Run.All), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.SchemaTongs)).Concat(

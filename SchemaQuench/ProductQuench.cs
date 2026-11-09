@@ -104,6 +104,7 @@ public class ProductQuench
     // The same id is on every structured log line of the run (RunContext, started by Main).
     private readonly Guid _runId = RunContext.Id;
     private Task<PackageIdentity> _packageIdentity;
+    private DeploymentRecordRun _deploymentRecord;
     private bool _summaryWritten;
     // Captured pre-run (before this run marks any of its own steps complete) so the report
     // reflects whether the run RESUMED — reading the checkpoint at emit time would see this
@@ -918,6 +919,7 @@ public class ProductQuench
         _checkpointing.StampRunId(_runId);
         // A package with table data can be large; the hash is only needed when the summary is written.
         _packageIdentity = Task.Run(ComputePackageIdentity);
+        _deploymentRecord = BuildDeploymentRecord();
 
         _runTiming.Start();
         try
@@ -1222,12 +1224,36 @@ public class ProductQuench
         return identity;
     }
 
+    private DeploymentRecordRun BuildDeploymentRecord()
+    {
+        if (IsWhatIfOnly || _drift) return null;
+        var setting = _config[SettingsKeys.DeploymentHistory]?.Trim();
+        if (string.Equals(setting, "off", StringComparison.OrdinalIgnoreCase) || string.Equals(setting, "false", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!string.IsNullOrEmpty(setting) && !string.Equals(setting, "on", StringComparison.OrdinalIgnoreCase) && !string.Equals(setting, "true", StringComparison.OrdinalIgnoreCase))
+            _progressLog.Warn($"DeploymentHistory '{setting}' is not on or off; the deployment record is written.");
+        var retentionSetting = _config[SettingsKeys.DeploymentHistoryRetentionDays]?.Trim();
+        var retention = 400;
+        if (!string.IsNullOrEmpty(retentionSetting) && (!int.TryParse(retentionSetting, out retention) || retention < 0))
+        {
+            _progressLog.Warn($"DeploymentHistoryRetentionDays '{retentionSetting}' is not a whole number of days, 0 or more; 400 is used.");
+            retention = 400;
+        }
+        var identity = RunIdentity.Build(_runId, key => _config[key], EnvironmentWrapper.GetFromFactory(), PackageGitSource(), null, RunHost.Current());
+        return new DeploymentRecordRun(_runId, _product.Name, ToolVersion(), identity.Source?.Commit, identity.Source?.Branch, identity.Label,
+            identity.Ci?.Url, identity.Ci?.Actor ?? identity.Host?.User, retention,
+            wait => wait ? WaitForPackageIdentity()?.ContentHash : _packageIdentity is { IsCompletedSuccessfully: true } done ? done.Result?.ContentHash : null,
+            () => _checkpointing.ResumedRunId);
+    }
+
+    private GitSource PackageGitSource() => IsZipPackage ? null : GitSourceReader.Read(Path.GetDirectoryName(Path.GetFullPath(_product.FilePath)));
+
+    // A hash that failed costs the summary its package, never the summary.
+    private PackageIdentity WaitForPackageIdentity() =>
+        _packageIdentity?.ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : null).GetAwaiter().GetResult();
+
     private RunIdentity BuildRunIdentity()
     {
-        // A hash that failed costs the summary its package, never the summary.
-        var package = _packageIdentity?.ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : null).GetAwaiter().GetResult();
-        var git = IsZipPackage ? null : GitSourceReader.Read(Path.GetDirectoryName(Path.GetFullPath(_product.FilePath)));
-        return RunIdentity.Build(_runId, key => _config[key], EnvironmentWrapper.GetFromFactory(), git, package, RunHost.Current())
+        return RunIdentity.Build(_runId, key => _config[key], EnvironmentWrapper.GetFromFactory(), PackageGitSource(), WaitForPackageIdentity(), RunHost.Current())
             .WithResume(_checkpointing.ResumedRunId);
     }
 
@@ -2399,7 +2425,8 @@ public class ProductQuench
             // per-table or per-object level for this to cascade from. Forced OFF under the no-drop
             // protection tier (PreventDrop) exactly like every other drop-by-absence pass -- the tier's
             // contract is that nothing is dropped for being absent from the product, events included.
-            DropRemovedEvents = !_protectedMode && (ConfigBool(_config, SettingsKeys.DropEventsRemovedFromProduct) ?? false)
+            DropRemovedEvents = !_protectedMode && (ConfigBool(_config, SettingsKeys.DropEventsRemovedFromProduct) ?? false),
+            DeploymentRecord = _deploymentRecord
         };
         var workUnitStopwatch = Stopwatch.StartNew();
         // A tier-1 drift check's uncommitted kindle holds locks on the helpers every other unit of the database needs.

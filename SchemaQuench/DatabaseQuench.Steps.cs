@@ -105,6 +105,10 @@ public partial class DatabaseQuench
                 RetryOnContention(() => ForgeKindler.KindleTheForge(kindleCmd, _product.Platform, _forceReKindle, _ingestEncoding, _sqlServerMajorVersion, kindlePolicy));
             }, StepPreview.SameCall),
 
+            // The deployment record's Started row: after the helpers (its table is one of them), before the first change. ProductQuench
+            // gives a unit no record in a read-only mode.
+            new("DeploymentRecord", null, () => DeploymentRecord != null, StartDeploymentRecord, StepPreview.Skip),
+
             // H1, tier 2: what the deploy reads back from the target -- ownership, stamps, migrations run, the expression map.
             new("DriftCopyState", null, () => _driftHelperDatabase != null, () =>
             {

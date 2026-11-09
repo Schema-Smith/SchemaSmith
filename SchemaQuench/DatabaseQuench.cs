@@ -507,10 +507,64 @@ public partial class DatabaseQuench
     /// <summary>The login the engine reported for this target's session; null when it could not be read.</summary>
     public string ConnectedAs { get; private set; }
 
+    /// <summary>The run's fields for this target's deployment record; null when no record is written (off, or a read-only mode).</summary>
+    internal DeploymentRecordRun DeploymentRecord { get; set; }
+
+    private long? _deploymentRecordId;
+
     public void Execute()
     {
         // Structured log lines carry the target as fields; the scope ends with the unit, so no other unit inherits it.
         using var logScope = LogScope.Begin(_server, _databaseName, _schemaName, _template?.Name, LogPrefix);
+        try
+        {
+            ExecuteUnit();
+        }
+        finally
+        {
+            FinishDeploymentRecord();
+        }
+    }
+
+    // On its own connection, committed at once: a run that dies a moment later leaves the Started row.
+    private void StartDeploymentRecord()
+    {
+        try
+        {
+            using var connection = GetConnection();
+            using var command = Timeouts.NewCommand(connection);
+            _deploymentRecordId = DeploymentHistory.Start(command, _product.Platform, DeploymentRecord, _template?.Name, _schemaName, ConnectedAs, DateTime.UtcNow);
+        }
+        catch (DbException e)
+        {
+            SafeProgressLogWarn($"The deployment record could not be started ({e.Message}); the deploy goes on without it.");
+        }
+    }
+
+    // A fresh connection, so a target whose working connection broke still records how it ended; if even that fails, the
+    // row stays Started, which is still true. The record is evidence, never a reason to fail the deploy.
+    private void FinishDeploymentRecord()
+    {
+        if (_deploymentRecordId is not { } id) return;
+        var audit = ChangeAudit?.Snapshot().Where(r => r.Target == AuditTarget).ToList();
+        var outcome = !QuenchSuccessful ? "Failed" : audit?.Any(r => r.Action == "downgraded") == true ? "Incomplete" : "Success";
+        try
+        {
+            using var connection = GetConnection();
+            using var command = Timeouts.NewCommand(connection);
+            var now = DateTime.UtcNow;
+            DeploymentHistory.Finish(command, _product.Platform, id, outcome, audit?.Count(r => DeploymentHistory.ExecutedActions.Contains(r.Action)),
+                now, DeploymentRecord.PackageHash?.Invoke(true), DeploymentRecord.ResumedFromRunId?.Invoke());
+            DeploymentHistory.Prune(command, _product.Platform, DeploymentRecord.Product, DeploymentRecord.RetentionDays, now);
+        }
+        catch (DbException e)
+        {
+            SafeProgressLogWarn($"The deployment record could not be finished ({e.Message}); its row stays Started.");
+        }
+    }
+
+    private void ExecuteUnit()
+    {
         SafeProgressLog("Begin Quench");
         // #576: the previous run's debug files for this target go, so only the current failure's are there.
         ResolvedSqlArtifactWriter.DeleteOwned(ResolveArtifactDirectory(), o =>
@@ -3623,6 +3677,15 @@ SET NOCOUNT ON
         lock (_lockObject)
         {
             _progressLog.Info($"{LogPrefix} {msg}");
+            FailureCtx.Log(msg);
+        }
+    }
+
+    private void SafeProgressLogWarn(string msg)
+    {
+        lock (_lockObject)
+        {
+            _progressLog.Warn($"{LogPrefix} {msg}");
             FailureCtx.Log(msg);
         }
     }

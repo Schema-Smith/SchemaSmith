@@ -118,6 +118,11 @@
     "RunScriptsTwice": false, // Run object/[ALWAYS] scripts twice; both passes must succeed — an idempotency check, NOT dependency resolution (the retry loop handles dependencies)
     "CheckpointDirectory": "", // Directory for checkpoint files to enable resuming interrupted quenches
 
+    // --- Deployment record ---------------------------------------------------------------------------
+    // Each deployment writes one row in the target's SchemaSmith DeploymentHistory table: when, from what, by whom, how it ended.
+    // "DeploymentHistory": "on", // on, or off to write nothing.
+    // "DeploymentHistoryRetentionDays": 400, // Rows of this product older than this are removed after each deployment; 0 keeps all.
+
     // --- Run identity ------------------------------------------------------------------------------
     // Written into the deployment summary's run block. Detected on GitHub Actions, Azure DevOps, GitLab and Jenkins; set
     // these to override what was detected or to supply it elsewhere. Usually passed per run: --RunLabel:2026.11.3
