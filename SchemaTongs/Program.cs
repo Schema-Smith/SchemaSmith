@@ -92,7 +92,7 @@ public static class Program
         void Warn(string warning)
         {
             warnings++;
-            Console.WriteLine($"WARNING: {warning}");
+            ConsoleOutput.Line($"WARNING: {warning}");
         }
 
         var config = FactoryContainer.ResolveOrCreate<Microsoft.Extensions.Configuration.IConfigurationRoot>();
@@ -103,7 +103,7 @@ public static class Program
             throw new RunFailedException($"Product.json not found at '{productFile}'. Set 'Product:Path' to the product directory.");
 
         var product = Product.LoadForDisplay(productFile);
-        Console.WriteLine($"Regenerating .json-schemas for {product.Name} ({product.Platform})...");
+        ConsoleOutput.Line($"Regenerating .json-schemas for {product.Name} ({product.Platform})...");
         var results = RepositoryHelper.WriteSchemaFilesWithResults(productPath, product.Platform, Warn);
 
         // Say which of the three things happened. "Done." was true of every outcome, including the one
@@ -112,14 +112,14 @@ public static class Program
         var created = results.Count(r => r.WasCreated);
         var updated = results.Count(r => r.WasUpdated);
         var unchanged = results.Count - created - updated;
-        Console.WriteLine(created == 0 && updated == 0
+        ConsoleOutput.Line(created == 0 && updated == 0
             ? $"Done. {unchanged} schema file(s) already current."
             : $"Done. {created} created, {updated} updated, {unchanged} already current.");
 
         // Generating the schemas is only half of what makes an editor validate: without a $schema
         // reference in each package file, the .json-schemas folder sits there and nothing reads it.
         var stamped = RepositoryHelper.StampSchemaRefs(productPath, product.Platform, Warn);
-        Console.WriteLine(stamped == 0
+        ConsoleOutput.Line(stamped == 0
             ? "All package files already reference their schema."
             : $"Added a $schema reference to {stamped} package file(s).");
         return warnings;

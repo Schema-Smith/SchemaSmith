@@ -21,6 +21,10 @@ public class JsonLayoutTests
 {
     private static readonly DateTime At = new(2026, 11, 9, 14, 3, 22, 123, DateTimeKind.Utc);
 
+    // JsonLogs is process-wide: a test that switched a repository to json must not leave later tests printing to stderr.
+    [TearDown]
+    public void ResetFormat() => ConfigHelper.ApplyLogFormat(LogManager.CreateRepository($"reset-{Guid.NewGuid():N}"), null, null);
+
     private static LoggingEvent Event(string logger, Level level, string message, Exception error = null) =>
         new(new LoggingEventData { LoggerName = logger, Level = level, Message = message, TimeStampUtc = At, ExceptionString = error?.ToString() });
 

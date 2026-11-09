@@ -70,17 +70,17 @@ public static class LogBackup
             // actually reached -- that is what turned a passing run into an exit-4 failure.
             if (!copied)
             {
-                Console.WriteLine("");
-                Console.WriteLine($"UNABLE TO BACKUP LOG FILES TO {backupDir} -- the run's own result stands.");
+                ConsoleOutput.Line();
+                ConsoleOutput.Line($"UNABLE TO BACKUP LOG FILES TO {backupDir} -- the run's own result stands.");
             }
 
             EnvironmentWrapper.GetFromFactory().Exit(exitCode);
         }
         catch (Exception e)
         {
-            Console.WriteLine("");
-            Console.WriteLine($"UNABLE TO BACKUP LOG FILES TO {backupDir}");
-            Console.WriteLine(e);
+            ConsoleOutput.Line();
+            ConsoleOutput.Line($"UNABLE TO BACKUP LOG FILES TO {backupDir}");
+            ConsoleOutput.Line(e.ToString());
             EnvironmentWrapper.GetFromFactory().Exit(4);
         }
     }

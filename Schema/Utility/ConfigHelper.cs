@@ -52,6 +52,7 @@ public static class ConfigHelper
     internal static void ApplyLogFormat(ILoggerRepository repository, IConfiguration config, Action<string> warn)
     {
         var format = config?[SettingsKeys.LogFormat]?.Trim();
+        JsonLogs = string.Equals(format, "json", StringComparison.OrdinalIgnoreCase);
         if (string.IsNullOrEmpty(format) || format.Equals("text", StringComparison.OrdinalIgnoreCase)) return;
         if (!format.Equals("json", StringComparison.OrdinalIgnoreCase))
         {
@@ -83,6 +84,21 @@ public static class ConfigHelper
             }
         }
         foreach (var replaced in plainConsoles.Keys) replaced.Close();
+    }
+
+    /// <summary>Whether this run's logs are JSON lines (LogFormat: json), so nothing else may be written to standard output.</summary>
+    public static bool JsonLogs { get; private set; }
+
+    private static void UseUtf8Console()
+    {
+        try
+        {
+            Console.OutputEncoding = new System.Text.UTF8Encoding(false);
+        }
+        catch (IOException)
+        {
+            // No console to set it on: output goes wherever the host sends it, unchanged.
+        }
     }
 
     public static string ResolveLogPath()
@@ -169,6 +185,8 @@ public static class ConfigHelper
             FactoryContainer.Register(config);
             ApplyLogFormat(LogManager.GetRepository(Assembly.GetEntryAssembly() ?? Assembly.GetCallingAssembly()), config,
                 message => LogFactory.GetLogger("ProgressLog").Warn(message));
+            // JSON lines are UTF-8: a console left on the Windows code page would turn a message's — into -, or worse.
+            if (JsonLogs) UseUtf8Console();
             logLine?.Invoke(app);
 
             ConfigurationLogger.LogCommandLine(config, logLine);
