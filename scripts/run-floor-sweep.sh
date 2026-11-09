@@ -192,12 +192,17 @@ for f in "${FLOORS[@]}"; do
   echo "--- $image:$tag  (port $port, category $category) ---"
   docker rm -fv "$name" >/dev/null 2>&1
 
+  # MySQL 8.4 and later outgrow 2 GB over the whole SchemaQuench suite and are OOM-killed partway through the
+  # next project, which then fails every test on a lost connection.
+  MEM=2g
+  case "$image:$tag" in mysql:8.4*|mysql:9*|mysql:2[0-9]*) MEM=3g ;; esac
+
   if [ "$image" = "postgres" ]; then
-    docker run -d --name "$name" --memory 2g --memory-swap 2g \
+    docker run -d --name "$name" --memory $MEM --memory-swap $MEM \
       -e POSTGRES_USER="$TEST_USER" -e POSTGRES_PASSWORD="$TEST_PASSWORD" -e POSTGRES_DB=TestMain \
       -p "$port:5432" "$image:$tag" >/dev/null
   else
-    docker run -d --name "$name" --memory 2g --memory-swap 2g \
+    docker run -d --name "$name" --memory $MEM --memory-swap $MEM \
       -e MYSQL_ROOT_PASSWORD="$TEST_PASSWORD" -e MYSQL_USER="$TEST_USER" \
       -e MYSQL_PASSWORD="$TEST_PASSWORD" -e MYSQL_DATABASE=TestMain \
       -p "$port:3306" "$image:$tag" >/dev/null
@@ -264,6 +269,11 @@ for f in "${FLOORS[@]}"; do
       # The full output, so a failure that does not reproduce alone still has its message.
       faillog="${TMPDIR:-/tmp}/floor-sweep/${name}-$(basename "$proj" .csproj).log"
       mkdir -p "$(dirname "$faillog")" && echo "$out" > "$faillog" && echo "    full output: $faillog"
+    fi
+    if [ "$(docker inspect -f '{{.State.OOMKilled}}' "$name" 2>/dev/null)" = "true" ]; then
+      echo "  FAIL: $name was killed for running out of memory ($MEM) -- failures from here on are the lost server."
+      FAILED=1
+      break
     fi
   done
 
