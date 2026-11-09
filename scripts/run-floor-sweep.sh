@@ -193,9 +193,10 @@ for f in "${FLOORS[@]}"; do
   docker rm -fv "$name" >/dev/null 2>&1
 
   # MySQL 8.4 and later outgrow 2 GB over the whole SchemaQuench suite and are OOM-killed partway through the
-  # next project, which then fails every test on a lost connection.
+  # next project, which then fails every test on a lost connection. PostgreSQL 12 to 15 lose a backend to the same
+  # cap during SchemaQuench, and the server's recovery fails whatever is connected at the time.
   MEM=2g
-  case "$image:$tag" in mysql:8.4*|mysql:9*|mysql:2[0-9]*) MEM=3g ;; esac
+  case "$image:$tag" in mysql:8.4*|mysql:9*|mysql:2[0-9]*|postgres:1[2-5]*) MEM=3g ;; esac
 
   if [ "$image" = "postgres" ]; then
     docker run -d --name "$name" --memory $MEM --memory-swap $MEM \
