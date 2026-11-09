@@ -146,6 +146,16 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 }
 ```
 
+### Validating a summary
+
+The report's shape is published as a JSON Schema (draft-07), one file per schema version: [`deployment-summary-1.4.schema.json`](schemas/deployment-summary-1.4.schema.json). A released version's file never changes; a change to the shape is a new version and a new file. Each object lists every property it may carry, so a summary with a key the schema does not know fails validation. To get the schema for the exact SchemaQuench you run, with no repository and no settings file:
+
+```bash
+SchemaQuench --WriteSummarySchema:deployment-summary.schema.json
+```
+
+Pick the file by the summary's `schemaVersion`.
+
 ### Top-level fields
 
 | Key | Meaning |
