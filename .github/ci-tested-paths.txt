@@ -47,12 +47,13 @@ coverage.runsettings
 
 # Files only unit tests read. CapabilityDocumentationTests parses the reference page's Engine Version Compatibility
 # section; DeploymentSummarySchemaTests and DeploymentSummaryDocumentationTests hold the published summary schema and
-# its reference page to the model. A doc edit there runs those tests alone. A change that also touches [tested] runs
-# them inside the matrix.
+# its reference page to the model; PluginContractTests holds the Claude Code plugin's skills to the tools. An edit there
+# runs those tests alone. A change that also touches [tested] runs them inside the matrix.
 [unit-tested]
 docs/end-user/reference/schemaquench.md
 docs/end-user/reference/deployment-summary-report.md
 docs/end-user/reference/schemas/**
+plugin/**
 .github/workflows/ci-doc-contract.yml
 
 # Top-level paths CI does not test, each a decision rather than a default: CiTestedPathsTests fails for a tracked
@@ -63,6 +64,8 @@ docs/end-user/reference/schemas/**
 # and the end-to-end tests deploy copies under TestProducts/.
 Demos
 docs
+# The Claude Code plugin: prose skills, held to the tools by PluginContractTests (above).
+plugin
 packaging
 action
 action.yml

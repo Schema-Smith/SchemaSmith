@@ -125,6 +125,15 @@ docker run --rm -v "$PWD/schema:/pkg" \
 
 Tags: `latest`, `X.Y.Z` (immutable), `X.Y`, `X`. Multi-arch (`linux/amd64` + `linux/arm64`). Configure via `SmithySettings_` environment variables (`__` denotes nesting) or a mounted `SchemaQuench.settings.json`; append `--Key:value` overrides as needed.
 
+## Claude Code
+
+In Claude Code, the SchemaSmith plugin installs the tools, extracts a database, previews a deployment and runs one you confirm, in one conversation. It operates the tools and does not edit packages. See [Using SchemaSmith with Claude Code](docs/end-user/guide/claude-code.md).
+
+```
+/plugin marketplace add Schema-Smith/SchemaSmith
+/plugin install schemasmith@schemasmith
+```
+
 ## GitHub Action (CI/CD)
 
 Run SchemaQuench in a workflow with the **SchemaSmith Deploy** action ([GitHub Marketplace](https://github.com/marketplace/actions/schemasmith-deploy)) — WhatIf on pull requests, deploy on merge:

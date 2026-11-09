@@ -215,4 +215,6 @@ Useful for procurement review and dependency auditing.
 
 Tools in place? Time to put them to work. Run any of them with no arguments before you've configured it and it tells you which settings file it read and which settings to fill in.
 
+Working in Claude Code? The SchemaSmith plugin can install the tools and walk you through a first extraction and preview: [Using SchemaSmith with Claude Code](claude-code.md).
+
 **[Quick Start →](02-quick-start.md)**
