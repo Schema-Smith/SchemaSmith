@@ -36,7 +36,11 @@ public static class PackageContentHash
                 .Select(f => (f.Relative, (Func<Stream>)(() => file.OpenRead(f.Full))));
             return Hash(files);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
         {
             return null;
         }
@@ -52,7 +56,15 @@ public static class PackageContentHash
                 .Select(f => (f.Relative, (Func<Stream>)f.Entry.Open));
             return Hash(files);
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException or UnauthorizedAccessException)
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+        catch (InvalidDataException)
         {
             return null;
         }

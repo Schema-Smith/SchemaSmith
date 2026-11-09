@@ -1223,7 +1223,8 @@ public class ProductQuench
 
     private RunIdentity BuildRunIdentity()
     {
-        var package = _packageIdentity?.GetAwaiter().GetResult();
+        // A hash that failed costs the summary its package, never the summary.
+        var package = _packageIdentity?.ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : null).GetAwaiter().GetResult();
         var git = IsZipPackage ? null : GitSourceReader.Read(Path.GetDirectoryName(Path.GetFullPath(_product.FilePath)));
         return RunIdentity.Build(_runId, key => _config[key], EnvironmentWrapper.GetFromFactory(), git, package, RunHost.Current())
             .WithResume(_checkpointing.ResumedRunId);

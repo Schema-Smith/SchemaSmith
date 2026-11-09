@@ -38,7 +38,15 @@ public static class GitSourceReader
             var branch = reference.StartsWith(HeadsPrefix, StringComparison.Ordinal) ? reference[HeadsPrefix.Length..] : reference;
             return new GitSource(ResolveRef(gitDir, reference), branch);
         }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        catch (IOException)
+        {
+            return null;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return null;
+        }
+        catch (ArgumentException)
         {
             return null;
         }

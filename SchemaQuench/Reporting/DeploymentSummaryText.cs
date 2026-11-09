@@ -77,8 +77,8 @@ public static class DeploymentSummaryText
     {
         var parts = new List<string> { Short(run.Id.ToString(), 8) };
         if (run.Label != null) parts.Add(run.Label);
-        var where = Short(run.Source?.Commit, 7) ?? run.Source?.Branch;
-        if (where != null) parts.Add(run.Source?.Repository == null ? where : $"{run.Source.Repository}@{where}");
+        if (run.Source is { } source && (Short(source.Commit, 7) ?? source.Branch) is { } where)
+            parts.Add(source.Repository == null ? where : $"{source.Repository}@{where}");
         if (run.Ci?.Pipeline != null) parts.Add(run.Ci.RunId == null ? run.Ci.Pipeline : $"{run.Ci.Pipeline} #{run.Ci.RunId}");
         if (run.ResumesRunId != null) parts.Add($"resumes {Short(run.ResumesRunId.ToString(), 8)}");
         return string.Join(" · ", parts);
