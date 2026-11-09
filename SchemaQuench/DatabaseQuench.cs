@@ -509,6 +509,8 @@ public partial class DatabaseQuench
 
     public void Execute()
     {
+        // Structured log lines carry the target as fields; the scope ends with the unit, so no other unit inherits it.
+        using var logScope = LogScope.Begin(_server, _databaseName, _schemaName, _template?.Name, LogPrefix);
         SafeProgressLog("Begin Quench");
         // #576: the previous run's debug files for this target go, so only the current failure's are there.
         ResolvedSqlArtifactWriter.DeleteOwned(ResolveArtifactDirectory(), o =>
