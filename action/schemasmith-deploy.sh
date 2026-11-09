@@ -42,8 +42,99 @@ mode_switch() {
     validate) printf -- '--Validate\n' ;;
     test-connection) printf -- '--TestConnection\n' ;;
     preview-targets) printf -- '--PreviewTargets\n' ;;
+    drift) printf -- '--Drift\n' ;;
     *) echo "unsupported mode: $1" >&2; return 1 ;;
   esac
+}
+
+# Workflow-command escaping: a message's data, and a property value, which also takes ':' and ','.
+escape_data() {
+  local s="$1"
+  s="${s//'%'/%25}"
+  s="${s//$'\r'/%0D}"
+  s="${s//$'\n'/%0A}"
+  printf '%s' "$s"
+}
+
+escape_property() {
+  local s
+  s="$(escape_data "$1")"
+  s="${s//:/%3A}"
+  s="${s//,/%2C}"
+  printf '%s' "$s"
+}
+
+# A runner path made relative to the workspace, with '/' separators, so an annotation lands on the file in the pull
+# request; empty when the path is not inside the workspace. Windows paths compare without regard to case.
+workspace_relative() {
+  local path="${1//\\//}" workspace="${2//\\//}"
+  workspace="${workspace%/}"
+  [ -n "$path" ] && [ -n "$workspace" ] || return 0
+  local p="$path" w="$workspace"
+  case "$w" in [A-Za-z]:*) p="${p,,}"; w="${w,,}" ;; esac
+  case "$p" in "$w"/*) printf '%s' "${path:${#workspace}+1}" ;; esac
+}
+
+# At most ten of a kind: GitHub shows ten errors and ten warnings per step.
+ANNOTATION_LIMIT=10
+
+annotations_from_summary() {
+  local summary="$1" workspace="$2" total scope message path file props
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "::notice::jq is not installed on this runner, so the run's failures are not shown as annotations; they are in the deployment summary."
+    return 0
+  fi
+  [ -f "$summary" ] || return 0
+
+  total="$(jq '(.failures // []) | length' "$summary")"
+  while IFS= read -r -d '' scope && IFS= read -r -d '' message; do
+    path="$(printf '%s' "$message" | sed -n "s/^Unable to quench '\([^']*\)'.*/\1/p")"
+    file="$(workspace_relative "$path" "$workspace")"
+    props="title=$(escape_property "$scope")"
+    [ -n "$file" ] && props="file=$(escape_property "$file"),$props"
+    echo "::error $props::$(escape_data "$message")"
+  done < <(jq -j --argjson n "$ANNOTATION_LIMIT" \
+    '(.failures // [])[:$n][] | (.scopeKey // ""), "\u0000", ((.error // "") | split("\n")[0] | rtrimstr("\r")), "\u0000"' "$summary")
+  [ "$total" -gt "$ANNOTATION_LIMIT" ] && echo "::notice::$((total - ANNOTATION_LIMIT)) more failures are in the deployment summary."
+
+  local warnings=() warning
+  while IFS= read -r -d '' warning; do warnings+=("$warning"); done < <(jq -j '
+    ( if .drift.drifted == true then (.drift.targets // [])[] | select(.status == "drifted")
+        | "Drift: [\(.server)].[\(.database)]\(if (.schema // "") != "" then " [Schema: \(.schema)]" else "" end) has \(.counted) change(s) a deploy would make", "\u0000"
+      else empty end ),
+    ( (.unsupportedDowngrade.downgrades // [])[] | "Downgraded on the target: \(.objectName) - \(.feature)", "\u0000" ),
+    ( (.destructive.changes // [])[] | select(.outcome == "refused" or .outcome == "wouldRefuse")
+        | "Refused by DestructiveChangePolicy: \(.kind) \(.objectName) on [\(.server)].[\(.database)]", "\u0000" )' "$summary")
+  local i
+  for ((i = 0; i < ${#warnings[@]} && i < ANNOTATION_LIMIT; i++)); do
+    echo "::warning::$(escape_data "${warnings[$i]}")"
+  done
+  [ "${#warnings[@]}" -gt "$ANNOTATION_LIMIT" ] && echo "::notice::$((${#warnings[@]} - ANNOTATION_LIMIT)) more warnings are in the deployment summary."
+  return 0
+}
+
+TRUNCATED_POINTER=$'\n\n_The full summary is in the log directory (the action'"'"'s log-dir output)._\n'
+
+# Appends the Markdown summary to the job page; GitHub caps a step's summary at 1 MiB.
+write_step_summary() {
+  local source="$1" dest="$2" limit="${3:-921600}"
+  [ -f "$source" ] && [ -n "$dest" ] || return 0
+  if [ "$(wc -c < "$source")" -le "$limit" ]; then
+    cat "$source" >> "$dest"
+  else
+    { head -c "$limit" "$source"; printf '%s' "$TRUNCATED_POINTER"; } >> "$dest"
+  fi
+}
+
+# The pull-request comment: a hidden marker first, so a re-run edits this comment instead of adding one, then the
+# summary, cut to GitHub's 65,536-character limit.
+pr_comment_body() {
+  local source="$1" marker="$2" limit="${3:-65536}" body
+  body="$marker"$'\n'"$(cat "$source")"
+  if [ "${#body}" -gt "$limit" ]; then
+    body="${body:0:$((limit - ${#TRUNCATED_POINTER}))}$TRUNCATED_POINTER"
+  fi
+  printf '%s' "$body"
 }
 
 # When sourced with --lib-only, expose functions and stop (no main run).

@@ -1,0 +1,32 @@
+{
+  "schemaVersion": "1.4",
+  "failures": [
+    {
+      "phase": "Objects",
+      "scopeKey": "[sql01].[Billing]",
+      "error": "Unable to quench 'D:\\a\\billing-db\\billing-db\\pkg\\Templates\\Main\\Procedures\\dbo.Get.sql': Incorrect syntax near 'x'.\nMsg 102, Level 15",
+      "contextTail": [],
+      "artifactPath": null,
+      "kind": "other"
+    },
+    {
+      "phase": "Objects",
+      "scopeKey": "[srv,1:2].[db]",
+      "error": "100% of the batch failed: near ','",
+      "contextTail": [],
+      "artifactPath": null,
+      "kind": "other"
+    },
+    {
+      "phase": "Objects",
+      "scopeKey": "[sql01].[Other]",
+      "error": "Unable to quench 'C:\\elsewhere\\dbo.X.sql': boom",
+      "contextTail": [],
+      "artifactPath": null,
+      "kind": "other"
+    }
+  ],
+  "drift": null,
+  "unsupportedDowngrade": null,
+  "destructive": null
+}
