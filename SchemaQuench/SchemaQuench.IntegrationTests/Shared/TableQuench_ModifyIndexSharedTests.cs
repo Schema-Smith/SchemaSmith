@@ -206,7 +206,7 @@ VALUES ('{_productName}', '', '{db}', 'TABLE', 'Parent'), ('{_productName}', '',
                          })
                 {
                     cmd.CommandText = $"CALL `{_mainDb}`.{call}";
-                    cmd.ExecuteNonQuery();
+                    TransientRetry.Run(() => cmd.ExecuteNonQuery());
                 }
             }, "changing an index a foreign key uses must not stop the deploy");
 

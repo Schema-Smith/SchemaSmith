@@ -85,6 +85,14 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
 
         public string Log() => Scalar("SELECT GROUP_CONCAT(Message SEPARATOR ' | ') FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()") ?? "";
 
+        // What a failed check needs to say why: what the deploy did, what is still set aside, and where this run's keys are.
+        public string Why() =>
+            Environment.NewLine + "  deploy log: " + Log()
+            + Environment.NewLine + "  audit: " + (Scalar("SELECT GROUP_CONCAT(CONCAT_WS('/', ObjectType, ObjectName, ActionType) SEPARATOR '; ') FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()") ?? "none")
+            + Environment.NewLine + "  set aside: " + (Scalar("SELECT GROUP_CONCAT(CONCAT_WS('/', ChildSchema, ChildTable, KeyName, ParentTable) SEPARATOR '; ') FROM SchemaSmith_RebuildSetAsideForeignKeys") ?? "none")
+            + Environment.NewLine + "  this run's keys: " + (Scalar("SELECT GROUP_CONCAT(CONCAT_WS('/', CONSTRAINT_SCHEMA, TABLE_NAME, CONSTRAINT_NAME, REFERENCED_TABLE_NAME) SEPARATOR '; ') "
+                                                + $"FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_NAME LIKE '%{Uid}%'") ?? "none");
+
         public void Dispose()
         {
             Exec($"DROP DATABASE IF EXISTS `{OtherDb}`");
@@ -141,7 +149,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
 
         Deploy(r, r.Json("VARCHAR(60)"));
 
-        Assert.That(r.Key("c", $"fk_xdb_{r.Uid}", r.OtherDb), Is.Not.Null);
+        Assert.That(r.Key("c", $"fk_xdb_{r.Uid}", r.OtherDb), Is.Not.Null, r.Why());
     }
 
     [Test]
@@ -155,7 +163,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
                   SET foreign_key_checks = 1;");
 
         Assert.DoesNotThrow(() => Deploy(r, r.Json("VARCHAR(60)")), "re-added with checks on, it failed on the orphan row");
-        Assert.That(r.Key(r.Other, $"fk_orphan_{r.Uid}"), Is.Not.Null);
+        Assert.That(r.Key(r.Other, $"fk_orphan_{r.Uid}"), Is.Not.Null, r.Why());
     }
 
     [Test]
@@ -174,7 +182,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
             Assert.That(ex!.Message, Does.Contain($"fk_other_{r.Uid}"));
             Assert.That(r.Log(), Does.Contain($"fk_other_{r.Uid}").And.Contain("the referenced columns to keep their current definition"));
             Assert.That(r.CreateTime(), Is.EqualTo(before), "the table was not rebuilt");
-            Assert.That(r.Key(r.Other, $"fk_other_{r.Uid}"), Is.Not.Null, "and the key is where it was");
+            Assert.That(r.Key(r.Other, $"fk_other_{r.Uid}"), Is.Not.Null, "and the key is where it was" + r.Why());
         });
     }
 
@@ -192,7 +200,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         {
             Assert.That(ex!.Message, Does.Contain($"fk_code_{r.Uid}"));
             Assert.That(r.Log(), Does.Contain("a declared primary key or unique index over exactly (`Code`)"));
-            Assert.That(r.Key(r.Other, $"fk_code_{r.Uid}"), Is.Not.Null);
+            Assert.That(r.Key(r.Other, $"fk_code_{r.Uid}"), Is.Not.Null, r.Why());
         });
     }
 
@@ -214,7 +222,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         {
             Assert.That(ex!.Message, Does.Contain($"fk_code_{r.Uid}"));
             Assert.That(r.Log(), Does.Contain("every referenced column to stay declared"));
-            Assert.That(r.Key(r.Other, $"fk_code_{r.Uid}"), Is.Not.Null);
+            Assert.That(r.Key(r.Other, $"fk_code_{r.Uid}"), Is.Not.Null, r.Why());
         });
     }
 
@@ -229,7 +237,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(r.Key(r.Child, r.ChildKey), Is.Not.Null, "the declared key is back");
+            Assert.That(r.Key(r.Child, r.ChildKey), Is.Not.Null, "the declared key is back" + r.Why());
             Assert.That(r.Key(r.Child, $"fk_extra_{r.Uid}"), Is.Not.Null,
                 "a key this product never declared is not its to drop, rebuild or not");
             Assert.That(r.SetAside(r.Child), Is.EqualTo("0"));
@@ -241,13 +249,13 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
     {
         using var r = Seeded();
         Deploy(r, r.Json("VARCHAR(50)", child: true, childKey: $"fk_gone_{r.Uid}"));
-        Assert.That(r.Key(r.Child, $"fk_gone_{r.Uid}"), Is.Not.Null, "setup: the product declared and owns the key");
+        Assert.That(r.Key(r.Child, $"fk_gone_{r.Uid}"), Is.Not.Null, "setup: the product declared and owns the key" + r.Why());
 
         Deploy(r, r.Json("VARCHAR(60)", child: true, childKey: r.ChildKey));
 
         Assert.Multiple(() =>
         {
-            Assert.That(r.Key(r.Child, r.ChildKey), Is.Not.Null);
+            Assert.That(r.Key(r.Child, r.ChildKey), Is.Not.Null, r.Why());
             Assert.That(r.Key(r.Child, $"fk_gone_{r.Uid}"), Is.Null, "the key the product removed stays removed");
             Assert.That(r.SetAside(r.Child), Is.EqualTo("0"));
         });
@@ -277,7 +285,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(r.Key(r.Other, $"fk_code_{r.Uid}"), Is.Not.Null);
+            Assert.That(r.Key(r.Other, $"fk_code_{r.Uid}"), Is.Not.Null, r.Why());
             Assert.That(r.SetAside(r.Other), Is.EqualTo("0"));
         });
     }
@@ -319,7 +327,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         Assert.Multiple(() =>
         {
             Assert.That(r.SetAside(r.Other), Is.EqualTo("0"), "once it has finished, a key on its table is done with");
-            Assert.That(r.Key(r.Other, $"fk_mid_{r.Uid}"), Is.Not.Null);
+            Assert.That(r.Key(r.Other, $"fk_mid_{r.Uid}"), Is.Not.Null, r.Why());
         });
     }
 }
