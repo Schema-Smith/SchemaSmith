@@ -128,15 +128,16 @@ public abstract class DestructiveChangeMySqlFamilyTests : DestructiveChangeShare
 
     // STRICT_TRANS_TABLES is strict only for a transactional table: on MyISAM the engine clamps, cuts, zeroes and substitutes
     // instead of refusing, so a narrowing, a column made NOT NULL and a utf8 column moved to latin1 are all destructive there.
-    [TestCase("VARCHAR(10)", "'abcdefg'", "VARCHAR(5)", "", true)]
-    [TestCase("INT", "NULL", "INT", "", false)]
-    [TestCase("VARCHAR(10)", "'Ωmega'", "VARCHAR(10)", ", \"CharacterSet\": \"latin1\"", true)]
-    public void UnderFail_WithoutAStrictModeANarrowingIsRefusedAndTheValueKept(string from, string value, string to, string toExtra, bool toNullable)
+    // The utf8 column says so: on MySQL 5.7 and MariaDB 10.2-10.4 a new database defaults to latin1.
+    [TestCase("VARCHAR(10)", "", "'abcdefg'", "VARCHAR(5)", "", true)]
+    [TestCase("INT", "", "NULL", "INT", "", false)]
+    [TestCase("VARCHAR(10)", ", \"CharacterSet\": \"utf8mb4\"", "'Ωmega'", "VARCHAR(10)", ", \"CharacterSet\": \"latin1\"", true)]
+    public void UnderFail_WithoutAStrictModeANarrowingIsRefusedAndTheValueKept(string from, string fromExtra, string value, string to, string toExtra, bool toNullable)
     {
         const string myIsam = ", \"Engine\": \"MyISAM\"";
         Exec($"DROP TABLE IF EXISTS `{MainDb}`.{Typed}");
         WritePackage("");
-        WriteFile("Tables", $"{Typed}.json", TypedJson(from, table: myIsam));
+        WriteFile("Tables", $"{Typed}.json", TypedJson(from, fromExtra, myIsam));
         Deploy();
         Exec($"INSERT INTO `{MainDb}`.{Typed} (v) VALUES ({value})");
         var before = ValueOfV();

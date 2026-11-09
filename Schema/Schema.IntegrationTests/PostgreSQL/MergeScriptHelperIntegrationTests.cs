@@ -60,6 +60,8 @@ public class MergeScriptHelperIntegrationTests
     {
         using var command = _connection.CreateCommand();
         var tableName = $"_test_defgeo_{Guid.NewGuid():N}"[..40];
+        command.CommandText = "SELECT COUNT(*) FROM pg_available_extensions WHERE name = 'postgis'";
+        if (Convert.ToInt64(command.ExecuteScalar()) == 0) Assert.Ignore("PostGIS is not available on this server.");
         try
         {
             command.CommandText = $@"CREATE EXTENSION IF NOT EXISTS postgis;

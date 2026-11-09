@@ -78,6 +78,9 @@ public abstract class HostileNameCastSharedTests
     [TestCase("Xml")]
     public void TheCastScript_PutsTheExtractedRowsBack(string encoding)
     {
+        using (var probe = _connection.CreateCommand())
+            if (Platform == Platform.MySQL && TargetVersionDetector.Detect(probe, Platform, Database).ServerComparable is > 0 and < 800)
+                Assert.Ignore("DataTongs writes no merge script below MySQL 8.0, by design.");
         var errors = new List<string>();
         var progress = new List<string>();
         var errorLog = Substitute.For<ILog>();

@@ -120,6 +120,9 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
 
     private string InDb => $"TABLE_SCHEMA = {L(MainDb)}";
 
+    // MySQL 5.7 and MariaDB before 10.2.22 keep no CHECK constraints; the package declares them all the same.
+    private bool Checks => TestVersionGates.SupportsCheckConstraints(Platform, MainConnectionString);
+
     private bool Exists(string sql) => Count(sql) > 0;
 
     private bool TableExists(string table) => Exists($"SELECT COUNT(*) FROM information_schema.TABLES WHERE {InDb} AND TABLE_NAME = {L(table)}");
@@ -257,7 +260,7 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
         Expect(TableExists(Table) && TableExists(Child) && TableExists(Gone), "the tables");
         Expect(ColumnExists(Table, Key) && ColumnExists(Table, Col) && ColumnExists(Table, Long), "the columns, the 64-character one included");
         Expect(IndexExists(Table, Ix) && IndexExists(Table, LongIx) && IndexExists(Table, Ft), "the indexes, the 64-character and FULLTEXT ones included");
-        Expect(ConstraintExists(Table, Ck, "CHECK") && ConstraintExists(Table, CkLike, "CHECK"), "the checks");
+        Expect(!Checks || (ConstraintExists(Table, Ck, "CHECK") && ConstraintExists(Table, CkLike, "CHECK")), "the checks");
         Expect(ConstraintExists(Child, Fk, "FOREIGN KEY"), "the foreign key");
         ExpectEqual(Text1($"SELECT TABLE_COMMENT FROM information_schema.TABLES WHERE {InDb} AND TABLE_NAME = {L(Table)}"), TableComment, "the table's comment");
         ExpectEqual(Text1($"SELECT COLUMN_COMMENT FROM information_schema.COLUMNS WHERE {InDb} AND TABLE_NAME = {L(Table)} AND COLUMN_NAME = {L(Col)}"), ColumnComment, "the column's comment");
@@ -320,7 +323,7 @@ public abstract class IdentifierSafetyMySqlFamilySharedTests : ObjectScriptDeplo
         Expect(!TableExists(Gone), "the removed table dropped");
         Expect(!ConstraintExists(Table, Ck, "CHECK"), "the check dropped");
         Expect(!ConstraintExists(Child + "n", Fk, "FOREIGN KEY"), "the foreign key dropped");
-        Expect(Text1($"SELECT CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = {L(MainDb)} AND CONSTRAINT_NAME = {L(CkLike)}")?.Contains("%y%") == true,
+        Expect(!Checks || Text1($"SELECT CHECK_CLAUSE FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = {L(MainDb)} AND CONSTRAINT_NAME = {L(CkLike)}")?.Contains("%y%") == true,
             "the changed check re-created with its new pattern");
         ExpectEqual(Text1($"SELECT DATA_TYPE FROM information_schema.COLUMNS WHERE {InDb} AND TABLE_NAME = {L(Table)} AND COLUMN_NAME = {L(Long)}"), "bigint", "the type changed");
         ExpectNone(Mangled(run), "progress lines that name the table");
