@@ -753,6 +753,7 @@ public static class ForgeKindler
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
                 new("Kindling_RebuildSetAsideForeignKeys_Table.sql", ReplaceTableDef: true),
+                new("Kindling_DeploymentHistory_Table.sql", ReplaceTableDef: true),
                 // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
                 // expression stops reading as a change. Kindled like the other bootstrap tables.
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
@@ -873,6 +874,7 @@ public static class ForgeKindler
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
                 new("Kindling_RebuildSetAsideForeignKeys_Table.sql", ReplaceTableDef: true),
+                new("Kindling_DeploymentHistory_Table.sql", ReplaceTableDef: true),
                 // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
                 // expression stops reading as a change. Kindled like the other bootstrap tables.
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
@@ -1001,6 +1003,7 @@ public static class ForgeKindler
                 new("Kindling_StatusMessages_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
                 new("Kindling_RebuildSetAsideForeignKeys_Table.sql", ReplaceTableDef: true),
+                new("Kindling_DeploymentHistory_Table.sql", ReplaceTableDef: true),
                 // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
                 // expression stops reading as a change. Kindled like the other bootstrap tables.
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),

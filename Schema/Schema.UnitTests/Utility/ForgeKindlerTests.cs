@@ -357,7 +357,8 @@ public class ForgeKindlerTests
         // +2 on SQL Server = fn_PartitionCompression and fn_PartitionCompressionDrift (a partitioned index read once, not once per partition).
         // +1 on SQL Server = Kindling_RebuildSetAsideForeignKeys_Table (the inbound keys a rebuild sets aside until the foreign-key pass restores them).
         // +1 = SchemaSmith.SequenceQuench (declared sequences; XML ingest on every tier).
-        Assert.That(sqlServer.Length, Is.EqualTo(85));
+        // +1 on SQL Server = Kindling_DeploymentHistory_Table (the deployment record: one row per deployment of a template).
+        Assert.That(sqlServer.Length, Is.EqualTo(86));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -414,7 +415,8 @@ public class ForgeKindlerTests
         // +1 on PostgreSQL = SchemaSmith.ExcludeKeyForms (an exclusion's keys, declared and live, read one way).
         // +1 on PostgreSQL = SchemaSmith.DeclaredTypeCanonical (a declared type and modifier as format_type renders it).
         // +1 on PostgreSQL = SchemaSmith.SerialSequenceName (the sequence a serial column gets, as the engine names it).
-        Assert.That(postgres.Length, Is.EqualTo(78));
+        // +1 on PostgreSQL = Kindling_DeploymentHistory_Table (the deployment record: one row per deployment of a template).
+        Assert.That(postgres.Length, Is.EqualTo(79));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
@@ -569,7 +571,8 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_CheckClauseText (MySQL's CHECK_CLAUSE read back as the SQL that was declared).
         // +1 = SchemaSmith_DecodeStringLiteral (a default's literal compared as the value it stands for).
         // +1 = Kindling_RebuildSetAsideForeignKeys_Table (inbound keys a rebuild sets aside).
-        Assert.That(mysql.Length, Is.EqualTo(119));
+        // +1 on MySQL = Kindling_DeploymentHistory_Table (the deployment record: one row per deployment of a template).
+        Assert.That(mysql.Length, Is.EqualTo(120));
     }
 
     [Test]

@@ -38,6 +38,19 @@ public class ForgeKindlerIntegrationTests
         _connection?.Dispose();
     }
 
+    // The deployment record's table is kindled with the other helper tables, with the columns the record writes.
+    [Test]
+    public void KindleTheForge_CreatesTheDeploymentHistoryTable()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = 'SchemaSmith' AND TABLE_NAME = 'DeploymentHistory' ORDER BY ORDINAL_POSITION";
+        var columns = new System.Collections.Generic.List<string>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) columns.Add(reader.GetString(0));
+
+        Assert.That(columns, Is.EqualTo(new[] { "Id", "RunId", "Product", "Template", "SchemaName", "StartedUtc", "FinishedUtc", "Outcome", "ChangesApplied", "ToolVersion", "PackageHash", "SourceCommit", "SourceBranch", "RunLabel", "PipelineUrl", "Actor", "DeployedAs", "ResumedFromRunId" }));
+    }
+
     [Test]
     public void KindleTheForge_CreatesCompletedMigrationScriptsSlotScopeIndex()
     {
