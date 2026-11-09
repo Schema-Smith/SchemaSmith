@@ -19,7 +19,7 @@ namespace SchemaQuench.UnitTests;
 [TestFixture]
 public class DeploymentSummaryJsonTests
 {
-    private static DeploymentSummary BuildFullyPopulatedSummary()
+    internal static DeploymentSummary BuildFullyPopulatedSummary()
     {
         var run = new RunInfo(
             Product: "MyProduct",

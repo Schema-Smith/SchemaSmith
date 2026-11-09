@@ -16,6 +16,9 @@ namespace SchemaQuench.Reporting;
 /// </summary>
 public static class DeploymentSummaryAssembler
 {
+    /// <summary>The contract version: a change to the summary's shape is a new version, and a new published schema file.</summary>
+    public const string SchemaVersion = "1.4";
+
     public static DeploymentSummary Assemble(
         string product,
         string platform,
@@ -101,7 +104,7 @@ public static class DeploymentSummaryAssembler
         var unsupportedDowngrade = BuildUnsupportedDowngrade(changeAudit);
 
         return new DeploymentSummary(
-            SchemaVersion: "1.4",
+            SchemaVersion: SchemaVersion,
             Tool: "SchemaQuench",
             ToolVersion: toolVersion,
             Run: run,
