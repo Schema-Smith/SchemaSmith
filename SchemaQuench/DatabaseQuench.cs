@@ -504,6 +504,9 @@ public partial class DatabaseQuench
         SchemaName = _schemaName ?? ""
     };
 
+    /// <summary>The login the engine reported for this target's session; null when it could not be read.</summary>
+    public string ConnectedAs { get; private set; }
+
     public void Execute()
     {
         SafeProgressLog("Begin Quench");
@@ -527,6 +530,7 @@ public partial class DatabaseQuench
             using var connection = GetConnection();
             using var mainCommand = CheckServerErrors(Timeouts.NewCommand(connection));
             var command = _driftHelperDatabase == null ? mainCommand : new HelperQualifyingCommand(mainCommand, _driftHelperDatabase);
+            ConnectedAs = SessionLogin.Read(mainCommand, _product.Platform, _server, m => _progressLog.Warn(m));
 
             // SkipIfReadOnly: the target still resolved and counted toward RequireAtLeastOneTarget,
             // so the template validates normally — it just does not apply here. A read-only target

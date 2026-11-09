@@ -2416,7 +2416,7 @@ public class ProductQuench
             TargetResult.DeriveOutcome(quench.QuenchSuccessful, quench.WasSkipped), workUnitStopwatch.ElapsedMilliseconds,
             // Source disclosure rides the record that already has one row per work unit, so the report
             // carries the audit trail the progress log used to repeat per unit.
-            unit.DatabaseSource, unit.SchemaSource));
+            unit.DatabaseSource, unit.SchemaSource, quench.ConnectedAs));
         if (!quench.QuenchSuccessful)
         {
             if (quench.LastFailure != null) _failureRecords.Add(quench.LastFailure);

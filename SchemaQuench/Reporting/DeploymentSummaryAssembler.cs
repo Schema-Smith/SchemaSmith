@@ -71,7 +71,8 @@ public static class DeploymentSummaryAssembler
                 DurationMs: tr.DurationMs,
                 Slots: timing.SlotsForScope(tr.ScopeKey),
                 DatabaseSource: tr.DatabaseSource,
-                SchemaSource: tr.SchemaSource))
+                SchemaSource: tr.SchemaSource,
+                ConnectedAs: tr.ConnectedAs))
             .ToList();
 
         var mappedMigrationScripts = migrationScripts

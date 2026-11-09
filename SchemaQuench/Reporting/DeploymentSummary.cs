@@ -89,7 +89,9 @@ public sealed record TargetSummary(
     long DurationMs,
     IReadOnlyList<TargetSlotTiming> Slots,
     string DatabaseSource = "",
-    string SchemaSource = "");
+    string SchemaSource = "",
+    // 1.4: the login the engine reported for the session; null when it could not be read.
+    string ConnectedAs = null);
 
 /// <summary>Per-target slot timing — distinct from E1's aggregate <see cref="SlotTiming"/>.</summary>
 public sealed record TargetSlotTiming(string Slot, long DurationMs, int ScriptsRun);

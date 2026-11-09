@@ -3,6 +3,7 @@
 using System;
 using System.Data;
 using System.IO;
+using System.Linq;
 using log4net;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json.Linq;
@@ -409,6 +410,9 @@ ModifiedTables
                 Assert.That((int?)summary.SelectToken("run.package.fileCount"), Is.EqualTo(expected.FileCount));
                 Assert.That(summary.SelectToken("run.resumesRunId")?.Type, Is.EqualTo(JTokenType.Null));
                 Assert.That((string)summary.SelectToken("run.host.machine"), Is.EqualTo(Environment.MachineName));
+                // The login the engine saw for the session, asked of the engine and never read from the settings.
+                var expectedLogin = FactoryContainer.Resolve<IConfigurationRoot>()["Target:User"];
+                Assert.That(summary.SelectToken("targets")!.Select(t => (string)t["connectedAs"]), Is.Not.Empty.And.All.EqualTo(expectedLogin));
             }
             finally
             {
