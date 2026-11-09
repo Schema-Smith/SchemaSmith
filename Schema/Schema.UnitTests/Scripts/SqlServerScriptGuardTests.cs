@@ -8,6 +8,8 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using Schema.Capabilities;
+using Schema.Domain;
+using Schema.Utility;
 
 namespace Schema.UnitTests.Scripts;
 
@@ -403,6 +405,32 @@ public class SqlServerScriptGuardTests
                 .Select((line, i) => (s.Name, Line: i + 1, Text: line.Trim()))
                 .Where(l => Regex.IsMatch(l.Text, @"RAISERROR\s*\(\s*@\w+\s*,", RegexOptions.IgnoreCase)))
             .Select(l => $"{l.Name}:{l.Line}: {l.Text}  -- use RAISERROR('%s', <severity>, <state>, @variable)")
+            .ToList();
+        Assert.That(offences, Is.Empty, string.Join(Environment.NewLine, offences));
+    }
+
+    /// <summary>
+    /// The XML tier is what kindles on SQL Server 2008 and 2008 R2, which parse a procedure whole at CREATE time: one
+    /// statement from 2012 or later fails the kindle, and nothing deploys. String literals are left out, since
+    /// dynamic SQL is run only where the server has what it names.
+    /// </summary>
+    [Test]
+    public void TheXmlTierUsesNoStatementOrFunctionNewerThan2008()
+    {
+        var names = ForgeKindler.GetKindlingScripts(Platform.SqlServer, IngestEncoding.Xml).Select(s => s.FileName)
+            .Append("ParseTableXmlIntoTempTables.sql")
+            .ToList();
+        Assert.That(names, Does.Contain("SchemaSmith.IndexedViewXmlQuench.sql"), "the XML tier's kindle list");
+
+        var newer = new Regex(@"\b(THROW|IIF|CHOOSE|CONCAT|FORMAT|TRY_CONVERT|TRY_CAST|TRY_PARSE|STRING_AGG|STRING_SPLIT|OPENJSON|EOMONTH|DATEFROMPARTS)\b(?=\s*[\(;0-9@]|\s*$)",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline);
+        var offences = names
+            .SelectMany(name => Regex.Replace(WithoutLineComments(ResourceLoader.Load(name, Platform.SqlServer)), @"N?'(?:[^']|'')*'",
+                    m => "''" + new string('\n', m.Value.Count(c => c == '\n')))
+                .Split('\n')
+                .Select((line, i) => (Name: name, Line: i + 1, Text: line.Trim())))
+            .Where(l => newer.IsMatch(l.Text))
+            .Select(l => $"{l.Name}:{l.Line}: {l.Text}")
             .ToList();
         Assert.That(offences, Is.Empty, string.Join(Environment.NewLine, offences));
     }

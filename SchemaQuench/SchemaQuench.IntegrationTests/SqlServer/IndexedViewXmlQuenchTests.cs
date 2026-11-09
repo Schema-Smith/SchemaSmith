@@ -161,6 +161,47 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             }
         }
 
+        // The refusal is the XML tier's, so it must CREATE on SQL Server 2008: THROW (2012) failed the whole kindle there.
+        [Test]
+        public void XmlIndexedView_AnUnownedViewOfTheSameName_IsRefusedByName_AndLeftAsItWas()
+        {
+            const string xv = "vIvCollideXml";
+            var xmlScript = (ResourceLoader.Load("SchemaSmith.IndexedViewXmlQuench.sql", Platform.SqlServer)
+                             ?? throw new System.Exception("IndexedViewXmlQuench.sql not found"))
+                            .Replace("[SchemaSmith].[IndexedViewQuench]", "[SchemaSmith].[IndexedViewQuenchXmlTest]");
+
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+            conn.Open();
+            conn.ChangeDatabase(_mainDb);
+
+            Cleanup(conn, xv, xv);
+            try
+            {
+                Exec(conn, "CREATE TABLE dbo.IvXmlSource (Id INT NOT NULL, Label VARCHAR(100) NOT NULL, Amount DECIMAL(10,2) NOT NULL); " +
+                           "CREATE UNIQUE CLUSTERED INDEX UDX_IvXmlSource ON dbo.IvXmlSource (Id);");
+                Exec(conn, $"CREATE VIEW dbo.{xv} AS SELECT Id FROM dbo.IvXmlSource");
+                foreach (var b in SqlServerBatchSplitter.Split(xmlScript)) Exec(conn, b);
+
+                var ex = Assert.Catch<Microsoft.Data.SqlClient.SqlException>(() =>
+                    Exec(conn, "EXEC SchemaSmith.IndexedViewQuenchXmlTest @ProductName = 'IvCollideXml', @IndexedViewSchema = @p, @TemplateName = N'Main', @SchemaName = N''",
+                        ("@p", ModelXmlSerializer.ToIngestXml(PayloadJson(xv), "IndexedViews", "IndexedView"))));
+
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = $"SELECT CONVERT(VARCHAR, OBJECTPROPERTY(OBJECT_ID('dbo.{xv}'), 'IsView')) + '|' + CONVERT(VARCHAR, OBJECTPROPERTY(OBJECT_ID('dbo.{xv}'), 'IsIndexed'))";
+                var state = cmd.ExecuteScalar() as string;
+                Assert.Multiple(() =>
+                {
+                    Assert.That(ex!.Message, Does.Contain(xv).And.Contain("not owned"), ex.Message);
+                    Assert.That(ex.Errors.Count, Is.EqualTo(1), $"the refusal stops the procedure: {ex.Message}");
+                    Assert.That(state, Is.EqualTo("1|0"), "the unowned view is still there, unindexed");
+                });
+            }
+            finally
+            {
+                Cleanup(conn, xv, xv);
+            }
+        }
+
         private static void Cleanup(IDbConnection conn, string jv, string xv) =>
             Exec(conn, $"DROP VIEW IF EXISTS dbo.{jv}; DROP VIEW IF EXISTS dbo.{xv}; " +
                        "DROP TABLE IF EXISTS dbo.IvXmlSource; " +

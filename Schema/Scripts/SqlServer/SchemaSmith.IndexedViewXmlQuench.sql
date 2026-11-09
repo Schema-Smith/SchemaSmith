@@ -294,7 +294,7 @@ BEGIN
                 ELSE
                 BEGIN
                     DECLARE @ivCollisionMsg NVARCHAR(2048) = N'Indexed view ' + @ivSchema + N'.' + @ivName + N' cannot be created: an object of that name already exists and is not owned by product ' + @ProductName + N'. Drop or rename it, or set its SchemaSmith_Product extended property to this product.';
-                    THROW 50001, @ivCollisionMsg, 1;
+                    RAISERROR('%s', 16, 1, @ivCollisionMsg); RETURN;
                 END;
             END;
 
