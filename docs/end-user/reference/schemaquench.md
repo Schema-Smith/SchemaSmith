@@ -25,6 +25,9 @@ SchemaQuench --TestConnection     # validate connections + MinimumVersion, then 
 SchemaQuench --PreviewTargets     # validate connections + MinimumVersion + show target report, then exit
 SchemaQuench --WhatIf             # dry run: log the SQL a deployment would run, change nothing
 
+# The JSON Schema of this version's deployment summary (Summary.json); needs no settings file
+SchemaQuench --WriteSummarySchema:deployment-summary.schema.json
+
 # SQL Server
 SchemaQuench --ConnectionString:"Data Source=myserver;Initial Catalog=master;User ID=sa;Password=secret;TrustServerCertificate=True;"
 

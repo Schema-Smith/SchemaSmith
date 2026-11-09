@@ -1,12 +1,14 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.IO;
 using Microsoft.Extensions.Configuration;
 using Schema.Checkpointing;
 using Schema.Domain;
 using Schema.Isolators;
 using Schema.Configuration;
 using Schema.Utility;
+using SchemaQuench.Reporting;
 using Schema.Validation;
 
 namespace SchemaQuench;
@@ -22,6 +24,12 @@ public static class Program
     public static void Main(string[] args)
     {
         CommandLineParser.HandleCommonSwitches("SchemaQuench", ToolSpecificSwitches);
+        // Before the first-run screen and the settings: it needs neither.
+        if (CommandLineParser.ContainsSwitch("WriteSummarySchema"))
+        {
+            WriteSummarySchema(CommandLineParser.ValueOfSwitch("WriteSummarySchema"));
+            return;
+        }
         if (GettingStarted.ShowIfUnconfigured("SchemaQuench", "deploys a schema package to a database", FirstRunSettings, args)) return;
 
         var skipKindlingForge = args.Length > 0 && args[0] == "SkipKindlingForge";
@@ -180,8 +188,38 @@ public static class Program
         "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle", "WhatIf", "WriteDebugSql", "Drift"
     };
 
+    private static void WriteSummarySchema(string path)
+    {
+        var environment = EnvironmentWrapper.GetFromFactory();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            Console.Error.WriteLine("--WriteSummarySchema needs a file to write: --WriteSummarySchema:<path>");
+            environment.Exit(2);
+            return;
+        }
+        try
+        {
+            var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(directory)) DirectoryWrapper.GetFromFactory().CreateDirectory(directory);
+            FileWrapper.GetFromFactory().WriteAllText(path, DeploymentSummarySchema.Render());
+            Console.WriteLine($"Deployment summary schema {DeploymentSummaryAssembler.SchemaVersion} written: {path}");
+            environment.Exit(0);
+        }
+        catch (IOException e)
+        {
+            Console.Error.WriteLine($"Could not write the deployment summary schema to {path}: {e.Message}");
+            environment.Exit(2);
+        }
+        catch (UnauthorizedAccessException e)
+        {
+            Console.Error.WriteLine($"Could not write the deployment summary schema to {path}: {e.Message}");
+            environment.Exit(2);
+        }
+    }
+
     private static void ToolSpecificSwitches()
     {
+        Console.WriteLine("  --WriteSummarySchema:<path>      Write the JSON Schema of this version's deployment summary (Summary.json) to <path>, then exit.");
         Console.WriteLine("  --Validate                       Statically validate the schema package (no database connection), then exit.");
         Console.WriteLine("  --TestConnection                 Validate server connection(s) + minimum version, then exit. No deployment.");
         Console.WriteLine("  --PreviewTargets                 Validate, then list the databases/schemas each template would target (read-only). No deployment.");
