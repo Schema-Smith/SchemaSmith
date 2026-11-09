@@ -73,9 +73,17 @@ SchemaSmith ships a composite action, listed on the
 version it runs, or set the `version` input explicitly). It fetches the matching
 self-contained binary for the runner OS at run time -- no runtime install, and no
 self-hosted runner with SchemaQuench pre-installed required. Modes: `deploy`,
-`whatif`, `validate`, `test-connection`, `preview-targets`; connection inputs
+`whatif`, `drift`, `validate`, `test-connection`, `preview-targets`; connection inputs
 pass the password via env, never on the command line; outputs include
-`exit-code`, `log-dir`, and `summary-path`.
+`exit-code`, `log-dir`, `summary-path` and `summary-json-path`.
+
+The run reports itself on the workflow run with no extra steps:
+
+- **Job summary.** The deployment summary appears on the job's page (turn it off with `step-summary: false`).
+- **Annotations.** Each failed target is an error annotation, placed on the failing script when it is in the repository, so it shows on that file in the pull request. Drift, features the target could not take, and changes the destructive-change policy refused are warnings. GitHub shows ten of each per step; the rest are in the summary.
+- **Pull-request comment.** With `pr-comment: true` on a pull request, the summary is posted as a comment and the same comment is updated on later runs. The workflow needs `permissions: pull-requests: write`; a pull request from a fork cannot have it, and then the run notes that and carries on.
+
+`mode: drift` runs a [drift check](../reference/schemaquench.md#drift-checks) and fails the step with exit code `5` when a target has drifted; add `continue-on-error: true` to report drift without failing the job.
 
 ### Jenkins
 
@@ -149,6 +157,8 @@ steps:
 ```
 
 Credentials are stored in Variable Groups or Azure Key Vault and linked to the pipeline. The named agent pool `SchemaSmith` ensures the job runs on an agent with SchemaQuench installed.
+
+To show the deployment summary on the run's page, add a step after the deploy that runs `echo "##vso[task.uploadsummary]$(Build.SourcesDirectory)/SchemaQuench - Summary.md"` (point it at the folder `--LogPath` writes to). On GitLab, keep the summary with the job by listing `SchemaQuench - Summary.md` and `SchemaQuench - Summary.json` under `artifacts: paths`.
 
 ### Runner and agent requirements
 

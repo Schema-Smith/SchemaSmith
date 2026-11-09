@@ -146,10 +146,34 @@ gh_api() { # $1 = url ; authenticated if GH_TOKEN present
   curl -sfL ${auth[@]+"${auth[@]}"} -H "Accept: application/vnd.github+json" "$1"
 }
 
+# Posts the summary on the pull request, or edits the comment an earlier run of the same mode and package posted.
+post_pr_comment() {
+  local md="$1" mode="$2" pr repo api marker payload existing auth
+  case "${GITHUB_EVENT_NAME:-}" in
+    pull_request|pull_request_target) ;;
+    *) echo "::notice::pr-comment is on, but this run is not for a pull request, so no comment was posted."; return 0 ;;
+  esac
+  command -v jq >/dev/null 2>&1 || { echo "::notice::jq is not installed on this runner, so the summary was not posted as a comment."; return 0; }
+  pr="$(jq -r '.pull_request.number // empty' "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null)"
+  [ -n "$pr" ] && [ -n "${GH_TOKEN:-}" ] || return 0
+  repo="$GITHUB_REPOSITORY"; api="${GITHUB_API_URL:-https://api.github.com}"
+  marker="<!-- schemasmith-deploy:$mode:${SS_PRODUCT_PATH:-.} -->"
+  payload="$(jq -n --arg body "$(pr_comment_body "$md" "$marker")" '{body: $body}')"
+  auth=(-H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json")
+  existing="$(curl -sf "${auth[@]}" "$api/repos/$repo/issues/$pr/comments?per_page=100" \
+    | jq -r --arg m "$marker" '[.[] | select(.body | startswith($m))][0].id // empty' 2>/dev/null)"
+  if [ -n "$existing" ]; then
+    curl -sf -X PATCH "${auth[@]}" "$api/repos/$repo/issues/comments/$existing" -d "$payload" >/dev/null
+  else
+    curl -sf -X POST "${auth[@]}" "$api/repos/$repo/issues/$pr/comments" -d "$payload" >/dev/null
+  fi || echo "::notice::The summary could not be posted on the pull request: the workflow needs 'pull-requests: write', which a pull request from a fork cannot have."
+  return 0
+}
+
 main() {
   local repo="Schema-Smith/SchemaSmith"
   local mode="${SS_MODE:-deploy}"
-  local rid version rel_json url work bin logdir sw summary code pkg_win dest_win
+  local rid version rel_json url work bin logdir sw summary summary_json code pkg_win dest_win
 
   # required-input validation per mode
   if [ "$mode" != "validate" ] && [ -z "${SS_SERVER:-}" ]; then
@@ -205,13 +229,24 @@ main() {
   "$bin" $sw --LogPath="$logdir" ${SS_EXTRA_ARGS:-}
   code=$?
 
-  summary=""
+  summary=""; summary_json=""
   [ -f "$logdir/SchemaQuench - Summary.md" ] && summary="$logdir/SchemaQuench - Summary.md"
+  [ -f "$logdir/SchemaQuench - Summary.json" ] && summary_json="$logdir/SchemaQuench - Summary.json"
   {
     echo "exit-code=$code"
     echo "log-dir=$logdir"
     echo "summary-path=$summary"
+    echo "summary-json-path=$summary_json"
   } >> "$GITHUB_OUTPUT"
+
+  # Reporting never changes the result: each step is allowed to fail on its own.
+  [ -n "$summary_json" ] && { annotations_from_summary "$summary_json" "${GITHUB_WORKSPACE:-$PWD}" || true; }
+  if [ "${SS_STEP_SUMMARY:-true}" != "false" ] && [ -n "$summary" ] && [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    write_step_summary "$summary" "$GITHUB_STEP_SUMMARY" || true
+  fi
+  if [ "${SS_PR_COMMENT:-false}" = "true" ] && [ -n "$summary" ]; then
+    post_pr_comment "$summary" "$mode" || true
+  fi
   exit "$code"
 }
 main "$@"
