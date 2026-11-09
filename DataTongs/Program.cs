@@ -21,6 +21,7 @@ public static class Program
 
     public static void Main(string[] args)
     {
+        RunContext.Start("DataTongs");
         CommandLineParser.HandleCommonSwitches("DataTongs", ToolSpecificSwitches);
         if (GettingStarted.ShowIfUnconfigured("DataTongs", "extracts table data into content files and merge scripts", FirstRunSettings, args)) return;
 

@@ -7,4 +7,5 @@
     "AllowDrops": ""         // Comma-separated drop categories to leave enabled (e.g. "Columns,Indexes"); empty suppresses all drops
     // "LogHygiene": { "ScrubTokens": [ "ApiKey" ] }, // Extra setting names whose values are masked in the log, beyond the built-in sensitive-name list.
     // "ExitNonZeroOnWarning": false // Exit 1 instead of 0 when the run logged a warning, for pipelines that treat warnings as failures. Also the --ExitNonZeroOnWarning switch.
+    // "LogFormat": "text" // text, or json: one JSON object per line on the console and in the log files, for a log platform to read with no parse rules. Also --LogFormat:json.
 }

@@ -21,6 +21,7 @@
       "FailureContextLines",
       "ForceReKindle",
       "KindleTheForge",
+      "LogFormat",
       "LogHygiene",
       "MaxThreads",
       "OnlineApply",
@@ -73,6 +74,7 @@
     "SchemaTongs": [
       "ExitNonZeroOnWarning",
       "FolderMapping",
+      "LogFormat",
       "LogHygiene",
       "OrphanHandling:Mode",
       "Product:CheckConstraintStyle",
@@ -145,6 +147,7 @@
     "DataTongs": [
       "ContentPath",
       "ExitNonZeroOnWarning",
+      "LogFormat",
       "LogHygiene",
       "ScriptPath",
       "ShouldCast:ConfigureDataDelivery",
@@ -183,6 +186,7 @@
       "AllowDrops",
       "AlwaysIncludePath",
       "ExitNonZeroOnWarning",
+      "LogFormat",
       "LogHygiene",
       "ManifestPath",
       "OutputPath",

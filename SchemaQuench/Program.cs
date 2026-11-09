@@ -23,6 +23,7 @@ public static class Program
 
     public static void Main(string[] args)
     {
+        RunContext.Start("SchemaQuench");
         CommandLineParser.HandleCommonSwitches("SchemaQuench", ToolSpecificSwitches);
         // Before the first-run screen and the settings: it needs neither.
         if (CommandLineParser.ContainsSwitch("WriteSummarySchema"))

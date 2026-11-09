@@ -20,6 +20,7 @@ public static class Program
 
     public static void Main(string[] args)
     {
+        RunContext.Start("SchemaShears");
         CommandLineParser.HandleCommonSwitches("SchemaShears", ToolSpecificSwitches);
         if (GettingStarted.ShowIfUnconfigured("SchemaShears", "carves a patch package out of a product", FirstRunSettings, args)) return;
 

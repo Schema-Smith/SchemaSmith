@@ -22,6 +22,7 @@ public static class Program
 
     public static void Main(string[] args)
     {
+        RunContext.Start("SchemaTongs");
         CommandLineParser.HandleCommonSwitches("SchemaTongs", ToolSpecificSwitches);
         if (GettingStarted.ShowIfUnconfigured("SchemaTongs", "extracts an existing database into a schema package", FirstRunSettings, args)) return;
 

@@ -269,6 +269,8 @@ public static class SettingsKeys
     // past 2.8 GA with its contract entry and warning (roadmap: the deprecated 2.8 settings).
     public const string ScrubArtifacts = "ScrubArtifacts";
     public const string WriteDebugSql = "WriteDebugSql";
+    /// <summary>All four tools: text (default) or json, one JSON object per log line.</summary>
+    public const string LogFormat = "LogFormat";
 
     /// <summary>
     /// What a pipeline says about the run, written into the deployment summary. Flat keys, because a nested one

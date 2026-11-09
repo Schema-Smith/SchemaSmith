@@ -1,12 +1,18 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using log4net;
+using log4net.Appender;
 using log4net.Config;
+using log4net.Repository;
+using log4net.Repository.Hierarchy;
 using Microsoft.Extensions.Configuration;
+using Schema.Configuration;
 using Schema.Isolators;
 
 namespace Schema.Utility;
@@ -34,6 +40,49 @@ public static class ConfigHelper
         var counter = new WarningCounter();
         foreach (var logger in logRepository.GetCurrentLoggers())
             ((log4net.Repository.Hierarchy.Logger)logger).AddAppender(counter);
+
+        // A reconfiguration once the settings are loaded (a test process runs Main many times) keeps the run's format.
+        ApplyLogFormat(logRepository, FactoryContainer.Resolve<IConfigurationRoot>(), null);
+    }
+
+    /// <summary>
+    /// LogFormat: json gives every appender one JSON object per line and swaps the coloured console for a plain one, so
+    /// standard output carries nothing but those lines. text, the default, leaves the configuration as it is.
+    /// </summary>
+    internal static void ApplyLogFormat(ILoggerRepository repository, IConfiguration config, Action<string> warn)
+    {
+        var format = config?[SettingsKeys.LogFormat]?.Trim();
+        if (string.IsNullOrEmpty(format) || format.Equals("text", StringComparison.OrdinalIgnoreCase)) return;
+        if (!format.Equals("json", StringComparison.OrdinalIgnoreCase))
+        {
+            warn?.Invoke($"LogFormat '{format}' is not recognized (text or json); logging as text.");
+            return;
+        }
+
+        var layout = new JsonLayout();
+        var plainConsoles = new Dictionary<IAppender, ConsoleAppender>();
+        foreach (var logger in repository.GetCurrentLoggers().OfType<Logger>())
+        {
+            foreach (var appender in logger.Appenders.ToArray())
+            {
+                if (appender is ManagedColoredConsoleAppender)
+                {
+                    if (!plainConsoles.TryGetValue(appender, out var plain))
+                    {
+                        plain = new ConsoleAppender { Name = appender.Name, Layout = layout };
+                        plain.ActivateOptions();
+                        plainConsoles[appender] = plain;
+                    }
+                    logger.RemoveAppender(appender);
+                    logger.AddAppender(plain);
+                }
+                else if (appender is AppenderSkeleton { Layout: not null } withLayout)
+                {
+                    withLayout.Layout = layout;
+                }
+            }
+        }
+        foreach (var replaced in plainConsoles.Keys) replaced.Close();
     }
 
     public static string ResolveLogPath()
@@ -118,6 +167,8 @@ public static class ConfigHelper
             config = builder.Build();
             if (missingFile != null) MissingSettingsFiles.AddOrUpdate(config, missingFile);
             FactoryContainer.Register(config);
+            ApplyLogFormat(LogManager.GetRepository(Assembly.GetEntryAssembly() ?? Assembly.GetCallingAssembly()), config,
+                message => LogFactory.GetLogger("ProgressLog").Warn(message));
             logLine?.Invoke(app);
 
             ConfigurationLogger.LogCommandLine(config, logLine);

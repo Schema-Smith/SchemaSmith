@@ -101,7 +101,8 @@ public class ProductQuench
     // WriteDeploymentSummary so an abort-path write can never double-fire alongside the
     // normal-completion write.
     private DateTime _startedUtc;
-    private readonly Guid _runId = Guid.NewGuid();
+    // The same id is on every structured log line of the run (RunContext, started by Main).
+    private readonly Guid _runId = RunContext.Id;
     private Task<PackageIdentity> _packageIdentity;
     private bool _summaryWritten;
     // Captured pre-run (before this run marks any of its own steps complete) so the report

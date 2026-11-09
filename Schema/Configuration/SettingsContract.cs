@@ -79,7 +79,7 @@ public static class SettingsContract
             SettingsKeys.BottleneckThresholdMs, SettingsKeys.TrackRunOnceMigrations,
             SettingsKeys.PruneObsoleteMigrationTracking,
             SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.WriteDebugSql, SettingsKeys.ScriptTokens,
-            SettingsKeys.LogHygiene, SettingsKeys.ExitNonZeroOnWarning
+            SettingsKeys.LogHygiene, SettingsKeys.ExitNonZeroOnWarning, SettingsKeys.LogFormat
         ]).Concat(SettingsKeys.Run.All), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.SchemaTongs)).Concat(
@@ -89,21 +89,21 @@ public static class SettingsContract
             SettingsKeys.ProductKeys.ObjectOrder, SettingsKeys.ProductKeys.PreserveExistingOrder,
             SettingsKeys.TemplateKeys.Name, SettingsKeys.TemplateKeys.SchemaIdentificationScript,
             SettingsKeys.OrphanHandling.Mode, SettingsKeys.FolderMapping, SettingsKeys.LogHygiene,
-            SettingsKeys.ExitNonZeroOnWarning
+            SettingsKeys.ExitNonZeroOnWarning, SettingsKeys.LogFormat
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.DataTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.DataTongs)).Concat(
         [
             SettingsKeys.ContentPath, SettingsKeys.ScriptPath, SettingsKeys.TemplatePath,
             SettingsKeys.TablesToExtract, SettingsKeys.CompatEncoding, SettingsKeys.LogHygiene,
-            SettingsKeys.ExitNonZeroOnWarning
+            SettingsKeys.ExitNonZeroOnWarning, SettingsKeys.LogFormat
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaShears] = new(
         [
             SettingsKeys.SourcePath, SettingsKeys.ManifestPath, SettingsKeys.AlwaysIncludePath,
             SettingsKeys.OutputPath, SettingsKeys.Zip, SettingsKeys.AllowDrops, SettingsKeys.LogHygiene,
-            SettingsKeys.ExitNonZeroOnWarning
+            SettingsKeys.ExitNonZeroOnWarning, SettingsKeys.LogFormat
         ], StringComparer.OrdinalIgnoreCase)
     };
 
