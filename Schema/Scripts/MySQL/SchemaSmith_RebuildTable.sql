@@ -978,7 +978,7 @@ BEGIN
         -- from. One still on its table when the next foreign-key pass looks is simply cleared -- so from here until the
         -- keys are dropped this session holds a lock another deploy's foreign-key pass waits on: without it, a pass in
         -- between saw the key still there, cleared the record, and the drop below then lost the key for good.
-        SET @ss_rebuild_fk_lock = CONCAT('ss_rbfk_', MD5(CONCAT(v_SchemaRaw, '.', v_TableRaw)));
+        SET @ss_rebuild_fk_lock = CONCAT('ss_rbfk_', LEFT(SHA2(CONCAT(v_SchemaRaw, '.', v_TableRaw), 256), 32));
         -- Without the lock the race it closes is open again, so a rebuild that cannot take it in a minute stops here.
         IF COALESCE(GET_LOCK(@ss_rebuild_fk_lock, 60), 0) <> 1 THEN
             SET @ss_msg = LEFT(CONCAT('Rebuild of ', v_TableRaw, ' stopped: another deploy holds its lock'), 128);

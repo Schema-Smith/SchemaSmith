@@ -298,7 +298,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         using var rebuilding = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
         rebuilding.Open();
         using var lockCmd = rebuilding.CreateCommand();
-        lockCmd.CommandText = $"SELECT GET_LOCK(CONCAT('ss_rbfk_', MD5(CONCAT('{r.Db}', '.', '{r.Parent}'))), 5)";
+        lockCmd.CommandText = $"SELECT GET_LOCK(CONCAT('ss_rbfk_', LEFT(SHA2(CONCAT('{r.Db}', '.', '{r.Parent}'), 256), 32)), 5)";
         Assert.That(Convert.ToInt32(lockCmd.ExecuteScalar()), Is.EqualTo(1), "setup: the rebuild's lock is held");
 
         r.Exec("DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
@@ -311,7 +311,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
             Assert.That(r.Log(), Does.Contain("another deploy is still rebuilding"));
         });
 
-        lockCmd.CommandText = $"SELECT RELEASE_LOCK(CONCAT('ss_rbfk_', MD5(CONCAT('{r.Db}', '.', '{r.Parent}'))))";
+        lockCmd.CommandText = $"SELECT RELEASE_LOCK(CONCAT('ss_rbfk_', LEFT(SHA2(CONCAT('{r.Db}', '.', '{r.Parent}'), 256), 32)))";
         lockCmd.ExecuteScalar();
         Deploy(r, $$"""
 [ { "Name": "unrel_{{r.Uid}}", "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false } ] } ]

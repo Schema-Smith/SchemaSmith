@@ -390,7 +390,7 @@ BEGIN
 
             -- Another session's rebuild still between recording its keys and dropping them: the key it is about to drop
             -- would read as already back, so the record is left for a pass after that rebuild has finished.
-            IF COALESCE(IS_USED_LOCK(CONCAT('ss_rbfk_', MD5(CONCAT(v_SaParentSchema, '.', v_SaParentTable)))), CONNECTION_ID()) <> CONNECTION_ID() THEN
+            IF COALESCE(IS_USED_LOCK(CONCAT('ss_rbfk_', LEFT(SHA2(CONCAT(v_SaParentSchema, '.', v_SaParentTable), 256), 32))), CONNECTION_ID()) <> CONNECTION_ID() THEN
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
                 VALUES (CONNECTION_ID(), CONCAT('  Foreign key ', v_SaLabel, ' waits: another deploy is still rebuilding ', v_SaParentSchema, '.', v_SaParentTable));
             ELSEIF v_SaChildExists = 0 OR v_SaKeyExists > 0 OR v_SaRemoved = 1 THEN
