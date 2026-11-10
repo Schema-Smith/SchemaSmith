@@ -299,15 +299,15 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         using var r = Seeded();
         r.Exec($@"CREATE TABLE `{r.Other}` (`Id` INT NOT NULL PRIMARY KEY, `ParentId` INT NULL,
                     CONSTRAINT `fk_mid_{r.Uid}` FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`));");
-        r.Exec($@"INSERT INTO SchemaSmith_RebuildSetAsideForeignKeys (ChildSchema, ChildTable, KeyName, ParentSchema, ParentTable, ReferencedColumns, Definition, Declared)
-                  VALUES ('{r.Db}', '{r.Other}', 'fk_mid_{r.Uid}', '{r.Db}', '{r.Parent}', '`Id`',
-                          'FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`)', 0)");
-
         using var rebuilding = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
         rebuilding.Open();
         using var lockCmd = rebuilding.CreateCommand();
         lockCmd.CommandText = $"SELECT GET_LOCK(CONCAT('ss_rbfk_', LEFT(SHA2(CONCAT('{r.Db}', '.', '{r.Parent}'), 256), 32)), 5)";
         Assert.That(Convert.ToInt32(lockCmd.ExecuteScalar()), Is.EqualTo(1), "setup: the rebuild's lock is held");
+        // Recorded under the lock, as a rebuild records: another worker's pass would otherwise clear it first.
+        r.Exec($@"INSERT INTO SchemaSmith_RebuildSetAsideForeignKeys (ChildSchema, ChildTable, KeyName, ParentSchema, ParentTable, ReferencedColumns, Definition, Declared)
+                  VALUES ('{r.Db}', '{r.Other}', 'fk_mid_{r.Uid}', '{r.Db}', '{r.Parent}', '`Id`',
+                          'FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`)', 0)");
 
         r.Exec("DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
         Deploy(r, $$"""
@@ -328,6 +328,47 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         {
             Assert.That(r.SetAside(r.Other), Is.EqualTo("0"), "once it has finished, a key on its table is done with");
             Assert.That(r.Key(r.Other, $"fk_mid_{r.Uid}"), Is.Not.Null, r.Why());
+        });
+    }
+
+    // A pass that read the key as still on its table, and only then found the lock free, had seen it before the rebuild
+    // dropped it and cleared the record: the key was gone for good (twice on the MySQL 5.7.22 band). The pass now takes
+    // the lock before it looks, so a rebuild that finishes while the pass waits leaves it a key to put back.
+    [Test]
+    public void AKeyARebuildDropsWhileAPassWaits_IsRestoredByThatPass()
+    {
+        using var r = Seeded();
+        r.Exec($@"CREATE TABLE `{r.Other}` (`Id` INT NOT NULL PRIMARY KEY, `ParentId` INT NULL,
+                    CONSTRAINT `fk_wait_{r.Uid}` FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`));");
+        using var rebuilding = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        rebuilding.Open();
+        rebuilding.ChangeDatabase(r.Db);
+        using var lockCmd = rebuilding.CreateCommand();
+        lockCmd.CommandText = $"SELECT GET_LOCK(CONCAT('ss_rbfk_', LEFT(SHA2(CONCAT('{r.Db}', '.', '{r.Parent}'), 256), 32)), 5)";
+        Assert.That(Convert.ToInt32(lockCmd.ExecuteScalar()), Is.EqualTo(1), "setup: the rebuild's lock is held");
+        // Recorded under the lock, as a rebuild records: another worker's pass would otherwise clear it first.
+        r.Exec($@"INSERT INTO SchemaSmith_RebuildSetAsideForeignKeys (ChildSchema, ChildTable, KeyName, ParentSchema, ParentTable, ReferencedColumns, Definition, Declared)
+                  VALUES ('{r.Db}', '{r.Other}', 'fk_wait_{r.Uid}', '{r.Db}', '{r.Parent}', '`Id`',
+                          'FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`)', 0)");
+
+        // The rebuild finishes while the deploy is under way: its key dropped, then its lock released.
+        var finish = System.Threading.Tasks.Task.Run(() =>
+        {
+            System.Threading.Thread.Sleep(1500);
+            lockCmd.CommandText = $"ALTER TABLE `{r.Other}` DROP FOREIGN KEY `fk_wait_{r.Uid}`";
+            lockCmd.ExecuteNonQuery();
+            lockCmd.CommandText = $"SELECT RELEASE_LOCK(CONCAT('ss_rbfk_', LEFT(SHA2(CONCAT('{r.Db}', '.', '{r.Parent}'), 256), 32)))";
+            lockCmd.ExecuteScalar();
+        });
+        Deploy(r, $$"""
+[ { "Name": "unrel_{{r.Uid}}", "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false } ] } ]
+""", productName: $"Unrelated_{r.Uid}");
+        finish.Wait();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Key(r.Other, $"fk_wait_{r.Uid}"), Is.Not.Null, r.Why());
+            Assert.That(r.SetAside(r.Other), Is.EqualTo("0"));
         });
     }
 }

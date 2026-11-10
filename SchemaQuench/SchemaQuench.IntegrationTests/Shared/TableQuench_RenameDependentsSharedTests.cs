@@ -34,8 +34,9 @@ public abstract class TableQuench_RenameDependentsSharedTests : BaseTableQuenchT
         }
         finally
         {
+            // The ownership table is shared by every worker's deploy, so this delete can be a deadlock victim (MySQL 8.4 band).
             cmd.CommandText = $"DROP TABLE IF EXISTS `{t}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{t}%'";
-            cmd.ExecuteNonQuery();
+            RetryingTransientConcurrency(() => cmd.ExecuteNonQuery());
         }
     }
 

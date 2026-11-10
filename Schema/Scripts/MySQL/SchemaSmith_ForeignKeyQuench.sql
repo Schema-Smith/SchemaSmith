@@ -48,6 +48,7 @@ BEGIN
     DECLARE v_SaRemoved TINYINT DEFAULT 0;
     DECLARE v_SaThisFailed TINYINT DEFAULT 0;
     DECLARE v_SavedChecks INT DEFAULT 1;
+    DECLARE v_SaLock VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
     DECLARE CONTINUE HANDLER FOR NOT FOUND SET v_Done = TRUE;
 
@@ -365,6 +366,20 @@ BEGIN
             SET v_SaParentCi = v_SaParentSchema;
             SET v_SaLabel = CONCAT(v_SaChildSchema, '.', v_SaChildTable, '.', v_SaKeyName);
 
+            -- Taken before the key is looked for, and held until it is restored or cleared: a rebuild records its keys and
+            -- drops them under this lock, so a key read as still there by a pass that only checked the lock afterwards had
+            -- been dropped in between, and clearing its record lost it. Another pass holds it only for one key, so it waits.
+            SET v_SaLock = CONCAT('ss_rbfk_', LEFT(SHA2(CONCAT(v_SaParentSchema, '.', v_SaParentTable), 256), 32));
+            IF COALESCE(GET_LOCK(v_SaLock, 10), 0) <> 1 THEN
+                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                VALUES (CONNECTION_ID(), CONCAT('  Foreign key ', v_SaLabel, ' waits: another deploy is still rebuilding ', v_SaParentSchema, '.', v_SaParentTable));
+            ELSE
+            BEGIN
+            DECLARE EXIT HANDLER FOR SQLEXCEPTION
+            BEGIN
+                DO RELEASE_LOCK(v_SaLock);
+                RESIGNAL;
+            END;
             SELECT COUNT(*) INTO v_SaChildExists FROM INFORMATION_SCHEMA.TABLES t
              WHERE t.TABLE_SCHEMA = v_SaChildCi AND SchemaSmith_IdentifierKey(t.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(v_SaChildSchema)
                AND SchemaSmith_IdentifierKey(t.TABLE_NAME) = SchemaSmith_IdentifierKey(v_SaChildTable) AND t.TABLE_TYPE = 'BASE TABLE';
@@ -398,12 +413,7 @@ BEGIN
                AND (CHAR_LENGTH(x.Cols) = CHAR_LENGTH(v_SaRefColumns)
                     OR CAST(SUBSTRING(x.Cols, CHAR_LENGTH(v_SaRefColumns) + 1, 1) AS BINARY) = CAST(',' AS BINARY));
 
-            -- Another session's rebuild still between recording its keys and dropping them: the key it is about to drop
-            -- would read as already back, so the record is left for a pass after that rebuild has finished.
-            IF COALESCE(IS_USED_LOCK(CONCAT('ss_rbfk_', LEFT(SHA2(CONCAT(v_SaParentSchema, '.', v_SaParentTable), 256), 32))), CONNECTION_ID()) <> CONNECTION_ID() THEN
-                INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-                VALUES (CONNECTION_ID(), CONCAT('  Foreign key ', v_SaLabel, ' waits: another deploy is still rebuilding ', v_SaParentSchema, '.', v_SaParentTable));
-            ELSEIF v_SaChildExists = 0 OR v_SaKeyExists > 0 OR v_SaRemoved = 1 THEN
+            IF v_SaChildExists = 0 OR v_SaKeyExists > 0 OR v_SaRemoved = 1 THEN
                 IF v_SaChildExists = 0 THEN
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
                     VALUES (CONNECTION_ID(), CONCAT('  Not restoring foreign key ', v_SaLabel, ': the table no longer exists'));
@@ -458,6 +468,9 @@ BEGIN
                         END IF;
                     END IF;
                 END IF;
+            END IF;
+            DO RELEASE_LOCK(v_SaLock);
+            END;
             END IF;
             SET v_SaId = (SELECT MIN(Id) FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE Id > v_SaId);
         END WHILE;
