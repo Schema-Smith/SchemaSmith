@@ -36,4 +36,25 @@ public class ProgramTests
             LogFactory.Clear();
         }
     }
+
+    // The switch form was accepted (it is in KnownArguments) and ignored: only the bare positional word skipped kindling.
+    [TestCase("SchemaQuench.exe SkipKindlingForge", true)]
+    [TestCase("SchemaQuench.exe --SkipKindlingForge", true)]
+    [TestCase("SchemaQuench.exe --WhatIf", false)]
+    public void SkipKindlingForge_IsReadInEitherForm(string commandLine, bool skips)
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Register(_environment);
+            _environment.CommandLine.Returns(commandLine);
+            try
+            {
+                Assert.That(Program.SkipsKindling(commandLine.Split(' ')[1..]), Is.EqualTo(skips));
+            }
+            finally
+            {
+                FactoryContainer.Clear();
+            }
+        }
+    }
 }

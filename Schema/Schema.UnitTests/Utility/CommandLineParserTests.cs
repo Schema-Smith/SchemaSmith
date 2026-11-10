@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using NSubstitute;
+using Schema.Configuration;
 using Schema.Domain;
 using Schema.Isolators;
 using Schema.Utility;
@@ -412,7 +413,7 @@ public class CommandLineParserTests
     [Test]
     public void ConfigOverrides_FlagSwitch_IsNotAnOverride()
     {
-        _mockEnvironment.CommandLine.Returns("app.exe --verbose");
+        _mockEnvironment.CommandLine.Returns("app.exe --WhatIf");
         var overrides = CommandLineParser.ConfigOverrides;
         Assert.That(overrides, Is.Empty);
     }
@@ -550,6 +551,54 @@ public class CommandLineParserTests
         Assert.That(unread, Is.EqualTo(new[] { "--TestConection" }));
     }
 
+    // --debug and --verbose were accepted by every tool and read by none, so a user asking for more output got silence
+    // (the failure #443 fixed for --WhatIf). A tool that reads one lists it; anywhere else it is refused.
+    [TestCase("--debug")]
+    [TestCase("--verbose")]
+    public void Unrecognized_DebugAndVerbose_AreRefusedWhereNoToolReadsThem(string flag)
+    {
+        _mockEnvironment.CommandLine.Returns($"app.exe {flag}");
+
+        Assert.That(CommandLineParser.UnrecognizedArguments(KnownFlags), Is.EqualTo(new[] { flag }));
+    }
+
+    [Test]
+    public void ConfigOverrides_BareVerbose_TurnsVerboseLoggingOn()
+    {
+        _mockEnvironment.CommandLine.Returns("app.exe --verbose");
+
+        Assert.That(CommandLineParser.ConfigOverrides[SettingsKeys.VerboseLogging], Is.EqualTo("true"));
+    }
+
+    [TestCase("app.exe SkipKindlingForge")]
+    [TestCase("app.exe --SkipKindlingForge")]
+    public void ConfigOverrides_SkipKindlingForge_IsKindleTheForgeFalse(string commandLine)
+    {
+        _mockEnvironment.CommandLine.Returns(commandLine);
+
+        Assert.That(CommandLineParser.ConfigOverrides[SettingsKeys.KindleTheForge], Is.EqualTo("false"));
+    }
+
+    // The header named "<app>.exe [<command>]" on every OS, for tools that take no command.
+    [Test]
+    public void Help_NamesTheToolAsTyped()
+    {
+        _mockEnvironment.CommandLine.Returns("app.exe --help");
+        var original = Console.Out;
+        using var output = new System.IO.StringWriter();
+        Console.SetOut(output);
+        try
+        {
+            CommandLineParser.HandleCommonSwitches("SchemaTongs");
+        }
+        finally
+        {
+            Console.SetOut(original);
+        }
+
+        Assert.That(output.ToString(), Does.StartWith("Usage: SchemaTongs [options]").And.Not.Contain(".exe"));
+    }
+
     [Test]
     public void Unrecognized_KnownBareFlag_IsAccepted()
     {
@@ -604,7 +653,7 @@ public class CommandLineParserTests
     public void Unrecognized_CommonFlagsNeedNoDeclaration()
     {
         // version/help variants are handled by HandleCommonSwitches for every tool.
-        _mockEnvironment.CommandLine.Returns("app.exe --version --help -h -? --ver --Encrypt --debug --verbose");
+        _mockEnvironment.CommandLine.Returns("app.exe --version --help -h -? --ver --Encrypt");
 
         Assert.That(CommandLineParser.UnrecognizedArguments(KnownFlags), Is.Empty);
     }

@@ -71,7 +71,8 @@ Each tool adds its own switches on top of the common set. They are listed here s
 | `--CheckpointDirectory:<path>` | Directory for checkpoint files. Also the `CheckpointDirectory` setting. |
 | `--ForceReKindle` | Re-deploy SchemaSmith's helper procedures this run even when the in-database kindle stamp is current. Also the `ForceReKindle` setting. See [ForceReKindle](schemaquench.md#forcerekindle). |
 | `--WriteDebugSql` | Write the resolved SQL of each step to `ArtifactPath`. Also the `WriteDebugSql` setting. See [Debug SQL files](#debug-sql-files). |
-| `SkipKindlingForge` | Positional, as the first argument (no dashes): skip kindling for this run, as `KindleTheForge: false` does. See [KindleTheForge](schemaquench.md#kindletheforge). |
+| `--SkipKindlingForge` | Skip kindling for this run: the same as `KindleTheForge: false`. Also accepted as a bare word (`SkipKindlingForge`, no dashes). See [KindleTheForge](schemaquench.md#kindletheforge). |
+| `--verbose` | Log more of what the run does: the same as `VerboseLogging: true`. |
 
 **SchemaTongs** ([reference](schematongs.md))
 

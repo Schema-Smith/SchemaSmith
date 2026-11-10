@@ -33,7 +33,7 @@ public static class Program
         }
         if (GettingStarted.ShowIfUnconfigured("SchemaQuench", "deploys a schema package to a database", FirstRunSettings, args)) return;
 
-        var skipKindlingForge = args.Length > 0 && args[0] == "SkipKindlingForge";
+        var skipKindlingForge = SkipsKindling(args);
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;
         var config = ConfigHelper.GetAppSettingsAndUserSecrets("SchemaQuench", LogFactory.GetLogger("ProgressLog").Info);
@@ -186,8 +186,13 @@ public static class Program
 
     private static readonly string[] KnownArguments =
     {
-        "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle", "WhatIf", "WriteDebugSql", "Drift"
+        "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle", "WhatIf", "WriteDebugSql", "Drift",
+        "verbose"
     };
+
+    // The bare word (the older form, and how a host passes it) or the switch.
+    internal static bool SkipsKindling(string[] args) =>
+        args.Contains("SkipKindlingForge") || CommandLineParser.ContainsSwitch("SkipKindlingForge");
 
     private static void WriteSummarySchema(string path)
     {
@@ -227,6 +232,8 @@ public static class Program
         Console.WriteLine("  --ResumeQuench                   Resume from an existing checkpoint if one is present.");
         Console.WriteLine("  --CheckpointDirectory:<path>     Directory for checkpoint files (default: %TEMP%/schemaquench-checkpoints).");
         Console.WriteLine("  --ForceReKindle                  Re-deploy the SchemaSmith helper procedures this run even if the in-database kindle stamp is current.");
+        Console.WriteLine("  --SkipKindlingForge              Do not install or update the SchemaSmith helpers this run (as KindleTheForge: false).");
+        Console.WriteLine("  --verbose                        Log more of what the run does (same as the VerboseLogging setting).");
         Console.WriteLine("  --WhatIf                         Dry run: report what would change and change nothing of yours (same as the WhatIfONLY setting).");
         Console.WriteLine("  --WhatIfDetail:<mode>            WhatIf console verbosity: concise | normal (default) | verbose. Concise collapses each section's per-script lines into per-category counts. Does not affect the WhatIf summary file.");
         Console.WriteLine("  --Drift                          Read-only: does each target match the package? Exit 0 no drift, 5 drift, 2 a target could not be checked.");

@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using Schema.Configuration;
 using Schema.Domain;
 using Schema.Isolators;
 
@@ -83,6 +84,14 @@ public static class CommandLineParser
                 if (key.Length == 0) continue;
                 result[key] = trimmed.Substring(sep + 1).Trim('"', ' ');
             }
+            // --verbose is the switch people reach for; only a tool that lists it accepts it (SchemaQuench).
+            if (ContainsSwitch("verbose") && !result.ContainsKey(SettingsKeys.VerboseLogging))
+                result[SettingsKeys.VerboseLogging] = "true";
+            // SchemaQuench's SkipKindlingForge, as a bare word or a switch, is KindleTheForge: false, so everything that
+            // reads the setting (the drift tier among them) sees it.
+            if ((ContainsSwitch("SkipKindlingForge") || Arguments.Skip(1).Contains("SkipKindlingForge"))
+                && !result.ContainsKey(SettingsKeys.KindleTheForge))
+                result[SettingsKeys.KindleTheForge] = "false";
             return result;
         }
     }
@@ -129,7 +138,7 @@ public static class CommandLineParser
     }
 
     private static readonly string[] CommonBareFlags =
-        { "v", "ver", "version", "?", "h", "help", "Encrypt", "NoEncrypt", "debug", "verbose", "ExitNonZeroOnWarning" };
+        { "v", "ver", "version", "?", "h", "help", "Encrypt", "NoEncrypt", "ExitNonZeroOnWarning" };
 
     /// <summary>
     /// Arguments this run will never read, in command-line order. Two shapes qualify, and both are
@@ -229,7 +238,7 @@ public static class CommandLineParser
 
     private static void ShowHelpAndExit(string app, Action toolSpecificSwitches = null)
     {
-        Console.WriteLine($"{app}.exe [<command>]");
+        Console.WriteLine($"Usage: {app} [options]");
         Console.WriteLine("  --version                        Show the program version");
         Console.WriteLine("  --LogPath:<logpath>              Path to write logs and create backup directories. The default is the executable's directory.");
         Console.WriteLine("  --ConfigFile:<filepath>          Path and file name of the config file. The default is <toolname>.settings.json in the current path.");
