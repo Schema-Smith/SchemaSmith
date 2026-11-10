@@ -25,6 +25,8 @@ DECLARE
   v_default_oid OID;
   v_condition TEXT;
   v_holds BOOLEAN;
+  v_declared TEXT;
+  v_verified INTEGER := 0;
 BEGIN
   IF NOT EXISTS (SELECT 1 FROM temp_tables WHERE "PartitionMethod" <> '') THEN RETURN; END IF;
   RAISE NOTICE 'Verify Declared Partitioning';
@@ -52,7 +54,10 @@ BEGIN
       CONTINUE;
     END IF;
     v_live_key := pg_get_partkeydef(v_oid);
-    CONTINUE WHEN v_live_key = r.method || ' (' || r.expr || ')';
+    v_declared := r.method || ' (' || r.expr || ')';
+    CONTINUE WHEN v_live_key = v_declared;
+    -- A pair ExpressionMapRecord recorded on an earlier deploy needs no probe until either text changes.
+    CONTINUE WHEN "SchemaSmith"."ExpressionMapUnchanged"(r.sch, r.obj, 'PARTITION', r.obj, 'key', v_declared, v_live_key);
     v_rendered := NULL;
     BEGIN
       EXECUTE format('CREATE TEMPORARY TABLE schemasmith_part_probe (LIKE %I.%I) PARTITION BY %s (%s)', r.sch, r.obj, r.method, r.expr);
@@ -65,6 +70,8 @@ BEGIN
     IF v_rendered IS DISTINCT FROM v_live_key THEN
       v_problems := v_problems || format('%s %s.%s declares PARTITION BY %s (%s), but is deployed as PARTITION BY %s. SchemaSmith does not repartition an existing table (that moves every row) -- migrate it manually, or correct the declared partitioning to match.',
                                          r.kind, r.sch, r.obj, r.method, r.expr, v_live_key);
+    ELSE
+      v_verified := v_verified + 1;
     END IF;
   END LOOP;
 
@@ -95,7 +102,8 @@ BEGIN
         CONTINUE;
       END IF;
       v_live_bound := pg_get_expr((SELECT relpartbound FROM pg_class WHERE oid = v_oid), v_oid);
-      IF v_live_bound <> r."Bound" THEN
+      IF v_live_bound <> r."Bound"
+         AND NOT "SchemaSmith"."ExpressionMapUnchanged"(r."TableSchema", r."ParentName", 'PARTITION', r."Name", 'bound', r."Bound", v_live_bound) THEN
         v_rendered := NULL;
         BEGIN
           EXECUTE format('CREATE TEMPORARY TABLE schemasmith_part_probe (LIKE %I.%I) PARTITION BY %s', r."TableSchema", r."ParentName", pg_get_partkeydef(v_parent_oid));
@@ -109,6 +117,8 @@ BEGIN
         IF v_rendered IS DISTINCT FROM v_live_bound THEN
           v_problems := v_problems || format('Partition %s.%s of %s.%s declares %s, but is deployed with %s. SchemaSmith does not change a partition''s bound (that is a DETACH and re-ATTACH, which moves or re-checks rows) -- change it manually, or correct the declared bound to match.',
                                              r."TableSchema", r."Name", r."TableSchema", r."ParentName", r."Bound", v_live_bound);
+        ELSE
+          v_verified := v_verified + 1;
         END IF;
       END IF;
       IF r."Tablespace" IS NOT NULL AND (SELECT relkind FROM pg_class WHERE oid = v_oid) = 'r'
@@ -160,6 +170,9 @@ BEGIN
   END LOOP;
 
   PERFORM set_config('TimeZone', v_saved_tz, true);
+  IF v_verified > 0 THEN
+    RAISE NOTICE '  Verified % partition key(s) and bound(s) on a scratch copy: the declared text renders to exactly what the database holds.', v_verified;
+  END IF;
   IF array_length(v_problems, 1) > 0 THEN
     FOR i IN 1 .. array_length(v_problems, 1) LOOP
       RAISE NOTICE '  %', v_problems[i];

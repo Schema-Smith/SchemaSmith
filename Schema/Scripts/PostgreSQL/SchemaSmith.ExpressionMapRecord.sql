@@ -23,6 +23,7 @@ AS $$
 DECLARE
   v_version TEXT := current_setting('server_version');
   v_rebaselined INTEGER := 0;
+  v_zone TEXT;
 BEGIN
   IF p_WhatIf THEN
     -- #508: a preview leaves the map as it found it, including what ExpressionMapAdopt verified for the preview.
@@ -178,6 +179,32 @@ BEGIN
         FROM temp_policies tp
         JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
        WHERE NULLIF(TRIM(tp."WithCheckExpression"), '') IS NOT NULL AND pol.with_check IS NOT NULL;
+  END IF;
+
+  -- Partition keys and bounds, which PartitionVerify probes on a scratch copy when the declared text differs from the
+  -- engine's. A run that reaches here passed that check (it raises otherwise), so the live text is the declared one's.
+  -- Read in UTC, as PartitionVerify reads them: a timestamptz bound renders in the session's time zone.
+  -- An index-only quench builds a temp_tables with no partitioning (and a session's earlier run can leave temp_partitions).
+  IF to_regclass('pg_temp.temp_partitions') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('pg_temp.temp_tables') AND attname = 'PartitionMethod' AND NOT attisdropped) THEN
+    v_zone := current_setting('TimeZone');
+    PERFORM set_config('TimeZone', 'UTC', true);
+    INSERT INTO temp_expression_map_declared
+      SELECT k.sch, k.obj, 'PARTITION', k.obj, 'key', k.declared, pg_get_partkeydef(c.oid)
+        FROM (SELECT t."Schema" AS sch, t."Name" AS obj, t."PartitionMethod" || ' (' || t."PartitionExpression" || ')' AS declared
+                FROM temp_tables t WHERE t."PartitionMethod" <> ''
+              UNION ALL
+              SELECT p."TableSchema", p."Name", p."Method" || ' (' || p."Expression" || ')'
+                FROM temp_partitions p WHERE p."Method" <> '') k
+        JOIN pg_class c ON c.oid = to_regclass("SchemaSmith"."QuoteName"(k.sch) || '.' || "SchemaSmith"."QuoteName"(k.obj))
+       WHERE c.relkind = 'p' AND pg_get_partkeydef(c.oid) <> k.declared;
+    INSERT INTO temp_expression_map_declared
+      SELECT p."TableSchema", p."ParentName", 'PARTITION', p."Name", 'bound', p."Bound", pg_get_expr(c.relpartbound, c.oid)
+        FROM temp_partitions p
+        JOIN pg_class c ON c.oid = to_regclass("SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."Name"))
+       WHERE c.relispartition AND NULLIF(TRIM(p."Bound"), '') IS NOT NULL
+         AND pg_get_expr(c.relpartbound, c.oid) <> p."Bound";
+    PERFORM set_config('TimeZone', v_zone, true);
   END IF;
 
   -- Say so when a re-baseline happens (Paul, 2026-09-08: "re-baseline, and say so in the log -- log the count so

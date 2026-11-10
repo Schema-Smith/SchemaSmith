@@ -130,7 +130,54 @@ public class TableQuench_DeclarativePartitioningTests : BaseTableQuenchTests
         }
     }
 
-    private static void Drop(IDbConnection conn, string t) => Exec(conn, $"DROP TABLE IF EXISTS public.{t} CASCADE; DROP TABLE IF EXISTS public.{t}_h CASCADE;");
+    private static void Drop(IDbConnection conn, string t) => Exec(conn, $"DROP TABLE IF EXISTS public.{t} CASCADE; DROP TABLE IF EXISTS public.{t}_h CASCADE; " +
+                                                                         $"DELETE FROM \"SchemaSmith\".\"ExpressionMap\" WHERE \"ObjectTable\" LIKE '{t}%';");
+
+    private static string PartitionMapRows(IDbConnection conn, string t)
+        => Scalar(conn, $"SELECT string_agg(\"ObjectName\" || '.' || \"Slot\", ', ' ORDER BY \"ObjectName\", \"Slot\") FROM \"SchemaSmith\".\"ExpressionMap\" " +
+                        $"WHERE \"ObjectKind\" = 'PARTITION' AND \"ObjectTable\" LIKE '{t}%'");
+
+    // A key or bound the engine renders differently from the declaration is checked on a scratch copy. The run that
+    // created it records the pair, so later deploys take the map's word and probe nothing until either text changes.
+    [Test]
+    public void AKeyAndBoundsTheEngineRendersDifferently_AreRecorded_AndNotProbedAgain()
+    {
+        var t = "dpm_" + Guid.NewGuid().ToString("N")[..8];
+        var json = Json(t).Replace("\"Method\": \"HASH\", \"Expression\": \"id\"", "\"Method\": \"HASH\", \"Expression\": \"(id)\"");
+        using var conn = Open();
+        var messages = new List<string>();
+        conn.Notice += (_, e) => messages.Add(e.Notice.MessageText);
+        try
+        {
+            Exec(conn, "SET TimeZone = 'America/Chicago'");
+            using (var cmd = conn.CreateCommand())
+                RunTableQuenchProc(cmd, json, productName: "Dpm_" + t);
+            var recorded = $"{t}_eu_2026.bound, {t}_eu_old.bound, {t}_h.key";
+            Assert.That(PartitionMapRows(conn, t), Is.EqualTo(recorded), "the run that created them recorded each pair");
+
+            messages.Clear();
+            using (var cmd = conn.CreateCommand())
+                RunTableQuenchProc(cmd, json, productName: "Dpm_" + t);
+            Assert.That(messages, Has.None.Contains("on a scratch copy"), "the map answers, without a probe");
+
+            Exec(conn, $"DELETE FROM \"SchemaSmith\".\"ExpressionMap\" WHERE \"ObjectKind\" = 'PARTITION' AND \"ObjectTable\" LIKE '{t}%'");
+            messages.Clear();
+            ClearChanges(conn);
+            using (var cmd = conn.CreateCommand())
+                RunTableQuenchProc(cmd, json, productName: "Dpm_" + t);
+            Assert.Multiple(() =>
+            {
+                Assert.That(messages, Has.Some.Contains("Verified 3 partition key(s) and bound(s) on a scratch copy"), "with no row, each is probed");
+                Assert.That(Changes(conn), Is.Empty, "and nothing changes");
+                Assert.That(PartitionMapRows(conn, t), Is.EqualTo(recorded), "and the pairs are recorded again");
+            });
+        }
+        finally
+        {
+            Exec(conn, "RESET TimeZone");
+            Drop(conn, t);
+        }
+    }
 
     [Test]
     public void ADeclaredPartitionTree_IsCreated_RowsLandWhereTheBoundsSay_AndTheSecondDeployChangesNothing()
