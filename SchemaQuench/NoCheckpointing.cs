@@ -18,13 +18,9 @@ internal sealed class NoCheckpointing : ICheckpointing
 
     public void Track(TrackingScope scope, string stepName, Action work) => work();
 
-    public void TrackScript(TrackingScope scope, string slot, string scriptPath, Action work) => work();
-
     public bool HasCompleted(TrackingScope scope, string stepName) => false;
 
     public bool HasCompletedScript(TrackingScope scope, string slot, string scriptPath) => false;
-
-    public ProductCheckpointSummary GetProductCheckpointSummary(string productName) => ProductCheckpointSummary.Empty;
 
     public DatabaseCheckpointSummary GetDatabaseCheckpointSummary(TrackingScope scope) => DatabaseCheckpointSummary.Empty;
 

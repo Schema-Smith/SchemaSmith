@@ -25,7 +25,6 @@ public class FileCheckpointManager : ICheckpointing
     // otherwise read a concurrent run's progress as its own and skip steps it never ran.
     private readonly bool _adoptExisting;
     private readonly ConcurrentDictionary<string, DatabaseCheckpoint> _dbCheckpoints = new();
-    private readonly ConcurrentDictionary<string, ProductCheckpoint> _productCheckpoints = new();
     private static readonly ConcurrentDictionary<string, object> FileLocks = new();
     private const string RunIdLine = "# RunId:";
     private Guid? _runId;
@@ -66,56 +65,7 @@ public class FileCheckpointManager : ICheckpointing
             SaveDatabaseCheckpoint(checkpoint);
         }
         else
-        {
-            var checkpoint = GetOrLoadProductCheckpoint(scope.ProductName);
-            if (checkpoint.HasCompletedTemplate(stepName)) return;
-
-            work();
-
-            checkpoint.AddTemplate(stepName);
-            SaveProductCheckpoint(checkpoint);
-        }
-    }
-
-    public void TrackScript(TrackingScope scope, string slot, string scriptPath, Action work)
-    {
-        if (IsDatabaseScope(scope))
-        {
-            var checkpoint = GetOrLoadDatabaseCheckpoint(scope);
-            if (Enum.TryParse<DatabaseScriptSlot>(slot, true, out var scriptSlot) &&
-                checkpoint.HasCompletedScript(scriptSlot, scriptPath))
-                return;
-
-            work();
-
-            if (Enum.TryParse(slot, true, out scriptSlot))
-            {
-                checkpoint.AddCompletedScript(scriptSlot, scriptPath);
-                SaveDatabaseCheckpoint(checkpoint);
-            }
-        }
-        else
-        {
-            var checkpoint = GetOrLoadProductCheckpoint(scope.ProductName);
-            var server = scope.Server ?? "default";
-            var normalizedPath = scriptPath.Replace('\\', '/');
-
-            if (slot.Equals("Before", StringComparison.OrdinalIgnoreCase) &&
-                checkpoint.HasCompletedBeforeScript(server, normalizedPath))
-                return;
-            if (slot.Equals("After", StringComparison.OrdinalIgnoreCase) &&
-                checkpoint.HasCompletedAfterScript(server, normalizedPath))
-                return;
-
-            work();
-
-            if (slot.Equals("Before", StringComparison.OrdinalIgnoreCase))
-                checkpoint.AddBeforeScript(server, normalizedPath);
-            else if (slot.Equals("After", StringComparison.OrdinalIgnoreCase))
-                checkpoint.AddAfterScript(server, normalizedPath);
-
-            SaveProductCheckpoint(checkpoint);
-        }
+            throw new ArgumentException("Checkpoints are kept per database: the scope names no template and database.", nameof(scope));
     }
 
     public bool ResumedAny { get; private set; }
@@ -134,7 +84,6 @@ public class FileCheckpointManager : ICheckpointing
         foreach (var key in _dbCheckpoints.Keys.Where(k => k.StartsWith(productName + "|", StringComparison.OrdinalIgnoreCase)).ToList())
             _dbCheckpoints.TryRemove(key, out _);
         DeleteProductCheckpoint(productName);
-        _productCheckpoints.TryRemove(productName, out _);
     }
 
     /// <summary>Clean up checkpoint files after a successful deployment.</summary>
@@ -142,7 +91,6 @@ public class FileCheckpointManager : ICheckpointing
     {
         DeleteProductCheckpoint(productName);
         DeleteDatabaseCheckpoints(productName);
-        _productCheckpoints.TryRemove(productName, out _);
         var keysToRemove = _dbCheckpoints.Keys.Where(k => k.StartsWith(productName + "|", StringComparison.OrdinalIgnoreCase)).ToList();
         foreach (var key in keysToRemove)
             _dbCheckpoints.TryRemove(key, out _);
@@ -152,7 +100,7 @@ public class FileCheckpointManager : ICheckpointing
     {
         if (IsDatabaseScope(scope))
             return GetOrLoadDatabaseCheckpoint(scope).HasCompletedStep(stepName);
-        return GetOrLoadProductCheckpoint(scope.ProductName).HasCompletedTemplate(stepName);
+        throw new ArgumentException("Checkpoints are kept per database: the scope names no template and database.", nameof(scope));
     }
 
     public bool HasCompletedScript(TrackingScope scope, string slot, string scriptPath)
@@ -163,27 +111,7 @@ public class FileCheckpointManager : ICheckpointing
             return GetOrLoadDatabaseCheckpoint(scope).HasCompletedScript(scriptSlot, scriptPath);
         }
 
-        var productCheckpoint = GetOrLoadProductCheckpoint(scope.ProductName);
-        var server = scope.Server ?? "default";
-        var normalizedPath = scriptPath.Replace('\\', '/');
-        return slot.Equals("Before", StringComparison.OrdinalIgnoreCase)
-            ? productCheckpoint.HasCompletedBeforeScript(server, normalizedPath)
-            : slot.Equals("After", StringComparison.OrdinalIgnoreCase)
-                && productCheckpoint.HasCompletedAfterScript(server, normalizedPath);
-    }
-
-    public ProductCheckpointSummary GetProductCheckpointSummary(string productName)
-    {
-        var filePath = GetProductCheckpointPath(productName);
-        if (!FileWrapper.GetFromFactory().Exists(filePath)) return ProductCheckpointSummary.Empty;
-
-        var checkpoint = GetOrLoadProductCheckpoint(productName);
-        return new ProductCheckpointSummary(
-            TotalBeforeScripts: checkpoint.CompletedBeforeScripts.Values.Sum(s => s.Count),
-            ServersWithBeforeScripts: checkpoint.CompletedBeforeScripts.Count,
-            CompletedTemplates: checkpoint.CompletedTemplates.Count,
-            TotalAfterScripts: checkpoint.CompletedAfterScripts.Values.Sum(s => s.Count),
-            ServersWithAfterScripts: checkpoint.CompletedAfterScripts.Count);
+        throw new ArgumentException("Checkpoints are kept per database: the scope names no template and database.", nameof(scope));
     }
 
     public void MarkStepCompleted(TrackingScope scope, string stepName)
@@ -195,11 +123,7 @@ public class FileCheckpointManager : ICheckpointing
             SaveDatabaseCheckpoint(checkpoint);
         }
         else
-        {
-            var checkpoint = GetOrLoadProductCheckpoint(scope.ProductName);
-            checkpoint.AddTemplate(stepName);
-            SaveProductCheckpoint(checkpoint);
-        }
+            throw new ArgumentException("Checkpoints are kept per database: the scope names no template and database.", nameof(scope));
     }
 
     public void MarkScriptCompleted(TrackingScope scope, string slot, string scriptPath)
@@ -212,16 +136,7 @@ public class FileCheckpointManager : ICheckpointing
             SaveDatabaseCheckpoint(checkpoint);
         }
         else
-        {
-            var checkpoint = GetOrLoadProductCheckpoint(scope.ProductName);
-            var server = scope.Server ?? "default";
-            var normalizedPath = scriptPath.Replace('\\', '/');
-            if (slot.Equals("Before", StringComparison.OrdinalIgnoreCase))
-                checkpoint.AddBeforeScript(server, normalizedPath);
-            else if (slot.Equals("After", StringComparison.OrdinalIgnoreCase))
-                checkpoint.AddAfterScript(server, normalizedPath);
-            SaveProductCheckpoint(checkpoint);
-        }
+            throw new ArgumentException("Checkpoints are kept per database: the scope names no template and database.", nameof(scope));
     }
 
     public DatabaseCheckpointSummary GetDatabaseCheckpointSummary(TrackingScope scope)
@@ -440,149 +355,19 @@ public class FileCheckpointManager : ICheckpointing
 
     #endregion
 
-    #region Product Checkpoint I/O
-
-    private ProductCheckpoint GetOrLoadProductCheckpoint(string productName)
-    {
-        return _productCheckpoints.GetOrAdd(productName, _ => LoadProductCheckpoint(productName));
-    }
-
-    private ProductCheckpoint LoadProductCheckpoint(string productName)
-    {
-        var filePath = GetProductCheckpointPath(productName);
-        if (!_adoptExisting || !FileWrapper.GetFromFactory().Exists(filePath))
-            return new ProductCheckpoint { ProductName = productName };
-
-        try
-        {
-            var content = FileWrapper.GetFromFactory().ReadAllText(filePath);
-            var checkpoint = ParseProductCheckpoint(content, productName);
-            ResumedRunId ??= checkpoint.RunId;
-            return checkpoint;
-        }
-        catch
-        {
-            return new ProductCheckpoint { ProductName = productName };
-        }
-    }
-
-    private void SaveProductCheckpoint(ProductCheckpoint checkpoint)
-    {
-        var filePath = GetProductCheckpointPath(checkpoint.ProductName);
-        checkpoint.RunId = _runId ?? checkpoint.RunId;
-        WriteFileThreadSafe(filePath, FormatProductCheckpoint(checkpoint));
-    }
-
+    // TRANSITIONAL (product-scope checkpoints, written by 2.7 and earlier, read by none since 2.8): a run that succeeds still
+    // deletes one a 2.7 run left behind, and the resume scan skips it. Delete both, and these two methods, in the release
+    // two past 2.9, when no 2.7 checkpoint can be left to clean up (Community roadmap: TRANSITIONAL entries).
     private void DeleteProductCheckpoint(string productName)
     {
         var filePath = GetProductCheckpointPath(productName);
         try { if (FileWrapper.GetFromFactory().Exists(filePath)) FileWrapper.GetFromFactory().Delete(filePath); }
-        catch { }
+        catch (IOException) { }
+        catch (UnauthorizedAccessException) { }
     }
 
-    private string GetProductCheckpointPath(string productName)
-    {
-        return Path.Combine(_checkpointDirectory, $"{FileNameEncoder.Encode(productName)}.product.checkpoint");
-    }
-
-    internal static ProductCheckpoint ParseProductCheckpoint(string content, string productName)
-    {
-        var checkpoint = new ProductCheckpoint { ProductName = productName };
-        var lines = content.Split(['\r', '\n'], StringSplitOptions.RemoveEmptyEntries);
-        string currentSection = null;
-        string currentServer = null;
-
-        foreach (var line in lines)
-        {
-            var trimmedLine = line.Trim();
-            if (string.IsNullOrWhiteSpace(trimmedLine)) continue;
-
-            if (trimmedLine.StartsWith("# Started:", StringComparison.Ordinal))
-            {
-                var dateStr = trimmedLine.Substring("# Started:".Length).Trim();
-                if (DateTime.TryParse(dateStr, CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var startedAt))
-                    checkpoint.StartedAt = startedAt;
-                continue;
-            }
-
-            if (trimmedLine.StartsWith(RunIdLine, StringComparison.Ordinal))
-            {
-                if (Guid.TryParse(trimmedLine[RunIdLine.Length..].Trim(), out var runId)) checkpoint.RunId = runId;
-                continue;
-            }
-
-            if (trimmedLine.StartsWith("#", StringComparison.Ordinal)) continue;
-
-            if (trimmedLine.StartsWith("[", StringComparison.Ordinal) && trimmedLine.EndsWith("]", StringComparison.Ordinal))
-            {
-                var sectionContent = trimmedLine.Substring(1, trimmedLine.Length - 2);
-
-                if (sectionContent.StartsWith("Before Product Scripts - ", StringComparison.Ordinal))
-                {
-                    currentSection = "Before Product Scripts";
-                    currentServer = sectionContent.Substring("Before Product Scripts - ".Length);
-                }
-                else if (sectionContent.StartsWith("After Product Scripts - ", StringComparison.Ordinal))
-                {
-                    currentSection = "After Product Scripts";
-                    currentServer = sectionContent.Substring("After Product Scripts - ".Length);
-                }
-                else
-                {
-                    currentSection = sectionContent;
-                    currentServer = null;
-                }
-                continue;
-            }
-
-            switch (currentSection)
-            {
-                case "Before Product Scripts" when currentServer != null:
-                    checkpoint.AddBeforeScript(currentServer, trimmedLine);
-                    break;
-                case "Completed Templates":
-                    checkpoint.CompletedTemplates.Add(trimmedLine);
-                    break;
-                case "After Product Scripts" when currentServer != null:
-                    checkpoint.AddAfterScript(currentServer, trimmedLine);
-                    break;
-            }
-        }
-
-        return checkpoint;
-    }
-
-    internal static string FormatProductCheckpoint(ProductCheckpoint checkpoint)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("# SchemaQuench Product Checkpoint");
-        sb.AppendLine($"# Product: {checkpoint.ProductName}");
-        sb.AppendLine($"# Started: {checkpoint.StartedAt:yyyy-MM-dd HH:mm:ss}Z");
-        if (checkpoint.RunId != null) sb.AppendLine($"{RunIdLine} {checkpoint.RunId}");
-        sb.AppendLine();
-
-        foreach (var serverScripts in checkpoint.CompletedBeforeScripts.OrderBy(kvp => kvp.Key))
-        {
-            sb.AppendLine($"[Before Product Scripts - {serverScripts.Key}]");
-            foreach (var script in serverScripts.Value) sb.AppendLine(script);
-            sb.AppendLine();
-        }
-
-        sb.AppendLine("[Completed Templates]");
-        foreach (var template in checkpoint.CompletedTemplates) sb.AppendLine(template);
-        sb.AppendLine();
-
-        foreach (var serverScripts in checkpoint.CompletedAfterScripts.OrderBy(kvp => kvp.Key))
-        {
-            sb.AppendLine($"[After Product Scripts - {serverScripts.Key}]");
-            foreach (var script in serverScripts.Value) sb.AppendLine(script);
-            sb.AppendLine();
-        }
-
-        return sb.ToString();
-    }
-
-    #endregion
+    private string GetProductCheckpointPath(string productName) =>
+        Path.Join(_checkpointDirectory, $"{FileNameEncoder.Encode(productName)}.product.checkpoint");
 
     private void WriteFileThreadSafe(string filePath, string content)
     {

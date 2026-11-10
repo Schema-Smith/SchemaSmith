@@ -96,36 +96,6 @@ public abstract class CheckpointIntegrationTestsSharedTests
     }
 
     [Test]
-    public void CheckpointManager_ShouldSaveAndLoadProductCheckpoint()
-    {
-        lock (FactoryContainer.SharedLockObject)
-        {
-            var manager = new FileCheckpointManager(_checkpointDir);
-            var scope = new TrackingScope { ProductName = "TestProduct" };
-
-            manager.MarkScriptCompleted(scope, "Before", "Scripts/Before1.sql");
-            manager.MarkStepCompleted(scope, "Template:Main");
-            manager.MarkScriptCompleted(scope, "After", "Scripts/After1.sql");
-
-            var filePath = Path.Combine(_checkpointDir, "TestProduct.product.checkpoint");
-            Assert.That(File.Exists(filePath), Is.True, "Product checkpoint file should exist on disk");
-
-            var content = File.ReadAllText(filePath);
-            Assert.That(content, Does.Contain("# Product: TestProduct"));
-            Assert.That(content, Does.Contain("[Before Product Scripts - default]"));
-            Assert.That(content, Does.Contain("Scripts/Before1.sql"));
-            Assert.That(content, Does.Contain("[Completed Templates]"));
-            Assert.That(content, Does.Contain("Template:Main"));
-            Assert.That(content, Does.Contain("[After Product Scripts - default]"));
-            Assert.That(content, Does.Contain("Scripts/After1.sql"));
-
-            Assert.That(manager.HasCompleted(scope, "Template:Main"), Is.True);
-            Assert.That(manager.HasCompletedScript(scope, "Before", "Scripts/Before1.sql"), Is.True);
-            Assert.That(manager.HasCompletedScript(scope, "After", "Scripts/After1.sql"), Is.True);
-        }
-    }
-
-    [Test]
     public void CheckpointManager_ShouldSaveAndLoadDatabaseCheckpoint()
     {
         lock (FactoryContainer.SharedLockObject)
@@ -167,16 +137,14 @@ public abstract class CheckpointIntegrationTestsSharedTests
     }
 
     [Test]
-    public void CheckpointManager_ShouldDeleteProductCheckpoint()
+    public void CheckpointManager_ShouldDeleteALegacyProductCheckpoint()
     {
         lock (FactoryContainer.SharedLockObject)
         {
+            // Product checkpoints were written by 2.7 and earlier; a successful run still removes one left behind.
             var manager = new FileCheckpointManager(_checkpointDir);
-            var scope = new TrackingScope { ProductName = "TestProduct" };
-            manager.MarkStepCompleted(scope, "Template:Main");
-
-            var filePath = Path.Combine(_checkpointDir, "TestProduct.product.checkpoint");
-            Assert.That(File.Exists(filePath), Is.True);
+            var filePath = Path.Join(_checkpointDir, "TestProduct.product.checkpoint");
+            File.WriteAllText(filePath, "# SchemaQuench Product Checkpoint");
 
             manager.DeleteCheckpoints("TestProduct");
 
