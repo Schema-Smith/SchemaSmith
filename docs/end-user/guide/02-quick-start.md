@@ -41,7 +41,7 @@ cd Demos/SqlServer
 
 The helper lists the databases it is about to create, waits for you to type `yes`, and deploys. It only ever drops databases it created itself, so an existing `Northwind` of yours is refused, not replaced. Client installs, Windows Authentication, and renaming a colliding demo are in [Use your own server](use-your-own-server.md). For the rest of this walkthrough, substitute your server, login and password wherever you see `localhost,1440` and `TestUser`.
 
-**With Docker.** This path needs nothing but Docker. `run-demo.sh` / `run-demo.cmd` pulls the published SchemaQuench image (`ghcr.io/schema-smith/schemaquench:2`), runs `docker compose up --build`, starts a SQL Server on port `1440`, and deploys the demo databases inside the compose stack. The launcher blocks until the `completed` service exits, which signals the databases are ready.
+**With Docker.** This path needs nothing but Docker. `run-demo.sh` / `run-demo.cmd` pulls the published SchemaQuench image (`ghcr.io/schema-smith/schemaquench:latest`), runs `docker compose up --build`, starts a SQL Server on port `1440`, and deploys the demo databases inside the compose stack. The launcher blocks until the `completed` service exits, which signals the databases are ready.
 
 ```bash
 cd Demos/SqlServer

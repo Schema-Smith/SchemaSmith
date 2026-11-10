@@ -47,7 +47,7 @@ services:
       - "3309:3306"
 
   quench-mysql8:
-    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:latest}
     environment:
       - SmithySettings_Target__Server=mysql8
       - SmithySettings_Target__User=${MYSQL_USER}
@@ -60,7 +60,7 @@ services:
         condition: service_healthy
 
   quench-mysql9:
-    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:latest}
     environment:
       - SmithySettings_Target__Server=mysql9
       - SmithySettings_Target__User=${MYSQL_USER}

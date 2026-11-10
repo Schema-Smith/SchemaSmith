@@ -49,7 +49,7 @@ services:
       - "3311:3306"
 
   quench-mariadb10:
-    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:latest}
     environment:
       - SmithySettings_Target__Server=mariadb10
       - SmithySettings_Target__User=${MARIADB_USER}
@@ -62,7 +62,7 @@ services:
         condition: service_healthy
 
   quench-mariadb11:
-    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:latest}
     environment:
       - SmithySettings_Target__Server=mariadb11
       - SmithySettings_Target__User=${MARIADB_USER}

@@ -2,7 +2,7 @@ name: schemasmith-sqlserver-demo
 
 services:
   quench-adventureworks:
-    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:latest}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MSSQL_SA_USERNAME}
@@ -16,7 +16,7 @@ services:
         condition: service_healthy
 
   quench-northwind:
-    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:latest}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MSSQL_SA_USERNAME}
@@ -30,7 +30,7 @@ services:
         condition: service_completed_successfully
 
   quench-sakila:
-    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:latest}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MSSQL_SA_USERNAME}
@@ -44,7 +44,7 @@ services:
         condition: service_completed_successfully
 
   quench-chinook:
-    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:latest}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MSSQL_SA_USERNAME}
@@ -58,7 +58,7 @@ services:
         condition: service_completed_successfully
 
   quench-tenantcrm:
-    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:latest}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=${MSSQL_SA_USERNAME}
