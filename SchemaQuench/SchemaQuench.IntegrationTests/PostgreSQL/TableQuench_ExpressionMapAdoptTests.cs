@@ -142,6 +142,44 @@ public class TableQuench_ExpressionMapAdoptTests : BaseTableQuenchTests
         });
     }
 
+    // A rendering that is not a fixed point (Paul, 2026-11-10: compare through a re-parse). status IN ('open','paid') on
+    // varchar is stored as one ARRAY form, and a dump/restore re-parses that form into another. After the upgrade the
+    // declaration rendered on the new server no longer matches what the server holds, though nothing changed. Simulated
+    // on one server: the check is re-added from its own rendering, as a restore does, and the row marked as an earlier
+    // major version's.
+    [Test]
+    public void ACheckARestoreReParsed_IsReBaselined_NotReApplied()
+    {
+        var t = $"adoptrp_{Guid.NewGuid():N}"[..20];
+        var json = $$"""
+            [{ "Schema": "public", "Name": "{{t}}",
+               "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false },
+                            { "Name": "status", "DataType": "character varying(10)", "Nullable": true } ],
+               "CheckConstraints": [ { "Name": "ck_{{t}}", "Expression": "status IN ('open','paid')" } ] }]
+            """;
+        WithTable(t, (cmd, messages) =>
+        {
+            RunTableQuenchProc(cmd, json);
+            var stored = Scalar(cmd, $"SELECT pg_get_expr(conbin, conrelid) FROM pg_constraint WHERE conname = 'ck_{t}'");
+            Exec(cmd, $"""ALTER TABLE public."{t}" DROP CONSTRAINT "ck_{t}"; ALTER TABLE public."{t}" ADD CONSTRAINT "ck_{t}" CHECK ({stored});""");
+            Assume.That(Scalar(cmd, $"SELECT pg_get_expr(conbin, conrelid) FROM pg_constraint WHERE conname = 'ck_{t}'"), Is.Not.EqualTo(stored),
+                "this server re-parses the rendering into the same text, so there is nothing to show");
+            Exec(cmd, $"""UPDATE "SchemaSmith"."ExpressionMap" SET "EngineVersion" = '9.6.24' WHERE "ObjectTable" = '{t}'""");
+            var before = Scalar(cmd, $"SELECT oid FROM pg_constraint WHERE conname = 'ck_{t}'");
+            Exec(cmd, """DELETE FROM "SchemaSmith"."ChangeAudit" WHERE "SessionId" = pg_backend_pid()""");
+
+            messages.Clear();
+            RunTableQuenchProc(cmd, json);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Scalar(cmd, $"SELECT oid FROM pg_constraint WHERE conname = 'ck_{t}'"), Is.EqualTo(before), "the check was not dropped and re-added");
+                Assert.That(Audits(cmd, t), Is.Empty);
+                Assert.That(messages, Has.Some.Contains("Re-baselined 1 expression(s)"));
+            });
+        });
+    }
+
     [Test]
     public void ARealDifference_IsStillReApplied()
     {

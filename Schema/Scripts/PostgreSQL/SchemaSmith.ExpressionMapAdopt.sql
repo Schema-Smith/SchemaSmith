@@ -24,6 +24,10 @@ DECLARE
   v_adopted INTEGER := 0;
   v_rebaselined INTEGER := 0;
   v_previous TEXT;
+  v_recorded TEXT;
+  v_first TEXT;
+  v_try TEXT;
+  v_match BOOLEAN;
   r RECORD;
 BEGIN
   IF to_regclass('pg_temp.temp_columns') IS NULL AND to_regclass('pg_temp.temp_indexes') IS NULL THEN RETURN; END IF;
@@ -163,20 +167,36 @@ BEGIN
   END IF;
 
   FOR r IN SELECT * FROM temp_expression_map_candidates LOOP
-    v_rendered := NULL;
-    BEGIN
-      EXECUTE format('CREATE TEMPORARY TABLE schemasmith_probe (LIKE %I.%I)', r."ObjectSchema", r."ObjectTable");
-      EXECUTE replace(r."Render", '{probe}', 'pg_temp.schemasmith_probe');
-      EXECUTE r."ReadBack" INTO v_rendered;
-      -- Always roll the copy back; the rendering survives in the variable.
-      RAISE EXCEPTION USING ERRCODE = 'SSPRB';
-    EXCEPTION
-      WHEN SQLSTATE 'SSPRB' THEN NULL;
-      WHEN OTHERS THEN v_rendered := NULL;
-    END;
-
-    -- Byte for byte: the C collation compares bytes whatever the database's collation is.
-    CONTINUE WHEN v_rendered IS NULL OR v_rendered COLLATE "C" != r."LiveText" COLLATE "C";
+    -- Three texts are tried, in turn, on the copy. The declared text. Then the text recorded when it was applied, which is
+    -- what a dump/restore or pg_upgrade re-parses on the new server. Then the declared text's own rendering, re-parsed.
+    -- Some renderings are not a fixed point -- status IN ('open','paid') on varchar comes back from a re-parse as a
+    -- different ARRAY form -- so after an upgrade only the second or third can match what the server now holds.
+    v_recorded := NULL;
+    SELECT m."CanonicalText" INTO v_recorded FROM "SchemaSmith"."ExpressionMap" m
+     WHERE m."ObjectSchema" = r."ObjectSchema" AND m."ObjectTable" = r."ObjectTable" AND m."ObjectKind" = r."ObjectKind"
+       AND m."ObjectName" = r."ObjectName" AND m."Slot" = r."Slot" AND m."AuthoredText" = r."AuthoredText";
+    v_first := NULL;
+    v_match := FALSE;
+    FOR i IN 1 .. 3 LOOP
+      v_try := CASE i WHEN 1 THEN r."AuthoredText" WHEN 2 THEN v_recorded ELSE v_first END;
+      CONTINUE WHEN v_try IS NULL OR (i > 1 AND v_try = r."AuthoredText");
+      v_rendered := NULL;
+      BEGIN
+        EXECUTE format('CREATE TEMPORARY TABLE schemasmith_probe (LIKE %I.%I)', r."ObjectSchema", r."ObjectTable");
+        EXECUTE replace(replace(r."Render", r."AuthoredText", v_try), '{probe}', 'pg_temp.schemasmith_probe');
+        EXECUTE r."ReadBack" INTO v_rendered;
+        -- Always roll the copy back; the rendering survives in the variable.
+        RAISE EXCEPTION USING ERRCODE = 'SSPRB';
+      EXCEPTION
+        WHEN SQLSTATE 'SSPRB' THEN NULL;
+        WHEN OTHERS THEN v_rendered := NULL;
+      END;
+      IF i = 1 THEN v_first := v_rendered; END IF;
+      -- Byte for byte: the C collation compares bytes whatever the database's collation is.
+      v_match := v_rendered IS NOT NULL AND v_rendered COLLATE "C" = r."LiveText" COLLATE "C";
+      EXIT WHEN v_match;
+    END LOOP;
+    CONTINUE WHEN NOT v_match;
 
     IF p_WhatIf THEN
       INSERT INTO temp_expression_map_adopt_undo
