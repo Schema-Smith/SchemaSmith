@@ -190,7 +190,7 @@ public class MergeScriptHelperTests
             new() { Name = "Id", DataType = "int" }
         };
         var sql = MergeScriptHelper.BuildChunkedMergeMySql("db", "t", "`Id`, `Name`", "jt.`Id`, jt.`Name`",
-            "(SELECT 1) AS jt", "`Id`, `Name`", "`Id`", rows, columns,
+            "(SELECT 1) AS jt", [new() { Name = "Id", DataType = "int" }, new() { Name = "Name", DataType = "varchar" }], "`Id`", rows, columns,
             new HashSet<string>(StringComparer.OrdinalIgnoreCase), null);
 
         Assert.Multiple(() =>
@@ -682,11 +682,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_InsertOnly_ContainsMergeAndInsert()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\",(elem ->> 'name')::varchar(100) AS \"name\"",
-            insertCols: "        \"id\",\r\n        \"name\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer"), new("name", "varchar", "character varying(100)")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[{\"id\":1}]", "\"id\"",
@@ -705,11 +701,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_InsertUpdate_ContainsMatchedClause()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\",(elem ->> 'name')::varchar(100) AS \"name\"",
-            insertCols: "        \"id\",\r\n        \"name\"",
-            updateCols: "\"name\"");
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer"), new("name", "varchar", "character varying(100)")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[{\"id\":1}]", "\"id\"",
@@ -723,11 +715,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_InsertUpdateDelete_ContainsDeleteClause()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\"",
-            insertCols: "        \"id\"",
-            updateCols: "\"id\"");
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -741,11 +729,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSql_Pg17_EmitsMergeNotMatchedBySource()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'Id')::int4 AS \"Id\"",
-            insertCols: "        \"Id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("Id", "int4", "integer")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "TestTable", "[{\"Id\":1}]", "\"Id\"",
@@ -762,11 +746,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSql_Pg16_EmitsDeleteWhereNotExists()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'Id')::int4 AS \"Id\"",
-            insertCols: "        \"Id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("Id", "int4", "integer")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "TestTable", "[{\"Id\":1}]", "\"Id\"",
@@ -783,11 +763,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSql_Pg16_FallbackDeleteAliasesTargetForMergeFilter()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'Id')::int4 AS \"Id\"",
-            insertCols: "        \"Id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("Id", "int4", "integer")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "TestTable", "[{\"Id\":1}]", "\"Id\"",
@@ -806,11 +782,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSql_Pg16_FallbackDeleteHandlesNullSafeKey()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'Id')::int4 AS \"Id\"",
-            insertCols: "        \"Id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("Id", "int4", "integer")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "TestTable", "[{\"Id\":1}]", "*\"Id\"",
@@ -831,11 +803,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_WithDisableTriggers()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\"",
-            insertCols: "        \"id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -849,11 +817,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_WithIdentitySequence_IncludesSetval()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: "id=public.test_table_id_seq=SYSTEM",
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\"",
-            insertCols: "        \"id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer", Identity: true, Sequence: "public.test_table_id_seq")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -867,11 +831,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_WithTokenize_UsesTokenPlaceholder()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\"",
-            insertCols: "        \"id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -884,11 +844,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSql_WithTokenize_ContentFileTokenParameter_IsEmbeddedVerbatim()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\"",
-            insertCols: "        \"id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -904,9 +860,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSql_XmlEncoding_EmitsXmltableRowSource()
     {
-        var cmd = CreatePostgreSqlXmlMockCommand(
-            unsupportedComments: null, identAndSeq: null,
-            updateCols: "\"Name\"", insertCols: "        \"Id\",\r\n        \"Name\"");
+        var cmd = CreatePostgreSqlShapeCommand([new("Id", "int4", "integer"), new("Name", "varchar", "character varying(100)")]);
 
         var script = MergeScriptHelper.BuildMergeScript(
             Platform.PostgreSQL, cmd, "public", "Widget",
@@ -928,9 +882,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSql_XmlEncoding_NoLongerThrows()
     {
-        var cmd = CreatePostgreSqlXmlMockCommand(
-            unsupportedComments: null, identAndSeq: null,
-            updateCols: "\"Name\"", insertCols: "        \"Id\",\r\n        \"Name\"");
+        var cmd = CreatePostgreSqlShapeCommand([new("Id", "int4", "integer"), new("Name", "varchar", "character varying(100)")]);
 
         Assert.DoesNotThrow(() => MergeScriptHelper.BuildMergeScript(
             Platform.PostgreSQL, cmd, "public", "Widget",
@@ -947,14 +899,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSql_XmlEncoding_GeometryColumn_UsesStGeomFromText()
     {
-        var cmd = CreatePostgreSqlXmlMockCommand(
-            unsupportedComments: null, identAndSeq: null,
-            updateCols: null, insertCols: "        \"Id\",\r\n        \"Geom\"",
-            metadataColumns:
-            [
-                ("Id", "integer", "int4", "pg_catalog", null, false),
-                ("Geom", "USER-DEFINED", "geometry", "public", null, true)
-            ]);
+        var cmd = CreatePostgreSqlShapeCommand([new("Id", "int4", "integer"), new("Geom", "geometry", "public.geometry")]);
 
         var script = MergeScriptHelper.BuildMergeScript(
             Platform.PostgreSQL, cmd, "public", "Shapes",
@@ -981,14 +926,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSql_XmlEncoding_ByteaColumn_UsesDecodeBase64()
     {
-        var cmd = CreatePostgreSqlXmlMockCommand(
-            unsupportedComments: null, identAndSeq: null,
-            updateCols: null, insertCols: "        \"Id\",\r\n        \"Data\"",
-            metadataColumns:
-            [
-                ("Id", "integer", "int4", "pg_catalog", null, false),
-                ("Data", "bytea", "bytea", "pg_catalog", null, true)
-            ]);
+        var cmd = CreatePostgreSqlShapeCommand([new("Id", "int4", "integer"), new("Data", "bytea", "bytea")]);
 
         var script = MergeScriptHelper.BuildMergeScript(
             Platform.PostgreSQL, cmd, "public", "Blobs",
@@ -1008,14 +946,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSql_XmlEncoding_ArrayColumn_ReadsLiteralOrLegacyDelimiter()
     {
-        var cmd = CreatePostgreSqlXmlMockCommand(
-            unsupportedComments: null, identAndSeq: null,
-            updateCols: null, insertCols: "        \"Id\",\r\n        \"Tags\"",
-            metadataColumns:
-            [
-                ("Id", "integer", "int4", "pg_catalog", null, false),
-                ("Tags", "ARRAY", "_int4", "pg_catalog", null, true)
-            ]);
+        var cmd = CreatePostgreSqlShapeCommand([new("Id", "int4", "integer"), new("Tags", "_int4", "integer[]")]);
 
         var script = MergeScriptHelper.BuildMergeScript(
             Platform.PostgreSQL, cmd, "public", "Tagged",
@@ -1595,9 +1526,7 @@ public class MergeScriptHelperTests
                 keyColumns = "[id]";
                 break;
             case Platform.PostgreSQL:
-                cmd = CreatePostgreSqlXmlMockCommand(
-                    unsupportedComments: null, identAndSeq: null, updateCols: null,
-                    insertCols: "        \"id\",\n        \"name\"");
+                cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer"), new("name", "varchar", "character varying(100)")]);
                 schemaOrDb = "public";
                 keyColumns = "\"id\"";
                 break;
@@ -1635,7 +1564,7 @@ public class MergeScriptHelperTests
         Assert.That(sqlResult, Does.Contain("it''s"));
 
         // PostgreSQL
-        var pgCmd = CreatePostgreSqlMockCommand(null, "(elem ->> 'id')::int4 AS \"id\"", "        \"id\"", null);
+        var pgCmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")]);
         var pgResult = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, pgCmd,
             "public", "t", "[{\"v\":\"it's\"}]", "\"id\"", false, false, false, false, null);
         Assert.That(pgResult, Does.Contain("it''s"));
@@ -1657,42 +1586,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_WithDisableRules()
     {
-        var cmd = Substitute.For<IDbCommand>();
-
-        // Set up ExecuteReader to return rule names on first call (rules query),
-        // then empty on subsequent calls
-        var readerCallCount = 0;
-        var ruleNames = new[] { "rule_insert_p1", "rule_insert_p2" };
-        var ruleIndex = -1;
-
-        cmd.ExecuteReader().Returns(ci =>
-        {
-            readerCallCount++;
-            var reader = Substitute.For<IDataReader>();
-            if (readerCallCount == 1)
-            {
-                // Rules query — return rule names
-                reader.Read().Returns(_ => { ruleIndex++; return ruleIndex < ruleNames.Length; });
-                reader.GetString(0).Returns(_ => ruleNames[ruleIndex]);
-            }
-            else
-            {
-                // Subsequent readers — return no rows
-                reader.Read().Returns(false);
-            }
-            return reader;
-        });
-
-        // Set up ExecuteScalar sequence for PostgreSQL merge helper
-        var scalarSequence = new object[]
-        {
-            null,  // GetUnsupportedColumnComments
-            null,  // GetIdentityColumnAndSequence
-            "(elem ->> 'id')::int4 AS \"id\"", // GetJsonColumnDefinitions
-            "        \"id\""  // GetInsertColumns
-        };
-        var scalarIndex = 0;
-        cmd.ExecuteScalar().Returns(_ => scalarIndex < scalarSequence.Length ? scalarSequence[scalarIndex++] : null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")], rules: ["rule_insert_p1", "rule_insert_p2"]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -1714,11 +1608,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_WithUpdateDescendents_OmitsOnlyKeyword()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\"",
-            insertCols: "        \"id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -1732,11 +1622,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_WithoutUpdateDescendents_IncludesOnlyKeyword()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\"",
-            insertCols: "        \"id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -1829,28 +1715,21 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_GeometryType_UsesStGeomFromText()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\",ST_GeomFromText(elem ->> 'location') AS \"location\"",
-            insertCols: "        \"id\",\r\n        \"location\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer"), new("location", "geometry", "public.geometry")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
             mergeUpdate: false, mergeDelete: false, disableTriggers: false,
             tokenizeScripts: false, mergeFilter: null);
 
-        Assert.That(result, Does.Contain("ST_GeomFromText(elem ->> 'location') AS \"location\""));
+        Assert.That(result, Does.Contain("public.ST_GeomFromText(elem ->> 'location', COALESCE(NULLIF(elem ->> 'location.STSrid', '')::int, 0)) AS \"location\""),
+            "PostGIS's function by its type's schema, with the SRID beside the value");
     }
 
     [Test]
     public void BuildMergeScript_PostgreSQL_ByteaType_UsesDecodeBase64()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\",decode(elem ->> 'photo', 'base64') AS \"photo\"",
-            insertCols: "        \"id\",\r\n        \"photo\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer"), new("photo", "bytea", "bytea")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -1863,11 +1742,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_WithGeometryUpdate_UsesStandardEquality()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\",ST_GeomFromText(elem ->> 'location') AS \"location\"",
-            insertCols: "        \"id\",\r\n        \"location\"",
-            updateCols: "\"location\"");
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer"), new("location", "geometry", "public.geometry")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -1882,12 +1757,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_XmlType_UsesTextCastForComparison()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\",(elem ->> 'demographics')::xml AS \"demographics\"",
-            insertCols: "        \"id\",\r\n        \"demographics\"",
-            updateCols: "\"demographics\"",
-            xmlCols: "demographics");
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer"), new("demographics", "xml", "xml", CompareCast: "::text")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -1902,12 +1772,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_JsonType_UsesTextCastForComparison()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\",(elem ->> 'metadata')::json AS \"metadata\"",
-            insertCols: "        \"id\",\r\n        \"metadata\"",
-            updateCols: "\"metadata\"",
-            jsonTypeCols: new Dictionary<string, string> { { "metadata", "json" } });
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer"), new("metadata", "json", "json", CompareCast: "::text")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -1922,12 +1787,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_JsonbType_UsesJsonbCastForComparison()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\",(elem ->> 'settings')::jsonb AS \"settings\"",
-            insertCols: "        \"id\",\r\n        \"settings\"",
-            updateCols: "\"settings\"",
-            jsonTypeCols: new Dictionary<string, string> { { "settings", "jsonb" } });
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer"), new("settings", "jsonb", "jsonb", CompareCast: "::jsonb")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -1942,12 +1802,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_NonJsonColumn_UsesStandardComparison()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\",(elem ->> 'name')::varchar(100) AS \"name\"",
-            insertCols: "        \"id\",\r\n        \"name\"",
-            updateCols: "\"name\"",
-            jsonTypeCols: new Dictionary<string, string>());
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer"), new("name", "varchar", "character varying(100)")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -2137,6 +1992,101 @@ public class MergeScriptHelperTests
 
     #endregion
 
+    #region PostgreSQL table shape
+
+    // Every clause of the PostgreSQL merge comes from one read of the table; only DisableRules adds the rule lookup. It took
+    // five to eight round trips.
+    [TestCase(false, 1)]
+    [TestCase(true, 2)]
+    public void BuildMergeScript_PostgreSQL_ReadsTheCatalogOnce(bool disableRules, int expected)
+    {
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer", Identity: true, Sequence: "public.t_id_seq"),
+                                                new("doc", "jsonb", "jsonb", CompareCast: "::jsonb")],
+            unsupported: [("price", "money")], rules: ["r"]);
+
+        MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd, "public", "t", "[{\"id\":1,\"doc\":null}]", "\"id\"",
+            mergeUpdate: true, mergeDelete: true, disableTriggers: true, tokenizeScripts: false, mergeFilter: null, disableRules: disableRules);
+
+        Assert.That(cmd.ReceivedCalls().Count(c => c.GetMethodInfo().Name is "ExecuteReader" or "ExecuteScalar" or "ExecuteNonQuery"), Is.EqualTo(expected));
+    }
+
+    // IS DISTINCT FROM reads each column through a type the script can always compare: text for xml, the geometric types
+    // and a type outside pg_catalog, jsonb as itself, json as text; anything else as it is.
+    [TestCase("::text", "\"Target\".\"c\"::text IS DISTINCT FROM \"Source\".\"c\"::text")]
+    [TestCase("::jsonb", "\"Target\".\"c\"::jsonb IS DISTINCT FROM \"Source\".\"c\"::jsonb")]
+    [TestCase(null, "\"Target\".\"c\" IS DISTINCT FROM \"Source\".\"c\"")]
+    public void BuildMergeScript_PostgreSQL_UpdateCompare_UsesTheColumnsCompareCast(string cast, string expected)
+    {
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer"), new("c", "anytype", "anytype", CompareCast: cast)]);
+
+        var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd, "public", "t", "[]", "\"id\"",
+            mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+
+        Assert.That(result, Does.Contain(expected));
+    }
+
+    // A column a sequence numbers is never updated; the identity column, not a serial one, decides the OVERRIDING clause.
+    [Test]
+    public void BuildMergeScript_PostgreSQL_SequenceFedColumns_AreInsertedButNotUpdated()
+    {
+        var cmd = CreatePostgreSqlShapeCommand([new("a_serial", "int4", "integer", Serial: true, Sequence: "public.t_a_seq"),
+                                                new("id", "int4", "integer", Identity: true, Sequence: "public.t_id_seq"),
+                                                new("v", "text", "text")]);
+
+        var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd, "public", "t", "[]", "\"id\"",
+            mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+
+        var update = result[result.IndexOf("UPDATE SET", StringComparison.Ordinal)..result.IndexOf("WHEN NOT MATCHED", StringComparison.Ordinal)];
+        Assert.Multiple(() =>
+        {
+            Assert.That(update, Does.Contain("\"v\" = \"Source\".\"v\""));
+            Assert.That(update, Does.Not.Contain("\"id\" =").And.Not.Contain("\"a_serial\" ="));
+            Assert.That(result, Does.Contain("\"Source\".\"a_serial\"").And.Contain("\"Source\".\"id\""), "both are still inserted");
+            Assert.That(result, Does.Contain("OVERRIDING SYSTEM VALUE"));
+            Assert.That(result, Does.Contain("public.t_id_seq"), "the identity column's sequence is the one reset");
+        });
+    }
+
+    // A key is read from the row element by its name as quote_literal writes it: quotes doubled, and an E'' literal with
+    // doubled backslashes when the name holds one.
+    [Test]
+    public void BuildMergeScript_PostgreSQL_JsonRowSource_QuotesEachNameAsALiteral()
+    {
+        var cmd = CreatePostgreSqlShapeCommand([new("it's", "text", "text"), new("back\\slash", "int4", "integer"), new("q\"uote", "int4", "integer")]);
+
+        var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd, "public", "t", "[]", "\"q\"\"uote\"",
+            mergeUpdate: false, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Does.Contain("(elem ->> 'it''s')::text AS \"it's\""));
+            Assert.That(result, Does.Contain("(elem ->> E'back\\\\slash')::integer AS \"back\\slash\""));
+            Assert.That(result, Does.Contain("(elem ->> 'q\"uote')::integer AS \"q\"\"uote\""));
+        });
+    }
+
+    [Test]
+    public void GetUnsupportedColumnComments_PostgreSQL_NamesEachColumnItCannotDeliver()
+    {
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")], unsupported: [("search_vector", "tsvector"), ("price", "money")]);
+
+        Assert.That(MergeScriptHelper.GetUnsupportedColumnComments(Platform.PostgreSQL, cmd, "public", "t"),
+            Is.EqualTo("-- Column \"price\" skipped: money is not supported for data delivery\n" +
+                       "-- Column \"search_vector\" skipped: tsvector is not supported for data delivery"));
+    }
+
+    // GetColumnMetadata leaves out a type delivery cannot carry, as its contract says; the XML row source built from it
+    // no longer shreds one either.
+    [Test]
+    public void GetColumnMetadata_PostgreSQL_LeavesOutUnsupportedTypes()
+    {
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")], unsupported: [("price", "money")]);
+
+        Assert.That(MergeScriptHelper.GetColumnMetadata(Platform.PostgreSQL, cmd, "public", "t").Select(c => c.Name), Is.EqualTo(new[] { "id" }));
+    }
+
+    #endregion
+
     #region Helper Methods - SQL Server Mock
 
     // A column of the table shape a SQL Server mock command answers with.
@@ -2201,131 +2151,58 @@ public class MergeScriptHelperTests
 
     #region Helper Methods - PostgreSQL Mock
 
-    /// <summary>
-    /// Creates a PostgreSQL mock command. Call order for BuildMergeScript:
-    /// 1. GetUnsupportedColumnComments, 2. GetIdentityColumnAndSequence, 3. GetJsonColumnDefinitions,
-    /// 4. GetUpdateColumns (only if mergeUpdate=true), 5. GetXmlColumns (if mergeUpdate),
-    /// 6. GetJsonColumnsPostgreSql (ExecuteReader, if mergeUpdate), 7. GetInsertColumns
-    /// </summary>
-    private static IDbCommand CreatePostgreSqlMockCommand(
-        string identAndSeq, string jsonColDefs, string insertCols, string updateCols,
-        string xmlCols = null, Dictionary<string, string> jsonTypeCols = null,
-        string unsupportedComments = null)
+    // A column of the table shape a PostgreSQL mock command answers with: its udt_name, the type as format_type renders
+    // it (schema-qualified outside pg_catalog), and what feeds or compares it.
+    private sealed record PgCol(string Name, string UdtName, string Type, bool Identity = false, bool Serial = false, string Sequence = null,
+        string CompareCast = null);
+
+    // PostgreSQL reads a table's whole shape in one query; a rule lookup (DisableRules) is the only other read.
+    private static IDbCommand CreatePostgreSqlShapeCommand(PgCol[] columns, (string Name, string UdtName)[] unsupported = null, string[] rules = null)
     {
         var cmd = Substitute.For<IDbCommand>();
-        var sequence = new List<object>
-        {
-            unsupportedComments, // 1. GetUnsupportedColumnComments
-            identAndSeq,        // 2. GetIdentityColumnAndSequence
-            jsonColDefs          // 3. GetJsonColumnDefinitions
-        };
-        if (updateCols != null)
-        {
-            sequence.Add(updateCols); // 4. GetUpdateColumns (only if mergeUpdate)
-            sequence.Add(xmlCols);    // 5. GetXmlColumns (only if mergeUpdate)
-            // 6. GetJsonColumnsPostgreSql uses ExecuteReader (handled below)
-        }
-        sequence.Add(insertCols);     // GetInsertColumns
-
-        var callCount = 0;
-        cmd.ExecuteScalar().Returns(ci =>
-        {
-            var idx = callCount++;
-            return idx < sequence.Count ? sequence[idx] : null;
-        });
-
-        // Set up ExecuteReader for GetJsonColumnsPostgreSql (only called when mergeUpdate)
-        var jsonTypeEntries = jsonTypeCols ?? new Dictionary<string, string>();
-        var jsonTypeList = jsonTypeEntries.ToList();
-        var readerIndex = -1;
-        var reader = Substitute.For<IDataReader>();
-        reader.Read().Returns(ci =>
-        {
-            readerIndex++;
-            return readerIndex < jsonTypeList.Count;
-        });
-        reader.GetString(0).Returns(ci => jsonTypeList[readerIndex].Key);
-        reader.GetString(1).Returns(ci => jsonTypeList[readerIndex].Value);
-        cmd.ExecuteReader().Returns(reader);
-
+        cmd.ExecuteReader().Returns(_ => cmd.CommandText != null && cmd.CommandText.Contains("pg_rules")
+            ? StringRowsReader(rules ?? [])
+            : PostgreSqlShapeReader(columns, unsupported ?? []));
         return cmd;
     }
 
-    /// <summary>
-    /// PostgreSQL mock command for the XML row-source path. Unlike CreatePostgreSqlMockCommand, the XML
-    /// path reads column metadata via GetColumnMetadataPostgreSql (ExecuteReader) instead of the
-    /// STRING_AGG-based jsonColumns query, so ExecuteReader is routed by CommandText rather than fed a
-    /// single fixed reader. ExecuteScalar order: 1. GetUnsupportedColumnComments,
-    /// 2. GetIdentityColumnAndSequence, 3. GetUpdateColumns, 4. GetXmlColumns (both mergeUpdate-only),
-    /// 5. GetInsertColumns. ExecuteReader: GetColumnMetadataPostgreSql (its pg_attribute/attidentity join
-    /// distinguishes it) returns metadataColumns (defaults to a fixed Id int4 / Name varchar(100) shape —
-    /// see CreatePostgreSqlColumnMetadataReader); GetJsonColumnsPostgreSql (mergeUpdate-only) returns no
-    /// rows (no json/jsonb-typed target columns).
-    /// </summary>
-    private static IDbCommand CreatePostgreSqlXmlMockCommand(
-        string unsupportedComments, string identAndSeq, string updateCols, string insertCols,
-        (string Name, string DataType, string UdtName, string UdtSchema, int? MaxLen, bool Nullable)[] metadataColumns = null)
+    private static IDataReader StringRowsReader(string[] rows)
     {
-        var cmd = Substitute.For<IDbCommand>();
-        var sequence = new List<object> { unsupportedComments, identAndSeq };
-        if (updateCols != null)
-        {
-            sequence.Add(updateCols);
-            sequence.Add(null); // GetTextCompareColumnsPostgreSql: no xml or geometric target columns
-        }
-        sequence.Add(insertCols);
-
-        var callCount = 0;
-        cmd.ExecuteScalar().Returns(ci =>
-        {
-            var idx = callCount++;
-            return idx < sequence.Count ? sequence[idx] : null;
-        });
-
-        cmd.ExecuteReader().Returns(ci =>
-            cmd.CommandText != null && cmd.CommandText.Contains("attidentity")
-                ? CreatePostgreSqlColumnMetadataReader(metadataColumns)
-                : CreateEmptyMockReader());
-
-        return cmd;
-    }
-
-    private static IDataReader CreatePostgreSqlColumnMetadataReader(
-        (string Name, string DataType, string UdtName, string UdtSchema, int? MaxLen, bool Nullable)[] columns = null)
-    {
-        columns ??= new (string Name, string DataType, string UdtName, string UdtSchema, int? MaxLen, bool Nullable)[]
-        {
-            ("Id", "integer", "int4", "pg_catalog", null, false),
-            ("Name", "character varying", "varchar", "pg_catalog", 100, true)
-        };
-
         var reader = Substitute.For<IDataReader>();
-        var idx = -1;
-        reader.Read().Returns(ci => { idx++; return idx < columns.Length; });
-        reader.GetString(0).Returns(ci => columns[idx].Name);
-        reader.GetString(1).Returns(ci => columns[idx].DataType);
-        reader.GetString(2).Returns(ci => columns[idx].UdtName);
-        reader.GetString(3).Returns(ci => columns[idx].UdtSchema);
-        reader.IsDBNull(4).Returns(ci => columns[idx].MaxLen is null);
-        reader.GetValue(4).Returns(ci => (object)columns[idx].MaxLen ?? DBNull.Value);
-        reader.IsDBNull(5).Returns(true);
-        reader.GetValue(5).Returns(DBNull.Value);
-        reader.IsDBNull(6).Returns(true);
-        reader.GetValue(6).Returns(DBNull.Value);
-        reader.IsDBNull(7).Returns(true);
-        reader.GetValue(7).Returns(DBNull.Value);
-        reader.GetString(8).Returns(ci => columns[idx].Nullable ? "YES" : "NO");
-        reader.GetValue(9).Returns(false);
-        reader.GetValue(10).Returns(false);
-        reader.GetString(11).Returns(ci => FormatTypeLike(columns[idx]));
+        var i = -1;
+        reader.Read().Returns(_ => ++i < rows.Length);
+        reader.GetString(0).Returns(_ => rows[i]);
         return reader;
     }
 
-    // What format_type returns for the shapes these tests use.
-    private static string FormatTypeLike((string Name, string DataType, string UdtName, string UdtSchema, int? MaxLen, bool Nullable) c) =>
-        c.UdtName.StartsWith('_') ? (c.UdtName == "_int4" ? "integer" : c.UdtName[1..]) + "[]"
-        : c.MaxLen is null ? c.DataType
-        : $"{c.DataType}({c.MaxLen})";
+    private static IDataReader PostgreSqlShapeReader(PgCol[] columns, (string Name, string UdtName)[] unsupported)
+    {
+        var rows = columns.Select((c, n) => (c.Name, c.UdtName, c.Type, c.Identity, Fed: c.Identity || c.Serial, c.Sequence, c.CompareCast, Unsupported: false, Ordinal: n + 1))
+            .Concat(unsupported.Select((u, n) => (u.Name, u.UdtName, Type: u.UdtName, Identity: false, Fed: false, Sequence: (string)null, CompareCast: (string)null,
+                                                  Unsupported: true, Ordinal: columns.Length + n + 1)))
+            .OrderBy(r => r.Name, StringComparer.Ordinal)
+            .ToArray();
+        var reader = Substitute.For<IDataReader>();
+        var i = -1;
+        reader.Read().Returns(_ => ++i < rows.Length);
+        reader.GetString(0).Returns(_ => rows[i].Name);
+        reader.GetString(1).Returns(_ => rows[i].UdtName);
+        foreach (var column in new[] { 2, 3, 4, 5 }) reader.IsDBNull(column).Returns(true);
+        reader.GetString(6).Returns("YES");
+        reader.GetValue(7).Returns(_ => rows[i].Identity);
+        reader.GetString(8).Returns(_ => rows[i].Type);
+        reader.GetValue(9).Returns(_ => rows[i].Unsupported);
+        reader.GetValue(10).Returns(true);
+        reader.IsDBNull(11).Returns(false);
+        reader.GetValue(11).Returns(_ => rows[i].Fed);
+        reader.IsDBNull(12).Returns(_ => rows[i].Sequence == null);
+        reader.GetString(12).Returns(_ => rows[i].Sequence);
+        reader.GetValue(13).Returns(_ => rows[i].Identity);
+        reader.GetValue(14).Returns(_ => rows[i].Ordinal);
+        reader.IsDBNull(15).Returns(_ => rows[i].CompareCast == null);
+        reader.GetString(15).Returns(_ => rows[i].CompareCast);
+        return reader;
+    }
 
     #endregion
 
@@ -2401,40 +2278,6 @@ public class MergeScriptHelperTests
     #region Unsupported Type Exclusion Tests
 
     [Test]
-    public void BuildMergeScript_PostgreSQL_QueriesContainUnsupportedTypeFilter()
-    {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\",(elem ->> 'name')::varchar(100) AS \"name\"",
-            insertCols: "        \"id\",\r\n        \"name\"",
-            updateCols: "\"name\"");
-
-        MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
-            "public", "test_table", "[{\"id\":1,\"name\":\"test\"}]", "\"id\"",
-            mergeUpdate: true, mergeDelete: false, disableTriggers: false,
-            tokenizeScripts: false, mergeFilter: null);
-
-        var allQueries = cmd.ReceivedCalls()
-            .Where(c => c.GetMethodInfo().Name == "set_CommandText")
-            .Select(c => c.GetArguments()[0]?.ToString())
-            .Where(t => t == null || !t.Contains("compatibility_level")) // B1: drop the cliff-detect probe
-            .ToList();
-
-        // GetJsonColumnDefinitions, GetInsertColumns, GetUpdateColumns should all have the filter
-        var filteredQueries = allQueries.Where(q => q != null && q.Contains("tsvector")).ToList();
-        Assert.That(filteredQueries.Count, Is.GreaterThanOrEqualTo(3),
-            "Expected at least 3 queries (json defs, insert, update) to include tsvector filter");
-
-        // Check that money, box, circle, line, lseg, path are also excluded
-        var moneyQueries = allQueries.Where(q => q != null && q.Contains("'money'")).ToList();
-        Assert.That(moneyQueries.Count, Is.GreaterThanOrEqualTo(3));
-
-        // Check composite type exclusion
-        var compositeQueries = allQueries.Where(q => q != null && q.Contains("t.typtype = 'c'")).ToList();
-        Assert.That(compositeQueries.Count, Is.GreaterThanOrEqualTo(3));
-    }
-
-    [Test]
     public void BuildMergeScript_PostgreSQL_DoesNotExcludePointOrPolygon()
     {
         // The unsupported type filter constant should not contain point or polygon
@@ -2489,18 +2332,6 @@ public class MergeScriptHelperTests
     #region Unsupported Column Comments Tests
 
     [Test]
-    public void GetUnsupportedColumnComments_PostgreSQL_ReturnsCommentLines()
-    {
-        var cmd = Substitute.For<IDbCommand>();
-        cmd.ExecuteScalar().Returns("-- Column \"search_vector\" skipped: tsvector is not supported for data delivery\n-- Column \"price\" skipped: money is not supported for data delivery");
-
-        var result = MergeScriptHelper.GetUnsupportedColumnComments(Platform.PostgreSQL, cmd, "public", "test_table");
-
-        Assert.That(result, Does.Contain("tsvector is not supported for data delivery"));
-        Assert.That(result, Does.Contain("money is not supported for data delivery"));
-    }
-
-    [Test]
     public void GetUnsupportedColumnComments_MySQL_ReturnsEmpty()
     {
         var cmd = Substitute.For<IDbCommand>();
@@ -2541,13 +2372,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_WithUnsupportedColumns_PrependsComments()
     {
-        var comments = "-- Column \"search_vector\" skipped: tsvector is not supported for data delivery";
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\"",
-            insertCols: "        \"id\"",
-            updateCols: null,
-            unsupportedComments: comments);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")], unsupported: [("search_vector", "tsvector")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
@@ -2625,8 +2450,9 @@ public class MergeScriptHelperTests
         Assert.That(result, Does.Contain("`name`"));
     }
 
+    // The update list is plain names: whether a column is JSON is in its column info, not a prefix on its name.
     [Test]
-    public void GetUpdateColumns_MySQL_MarksJsonColumnsWithPrefix()
+    public void GetUpdateColumns_MySQL_ListsAJsonColumnByName()
     {
         var cmd = CreateMySqlMockCommand(new MySqlColumnDef[]
         {
@@ -2636,8 +2462,7 @@ public class MergeScriptHelperTests
 
         var result = MergeScriptHelper.GetUpdateColumns(Platform.MySQL, cmd, "testdb", "test_table");
 
-        Assert.That(result, Does.Contain("`id`"));
-        Assert.That(result, Does.Contain("J[`metadata`]"));
+        Assert.That(result, Is.EqualTo("`id`,`metadata`"));
     }
 
     #endregion
@@ -2813,11 +2638,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_DestSchemaOverride_RewritesDestinationRefs()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: "id=tenant_seed.customers_id_seq=SYSTEM",
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\"",
-            insertCols: "        \"id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer", Identity: true, Sequence: "tenant_seed.customers_id_seq")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "tenant_seed", "customers", "[]", "\"id\"",
@@ -2837,11 +2658,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_DestSchemaOverride_TriggerAndSetvalUseOverride()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: "id=tenant_seed.customers_id_seq=SYSTEM",
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\"",
-            insertCols: "        \"id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer", Identity: true, Sequence: "tenant_seed.customers_id_seq")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "tenant_seed", "customers", "[]", "\"id\"",
@@ -2860,11 +2677,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_PostgreSQL_DestSchemaOverride_NullKeepsTodayBehavior()
     {
-        var cmd = CreatePostgreSqlMockCommand(
-            identAndSeq: null,
-            jsonColDefs: "(elem ->> 'id')::int4 AS \"id\"",
-            insertCols: "        \"id\"",
-            updateCols: null);
+        var cmd = CreatePostgreSqlShapeCommand([new("id", "int4", "integer")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.PostgreSQL, cmd,
             "public", "test_table", "[]", "\"id\"",
