@@ -1,0 +1,24 @@
+{
+  "$schema": "../../../.json-schemas/tables.sqlserver.schema",
+  "Name": "[Widget]",
+  "Columns": [
+    { "Name": "[Id]", "DataType": "INT" }
+  ],
+  "Indexes": [],
+  "ForeignKeys": [],
+  "CheckConstraints": [],
+  "Schema": "[dbo]",
+  "DataDelivery": [
+    {
+      "ContentFile": "data/Widget.core.tabledata",
+      "MergeType": "Insert/Update/Delete",
+      "MatchColumns": "[Id]",
+      "ShouldApplyExpression": "DB_NAME() = 'core'"
+    },
+    {
+      "ContentFile": "data/Widget.extra.tabledata",
+      "MergeType": "Insert/Update",
+      "MatchColumns": "[Id]"
+    }
+  ]
+}

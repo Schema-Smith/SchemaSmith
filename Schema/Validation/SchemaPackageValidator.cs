@@ -61,6 +61,9 @@ public sealed class SchemaPackageValidator
         // aborted on (see PackageLoader) — merged in so a skip during loading is reported exactly
         // like any other finding, instead of vanishing because the load itself didn't throw.
         var loadFindings = pkg.LoadFindings ?? Array.Empty<Finding>();
-        return new ValidationResult(loadFindings.Concat(_checks.SelectMany(check => check.Run(ctx))));
+        var checkFindings = _checks.SelectMany(check => check.Run(ctx)).ToList();
+        var named = checkFindings.Select(f => f.Location).ToHashSet(StringComparer.Ordinal);
+        var unnamed = (pkg.UnlessNamedLoadFindings ?? Array.Empty<Finding>()).Where(f => !named.Contains(f.Location));
+        return new ValidationResult(loadFindings.Concat(unnamed).Concat(checkFindings));
     }
 }

@@ -22,5 +22,12 @@ namespace Schema.Validation;
 /// null/empty so existing in-memory test fixtures that construct a <see cref="LoadedPackage"/>
 /// directly (no disk load, nothing to skip) don't need updating.
 /// </para>
+/// <para>
+/// <paramref name="UnlessNamedLoadFindings"/> carries SS-LOAD-001 for a component file that IS valid JSON
+/// but still failed to load. A schema violation in it is reported precisely by <c>JsonSchemaCheck</c>, so
+/// the validator prints one of these only when no check's finding names the same file; a rule only the
+/// loader enforces (a converter's) would otherwise leave the file dropped with nothing said.
+/// </para>
 /// </summary>
-public sealed record LoadedPackage(Product Product, IReadOnlyList<Template> Templates, IReadOnlyList<Finding> LoadFindings = null);
+public sealed record LoadedPackage(Product Product, IReadOnlyList<Template> Templates, IReadOnlyList<Finding> LoadFindings = null,
+    IReadOnlyList<Finding> UnlessNamedLoadFindings = null);

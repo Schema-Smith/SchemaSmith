@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Linq;
 using NSubstitute;
 using NUnit.Framework;
 using Schema.Domain;
@@ -59,6 +60,33 @@ public class SchemaPackageValidatorTests
             // No check may run: each one would be asking the same unanswerable question.
             check.DidNotReceive().Run(Arg.Any<ValidationContext>());
         });
+    }
+
+    // A component that is valid JSON but failed to load is reported only when no check names the file:
+    // a schema violation already has its precise finding, a converter-only rule has nothing else.
+    [Test]
+    public void Validate_ParseableLoadError_ReportedOnlyWhenNoCheckNamesTheFile()
+    {
+        var basePkg = ValidationTestPackages.Minimal(Platform.SqlServer);
+        var pkg = basePkg with
+        {
+            UnlessNamedLoadFindings = new[]
+            {
+                new Finding(Severity.Error, "SS-LOAD-001", "Load", "Tables/Named.json", "named"),
+                new Finding(Severity.Error, "SS-LOAD-001", "Load", "Tables/Unnamed.json", "unnamed"),
+            }
+        };
+        var check = Substitute.For<ISchemaCheck>();
+        check.Run(Arg.Any<ValidationContext>())
+             .Returns(new[] { new Finding(Severity.Error, "SS-JSON-001", "Json", "Tables/Named.json", "schema") });
+
+        var result = new SchemaPackageValidator(() => pkg, new[] { check }).Validate("pkg");
+
+        Assert.That(result.Findings.Select(f => $"{f.Code} {f.Location}"), Is.EquivalentTo(new[]
+        {
+            "SS-JSON-001 Tables/Named.json",
+            "SS-LOAD-001 Tables/Unnamed.json",
+        }));
     }
 
     [Test]

@@ -49,7 +49,7 @@ A schema package has to load before it can be checked at all -- malformed JSON, 
 
 | Code | Severity | Meaning |
 |------|----------|---------|
-| `SS-LOAD-001` | Error | Either the whole package failed to load (`Product.json` itself is missing/unparseable, or the configured path doesn't exist -- every other check is skipped when this happens), or one component file (a table/materialized-view/indexed-view JSON) inside an otherwise-loadable template was unparseable and got excluded -- the rest of the package still loads and every other check still runs. |
+| `SS-LOAD-001` | Error | Either the whole package failed to load (`Product.json` itself is missing/unparseable, or the configured path doesn't exist -- every other check is skipped when this happens), or one component file (a table/materialized-view/indexed-view JSON) inside an otherwise-loadable template was excluded because it was unparseable, or because it broke a rule the loader enforces and the editor schema does not (several `DataDelivery` entries without a `ShouldApplyExpression` on each) -- the rest of the package still loads and every other check still runs. |
 | `SS-LOAD-002` | Error | A whole template's own `Template.json` couldn't be loaded (unparseable JSON, or a self-contradictory template configuration such as `CreateSchemaIfMissing` without a `SchemaIdentificationScript`). That template is excluded and every check for it is skipped, but every OTHER template in the package still loads and still gets full check coverage. |
 | `SS-LOAD-003` | Error | `Product.json` does not declare a `Platform`. Every check depends on the target engine, so nothing further is checked. Add `"Platform"`: `SqlServer`, `PostgreSQL`, `MySQL` or `MariaDb`. |
 
