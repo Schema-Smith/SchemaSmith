@@ -1,7 +1,8 @@
 name: CI (doc contract)
 
 # A few documentation files are read by unit tests: CapabilityDocumentationTests parses the reference page's Engine
-# Version Compatibility section and holds it to the capability registry. An edit to one of those files cannot change
+# Version Compatibility section and holds it to the capability registry, and SettingsDocumentationTests holds every
+# reference page together to the settings the tools accept. An edit to one of those files cannot change
 # what the engines do, so it runs the tests that read it instead of the full integration matrix. The paths below are
 # a copy of the [unit-tested] section of .github/ci-tested-paths.txt (a trigger cannot read a file), and
 # CiTestedPathsTests fails when the copies and the list disagree. A change that also touches a [tested] path runs
@@ -11,16 +12,14 @@ on:
   push:
     branches: [main]
     paths:
-      - 'docs/end-user/reference/schemaquench.md'
-      - 'docs/end-user/reference/deployment-summary-report.md'
+      - 'docs/end-user/reference/*.md'
       - 'docs/end-user/reference/schemas/**'
       - 'plugin/**'
       - '.github/workflows/ci-doc-contract.yml'
   pull_request:
     branches: [main]
     paths:
-      - 'docs/end-user/reference/schemaquench.md'
-      - 'docs/end-user/reference/deployment-summary-report.md'
+      - 'docs/end-user/reference/*.md'
       - 'docs/end-user/reference/schemas/**'
       - 'plugin/**'
       - '.github/workflows/ci-doc-contract.yml'
@@ -43,7 +42,7 @@ jobs:
       - name: Tests that read the documentation
         run: |
           set -o pipefail
-          dotnet test Schema/Schema.UnitTests/Schema.UnitTests.csproj -c Debug --filter "FullyQualifiedName~CapabilityDocumentationTests" | tee doc-contract.log
+          dotnet test Schema/Schema.UnitTests/Schema.UnitTests.csproj -c Debug --filter "FullyQualifiedName~CapabilityDocumentationTests|FullyQualifiedName~SettingsDocumentationTests" | tee doc-contract.log
           # A filter that selects nothing exits 0, which would read as a pass.
           grep -Eq 'Total: +[1-9]' doc-contract.log || { echo '::error::the filter selected no tests'; exit 1; }
 

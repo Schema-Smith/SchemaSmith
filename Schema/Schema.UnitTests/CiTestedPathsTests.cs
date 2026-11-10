@@ -82,13 +82,13 @@ public class CiTestedPathsTests
         var workflow = File.ReadAllText(RepoFile(".github", "workflows", "ci-doc-contract.yml"));
         Assert.Multiple(() =>
         {
-            Assert.That(unitTested, Does.Contain("docs/end-user/reference/schemaquench.md"),
-                "CapabilityDocumentationTests parses the reference page");
+            Assert.That(unitTested, Does.Contain("docs/end-user/reference/*.md"),
+                "CapabilityDocumentationTests and SettingsDocumentationTests read the reference pages");
             Assert.That(unitTested.Intersect(tested), Is.Empty, "a file only unit tests read does not start the full matrix");
             Assert.That(copies, Has.Count.EqualTo(2), "a paths list on the push trigger and on the pull_request trigger");
             foreach (var copy in copies)
                 Assert.That(copy, Is.EqualTo(unitTested), "the trigger's paths, in order, are .github/ci-tested-paths.txt's [unit-tested] lines");
-            Assert.That(workflow, Does.Contain("--filter \"FullyQualifiedName~CapabilityDocumentationTests\""),
+            Assert.That(workflow, Does.Contain("--filter \"FullyQualifiedName~CapabilityDocumentationTests|FullyQualifiedName~SettingsDocumentationTests\""),
                 "the workflow runs the tests that read those files");
         });
     }
