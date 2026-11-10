@@ -520,7 +520,7 @@ public class DataTongs
                 if (extractionTimeZone != null)
                     mergeSQL = MySqlSessionSettings.WithTimeZone(mergeSQL, extractionTimeZone);
 
-                var scriptFilePath = Path.Combine(scriptPath, $"Populate {encodedDisplayName}.sql");
+                var scriptFilePath = Path.Join(scriptPath, $"Populate {encodedDisplayName}.sql");
                 _progressLog.Info($"    Writing merge script to : {scriptFilePath}");
                 FileWrapper.GetFromFactory().WriteAllText(scriptFilePath, mergeSQL);
                 tablesProcessed++;
@@ -580,7 +580,7 @@ public class DataTongs
     {
         if (string.IsNullOrWhiteSpace(templateRoot)) return false;
 
-        var templateJsonPath = Path.Combine(templateRoot, "Template.json");
+        var templateJsonPath = Path.Join(templateRoot, "Template.json");
         var fileWrapper = FileWrapper.GetFromFactory();
         if (!fileWrapper.Exists(templateJsonPath)) return false;
 
@@ -614,7 +614,7 @@ public class DataTongs
         var dir = Path.GetFullPath(contentPath);
         while (!string.IsNullOrEmpty(dir))
         {
-            var candidate = Path.Combine(dir, "Template.json");
+            var candidate = Path.Join(dir, "Template.json");
             if (FileWrapper.GetFromFactory().Exists(candidate))
                 return dir;
 

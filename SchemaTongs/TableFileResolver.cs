@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using Newtonsoft.Json;
 using Schema.Delivery;
 using Schema.Domain;
 using Schema.Isolators;
@@ -48,7 +49,10 @@ public sealed class TableFileResolver
         {
             Table table;
             try { table = JsonHelper.TableLoad(path, platform); }
-            catch { continue; } // unreadable/invalid JSON is the loader/validator's concern, not ours
+            // Unreadable or invalid JSON is the loader's and --Validate's concern, not ours; anything else is a defect.
+            catch (JsonException) { continue; }
+            catch (IOException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
             if (table == null || string.IsNullOrWhiteSpace(table.Name)) continue;
 
             // Schema-template files are schema-scrubbed on extraction, so identity is name-only there.

@@ -193,7 +193,7 @@ public class ProductQuenchTests
     }
 
     [Test]
-    public void QuenchProductScriptsWithCheckpoint_OpensCommandAgainstEachServerByName()
+    public void QuenchProductScripts_OpensCommandAgainstEachServerByName()
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -234,12 +234,47 @@ public class ProductQuenchTests
                 var quench = new RecordingProductQuench();
                 var folders = new List<ProductFolder> { new() { ServerToQuench = ServerToQuench.Both } };
 
-                quench.QuenchProductScriptsWithCheckpoint(folders, "Before Product", true);
+                quench.QuenchProductScripts(folders, "Before Product", true);
 
                 // The SQL Server fan-out opens one command per server, each against its OWN server
                 // name — the secondary's command must target the secondary, not be re-routed to the
                 // primary. MaxThreads=1 keeps the fan-out serial so the recording list stays single-threaded.
                 Assert.That(quench.CommandServers, Is.EquivalentTo(new[] { "primary-server", "secondary-server" }));
+            }
+            finally
+            {
+                FactoryContainer.Clear();
+            }
+        }
+    }
+
+    // A product script that fails is logged where it fails, and the run is marked failed. Anything else that escapes the
+    // per-server step is a defect, and used to be swallowed by a bare catch: the run failed with nothing said.
+    [Test]
+    public void QuenchProductScripts_AnUnexpectedFailureIsNotSwallowed()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Clear();
+            var file = Substitute.For<IFile>();
+            var directory = Substitute.For<IDirectory>();
+            directory.Exists("Product").Returns(true);
+            file.Exists(Path.Join("Product", "Product.json")).Returns(true);
+            file.ReadAllText(Path.Join("Product", "Product.json")).Returns("""{ "Name": "TestProduct", "Platform": "SqlServer", "ScriptFolders": [] }""");
+            FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+            {
+                ["SchemaPackagePath"] = "Product", ["Target:Server"] = "primary-server", ["MaxThreads"] = "1", ["WhatIfONLY"] = "true"
+            }).Build());
+            FactoryContainer.Register<IFile>(file);
+            FactoryContainer.Register<IDirectory>(directory);
+            try
+            {
+                var quench = new RecordingProductQuench();
+                var folder = new ProductFolder { ServerToQuench = ServerToQuench.Primary };
+                folder.Scripts.Add(null);
+
+                // The defect itself, not the generic "scripts failed" the run ended with once it had been swallowed.
+                Assert.That(() => quench.QuenchProductScripts([folder], "Before Product", true), Throws.InstanceOf<NullReferenceException>());
             }
             finally
             {
@@ -3127,6 +3162,15 @@ public class ProductQuenchTests
         });
     }
 
+    // A threshold that is not a whole number read as unset, so the policy ran with its default and nothing said so -- the
+    // same trap a mistyped drop setting was.
+    [Test]
+    public void EnvRebuildPolicy_AThresholdThatIsNotANumber_StopsTheRunNamingTheSetting()
+    {
+        var e = Assert.Throws<RunFailedException>(() => ProductQuench.ReadEnvRebuildPolicy(Cfg(("RebuildPolicyThreshold", "1O"))));
+        Assert.That(e.Message, Does.Contain("RebuildPolicyThreshold").And.Contain("'1O'"));
+    }
+
     [Test]
     public void EnvRebuildPolicy_OnOrderMismatchAloneStillProducesAPolicy()
     {
@@ -3140,15 +3184,15 @@ public class ProductQuenchTests
         });
     }
 
+    // SS-TBL-001 checks the package's policies, never the environment's, so a THRESHOLD whose threshold does not parse used
+    // to deploy with no threshold and nothing said. The run stops instead, naming the setting.
     [Test]
-    public void EnvRebuildPolicy_UnparseableThresholdLeavesItUnset()
+    public void EnvRebuildPolicy_ThresholdModeWithAThresholdThatDoesNotParse_StopsTheRun()
     {
-        // Left null so SS-TBL-001's shape ("THRESHOLD with no threshold") is what surfaces, rather than
-        // a silently invented number.
-        var policy = ProductQuench.ReadEnvRebuildPolicy(Cfg(
-            ("RebuildPolicyMode", "THRESHOLD"), ("RebuildPolicyThreshold", "banana")));
+        var e = Assert.Throws<RunFailedException>(() => ProductQuench.ReadEnvRebuildPolicy(Cfg(
+            ("RebuildPolicyMode", "THRESHOLD"), ("RebuildPolicyThreshold", "banana"))));
 
-        Assert.That(policy.Threshold, Is.Null);
+        Assert.That(e.Message, Does.Contain("RebuildPolicyThreshold").And.Contain("'banana'"));
     }
 
     #endregion

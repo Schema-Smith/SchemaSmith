@@ -108,7 +108,7 @@ public class FolderGateIntegrationTests
                     Folder("PrimaryOnly", ServerToQuench.Primary), Folder("SecondaryOnly", ServerToQuench.Secondary), Folder("Both", ServerToQuench.Both)
                 };
 
-                new ProductQuench().QuenchProductScriptsWithCheckpoint(folders, "After Product", false);
+                new ProductQuench().QuenchProductScripts(folders, "After Product", false);
 
                 cmd.CommandText = $"SELECT name FROM [{probeDb}].sys.tables ORDER BY name";
                 var created = new List<string>();
@@ -150,7 +150,7 @@ public class FolderGateIntegrationTests
                 var folder = new ProductFolder { FolderPath = "Messages", QuenchSlot = ProductQuenchSlot.After };
                 folder.Scripts.Add(SqlScript.Load(path, []));
 
-                new ProductQuench().QuenchProductScriptsWithCheckpoint([folder], "After Product", false);
+                new ProductQuench().QuenchProductScripts([folder], "After Product", false);
 
                 Assert.Multiple(() =>
                 {

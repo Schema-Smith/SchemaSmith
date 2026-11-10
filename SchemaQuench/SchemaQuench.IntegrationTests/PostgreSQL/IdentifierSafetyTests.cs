@@ -329,7 +329,7 @@ public class IdentifierSafetyTests : ObjectScriptDeployFixture
             Exec("CREATE TEMPORARY TABLE schemasmith_token_probe (i int)");
             var tokens = new Dictionary<string, string> { ["Answer"] = global::Schema.Utility.TokenHelper.QueryTag + "SELECT 'yes'" };
             using var command = Connection.CreateCommand();
-            global::Schema.Utility.TokenHelper.ResolveQueryTokens(tokens, [], command, ".", Platform.PostgreSQL);
+            global::Schema.Utility.TokenHelper.ResolveQueryTokens(tokens, [], command, Platform.PostgreSQL);
             Assert.Multiple(() =>
             {
                 Assert.That(tokens["Answer"], Is.EqualTo("yes"));

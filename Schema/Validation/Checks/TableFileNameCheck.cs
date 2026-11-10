@@ -47,7 +47,10 @@ public sealed class TableFileNameCheck : ISchemaCheck
 
             Table table;
             try { table = JsonHelper.TableLoad(path, ctx.Platform); }
-            catch { continue; } // malformed content is another check's concern
+            // Malformed or unreadable content is another check's concern; anything else is a defect in this one.
+            catch (JsonException) { continue; }
+            catch (IOException) { continue; }
+            catch (UnauthorizedAccessException) { continue; }
             if (table == null || string.IsNullOrWhiteSpace(table.Name)) continue;
 
             var schema = (table as IDeliverableTable)?.Schema ?? "";

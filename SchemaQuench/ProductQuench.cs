@@ -5,10 +5,10 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
-using System.Reflection;
 using System.Threading.Tasks;
 using log4net;
 using Microsoft.Extensions.Configuration;
@@ -284,7 +284,13 @@ public class ProductQuench
 
         var policy = new RebuildPolicy { OnOrderMismatch = onOrderMismatch == true };
         if (!string.IsNullOrWhiteSpace(mode)) policy.Mode = mode.Trim().ToUpperInvariant();
-        if (int.TryParse(threshold, out var parsedThreshold)) policy.Threshold = parsedThreshold;
+        if (!string.IsNullOrWhiteSpace(threshold))
+        {
+            if (!int.TryParse(threshold, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedThreshold))
+                throw new RunFailedException($"{SettingsKeys.RebuildPolicyThreshold} is '{threshold}', which is not a whole number. "
+                                             + "Set it to a number of changes, or leave it out to use the package's setting.");
+            policy.Threshold = parsedThreshold;
+        }
         return policy;
     }
 
@@ -1034,7 +1040,7 @@ public class ProductQuench
             if (_product.QueryTokens.Count > 0)
             {
                 _progressLog.Info("Resolving Product Level Query Tokens");
-                TokenHelper.ResolveQueryTokens(_product.QueryTokens, _product.NonQueryTokens.ToList(), command, Path.GetDirectoryName(_product.FilePath), _product.Platform);
+                TokenHelper.ResolveQueryTokens(_product.QueryTokens, _product.NonQueryTokens.ToList(), command, _product.Platform);
                 foreach (var script in _product.ScriptFolders.SelectMany(p => p.Scripts))
                     script.ReplaceQueryTokens(_product.QueryTokens.ToList());
             }
@@ -1064,7 +1070,7 @@ public class ProductQuench
             if (RefuseFoldedTableNameCollisions(templatesInScope)) return;
 
             QuenchServerSettings();
-            QuenchProductScriptsWithCheckpoint(_product.BeforeFolders, "Before Product", true);
+            QuenchProductScripts(_product.BeforeFolders, "Before Product", true);
 
             foreach (var template in templatesInScope)
             {
@@ -1090,7 +1096,7 @@ public class ProductQuench
             }
             else
             {
-                QuenchProductScriptsWithCheckpoint(_product.AfterFolders, "After Product", false);
+                QuenchProductScripts(_product.AfterFolders, "After Product", false);
 
                 if (!string.IsNullOrWhiteSpace(_product.VersionStampScript))
                 {
@@ -1145,7 +1151,7 @@ public class ProductQuench
             var mode = _drift ? RunMode.Drift : IsWhatIfOnly ? RunMode.WhatIf : RunMode.Quench;
             var resumed = _checkpointing.ResumedAny;
             var summary = DeploymentSummaryAssembler.Assemble(
-                _product.Name, _product.Platform.ToString(), ToolVersion(),
+                _product.Name, _product.Platform.ToString(), CommandLineParser.ToolVersion(),
                 _startedUtc, DateTime.UtcNow, mode, outcome, LogBackup.EffectiveExitCode(exitCode), resumed,
                 _targetResults.ToArray(), _runTiming, _migrationScripts.Snapshot(),
                 _whatIf.Snapshot(), _failureRecords.ToArray(), BottleneckThresholdMs(), _changeAudit,
@@ -1240,7 +1246,7 @@ public class ProductQuench
             retention = 400;
         }
         var identity = RunIdentity.Build(_runId, key => _config[key], EnvironmentWrapper.GetFromFactory(), PackageGitSource(), null, RunHost.Current());
-        return new DeploymentRecordRun(_runId, _product.Name, ToolVersion(), identity.Source?.Commit, identity.Source?.Branch, identity.Label,
+        return new DeploymentRecordRun(_runId, _product.Name, CommandLineParser.ToolVersion(), identity.Source?.Commit, identity.Source?.Branch, identity.Label,
             identity.Ci?.Url, identity.Ci?.Actor ?? identity.Host?.User, retention,
             wait => wait ? WaitForPackageIdentity()?.ContentHash : _packageIdentity is { IsCompletedSuccessfully: true } done ? done.Result?.ContentHash : null,
             () => _checkpointing.ResumedRunId);
@@ -1256,13 +1262,6 @@ public class ProductQuench
     {
         return RunIdentity.Build(_runId, key => _config[key], EnvironmentWrapper.GetFromFactory(), PackageGitSource(), WaitForPackageIdentity(), RunHost.Current())
             .WithResume(_checkpointing.ResumedRunId);
-    }
-
-    private static string ToolVersion()
-    {
-        var assembly = Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly();
-        return assembly.GetCustomAttribute<AssemblyFileVersionAttribute>()?.Version
-               ?? assembly.GetName().Version?.ToString() ?? "unknown";
     }
 
     internal static readonly string[] SpecialTokenTags = ["TableSchema_", "ObjectScripts_", "QueryTokens_", "MaterializedViewSchema_", "IndexedViewSchema_",
@@ -1415,7 +1414,7 @@ public class ProductQuench
         }
     }
 
-    internal void QuenchProductScriptsWithCheckpoint(List<ProductFolder> folders, string msg, bool isBefore)
+    internal void QuenchProductScripts(List<ProductFolder> folders, string msg, bool isBefore)
     {
         _updateFailed = false;
         // #576: the previous run's debug files for the product's own scripts go, as each target's do in DatabaseQuench.
@@ -1432,7 +1431,7 @@ public class ProductQuench
             // SQL Server: quench to primary and secondary servers in parallel, filtering by ServerToQuench
             var serverQueue = new TaskQueueManager<string>(_maxThreads);
             _secondaryServers.Union([_primaryServer]).Distinct().ToList()
-                .ForEach(server => serverQueue.AddToQueue(server, s => QuenchScriptsToServerWithCheckpoint(s, msg,
+                .ForEach(server => serverQueue.AddToQueue(server, s => QuenchProductScriptsOnServer(s, msg,
                     folders.Where(f => s.Equals(_primaryServer) ? f.QuenchOnPrimary : f.QuenchOnSecondary).ToList(),
                     isBefore)));
             serverQueue.WaitForAll();
@@ -1447,7 +1446,7 @@ public class ProductQuench
                     _progressLog.Info($"  Skipping folder '{folder.FolderPath}' — ServerToQuench is Secondary and no SecondaryServers are configured");
                 onPrimary = folders.Where(f => f.QuenchOnPrimary).ToList();
             }
-            QuenchScriptsToServerWithCheckpoint(_primaryServer, msg, onPrimary, isBefore);
+            QuenchProductScriptsOnServer(_primaryServer, msg, onPrimary, isBefore);
         }
 
         if (_updateFailed)
@@ -1547,7 +1546,7 @@ public class ProductQuench
         _progressLog.Info("");
     }
 
-    private void QuenchScriptsToServerWithCheckpoint(string server, string message, IEnumerable<ProductFolder> folders, bool isBefore)
+    private void QuenchProductScriptsOnServer(string server, string message, IEnumerable<ProductFolder> folders, bool isBefore)
     {
         _progressLog.Info($"Quenching {message} Scripts to {server}");
         using var productScriptCommand = GetCommand(server);
@@ -1557,10 +1556,11 @@ public class ProductQuench
             // flattening their scripts. Evaluated on the same server command the scripts run against.
             var scriptsToQuench = GateProductFolders(productScriptCommand, folders, server)
                 .SelectMany(f => f.Scripts).Select(j => j.Clone()).ToList();
-            QuenchScriptsWithCheckpoint(productScriptCommand, scriptsToQuench, server, isBefore);
+            QuenchProductScriptList(productScriptCommand, scriptsToQuench, server, isBefore);
         }
-        catch
+        catch (RunFailedException)
         {
+            // Logged where it failed (the failing scripts, a folder gate); anything else is a defect and surfaces.
             _updateFailed = true;
         }
         finally
@@ -2457,7 +2457,7 @@ public class ProductQuench
         }
     }
 
-    private void QuenchScriptsWithCheckpoint(IDbCommand destCmd, List<SqlScript> scriptList, string server, bool isBefore)
+    private void QuenchProductScriptList(IDbCommand destCmd, List<SqlScript> scriptList, string server, bool isBefore)
     {
         var initDb = GetInitDatabase(_product.Platform);
         var serverMsg = string.IsNullOrWhiteSpace(server) ? "" : $"[{server}].";

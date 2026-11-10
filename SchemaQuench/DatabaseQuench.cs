@@ -1259,7 +1259,7 @@ public partial class DatabaseQuench
         //    mutates the supplied dictionary in place, so we hand it our iteration-scoped
         //    copy and leave _template.QueryTokens untouched for the next iteration.
         TokenHelper.ResolveQueryTokens(iterationQueryTokens, iterationNonQueryTokens,
-            silentCmd, Path.GetDirectoryName(_template.FilePath), _product.Platform);
+            silentCmd, _product.Platform);
 
         // 5. Deposit newly-resolved per-DB token values into the cache so sibling iterations
         //    against the same (server, database) skip their round-trips.

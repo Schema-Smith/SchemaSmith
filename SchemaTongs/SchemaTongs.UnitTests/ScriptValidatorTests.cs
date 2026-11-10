@@ -400,6 +400,25 @@ public class ScriptValidatorTests
         Assert.That(result.ErrorMessage, Is.Null);
     }
 
+    // A batch error can end the transaction on the server (SQL Server dooms it on some errors). Rolling back an ended one
+    // throws, and a throw from the finally replaced the failure being returned: the check crashed instead of reporting.
+    [Test]
+    public void ValidateScript_ATransactionTheErrorAlreadyEnded_StillReportsTheError()
+    {
+        var connection = Substitute.For<IDbConnection>();
+        var transaction = Substitute.For<IDbTransaction>();
+        var command = Substitute.For<IDbCommand>();
+        connection.BeginTransaction().Returns(transaction);
+        connection.CreateCommand().Returns(command);
+        command.ExecuteNonQuery().Throws(new ServerErrorException("Invalid object name 'dbo.Missing'."));
+        transaction.When(t => t.Rollback()).Do(_ => throw new InvalidOperationException("This SqlTransaction has completed; it is no longer usable."));
+
+        var result = _validator.ValidateScript(connection, "CREATE VIEW [dbo].[vw_Test]\nAS\nSELECT * FROM dbo.Missing", ScriptObjectType.Views, Platform.SqlServer);
+
+        Assert.That(result.IsValid, Is.False);
+        Assert.That(result.ErrorMessage, Does.Contain("Invalid object name 'dbo.Missing'."));
+    }
+
     [Test]
     public void ValidateScript_InvalidScript_ReturnsError()
     {

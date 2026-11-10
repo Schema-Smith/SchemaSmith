@@ -326,7 +326,7 @@ END $$;
     // needed between query token resolutions within the same session.
     private const string DropTempTablesMySQL = "SELECT 1";
 
-    public static void ResolveQueryTokens(Dictionary<string, string> queryTokens, List<KeyValuePair<string, string>> nonQueryTokens, System.Data.IDbCommand cmd, string basePath, Platform platform)
+    public static void ResolveQueryTokens(Dictionary<string, string> queryTokens, List<KeyValuePair<string, string>> nonQueryTokens, System.Data.IDbCommand cmd, Platform platform)
     {
         var dropTempTablesScript = GetDropTempTablesScript(platform);
         foreach (var token in queryTokens.ToList())

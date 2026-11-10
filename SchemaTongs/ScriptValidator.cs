@@ -116,7 +116,18 @@ internal class ScriptValidator
         }
         finally
         {
-            transaction.Rollback();
+            // A batch error can end the transaction on the server; rolling back an ended one throws, and a throw here would
+            // replace the result being returned.
+            try
+            {
+                transaction.Rollback();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (System.Data.Common.DbException)
+            {
+            }
         }
     }
 

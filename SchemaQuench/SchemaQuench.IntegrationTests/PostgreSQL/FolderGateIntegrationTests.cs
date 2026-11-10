@@ -57,7 +57,7 @@ public class FolderGateIntegrationTests
                 var folder = new ProductFolder { FolderPath = "Notices", QuenchSlot = ProductQuenchSlot.After };
                 folder.Scripts.Add(SqlScript.Load(path, [], Platform.PostgreSQL));
 
-                new ProductQuench().QuenchProductScriptsWithCheckpoint([folder], "After Product", false);
+                new ProductQuench().QuenchProductScripts([folder], "After Product", false);
 
                 Assert.That(progress.Any(l => l.EndsWith("product script says hello")), Is.EqualTo(logged), string.Join(Environment.NewLine, progress));
             }
