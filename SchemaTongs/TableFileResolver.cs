@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Newtonsoft.Json;
 using Schema.Delivery;
 using Schema.Domain;
@@ -80,13 +81,41 @@ public sealed class TableFileResolver
             return new TableResolution(Path.Join(_tablesDir, TableFileName.Canonical(schema, name, "", schemaLess)), UngatedEmit: false);
 
         if (matches.Count == 1)
+        {
+            // A file named for the table in another case is renamed to match it (Paul, 2026-11-10). Writing the new spelling
+            // over it would keep the old name on Windows and macOS and leave two files on Linux, so the old one goes first.
+            var canonical = Path.Join(Path.GetDirectoryName(matches[0].Path) ?? _tablesDir, TableFileName.Canonical(schema, name, "", schemaLess));
+            var existingName = Path.GetFileName(matches[0].Path);
+            if (string.Equals(existingName, Path.GetFileName(canonical), StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(existingName, Path.GetFileName(canonical), StringComparison.Ordinal))
+            {
+                FileWrapper.GetFromFactory().Delete(matches[0].Path);
+                return new TableResolution(canonical, UngatedEmit: false, matches[0].DeclaredSchema);
+            }
             return new TableResolution(matches[0].Path, UngatedEmit: false, matches[0].DeclaredSchema);
+        }
 
         // Variant set: attribute the extracted shape to the active variant, or emit ungated.
         var decision = VariantAttribution.Decide(matches, e => e.Gate, _isVariantActive);
         return decision.Action == VariantAction.RefreshActive
             ? new TableResolution(matches[decision.ActiveIndex].Path, UngatedEmit: false, matches[decision.ActiveIndex].DeclaredSchema)
             : new TableResolution(Path.Join(_tablesDir, TableFileName.Canonical(schema, name, "", schemaLess)), UngatedEmit: true);
+    }
+
+    /// <summary>
+    /// Two tables whose names differ only in case would be written to one file, and one of them lost (on Windows and macOS
+    /// the two files cannot coexist), so the extraction is refused, naming them, before anything is written.
+    /// </summary>
+    public static void RefuseCaseOnlyNames(IEnumerable<(string Schema, string Name)> tables, bool isSchemaTemplate)
+    {
+        var clashes = tables
+            .GroupBy(t => (Schema: isSchemaTemplate ? "" : (t.Schema ?? "").ToLowerInvariant(), Name: t.Name.ToLowerInvariant()))
+            .Where(g => g.Select(t => t.Name).Distinct(StringComparer.Ordinal).Count() > 1)
+            .Select(g => string.Join(" and ", g.Select(t => string.IsNullOrEmpty(t.Schema) ? t.Name : $"{t.Schema}.{t.Name}").Distinct(StringComparer.Ordinal)))
+            .ToList();
+        if (clashes.Count > 0)
+            throw new RunFailedException("Tables whose names differ only in case cannot each have a file of their own: "
+                                         + string.Join("; ", clashes) + ". Nothing was extracted. Rename one of each pair, or extract them separately with ObjectList.");
     }
 
     // PostgreSQL extraction omits the default schema from content, while a hand-written or demo package often

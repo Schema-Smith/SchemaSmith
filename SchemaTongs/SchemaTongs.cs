@@ -3117,6 +3117,8 @@ SELECT t.schemaname, t.tablename, c.relkind, c.relispartition,
         var castPath = Path.Combine(_templatePath, "Tables");
         DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
         var resolver = new TableFileResolver(castPath, _platform, _isSchemaTemplate, IsVariantActive);
+        TableFileResolver.RefuseCaseOnlyNames(tables.Where(t => !t.Item4 && t.Item5 == null && !NotListedToCast(t.Item2, t.Item1))
+            .Select(t => (t.Item1, t.Item2)), _isSchemaTemplate);
 
         foreach (var (schema, table, relKind, isPartitionChild, refusal) in tables)
         {
@@ -4605,6 +4607,7 @@ SELECT TABLE_SCHEMA, TABLE_NAME
                 }
             }
 
+            TableFileResolver.RefuseCaseOnlyNames(tables.Where(t => !NotListedToCast(t.Table, t.Schema)).Select(t => (t.Schema, t.Table)), _isSchemaTemplate);
             var totalTables = tables.Count;
             var filteredCount = _objectsToCast.Length > 0
                 ? tables.Count(t => !NotListedToCast(t.Table, t.Schema))
@@ -4801,11 +4804,13 @@ SELECT TABLE_SCHEMA, TABLE_NAME
             var tableDir = Path.Combine(_templatePath, "Tables");
             DirectoryWrapper.GetFromFactory().CreateDirectory(tableDir);
             var resolver = new TableFileResolver(tableDir, _platform, _isSchemaTemplate, IsVariantActive);
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
+            var tableNames = new List<(string Schema, string Name)>();
+            using (var reader = command.ExecuteReader())
+                while (reader.Read())
+                    tableNames.Add(($"{reader["TABLE_SCHEMA"]}", $"{reader["TABLE_NAME"]}"));
+            TableFileResolver.RefuseCaseOnlyNames(tableNames.Where(t => ShouldExtractFromSchema(t.Schema) && !NotListedToCast(t.Name, t.Schema)), _isSchemaTemplate);
+            foreach (var (tableSchema, tableName) in tableNames)
             {
-                var tableSchema = $"{reader["TABLE_SCHEMA"]}";
-                var tableName = $"{reader["TABLE_NAME"]}";
                 if (!ShouldExtractFromSchema(tableSchema)) continue;
                 if (NotListedToCast(tableName, tableSchema)) continue;
 
@@ -4896,7 +4901,6 @@ SELECT cc.name AS [Name],
                     _stats.TableErrors++;
                 }
             }
-            reader.Close();
             WarnSqlServerTablesNotExtracted(commandJson);
         }
         finally

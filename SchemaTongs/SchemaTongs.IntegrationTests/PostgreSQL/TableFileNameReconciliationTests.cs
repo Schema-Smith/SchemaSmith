@@ -138,6 +138,75 @@ public class TableFileNameReconciliationTests
         }
     }
 
+    // Paul, 2026-11-10: two tables whose names differ only in case are refused by name, before anything is written.
+    [Test]
+    public void TwoTablesWhoseNamesDifferOnlyInCase_AreRefusedByName()
+    {
+        ExecSource("CREATE TABLE public.\"Widget\" (id INT NOT NULL PRIMARY KEY)");
+        try
+        {
+            var productPath = Path.Join(Path.GetTempPath(), $"SchemaTongsCasePg_{Guid.NewGuid():N}");
+            var e = Assert.Throws<RunFailedException>(() => Extract(productPath));
+            Assert.That(e.Message, Does.Contain("widget").And.Contain("Widget"));
+            var tablesDir = Path.Join(productPath, "Templates", TemplateName, "Tables");
+            Assert.That(Directory.Exists(tablesDir) ? Directory.GetFiles(tablesDir, "*.json") : [], Is.Empty, "no table file was written");
+        }
+        finally
+        {
+            ExecSource("DROP TABLE IF EXISTS public.\"Widget\"");
+        }
+    }
+
+    // One table whose file differs from its name only in case: the file is renamed to match.
+    [Test]
+    public void AFileNamedForTheTableInAnotherCase_IsRenamedToMatch()
+    {
+        var productPath = Path.Join(Path.GetTempPath(), $"SchemaTongsCasePg_{Guid.NewGuid():N}");
+        var tablesDir = Path.Join(productPath, "Templates", TemplateName, "Tables");
+        Directory.CreateDirectory(tablesDir);
+        File.WriteAllText(Path.Join(tablesDir, "Widget.json"), """{ "Name": "widget", "Columns": [] }""");
+
+        Extract(productPath);
+
+        var names = Directory.GetFiles(tablesDir, "*.json").Select(Path.GetFileName).ToList();
+        Assert.That(names, Does.Contain("widget.json").And.Not.Contain("Widget.json"), string.Join(", ", names));
+    }
+
+    private void Extract(string productPath)
+    {
+        _tempProductPath = productPath;
+        Directory.CreateDirectory(productPath);
+        var config = BuildConfig();
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Clear();
+            LogFactory.Clear();
+            FactoryContainer.Register<IConfigurationRoot>(config);
+            FactoryContainer.Register(Substitute.For<IEnvironment>());
+            LogFactory.Register("ErrorLog", Substitute.For<ILog>());
+            LogFactory.Register("ProgressLog", Substitute.For<ILog>());
+            try
+            {
+                new SchemaTongs(Platform.PostgreSQL).CastTemplate();
+            }
+            finally
+            {
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+            }
+        }
+    }
+
+    private void ExecSource(string sql)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_integrationDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
     // ----- setup helpers ---------------------------------------------------------------------
 
     private void CreateSourceDatabase()

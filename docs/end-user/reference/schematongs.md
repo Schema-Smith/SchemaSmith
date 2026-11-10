@@ -515,6 +515,8 @@ The optional `VariantName` segment comes after the schema and table, so a table'
 
 A table's identity lives in its file *content* -- `Schema`, `Name`, and `VariantName` -- not in its filename. SchemaTongs matches an existing file to an extracted table by that content identity, so a file you renamed by hand is still found and refreshed in place rather than duplicated. On PostgreSQL, `"Schema": "public"` and an absent `Schema` are the same identity: extraction omits the default schema, and a file that declares it is refreshed in place and keeps declaring it. The canonical name is a convention, not a contract: if a file's name drifts from canonical, the deploy still works and [`--Validate`](validate.md#file-naming) emits an `SS-FILE-NAME-003` warning pointing at the canonical name.
 
+**Case in a table name.** A file named for its table in another case (`Widget.json` for `widget`) is renamed to the table's own spelling, since Windows and macOS would otherwise keep the old name. Two tables whose names differ only in case cannot both have a file -- on Windows and macOS the two files cannot exist side by side -- so extraction stops before writing anything and names them: rename one of each pair, or extract them separately with `ObjectList`.
+
 ## Routine File Naming (PostgreSQL)
 
 A PostgreSQL function, procedure or aggregate is written as `<schema>.<name>.sql`. When a name is **overloaded**, each
