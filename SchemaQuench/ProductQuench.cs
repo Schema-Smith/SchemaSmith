@@ -40,6 +40,7 @@ public class ProductQuench
     private readonly List<string> _secondaryServers = [];
     private readonly bool _runScriptsTwice;
     private readonly bool _skipKindling;
+    private readonly bool _exitZeroOnDowngrade;
     private readonly bool _forceReKindle;
     private readonly bool _updateTables;
     private readonly bool _deliverData;
@@ -170,6 +171,8 @@ public class ProductQuench
         _runScriptsTwice = _config[SettingsKeys.RunScriptsTwice]?.ToLower() == "true";
         _primaryServer = PrimaryServer(_config);
         _skipKindling = _config[SettingsKeys.KindleTheForge]?.ToLower() == "false";
+        _exitZeroOnDowngrade = CommandLineParser.ContainsSwitch(SettingsKeys.ExitZeroOnDowngrade)
+                               || ConfigBool(_config, SettingsKeys.ExitZeroOnDowngrade) == true;
         if (_drift) _driftTier = DriftTiers.Choose(_product.Platform, _skipKindling, _config[SettingsKeys.DriftHelperDatabase]);
         // CLI-overridable (unlike the other kindling flags): ForceReKindle is an ad-hoc operational
         // gesture run on demand, not a sticky pipeline default, so a command-line switch is the natural UX.
@@ -963,7 +966,12 @@ public class ProductQuench
     }
 
     /// <summary>2 a target failed; under --Drift 5 when a target drifted; 1 finished with something left unapplied; 0.</summary>
-    public int ExitCode => _drift ? DriftVerdict.ExitCode(Failed, DriftReport?.Drifted == true, Incomplete) : Failed ? 2 : Incomplete ? 1 : 0;
+    public int ExitCode => _drift ? DriftVerdict.ExitCode(Failed, DriftReport?.Drifted == true, Incomplete) : RunExitCode(Failed, Incomplete, _exitZeroOnDowngrade);
+
+    // 1 for a run that finished with a downgrade, unless the pipeline expects downgrades (ExitZeroOnDowngrade, #616): the
+    // summary still says Incomplete and lists each one. ExitNonZeroOnWarning is applied after this, so it still wins.
+    internal static int RunExitCode(bool failed, bool incomplete, bool exitZeroOnDowngrade) =>
+        failed ? 2 : incomplete && !exitZeroOnDowngrade ? 1 : 0;
 
     private void DecideDrift()
     {

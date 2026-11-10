@@ -139,5 +139,6 @@
     // "ScrubArtifacts": false // Deprecated and ignored: debug SQL is never scrubbed.
     // "LogHygiene": { "LogTokens": true, "ScrubTokens": [ "ApiKey" ] }, // LogTokens false keeps script token values out of the log; ScrubTokens masks the values of extra setting and token names, beyond the built-in sensitive-name list.
     // "ExitNonZeroOnWarning": false // Exit 1 instead of 0 when the run logged a warning, for pipelines that treat warnings as failures. Also the --ExitNonZeroOnWarning switch.
+    // "ExitZeroOnDowngrade": false // Exit 0 instead of 1 when the run finished but downgraded a feature the target lacks; the summary still lists each one. Also --ExitZeroOnDowngrade.
     // "LogFormat": "text" // text, or json: one JSON object per line on the console and in the log files, for a log platform to read with no parse rules. Also --LogFormat:json.
 }

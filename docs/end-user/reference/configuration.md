@@ -73,6 +73,7 @@ Each tool adds its own switches on top of the common set. They are listed here s
 | `--WriteDebugSql` | Write the resolved SQL of each step to `ArtifactPath`. Also the `WriteDebugSql` setting. See [Debug SQL files](#debug-sql-files). |
 | `--SkipKindlingForge` | Skip kindling for this run: the same as `KindleTheForge: false`. Also accepted as a bare word (`SkipKindlingForge`, no dashes). See [KindleTheForge](schemaquench.md#kindletheforge). |
 | `--verbose` | Log more of what the run does: the same as `VerboseLogging: true`. |
+| `--ExitZeroOnDowngrade` | Exit `0` instead of `1` when the run finished but downgraded a feature the target lacks; the summary still says `Incomplete` and lists each one. Also the `ExitZeroOnDowngrade` setting. See [Exit codes](#exit-codes). |
 
 **SchemaTongs** ([reference](schematongs.md))
 
@@ -599,7 +600,7 @@ On Octopus Deploy, whose variables are not in the environment, pass them in the 
 | `3` | Unhandled exception -- a defect in the tool | An unexpected error occurred. The exception is logged to both the progress and error logs before exit. Please report it with the log contents. |
 | `4` | Log backup failure | The tool completed its main work but couldn't back up the log files. Check directory permissions and disk space in the log directory. The base log files may still be readable even though the backup failed. |
 
-`--ExitNonZeroOnWarning` (or the `ExitNonZeroOnWarning` setting) turns a `0` into a `1` when the run logged a warning; every other code is unchanged. When more than one applies, the order is `2`, then `5`, then `1`.
+`--ExitNonZeroOnWarning` (or the `ExitNonZeroOnWarning` setting) turns a `0` into a `1` when the run logged a warning; every other code is unchanged. When more than one applies, the order is `2`, then `5`, then `1`. SchemaQuench's `--ExitZeroOnDowngrade` (or the `ExitZeroOnDowngrade` setting) goes the other way for a run that finished with a downgrade: it exits `0`, while the deployment summary still says `Incomplete` and lists each one. `ExitNonZeroOnWarning` is applied after it, so with both set a run that logged a warning still exits `1`.
 
 ---
 

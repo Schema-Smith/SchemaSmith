@@ -312,5 +312,7 @@ public static class SettingsKeys
     // Every tool: a run that would exit 0 but logged a warning exits 1 instead, for pipelines that treat warnings as
     // failures. Also accepted as the bare switch --ExitNonZeroOnWarning.
     public const string ExitNonZeroOnWarning = "ExitNonZeroOnWarning";
+    // SchemaQuench: a run that finished with a downgrade exits 0 instead of 1 (#616). Also the bare switch --ExitZeroOnDowngrade.
+    public const string ExitZeroOnDowngrade = "ExitZeroOnDowngrade";
 
 }

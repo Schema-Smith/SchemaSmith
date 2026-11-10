@@ -283,6 +283,17 @@ public class ProductQuenchTests
         }
     }
 
+    // #616: a run that finished with a downgrade exits 1 unless the pipeline expects downgrades; a failure is 2 either way.
+    [TestCase(false, false, false, 0)]
+    [TestCase(false, true, false, 1)]
+    [TestCase(false, true, true, 0)]
+    [TestCase(true, true, true, 2)]
+    [TestCase(true, false, false, 2)]
+    public void RunExitCode_ADowngradeIsExitOneUnlessExitZeroOnDowngrade(bool failed, bool incomplete, bool exitZeroOnDowngrade, int expected)
+    {
+        Assert.That(ProductQuench.RunExitCode(failed, incomplete, exitZeroOnDowngrade), Is.EqualTo(expected));
+    }
+
     // D12: the server settings step runs on every server the product deploys to, before the Before scripts, and only when
     // the package has ServerSettings.json.
     private static void ArrangeServerSettingsProduct(string serverSettingsJson)

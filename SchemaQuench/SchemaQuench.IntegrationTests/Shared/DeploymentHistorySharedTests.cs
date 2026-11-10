@@ -351,6 +351,13 @@ public abstract class DeploymentHistorySharedTests : ObjectScriptDeployFixture
             Assert.That(run.ExitCode, Is.EqualTo(1), run.Describe());
 
             Assert.That(Field(runId, "Outcome"), Is.EqualTo("Incomplete"));
+
+            // #616: a pipeline that expects the downgrade exits 0, and the record still says Incomplete.
+            Exec(down.Drop);
+            var acceptingId = NewRun();
+            var accepting = RunDrift(switches: "--ExitZeroOnDowngrade");
+            Assert.That(accepting.ExitCode, Is.EqualTo(0), accepting.Describe());
+            Assert.That(Field(acceptingId, "Outcome"), Is.EqualTo("Incomplete"));
         }
         finally
         {

@@ -20,6 +20,7 @@
       "DropTablesRemovedFromProduct",
       "DropUnknownIndexes",
       "ExitNonZeroOnWarning",
+      "ExitZeroOnDowngrade",
       "FailureContextLines",
       "ForceReKindle",
       "KindleTheForge",

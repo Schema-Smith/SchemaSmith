@@ -142,7 +142,7 @@ public static class Program
             }
             // 1 when a feature was downgraded on a target that lacks it: the deploy finished, but not everything the
             // package declares is in place. The summary lists each downgrade.
-            LogBackup.BackupLogsAndExit("SchemaQuench", productQuench.Incomplete ? 1 : 0);
+            LogBackup.BackupLogsAndExit("SchemaQuench", productQuench.ExitCode);
         }
         else
         {
@@ -187,7 +187,7 @@ public static class Program
     private static readonly string[] KnownArguments =
     {
         "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle", "WhatIf", "WriteDebugSql", "Drift",
-        "verbose"
+        "verbose", "ExitZeroOnDowngrade"
     };
 
     // The bare word (the older form, and how a host passes it) or the switch.
@@ -234,6 +234,7 @@ public static class Program
         Console.WriteLine("  --ForceReKindle                  Re-deploy the SchemaSmith helper procedures this run even if the in-database kindle stamp is current.");
         Console.WriteLine("  --SkipKindlingForge              Do not install or update the SchemaSmith helpers this run (as KindleTheForge: false).");
         Console.WriteLine("  --verbose                        Log more of what the run does (same as the VerboseLogging setting).");
+        Console.WriteLine("  --ExitZeroOnDowngrade            Exit 0, not 1, when the run finished but downgraded a feature the target lacks (also the setting).");
         Console.WriteLine("  --WhatIf                         Dry run: report what would change and change nothing of yours (same as the WhatIfONLY setting).");
         Console.WriteLine("  --WhatIfDetail:<mode>            WhatIf console verbosity: concise | normal (default) | verbose. Concise collapses each section's per-script lines into per-category counts. Does not affect the WhatIf summary file.");
         Console.WriteLine("  --Drift                          Read-only: does each target match the package? Exit 0 no drift, 5 drift, 2 a target could not be checked.");
