@@ -81,6 +81,34 @@ namespace Schema.UnitTests.Capabilities
 
         // A fix shipped on several lines: one entry per line, oldest first, each on a distinct line, and the oldest is the
         // row's IntroducedInPatchComparable, so a consumer reading only that field gets the earliest fixed patch.
+        // B16 (Paul, 2026-11-10): a degrade on an engine that never has the feature gets a row too, or a consumer cannot see
+        // it. Never is int.MaxValue, so a consumer comparing versions reads it as unsupported before it knows the flag.
+        [TestCase(Platform.MySQL, "vector-index", "INDEX (VECTOR, MariaDB 11.7)")]
+        [TestCase(Platform.MariaDb, "functional-index", "INDEX (functional/expression, MySQL 8.0.13)")]
+        [TestCase(Platform.MySQL, "copy-lock-none", null)]
+        [TestCase(Platform.MariaDb, "column-srid", "column (SRID, MySQL 8.0.3)")]
+        [TestCase(Platform.MySQL, "application-time-period", "table without its PERIOD FOR clause")]
+        [TestCase(Platform.MySQL, "temporal-key", "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)")]
+        [TestCase(Platform.MySQL, "column-history-exclusion", "column without its WITHOUT SYSTEM VERSIONING clause")]
+        [TestCase(Platform.MySQL, "table-system-versioning", "table without its WITH SYSTEM VERSIONING clause")]
+        public void AFeatureAnEngineNeverHas_HasANeverRow(Platform platform, string key, string manifest)
+        {
+            var row = CapabilityRegistry.For(platform).Single(c => c.Key == key && c.Platform == platform);
+            Assert.Multiple(() =>
+            {
+                Assert.That(row.NeverSupported, Is.True);
+                Assert.That(row.IntroducedInComparable, Is.EqualTo(int.MaxValue));
+                Assert.That(row.ManifestObjectType, Is.EqualTo(manifest), "the downgrade row it records, so a consumer can join the two");
+            });
+        }
+
+        [Test]
+        public void OnlyNeverRows_UseTheNeverVersion()
+        {
+            var all = new[] { Platform.SqlServer, Platform.PostgreSQL, Platform.MySQL, Platform.MariaDb }.SelectMany(CapabilityRegistry.For).ToList();
+            Assert.That(all.Where(c => c.NeverSupported != (c.IntroducedInComparable == int.MaxValue)).Select(c => $"{c.Platform}/{c.Key}"), Is.Empty);
+        }
+
         // One rule for DegradeKind, which a consumer of the registry reads as given: Skip when the declared object is not
         // created, Reduced when it is created without what the server cannot express. These rows deploy the object
         // (the table, column, index, key or sequence) without the one attribute, as the compatibility matrix says, yet
@@ -220,23 +248,6 @@ namespace Schema.UnitTests.Capabilities
         {
             // MDEV-10134 landed in MariaDB 10.2.1, at/below our 10.2 floor — always supported, no row.
             Assert.That(CapabilityRegistry.For(Platform.MariaDb).Any(c => c.Key == "default-expression"), Is.False);
-        }
-
-        [Test]
-        public void MariaDb_HasNoColumnSridRow()
-        {
-            // MariaDB has no SRID attribute at any version — SchemaSmith_SupportsColumnSrid() is
-            // unconditionally 0 there, so there is no version boundary for a row to encode.
-            Assert.That(CapabilityRegistry.For(Platform.MariaDb).Any(c => c.Key == "column-srid"), Is.False);
-        }
-
-        [Test]
-        public void MariaDb_HasNoFunctionalIndexRow()
-        {
-            // MariaDB has no equivalent to a functional/expression index in this form at any version —
-            // SchemaSmith_SupportsFunctionalIndex() is unconditionally 0 there, so there is no version
-            // boundary for a row to encode (same "no row" shape as column-srid above).
-            Assert.That(CapabilityRegistry.For(Platform.MariaDb).Any(c => c.Key == "functional-index"), Is.False);
         }
 
         [Test]

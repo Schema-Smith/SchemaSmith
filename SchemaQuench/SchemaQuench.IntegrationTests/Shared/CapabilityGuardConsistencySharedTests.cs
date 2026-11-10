@@ -37,7 +37,8 @@ public abstract class CapabilityGuardConsistencySharedTests : BaseTableQuenchTes
     [Test]
     public void SupportsPredicates_FlipAtRegistryIntroducedInComparable()
     {
-        var rows = CapabilityRegistry.For(Platform).Where(c => PredicateFnByKey.ContainsKey(c.Key)).ToList();
+        // A feature the engine never has has no version to flip at.
+        var rows = CapabilityRegistry.For(Platform).Where(c => PredicateFnByKey.ContainsKey(c.Key) && !c.NeverSupported).ToList();
         Assert.That(rows, Is.Not.Empty, $"expected at least one predicate-gated capability row for {Platform}");
 
         using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);

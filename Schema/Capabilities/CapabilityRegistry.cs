@@ -208,19 +208,15 @@ namespace Schema.Capabilities
 
             // Column SRID restriction: MariaDB has NO equivalent at any version (verified live on 11.4 — the
             // syntax is a hard parse error and INFORMATION_SCHEMA.COLUMNS carries no SRS_ID at all), so
-            // SchemaSmith_SupportsColumnSrid() returns 0 unconditionally on MariaDB — there is no version
-            // boundary for a MariaDB row to encode (IntroducedInComparable documents "the literal the .sql
-            // guard compares against"; MariaDB's guard compares against nothing, it just always returns 0).
-            // Same "no row" treatment as the MySQL-only rows above, just unconditionally-0 instead of
-            // unconditionally-1 — the registry has no way to say "never" other than omission, so MariaDB gets
-            // no row for this key, same as it gets no row for check-constraint (there, unconditionally 1).
+            // SchemaSmith_SupportsColumnSrid() returns 0 unconditionally on MariaDB, and MariaDB's row is a never row
+            // (NeverSupported, below).
             rows.Add(new("column-srid", "Column SRID restriction", Platform.MySQL,
                 800, "MySQL 8.0.3", null, DegradeKind.Reduced, "column (SRID, MySQL 8.0.3)"));
 
             // Application-time period (MariaDB PERIOD FOR <name>(start, end)): the mirror image of
             // column-srid above. MySQL has NO equivalent at any version, so
-            // SchemaSmith_SupportsApplicationTimePeriods() returns 0 unconditionally there and MySQL gets
-            // no row -- the registry has no way to say "never" other than omission.
+            // SchemaSmith_SupportsApplicationTimePeriods() returns 0 unconditionally there, and MySQL's row is a never
+            // row (NeverSupported).
             //
             // Below the MariaDB threshold the period clause is dropped and the table is still created, so
             // this is Reduced rather than Skipped: what the user loses is the period, not the table.
@@ -248,7 +244,7 @@ namespace Schema.Capabilities
             rows.Add(new("temporal-key", "Temporal key (WITHOUT OVERLAPS)", Platform.MariaDb,
                 1005, "MariaDB 10.5.3", null, DegradeKind.Reduced, "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)",
                 IntroducedInPatchComparable: 100503));
-            // A VECTOR index is skipped below 11.7. MySQL Community has none at any version, so it has no row.
+            // A VECTOR index is skipped below 11.7. MySQL Community has none at any version: its row is a never row.
             rows.Add(new("vector-index", "Vector index", Platform.MariaDb,
                 1107, "MariaDB 11.7", null, DegradeKind.Skip, "INDEX (VECTOR, MariaDB 11.7)"));
 
@@ -262,7 +258,7 @@ namespace Schema.Capabilities
 
             // Per-column history exclusion (MariaDB WITHOUT SYSTEM VERSIONING, #408). Same shape as the
             // period row above: MySQL has no system versioning at any version, so
-            // SchemaSmith_SupportsSystemVersioning() is an unconditional 0 there and MySQL gets no row.
+            // SchemaSmith_SupportsSystemVersioning() is an unconditional 0 there, and MySQL's row is a never row.
             //
             // Reduced, not Skipped: below the threshold the clause is suppressed and the column is still
             // created -- what the user loses is the exclusion, not the column.
@@ -277,13 +273,10 @@ namespace Schema.Capabilities
 
             // Table-level system versioning (MariaDB WITH SYSTEM VERSIONING, F1S1). MySQL has no system
             // versioning at any version, so SchemaSmith_SupportsSystemVersioning() is an unconditional 0
-            // there and MySQL gets no row -- same "no row, no version boundary to cross" shape as the
-            // period/column-history rows above.
+            // there, and MySQL's row is a never row, as the period and column-history rows are.
             //
-            // Skip, not Reduced: below the threshold the WHOLE table's versioning is dropped -- the table
-            // still deploys, but as an ordinary table, not merely with reduced fidelity. Contrast with
-            // column-history-exclusion directly above, where only the exclusion is lost and the column
-            // survives.
+            // Reduced: below the threshold the table still deploys, as an ordinary one without its versioning (the one
+            // rule for DegradeKind: Skip is for an object not created at all).
             //
             // Scope note for anything driving UI or AI off this row: this row's threshold/DegradeKind
             // describe the CREATE path (F1S1). Convergence for an EXISTING table (F1S2, in
@@ -372,13 +365,32 @@ namespace Schema.Capabilities
             // MySQL 8.0.17+, same NULL-COLUMN_NAME/EXPRESSION shape as a plain functional key part, so it
             // rides this same row rather than needing one of its own): below the floor the whole index is
             // skipped, same "no reduced form" shape as default-expression above (a functional key part is
-            // a hard syntax error, not a clause that can be dropped and still leave a valid index). MariaDB
-            // is absent on purpose: it has no equivalent in this form at ANY version, so
-            // SchemaSmith_SupportsFunctionalIndex() is unconditionally 0 there — same "no row, no version
-            // boundary to cross" shape as column-srid above, just unconditionally-0 instead of
-            // unconditionally-1 (default-expression's MariaDB shape).
+            // a hard syntax error, not a clause that can be dropped and still leave a valid index). MariaDB has no
+            // equivalent in this form at ANY version (SchemaSmith_SupportsFunctionalIndex() is unconditionally 0
+            // there): its row is a never row, below.
             rows.Add(new("functional-index", "Functional/expression index", Platform.MySQL,
                 800, "MySQL 8.0.13", null, DegradeKind.Skip, "INDEX (functional/expression, MySQL 8.0.13)", IntroducedInPatchComparable: 80013));
+
+            // Features one engine of the family never has, degraded on every server of it (B16). Each records the same
+            // downgrade row as its version-gated twin on the other engine.
+            rows.Add(new("vector-index", "Vector index", Platform.MySQL,
+                int.MaxValue, "no vector index at any version", null, DegradeKind.Skip, "INDEX (VECTOR, MariaDB 11.7)", NeverSupported: true));
+            rows.Add(new("functional-index", "Functional/expression index", Platform.MariaDb,
+                int.MaxValue, "no equivalent at any version", null, DegradeKind.Skip, "INDEX (functional/expression, MySQL 8.0.13)", NeverSupported: true));
+            // OnlineApply Prefer: MySQL's COPY algorithm never takes LOCK=NONE, so a change INPLACE cannot take runs blocking
+            // writes and records its Mode as unavailable (MariaDB's from 11.2: copy-lock-none above).
+            rows.Add(new("copy-lock-none", "Online table copy (COPY, LOCK=NONE)", Platform.MySQL,
+                int.MaxValue, "no equivalent at any version", null, DegradeKind.Reduced, null, NeverSupported: true));
+            rows.Add(new("column-srid", "Column SRID restriction", Platform.MariaDb,
+                int.MaxValue, "no equivalent at any version", null, DegradeKind.Reduced, "column (SRID, MySQL 8.0.3)", NeverSupported: true));
+            rows.Add(new("application-time-period", "Application-time period", Platform.MySQL,
+                int.MaxValue, "no equivalent at any version", null, DegradeKind.Reduced, "table without its PERIOD FOR clause", NeverSupported: true));
+            rows.Add(new("temporal-key", "Temporal key (WITHOUT OVERLAPS)", Platform.MySQL,
+                int.MaxValue, "no equivalent at any version", null, DegradeKind.Reduced, "UNIQUE key (WITHOUT OVERLAPS, MariaDB 10.5.3)", NeverSupported: true));
+            rows.Add(new("column-history-exclusion", "Per-column history exclusion", Platform.MySQL,
+                int.MaxValue, "no equivalent at any version", null, DegradeKind.Reduced, "column without its WITHOUT SYSTEM VERSIONING clause", NeverSupported: true));
+            rows.Add(new("table-system-versioning", "Table-level system versioning", Platform.MySQL,
+                int.MaxValue, "no equivalent at any version", null, DegradeKind.Reduced, "table without its WITH SYSTEM VERSIONING clause", NeverSupported: true));
 
             // Gated on the server's filesystem rather than its version: MySQL refuses page compression where the
             // data directory cannot punch holes (Windows among them). Reduced: the table deploys uncompressed.

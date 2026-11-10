@@ -51,6 +51,11 @@ namespace Schema.Capabilities
     /// line's entry is met; a line newer than the last entry is covered from its first patch. <see cref="IntroducedInPatchComparable"/>
     /// holds the oldest entry. Null for a feature that arrived once.
     /// </param>
+    /// <param name="NeverSupported">
+    /// The engine has no form of the feature at any version (MySQL has no VECTOR index; MariaDB no functional index), and
+    /// SchemaSmith degrades it on every server. <see cref="IntroducedInComparable"/> is then <see cref="int.MaxValue"/>,
+    /// so a consumer that only compares versions still reads the feature as unsupported.
+    /// </param>
     public sealed record Capability(
         string Key,
         string DisplayName,
@@ -62,5 +67,6 @@ namespace Schema.Capabilities
         string? ManifestObjectType,
         string? RequiredDatabaseSetting = null,
         int? IntroducedInPatchComparable = null,
-        IReadOnlyList<int>? IntroducedInPatchByLine = null);
+        IReadOnlyList<int>? IntroducedInPatchByLine = null,
+        bool NeverSupported = false);
 }

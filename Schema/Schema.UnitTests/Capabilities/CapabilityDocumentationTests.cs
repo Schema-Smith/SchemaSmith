@@ -108,6 +108,15 @@ public class CapabilityDocumentationTests
         ["MySQL/invisible-column"] = "**Invisible column**",
         ["MySQL/column-srid"] = "**Column SRID restriction**",
         ["MySQL/functional-index"] = "**Functional / expression index**",
+        // Never on this engine: the other engine's row names it, and says so.
+        ["MySQL/vector-index"] = "**Vector index**",
+        ["MySQL/copy-lock-none"] = "**Online table copy**",
+        ["MariaDb/functional-index"] = "**Functional / expression index**",
+        ["MariaDb/column-srid"] = "**Column SRID restriction**",
+        ["MySQL/application-time-period"] = "**Application-time period**",
+        ["MySQL/temporal-key"] = "**Temporal key**",
+        ["MySQL/column-history-exclusion"] = "**Per-column history exclusion**",
+        ["MySQL/table-system-versioning"] = "**Table-level system versioning**",
         // Gated on the server's filesystem, so documented in prose below the table, like FILESTREAM.
         ["MySQL/page-compression"] = "**Page compression**",
 
@@ -204,6 +213,12 @@ public class CapabilityDocumentationTests
         // Rows with IntroducedInComparable 0 are gated on server or database state, so there is no
         // version for the page to agree with -- see the comment on the three SQL Server rows above.
         if (capability.IntroducedInComparable == 0) return;
+        // A feature the engine never has has no version either; the row says the engine has none.
+        if (capability.NeverSupported)
+        {
+            Assert.That(match, Does.Contain("at any version"), $"'{id}' is never supported, and the documented line should say so: {match}");
+            return;
+        }
 
         Assert.That(match, Does.Contain(capability.IntroducedInDisplay),
             $"The reference page documents '{id}' but does not quote the version the gate actually "
