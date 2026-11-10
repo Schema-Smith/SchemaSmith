@@ -18,8 +18,13 @@ public static class LogBackup
         if (promoted != exitCode)
         {
             exitCode = promoted;
-            // Otherwise the run ends with its success line and exits 1, and nothing says why.
-            LogFactory.GetLogger("ProgressLog")?.Info($"Exit code 1: {WarningCounter.Count + unloggedWarnings} warning(s) and ExitNonZeroOnWarning is on.");
+            // Otherwise the run ends with its success line and exits 1, and nothing says why or which lines they were.
+            var progressLog = LogFactory.GetLogger("ProgressLog");
+            progressLog?.Info($"Exit code 1: {WarningCounter.Count + unloggedWarnings} warning(s) and ExitNonZeroOnWarning is on.");
+            foreach (var warning in WarningCounter.Kept)
+                progressLog?.Info($"  {warning}");
+            if (WarningCounter.Count > WarningCounter.KeptWarnings)
+                progressLog?.Info($"  ... and {WarningCounter.Count - WarningCounter.KeptWarnings} more; search the log for WARNING: and ERROR:.");
         }
         var backupDir = "UNKNOWN";
         try

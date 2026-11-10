@@ -93,6 +93,45 @@ public class ToolLogFormatTests
         }
     }
 
+    // #617: once standard output is redirected the console's colours are gone, so a warning read exactly like progress.
+    [TestCase("SchemaQuench")]
+    [TestCase("SchemaTongs")]
+    [TestCase("DataTongs")]
+    [TestCase("SchemaShears")]
+    public void AWarningOrAnErrorLine_SaysItsLevel_OnTheConsoleAndInTheProgressLog(string tool)
+    {
+        var configFile = Path.Join(RepoRoot(), tool, "Log4Net.config");
+        Directory.CreateDirectory(_logDir);
+        GlobalContext.Properties["LogPath"] = _logDir;
+        var repository = (Hierarchy)LogManager.CreateRepository($"{tool}-{Guid.NewGuid():N}");
+        XmlConfigurator.Configure(repository, new FileInfo(configFile));
+        var stdout = new StringWriter();
+        var old = Console.Out;
+        Console.SetOut(stdout);
+        try
+        {
+            var log = LogManager.GetLogger(repository.Name, "ProgressLog");
+            log.Info("[db]      Quenching x.sql");
+            log.Warn("[db]      Unresolved token: {{name}}");
+            log.Error("FAILED: the run stopped");
+        }
+        finally
+        {
+            Console.SetOut(old);
+            repository.Shutdown();
+        }
+
+        var progress = File.ReadAllLines(Path.Join(_logDir, $"{tool} - Progress.log"));
+        var console = stdout.ToString().Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToArray();
+        foreach (var (name, lines) in new[] { ("progress log", progress), ("console", console) })
+            Assert.That(lines.Select(l => l[(l.IndexOf(" - ", StringComparison.Ordinal) + 3)..]), Is.EqualTo(new[]
+            {
+                "[db]      Quenching x.sql",
+                "WARNING: [db]      Unresolved token: {{name}}",
+                "ERROR: FAILED: the run stopped",
+            }), $"{tool}'s {name}");
+    }
+
     [Test]
     public void ALineTheToolPrintsItself_GoesToStandardErrorUnderJson_AndToStandardOutputOtherwise()
     {

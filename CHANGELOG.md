@@ -37,6 +37,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 - **PostgreSQL extraction writes a column default as the database stores it.** An operator default keeps its outer parentheses (`(now() + '1 day'::interval)`), so a re-extracted package matches the database exactly. Packages extracted earlier still deploy unchanged.
 - **The SchemaQuench Docker image is tagged by release date.** Each release publishes `YYYY.MM.N`, `YYYY.MM` (the month's latest) and `latest`. No single-number tag (`:2`) is published from this release on; pin `YYYY.MM` to follow a month's fixes.
 - **SQL Server and PostgreSQL data delivery read each table's catalog once.** A table's merge was assembled from a catalog query per clause, four to twelve of them on SQL Server (each with its own version probe) and five to eight on PostgreSQL; it is now built from one, plus the rule lookup when PostgreSQL rules are disabled.
+- **A warning or error line says so — #617.** On the console and in each tool's progress log, a line logged as a warning starts with `WARNING: ` and an error with `ERROR: `, so a redirected log (a CI agent, `docker logs`) that has lost the console's colours still shows which lines they are; other lines are unchanged. With `--ExitNonZeroOnWarning`, the `Exit code 1` line is followed by the warnings it counted, up to 50.
 
 ### Fixed
 

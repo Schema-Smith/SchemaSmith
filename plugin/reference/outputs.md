@@ -4,7 +4,7 @@ Without `--LogPath`, a tool writes its logs into its own install folder. Always 
 
 | File | Written by | Holds |
 |---|---|---|
-| `<Tool> - Progress.log` | every tool | What the run did, line by line, as the console showed it |
+| `<Tool> - Progress.log` | every tool | What the run did, line by line, as the console showed it; a warning line starts with `WARNING: `, an error line with `ERROR: ` |
 | `<Tool> - Errors.log` | every tool | Each error with its full detail |
 | `SchemaQuench - Failures.log` | SchemaQuench, when a target failed | Each failed target: its error and the lines leading up to it |
 | `SchemaQuench - Summary.json` | SchemaQuench: deploy, `--WhatIf`, `--Drift` | The deployment summary: the run, each target's outcome, what changed or would change, failures, drift. Its `schemaVersion` names the schema it follows |
