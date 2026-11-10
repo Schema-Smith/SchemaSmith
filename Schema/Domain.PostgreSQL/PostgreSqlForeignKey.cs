@@ -31,7 +31,7 @@ namespace Schema.Domain.PostgreSQL
         /// keep their values. Omitted means every column, as a plain <c>SET NULL</c> does. Below 15 every column is set
         /// and a downgrade is recorded.
         /// </summary>
-        [SchemaProperty(Description = "PostgreSQL 15+. With DeleteAction SET NULL, the comma-separated subset of Columns set to NULL when the referenced row is deleted (ON DELETE SET NULL (column, ...)); the other key columns keep their values. Omitted means every column. Below 15 every column is set and a downgrade is recorded.")]
+        [SchemaProperty(Description = "PostgreSQL 15+. With DeleteAction SET NULL or SET DEFAULT, the comma-separated subset of Columns a delete of the referenced row sets to NULL or to its default (ON DELETE SET NULL (column, ...)); the other key columns keep their values. Omitted means every column. Below 15 every column is set and a downgrade is recorded.")]
         [JsonProperty(Order = 106, NullValueHandling = NullValueHandling.Ignore)]
         public string SetNullColumns { get; set; }
 
