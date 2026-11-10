@@ -68,9 +68,10 @@ This uses a self-hosted runner with SchemaQuench pre-installed. Credentials flow
 
 SchemaSmith ships a composite action, listed on the
 [GitHub Marketplace](https://github.com/marketplace/actions/schemasmith-deploy) --
-`uses: Schema-Smith/schemasmith-deploy@vX.Y.Z`
-(replace with a release tag; pinning the tag pins both the action and the CLI
-version it runs, or set the `version` input explicitly). It fetches the matching
+`uses: Schema-Smith/schemasmith-deploy@vYYYY.MM.N`
+(replace with a release tag such as `v2026.12.0` -- releases are numbered by the year
+and month they ship, then the release within that month; pinning the tag pins both the
+action and the CLI version it runs, or set the `version` input explicitly). It fetches the matching
 self-contained binary for the runner OS at run time -- no runtime install, and no
 self-hosted runner with SchemaQuench pre-installed required. Modes: `deploy`,
 `whatif`, `drift`, `validate`, `test-connection`, `preview-targets`; connection inputs

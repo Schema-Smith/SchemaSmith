@@ -28,6 +28,7 @@ assert_fail "rid rejects unknown arch" resolve_rid Linux X86
 assert_eq "$(resolve_version 'v2.2.0' 'v9.9.9')" "v2.2.0" "explicit version wins"
 assert_eq "$(resolve_version 'latest' 'v2.3.0')" "latest" "explicit latest"
 assert_eq "$(resolve_version '' 'v2.3.0')"       "v2.3.0" "default uses version-tag action_ref"
+assert_eq "$(resolve_version '' 'v2026.12.0')"   "v2026.12.0" "default uses a dated version-tag action_ref"
 assert_eq "$(resolve_version '' 'main')"         "latest" "default falls back to latest"
 
 # select_asset_url

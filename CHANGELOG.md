@@ -34,6 +34,7 @@ For full release details and download links, see [GitHub Releases](https://githu
 
 - **SchemaTongs extracts a PostgreSQL partitioned table instead of failing it.** A partitioned table and each of its partitions were an error and a skip, so a database with one could not round-trip and the run exited 1. The table is now written with its partitions under `Partitioning`, a partition gets no file of its own, and a trigger on the partitioned table is extracted (its copies on the partitions are not). A partition's own indexes are named in a warning; a partition in another schema or a foreign-table partition skips the table with a warning.
 - **PostgreSQL extraction writes a column default as the database stores it.** An operator default keeps its outer parentheses (`(now() + '1 day'::interval)`), so a re-extracted package matches the database exactly. Packages extracted earlier still deploy unchanged.
+- **The SchemaQuench Docker image is tagged by release date.** Each release publishes `YYYY.MM.N`, `YYYY.MM` (the month's latest) and `latest`. No single-number tag (`:2`) is published from this release on; pin `YYYY.MM` to follow a month's fixes.
 
 ### Fixed
 

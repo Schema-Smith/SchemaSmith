@@ -8,10 +8,11 @@ REPO="Schema-Smith/SchemaSmith"
 GHCR_REPO="ghcr.io/schema-smith/schemaquench"
 HUB_REPO="schemasmithyfree/schemaquench"
 
-# derive_tags <version> -> newline list: full, major.minor, major, latest
+# derive_tags <version> -> newline list: full (YYYY.MM.N), year.month (that month's latest hotfix), latest.
+# No bare-year tag: under dated versions it would move every month, so there is nothing to pin to.
 derive_tags() {
   local v="$1"
-  printf '%s\n%s\n%s\nlatest\n' "$v" "${v%.*}" "${v%%.*}"
+  printf '%s\n%s\nlatest\n' "$v" "${v%.*}"
 }
 
 # image_refs <repo> <version> -> "<repo>:<tag>" one per line

@@ -6,7 +6,7 @@ branding:
   color: 'blue'
 inputs:
   version:
-    description: 'SchemaSmith release to use (e.g. v2.3.0, or latest). Default: the pinned action tag if any, else latest.'
+    description: 'SchemaSmith release to use (e.g. v2026.12.0, or latest). Default: the pinned action tag if any, else latest.'
     required: false
     default: ''
   mode:
