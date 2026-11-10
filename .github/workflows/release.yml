@@ -87,30 +87,11 @@ jobs:
             "check-headers"
           )
 
-          # A path CI does not test, read from the list CI's trigger is copied from (.github/ci-tested-paths.txt), so
-          # the two cannot drift: a commit CI skipped has NO check-runs at all, and if the walk-back below treated it
-          # as product it would stop there and fail the gate with "check not found" on a tree that is verified.
-          is_non_product() {
-            ! printf '%s\n' "$1" | python3 scripts/ci_path_filter.py .github/ci-tested-paths.txt > /dev/null
-          }
-
-          # Build the set of commits whose green checks still hold for this tree: the release commit,
-          # plus each ancestor that differs from it ONLY in non-product paths. Equivalence is computed
-          # from the actual commit diff — never from a workflow trigger path-filter, and never by
-          # stubbing a required check green, which would report success without the tests having run.
-          TRUSTED_SHAS=("$RELEASE_SHA")
-          CANDIDATE="$RELEASE_SHA"
-          for _ in $(seq 1 25); do
-            PARENT=$(git rev-parse --verify -q "${CANDIDATE}^") || break
-            EQUIVALENT=1
-            while IFS= read -r changed; do
-              [ -z "$changed" ] && continue
-              if ! is_non_product "$changed"; then EQUIVALENT=0; break; fi
-            done < <(git diff --name-only "$PARENT" "$RELEASE_SHA")
-            [ "$EQUIVALENT" -eq 1 ] || break
-            TRUSTED_SHAS+=("$PARENT")
-            CANDIDATE="$PARENT"
-          done
+          # The commits whose green checks still hold for this tree: the release commit, plus each ancestor (through every
+          # parent, so a merged branch's head is reached) whose tree differs from it only in paths CI does not test, read
+          # from the list CI's trigger is copied from. Equivalence is computed from the actual diff -- never from a trigger
+          # path-filter, and never by stubbing a required check green, which would report success without the tests running.
+          mapfile -t TRUSTED_SHAS < <(bash scripts/release-gate/trusted-shas.sh "$RELEASE_SHA")
 
           if [ "${#TRUSTED_SHAS[@]}" -gt 1 ]; then
             echo "Release commit differs from ${#TRUSTED_SHAS[@]} ancestor tree(s) only in non-product paths;"
@@ -548,6 +529,13 @@ jobs:
           fi
           echo "Extracted $(wc -l < release-notes.md) lines from CHANGELOG.md"
 
+      # Before the tag: GitHub refuses a body over 125,000 characters, and a tag pushed for a release that then fails to
+      # create is left behind.
+      - name: Fit release notes to GitHub's limit
+        run: |
+          bash scripts/release-gate/fit-notes.sh release-notes.md "${{ needs.read-version.outputs.version }}" "${{ github.repository }}" > release-body.md
+          echo "Release body: $(wc -m < release-body.md) characters"
+
       - name: Create tag
         run: |
           git tag "v${{ needs.read-version.outputs.version }}"
@@ -560,7 +548,7 @@ jobs:
           VERSION="${{ needs.read-version.outputs.version }}"
           gh release create "v${VERSION}" \
             --title "SchemaSmith v${VERSION}" \
-            --notes-file release-notes.md \
+            --notes-file release-body.md \
             --draft \
             release-assets/*
 

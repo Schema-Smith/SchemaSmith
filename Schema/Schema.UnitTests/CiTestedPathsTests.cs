@@ -98,13 +98,16 @@ public class CiTestedPathsTests
     {
         var companion = File.ReadAllText(RepoFile(".github", "workflows", "ci-docs-only-companion.yml"));
         var release = File.ReadAllText(RepoFile(".github", "workflows", "release.yml"));
+        var walkBack = File.ReadAllText(RepoFile("scripts", "release-gate", "trusted-shas.sh"));
         const string call = "python3 scripts/ci_path_filter.py .github/ci-tested-paths.txt";
         Assert.Multiple(() =>
         {
             Assert.That(companion, Does.Contain(call), "the companion's gate asks the list");
             Assert.That(companion, Does.Not.Contain("    paths:").And.Not.Contain("paths-ignore"),
                 "and starts on every pull request, so its trigger cannot disagree with CI's");
-            Assert.That(release, Does.Contain(call), "the release walk-back asks the list");
+            Assert.That(release, Does.Contain("bash scripts/release-gate/trusted-shas.sh"), "the release gate walks back with the script");
+            Assert.That(walkBack, Does.Contain("FILTER=\"$HERE/../ci_path_filter.py\"").And.Contain("LIST=\"$HERE/../../.github/ci-tested-paths.txt\""),
+                "which asks the list");
         });
     }
 
