@@ -131,6 +131,60 @@ public abstract class DriftSharedTests : ObjectScriptDeployFixture
         AssertTheDroppedColumnIsDrift(RunDrift());
     }
 
+    // A database SchemaSmith never deployed to: no helpers, no ownership, none of the package's tables. Tier 1 kindles
+    // there inside the transaction it rolls back, so the table to create is drift and the database is left with nothing
+    // of SchemaSmith's in it.
+    [Test]
+    public void Tier1_ADatabaseNeverDeployedTo_IsDrift_AndKeepsNothing()
+    {
+        if (!KindlesInATransaction) Assert.Ignore("MySQL and MariaDB have no tier 1.");
+        var fresh = $"drift_fresh_{Guid.NewGuid().ToString("N")[..8]}";
+        Exec(Platform == Schema.Domain.Platform.SqlServer ? $"CREATE DATABASE [{fresh}]" : $"CREATE DATABASE \"{fresh}\"");
+        try
+        {
+            var run = RunDrift(settings: new Dictionary<string, string> { ["Target:TemplateTargets:Main:Databases:0"] = fresh });
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(run.DriftTier, Is.EqualTo(1), run.Describe());
+                Assert.That(run.ExitCode, Is.EqualTo(5), run.Describe());
+                Assert.That(run.Report?.Targets.Single().Status, Is.EqualTo("drifted"), run.Describe());
+                Assert.That(run.Report?.Targets.Single().Changes.Select(c => Unquoted(c.ObjectName)), Has.Some.EndsWith(Table), run.Describe());
+                Assert.That(SchemaSmithObjectsIn(fresh), Is.Zero, "the kindle was rolled back with the rest");
+            });
+        }
+        finally
+        {
+            DropDatabase(fresh);
+        }
+    }
+
+    private long SchemaSmithObjectsIn(string database)
+    {
+        if (Platform == Schema.Domain.Platform.SqlServer)
+            return Count($"SELECT (SELECT COUNT(*) FROM [{database}].sys.schemas WHERE name = 'SchemaSmith') + "
+                         + $"(SELECT COUNT(*) FROM [{database}].sys.objects o JOIN [{database}].sys.schemas s ON s.schema_id = o.schema_id WHERE s.name = 'SchemaSmith')");
+        using var connection = Schema.DataAccess.DbConnectionFactory.ForPlatform(Platform).GetDbConnection(TestConnection(database));
+        connection.Open();
+        using var cmd = connection.CreateCommand();
+        cmd.CommandText = "SELECT (SELECT COUNT(*) FROM pg_namespace WHERE nspname = 'SchemaSmith') + "
+                          + "(SELECT COUNT(*) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'SchemaSmith')";
+        return Convert.ToInt64(cmd.ExecuteScalar());
+    }
+
+    private void DropDatabase(string database)
+    {
+        if (Platform == Schema.Domain.Platform.SqlServer)
+        {
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
+            Exec($"IF DB_ID('{database}') IS NOT NULL BEGIN ALTER DATABASE [{database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{database}]; END");
+            return;
+        }
+        Npgsql.NpgsqlConnection.ClearAllPools();
+        Exec($"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{database}' AND pid <> pg_backend_pid()");
+        Exec($"DROP DATABASE IF EXISTS \"{database}\"");
+    }
+
     // The kindle runs (the stamp says the helpers are out of date) and is rolled back with everything else.
     [Test]
     public void Tier1_LeavesTheTargetAsItFoundIt()
