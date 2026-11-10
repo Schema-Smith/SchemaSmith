@@ -81,6 +81,39 @@ namespace Schema.UnitTests.Capabilities
 
         // A fix shipped on several lines: one entry per line, oldest first, each on a distinct line, and the oldest is the
         // row's IntroducedInPatchComparable, so a consumer reading only that field gets the earliest fixed patch.
+        // One rule for DegradeKind, which a consumer of the registry reads as given: Skip when the declared object is not
+        // created, Reduced when it is created without what the server cannot express. These rows deploy the object
+        // (the table, column, index, key or sequence) without the one attribute, as the compatibility matrix says, yet
+        // were Skip beside Reduced rows of the same shape (invisible-column, MariaDB temporal-key, graph-table).
+        [TestCase(Platform.SqlServer, "temporal")]
+        [TestCase(Platform.SqlServer, "data-masking")]
+        [TestCase(Platform.SqlServer, "always-encrypted")]
+        [TestCase(Platform.PostgreSQL, "nulls-not-distinct")]
+        [TestCase(Platform.PostgreSQL, "unlogged-sequence")]
+        [TestCase(Platform.PostgreSQL, "statistics-target")]
+        [TestCase(Platform.PostgreSQL, "column-compression")]
+        [TestCase(Platform.PostgreSQL, "table-access-method")]
+        [TestCase(Platform.PostgreSQL, "partitioned-table-access-method")]
+        [TestCase(Platform.PostgreSQL, "temporal-key")]
+        [TestCase(Platform.MySQL, "invisible-index")]
+        [TestCase(Platform.MariaDb, "invisible-index")]
+        [TestCase(Platform.MariaDb, "table-system-versioning")]
+        [TestCase(Platform.MariaDb, "system-time-partition-count")]
+        public void AnObjectCreatedWithoutOneAttribute_IsReduced(Platform platform, string key)
+        {
+            Assert.That(CapabilityRegistry.For(platform).Single(c => c.Key == key && c.Platform == platform).Degrade, Is.EqualTo(DegradeKind.Reduced));
+        }
+
+        // And an object that is not created at all stays Skip.
+        [TestCase(Platform.PostgreSQL, "virtual-generated-column")]
+        [TestCase(Platform.SqlServer, "json-index")]
+        [TestCase(Platform.MySQL, "check-constraint")]
+        [TestCase(Platform.MySQL, "default-expression")]
+        public void AnObjectNotCreated_IsSkip(Platform platform, string key)
+        {
+            Assert.That(CapabilityRegistry.For(platform).Single(c => c.Key == key && c.Platform == platform).Degrade, Is.EqualTo(DegradeKind.Skip));
+        }
+
         [Test]
         public void PatchByLine_IsOneAscendingEntryPerLine_LedByThePatchComparable()
         {
