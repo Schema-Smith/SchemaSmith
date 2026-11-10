@@ -241,7 +241,7 @@ public static class CommandLineParser
         Console.WriteLine($"Usage: {app} [options]");
         Console.WriteLine("  --version                        Show the program version");
         Console.WriteLine("  --LogPath:<logpath>              Path to write logs and create backup directories. The default is the executable's directory.");
-        Console.WriteLine("  --ConfigFile:<filepath>          Path and file name of the config file. The default is <toolname>.settings.json in the current path.");
+        Console.WriteLine("  --ConfigFile:<filepath>          Path and file name of the config file, relative to the current directory. The default is <toolname>.settings.json in the current directory, else in the tool's folder.");
         Console.WriteLine("  --ConnectionString:<connstr>     Override the connection string. Bypasses all connection settings in the config file.");
         Console.WriteLine("  --Encrypt | --NoEncrypt          Force transport encryption on/off (SQL Server Encrypt, PostgreSQL SSL Mode, MySQL/MariaDB SslMode). Wins over ConnectionProperties.");
         Console.WriteLine("  --<Key>=<value>                  Override any configuration option (also --<Key>:<value>; nest with '__', e.g. --Source__Server=host). Logged at startup; sensitive values scrubbed.");
