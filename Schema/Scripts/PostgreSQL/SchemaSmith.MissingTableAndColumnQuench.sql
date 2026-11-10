@@ -164,14 +164,31 @@ BEGIN
                     'CREATE TABLE ' || "SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."Name") ||
                     ' PARTITION OF ' || "SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."ParentName") || ' ' || p."Bound" ||
                     CASE WHEN p."Method" <> '' THEN ' PARTITION BY ' || p."Method" || ' (' || p."Expression" || ')' ELSE '' END ||
-                    CASE WHEN p."Tablespace" IS NOT NULL AND NOT (p."Method" <> '' AND p."Tablespace" = db_default_tablespace)
-                         THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(p."Tablespace") ELSE '' END || ';' || CHR(10) ||
+                    CASE WHEN eff."Tablespace" IS NOT NULL AND NOT (p."Method" <> '' AND eff."Tablespace" = db_default_tablespace)
+                         THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(eff."Tablespace") ELSE '' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''partition'', ''' ||
                     REPLACE(p."TableSchema" || '.' || p."ParentName" || '.' || p."Name", '''', '''''') || ''', ''created'', ' ||
                     COALESCE('''' || REPLACE("SchemaSmith"."OnlineApplyForm"(p_OnlineApply, p."TableSchema", p."TableName", 'partition'), '''', '''''') || '''', 'NULL') || ');', CHR(10)
                     ORDER BY p."TableSchema", p."TableName", p."Depth", p."IsDefault", p."Position")
     INTO sql_script
     FROM temp_partitions p
+    -- One with no tablespace of its own goes where its nearest ancestor declares: a parent's changed tablespace is set
+    -- later in the run, after the partitions it would place are already created.
+    CROSS JOIN LATERAL (
+      SELECT COALESCE(p."Tablespace", (
+        WITH RECURSIVE up(name, lvl) AS (
+          SELECT p."ParentName", 1
+          UNION ALL
+          SELECT tp."ParentName", up.lvl + 1
+            FROM up JOIN temp_partitions tp ON tp."TableSchema" = p."TableSchema" AND tp."Name" = up.name
+           WHERE up.lvl < 64)
+        SELECT COALESCE(tp."Tablespace", NULLIF(tt."Tablespace", ''))
+          FROM up
+          LEFT JOIN temp_partitions tp ON tp."TableSchema" = p."TableSchema" AND tp."Name" = up.name
+          LEFT JOIN temp_tables tt ON tt."Schema" = p."TableSchema" AND tt."Name" = up.name
+         WHERE COALESCE(tp."Tablespace", NULLIF(tt."Tablespace", '')) IS NOT NULL
+         ORDER BY up.lvl
+         LIMIT 1)) AS "Tablespace") eff
     WHERE to_regclass("SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."Name")) IS NULL;
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
   IF p_WhatIf THEN

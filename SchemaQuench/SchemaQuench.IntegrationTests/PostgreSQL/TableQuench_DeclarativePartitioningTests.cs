@@ -73,6 +73,63 @@ public class TableQuench_DeclarativePartitioningTests : BaseTableQuenchTests
              { "Name": "{{t}}_h1", "Bound": "FOR VALUES WITH (modulus 2, remainder 1)" } ] } }]
         """;
 
+    private const string Tablespace = "ss_decl_part_ts";
+
+    // A second tablespace, so a partition's can differ from the database default. Made once; left for later runs.
+    private static bool EnsureTablespace(IDbConnection conn)
+    {
+        if (Scalar(conn, $"SELECT 1 FROM pg_tablespace WHERE spcname = '{Tablespace}'") == "1") return true;
+        try
+        {
+            Exec(conn, $"COPY (SELECT 1) TO PROGRAM 'mkdir -p /tmp/{Tablespace}'");
+            Exec(conn, $"CREATE TABLESPACE {Tablespace} LOCATION '/tmp/{Tablespace}'");
+            return true;
+        }
+        catch (Npgsql.PostgresException)
+        {
+            return false;
+        }
+    }
+
+    // P6a: a declared partition that is partitioned again holds no rows, so its tablespace is only where its new partitions
+    // go. A changed one is set, as a partitioned table's is: its partitions stay where they are and a new one follows it.
+    // A leaf's is a move, and is still refused by name.
+    [Test]
+    public void ASubPartitionsTablespace_IsSet_AndALeafsIsRefused()
+    {
+        var t = "dp_ts_" + Guid.NewGuid().ToString("N")[..8];
+        using var conn = Open();
+        if (!EnsureTablespace(conn)) Assert.Ignore("the server cannot create a tablespace here");
+        string WithSpace(string json, string partition) =>
+            json.Replace($"\"Name\": \"{partition}\",", $"\"Name\": \"{partition}\", \"Tablespace\": \"{Tablespace}\",");
+        string SpaceOf(string rel) => Scalar(conn, $"SELECT COALESCE(ts.spcname, '(default)') FROM pg_class c LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace WHERE c.oid = 'public.{rel}'::regclass");
+        try
+        {
+            using (var cmd = conn.CreateCommand())
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, Json(t)));
+
+            using (var cmd = conn.CreateCommand())
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithSpace(Json(t, with2027: true), $"{t}_eu")), "a sub-partition's tablespace is set");
+            Assert.Multiple(() =>
+            {
+                Assert.That(SpaceOf($"{t}_eu"), Is.EqualTo(Tablespace));
+                Assert.That(SpaceOf($"{t}_eu_2026"), Is.EqualTo("(default)"), "a partition that was there is not moved");
+                Assert.That(SpaceOf($"{t}_eu_2027"), Is.EqualTo(Tablespace), "a new partition goes where its parent says");
+            });
+
+            using (var cmd = conn.CreateCommand())
+            {
+                var e = Assert.Catch(() => RunTableQuenchProc(cmd, WithSpace(WithSpace(Json(t, with2027: true), $"{t}_eu"), $"{t}_eu_2026")));
+                Assert.That(e.Message, Does.Contain($"{t}_eu_2026").And.Contain(Tablespace));
+            }
+            Assert.That(SpaceOf($"{t}_eu_2026"), Is.EqualTo("(default)"), "a leaf is never moved");
+        }
+        finally
+        {
+            Drop(conn, t);
+        }
+    }
+
     private static void Drop(IDbConnection conn, string t) => Exec(conn, $"DROP TABLE IF EXISTS public.{t} CASCADE; DROP TABLE IF EXISTS public.{t}_h CASCADE;");
 
     [Test]

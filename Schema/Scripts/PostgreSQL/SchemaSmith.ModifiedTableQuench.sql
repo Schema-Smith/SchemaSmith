@@ -2082,7 +2082,8 @@ BEGIN
       END LOOP;
 
       -- A partitioned table or index holds no rows: its tablespace is only where new partitions go, so a declared one
-      -- is set, never refused, and the partitions already there stay where they are.
+      -- is set, never refused, and the partitions already there stay where they are. A declared partition that is
+      -- partitioned again is one too.
       SELECT STRING_AGG('RAISE NOTICE ''  Setting the tablespace of partitioned % %.% to % (existing partitions are not moved)'', ''' ||
                         REPLACE(p.kind, '''', '''''') || ''', ''' || REPLACE(p.sch, '''', '''''') || ''', ''' || REPLACE(p.obj, '''', '''''') || ''', ''' || REPLACE(p.declared, '''', '''''') || ''';' || CHR(10) ||
                         'ALTER ' || UPPER(p.kind) || ' ' || "SchemaSmith"."QuoteName"(p.sch) || '.' || "SchemaSmith"."QuoteName"(p.obj) || ' SET TABLESPACE ' || "SchemaSmith"."QuoteName"(p.declared) || ';' || CHR(10) ||
@@ -2092,6 +2093,11 @@ BEGIN
         FROM (SELECT t."Schema" AS sch, t."Name" AS tbl, t."Name" AS obj, 'table' AS kind, t."Tablespace" AS declared, COALESCE(ts.spcname, v_default_tablespace) AS live
                 FROM temp_tables t
                 JOIN pg_class c ON c.relname = t."Name" AND c.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = t."Schema") AND c.relkind = 'p'
+                LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace
+              UNION ALL
+              SELECT tp."TableSchema", tp."Name", tp."Name", 'table', tp."Tablespace", COALESCE(ts.spcname, v_default_tablespace)
+                FROM temp_partitions tp
+                JOIN pg_class c ON c.relname = tp."Name" AND c.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = tp."TableSchema") AND c.relkind = 'p'
                 LEFT JOIN pg_tablespace ts ON ts.oid = c.reltablespace
               UNION ALL
               SELECT ti."TableSchema", ti."TableName", ti."Name", 'index', ti."Tablespace", COALESCE(ts.spcname, v_default_tablespace)

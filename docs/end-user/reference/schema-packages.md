@@ -2370,7 +2370,7 @@ Each partition:
 |---|---|---|---|
 | `Name` | string | *(required)* | The partition's table name. |
 | `Bound` | string | *(required)* | The whole bound clause, as `\d+` shows it: `FOR VALUES FROM (...) TO (...)`, `FOR VALUES IN (...)`, `FOR VALUES WITH (modulus n, remainder r)`, or `DEFAULT`. |
-| `Tablespace` | string | `null` | Where the partition is created. Create-time only: a leaf already on another tablespace is refused rather than moved. |
+| `Tablespace` | string | `null` | Where the partition is created. A leaf already on another tablespace is refused rather than moved. A partition that is partitioned again holds no rows, so a changed tablespace is set on it, as on a partitioned table: its partitions stay where they are and new ones go there. A new partition with no `Tablespace` of its own goes where its nearest parent declares. |
 | `Partitioning` | object | `null` | A partition that is itself partitioned: its key and partitions, one level down. |
 
 ```json
