@@ -28,46 +28,49 @@ public class MaterializedViewQuenchTests
         var config = FactoryContainer.Resolve<IConfigurationRoot>();
         var connProps = ConnectionString.ReadProperties(config, "Target:ConnectionProperties");
         _adminConnectionString = ConnectionString.Build(Platform.PostgreSQL, config["Target:Server"], "postgres", config["Target:User"], config["Target:Password"], config["Target:Port"], connProps);
+        _mvTestDb = config["ScriptTokens:MainDB"];
     }
 
-    private string _mvTestDb = "";
+    // The suite's kindled database, not one of this fixture's own: nothing here is a database-level setting, and a database
+    // of its own cost a CREATE DATABASE and a kindle every run. Isolation is by name (mvq_test_source, mv_test, mv_audit),
+    // and the objects and this product's ownership rows are removed at both ends.
+    private readonly string _mvTestDb;
 
     [OneTimeSetUp]
     public void Setup()
     {
-        _mvTestDb = $"MvTest_{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid().ToString()[..8]}";
-
         using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
         conn.Open();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = $@"CREATE DATABASE ""{_mvTestDb}"";";
-        cmd.ExecuteNonQuery();
-
         conn.ChangeDatabase(_mvTestDb);
-        ForgeKindler.KindleTheForge(cmd, Platform.PostgreSQL);
+        using var cmd = conn.CreateCommand();
+        DropOwnObjects(cmd);
 
         // Create the source table for our materialized view tests
         cmd.CommandText = @"
-CREATE TABLE public.test_source (id INT, name VARCHAR(100), amount DECIMAL(10,2));
-INSERT INTO public.test_source VALUES (1, 'Alice', 100.00), (2, 'Bob', 200.00);
+CREATE TABLE public.mvq_test_source (id INT, name VARCHAR(100), amount DECIMAL(10,2));
+INSERT INTO public.mvq_test_source VALUES (1, 'Alice', 100.00), (2, 'Bob', 200.00);
 ";
         cmd.ExecuteNonQuery();
-
-        conn.Close();
     }
 
     [OneTimeTearDown]
     public void TearDown()
     {
-        if (string.IsNullOrEmpty(_mvTestDb)) return;
         using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_adminConnectionString);
         conn.Open();
+        conn.ChangeDatabase(_mvTestDb);
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $@"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{_mvTestDb}' AND pid <> pg_backend_pid();";
+        DropOwnObjects(cmd);
+    }
+
+    private void DropOwnObjects(IDbCommand cmd)
+    {
+        cmd.CommandText = $@"
+DROP MATERIALIZED VIEW IF EXISTS public.mv_test CASCADE;
+DROP MATERIALIZED VIEW IF EXISTS public.mv_audit CASCADE;
+DROP TABLE IF EXISTS public.mvq_test_source CASCADE;
+DELETE FROM ""SchemaSmith"".""ProductOwnership"" WHERE ""ProductName"" IN ('{_productName}', 'WrongProduct') AND ""TableName"" IN ('mv_test', 'mv_audit');";
         cmd.ExecuteNonQuery();
-        cmd.CommandText = $@"DROP DATABASE IF EXISTS ""{_mvTestDb}"";";
-        cmd.ExecuteNonQuery();
-        conn.Close();
     }
 
     [Test]
@@ -183,7 +186,7 @@ SELECT c.oid FROM pg_class c
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
-        var authored = "SELECT id, name, amount FROM public.test_source";
+        var authored = "SELECT id, name, amount FROM public.mvq_test_source";
         RunMaterializedViewQuench(cmd, BuildViewJson("mv_test", "public", authored, true, ViewIndexJson_IdOnly()));
 
         cmd.CommandText = @"
@@ -220,7 +223,7 @@ SELECT c.oid FROM pg_class c
         using var cmd = conn.CreateCommand();
 
         EnsureViewDropped(cmd);
-        var json = BuildViewJson("mv_test", "public", "SELECT id, name, amount FROM public.test_source", true, ViewIndexJson_IdOnly());
+        var json = BuildViewJson("mv_test", "public", "SELECT id, name, amount FROM public.mvq_test_source", true, ViewIndexJson_IdOnly());
         RunMaterializedViewQuench(cmd, json);
 
         const string oidSql = "SELECT c.oid FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public' WHERE c.relname = 'mv_test' AND c.relkind = 'm'";
@@ -522,7 +525,7 @@ SELECT c.oid FROM pg_class c
         // Run TableQuench with DropTablesRemovedFromProduct=true, passing only a regular table definition.
         // The materialized view is in ProductOwnership but NOT in the table JSON — this is the scenario
         // where the bug would cause DROP TABLE on the materialized view (error 42809).
-        var tableJson = @"[{""Name"":""test_source"",""Schema"":""public"",""Columns"":[{""Name"":""id"",""DataType"":""INT4""},{""Name"":""name"",""DataType"":""VARCHAR(100)"",""Nullable"":true},{""Name"":""amount"",""DataType"":""NUMERIC(10, 2)"",""Nullable"":true}],""Indexes"":[],""ForeignKeys"":[],""CheckConstraints"":[],""ExcludeConstraints"":[],""Statistics"":[]}]";
+        var tableJson = @"[{""Name"":""mvq_test_source"",""Schema"":""public"",""Columns"":[{""Name"":""id"",""DataType"":""INT4""},{""Name"":""name"",""DataType"":""VARCHAR(100)"",""Nullable"":true},{""Name"":""amount"",""DataType"":""NUMERIC(10, 2)"",""Nullable"":true}],""Indexes"":[],""ForeignKeys"":[],""CheckConstraints"":[],""ExcludeConstraints"":[],""Statistics"":[]}]";
         cmd.CommandText = $@"CALL ""SchemaSmith"".""TableQuench""(
             p_ProductName := '{_productName}',
             p_TableDefinitions := '{tableJson.Replace("'", "''")}',
@@ -613,7 +616,7 @@ END $$;";
         static string Index(string name, string column, bool unique) =>
             $@"{{""Name"":""{name}"",""Unique"":{(unique ? "true" : "false")},""IndexColumns"":""{column}"",""AccessMethod"":""btree"",""FillFactor"":90}}";
         static string View(params string[] indexes) =>
-            BuildViewJson("mv_audit", "public", "SELECT id, name, amount FROM public.test_source", true, $"[{string.Join(",", indexes)}]");
+            BuildViewJson("mv_audit", "public", "SELECT id, name, amount FROM public.mvq_test_source", true, $"[{string.Join(",", indexes)}]");
 
         try
         {
@@ -658,7 +661,7 @@ END $$;";
     // varchar column as lower((name)::text) and amount > 0 as (amount > (0)::numeric) -- so the index was dropped and
     // rebuilt on every deploy. Both now go through the expression map, keyed on the view.
     private static string ExpressionIndexView(string view) =>
-        BuildViewJson(view, "public", "SELECT id, name, amount FROM public.test_source", true,
+        BuildViewJson(view, "public", "SELECT id, name, amount FROM public.mvq_test_source", true,
             $@"[{{""Name"":""ix_{view}"",""Unique"":false,""IndexColumns"":""lower(name)"",""AccessMethod"":""btree"",""FilterExpression"":""amount > 0""}}]");
 
     private static string IndexOid(IDbCommand cmd, string view)
@@ -708,7 +711,7 @@ END $$;";
         using var cmd = conn.CreateCommand();
         try
         {
-            RunMaterializedViewQuench(cmd, BuildViewJson(view, "public", "SELECT id, name, amount FROM public.test_source", true, "[]"));
+            RunMaterializedViewQuench(cmd, BuildViewJson(view, "public", "SELECT id, name, amount FROM public.mvq_test_source", true, "[]"));
             cmd.CommandText = $"CREATE INDEX \"ix_{view}\" ON public.\"{view}\" (lower(name)) WHERE amount > 0";
             cmd.ExecuteNonQuery();
             var oid = IndexOid(cmd, view);
@@ -780,12 +783,12 @@ END $$;";
 
     private static string ViewDefinitionWithIndex()
     {
-        return @"[{""Name"":""mv_test"",""Schema"":""public"",""Definition"":""SELECT id, name, amount FROM public.test_source"",""WithData"":true,""Indexes"":[{""Name"":""ix_mv_test_id"",""Unique"":true,""IndexColumns"":""id"",""AccessMethod"":""btree"",""FillFactor"":90}]}]";
+        return @"[{""Name"":""mv_test"",""Schema"":""public"",""Definition"":""SELECT id, name, amount FROM public.mvq_test_source"",""WithData"":true,""Indexes"":[{""Name"":""ix_mv_test_id"",""Unique"":true,""IndexColumns"":""id"",""AccessMethod"":""btree"",""FillFactor"":90}]}]";
     }
 
     private static string ViewDefinitionWithWhereClause()
     {
-        return @"[{""Name"":""mv_test"",""Schema"":""public"",""Definition"":""SELECT id, name, amount FROM public.test_source WHERE amount > 50"",""WithData"":true,""Indexes"":[{""Name"":""ix_mv_test_id"",""Unique"":true,""IndexColumns"":""id"",""AccessMethod"":""btree"",""FillFactor"":90}]}]";
+        return @"[{""Name"":""mv_test"",""Schema"":""public"",""Definition"":""SELECT id, name, amount FROM public.mvq_test_source WHERE amount > 50"",""WithData"":true,""Indexes"":[{""Name"":""ix_mv_test_id"",""Unique"":true,""IndexColumns"":""id"",""AccessMethod"":""btree"",""FillFactor"":90}]}]";
     }
 
     /// <summary>
@@ -817,7 +820,7 @@ END $$;";
         using var cmd = conn.CreateCommand();
 
         static string Definition(string pagesPerRange) =>
-            @"[{""Name"":""mv_test"",""Schema"":""public"",""Definition"":""SELECT id, name, amount FROM public.test_source"",""WithData"":true,""Indexes"":[" +
+            @"[{""Name"":""mv_test"",""Schema"":""public"",""Definition"":""SELECT id, name, amount FROM public.mvq_test_source"",""WithData"":true,""Indexes"":[" +
             @"{""Name"":""ix_mv_test_brin"",""AccessMethod"":""brin"",""IndexColumns"":""id"",""StorageParameters"":{""pages_per_range"":""" + pagesPerRange + @"""}}," +
             @"{""Name"":""ix_mv_test_name"",""IndexColumns"":""name COLLATE \""C\"" text_pattern_ops"",""FillFactor"":70}]}]";
         string State(string index)
@@ -864,7 +867,7 @@ END $$;";
         EnsureViewDropped(cmd);
 
         var viewJson = BuildViewJson("mv_test", "public",
-            "SELECT id, name, amount FROM public.test_source",
+            "SELECT id, name, amount FROM public.mvq_test_source",
             withData: false, ViewIndexJson_IdOnly());
         RunMaterializedViewQuench(cmd, viewJson);
 
@@ -890,7 +893,7 @@ END $$;";
         EnsureViewDropped(cmd);
 
         var viewJson = BuildViewJson("mv_test", "public",
-            "SELECT id, name, amount FROM public.test_source",
+            "SELECT id, name, amount FROM public.mvq_test_source",
             withData: true, ViewIndexJson_IdOnly());
         RunMaterializedViewQuench(cmd, viewJson);
 
