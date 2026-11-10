@@ -240,3 +240,38 @@ jobs:
             echo "### SchemaSmith Deploy ${TAG}"
             echo "Mirror updated and tagged. **Finish the Marketplace publish by hand:** ${draft_url}"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  install-smoke:
+    # The public install.sh, piped as a user pipes it, installs THIS release on hosted runners and every tool reports
+    # its version: Linux under sh, Apple-silicon macOS under bash and zsh, Intel macOS under bash. Nothing is published.
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, shell: sh }
+          - { os: macos-latest, shell: bash }
+          - { os: macos-latest, shell: zsh }
+          - { os: macos-15-intel, shell: bash }
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Install with the public install.sh
+        env:
+          INSTALL_VERSION: ${{ needs.version.outputs.version }}
+          INSTALL_DIR: ${{ runner.temp }}/schemasmith
+        run: curl -fsSL https://schemasmith.com/dl/install.sh | ${{ matrix.shell }}
+
+      - name: Every tool reports this release's version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          BIN: ${{ runner.temp }}/schemasmith
+        run: |
+          failed=0
+          for tool in schemaquench schematongs datatongs schemashears; do
+            line="$("$BIN/$tool" --version 2>&1 | head -n 1)" || true
+            case "$line" in
+              *"Version: $VERSION"*) echo "ok   $tool: $line" ;;
+              *) echo "::error::$tool --version printed '$line', not version $VERSION"; failed=1 ;;
+            esac
+          done
+          exit "$failed"
