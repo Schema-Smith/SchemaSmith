@@ -308,7 +308,7 @@ jobs:
   validate:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Install SchemaQuench
         run: curl -fsSL https://schemasmith.com/dl/install.sh | sh
       - name: Validate schema package

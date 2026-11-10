@@ -70,6 +70,14 @@ workspace_relative() {
   local path="${1//\\//}" workspace="${2//\\//}"
   workspace="${workspace%/}"
   [ -n "$path" ] && [ -n "$workspace" ] || return 0
+  # A relative path is relative to the directory the action runs in, the workspace.
+  case "$path" in
+    /*|[A-Za-z]:*) ;;
+    *)
+      while [ "${path#./}" != "$path" ]; do path="${path#./}"; done
+      case "$path" in ..|../*) return 0 ;; esac
+      printf '%s' "$path"; return 0 ;;
+  esac
   local p="$path" w="$workspace"
   case "$w" in [A-Za-z]:*) p="${p,,}"; w="${w,,}" ;; esac
   case "$p" in "$w"/*) printf '%s' "${path:${#workspace}+1}" ;; esac

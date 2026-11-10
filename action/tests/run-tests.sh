@@ -60,6 +60,12 @@ assert_eq "$(workspace_relative 'd:\A\db\db\pkg\x.sql' 'D:\a\db\db\')" "pkg/x.sq
 assert_eq "$(workspace_relative '/home/runner/work/db/db/pkg/x.sql' '/home/runner/work/db/db')" "pkg/x.sql" "relative linux"
 assert_eq "$(workspace_relative '/home/runner/work/db/dbx/x.sql' '/home/runner/work/db/db')" "" "a sibling folder is not inside"
 assert_eq "$(workspace_relative '/elsewhere/x.sql' '/home/runner/work/db/db')" "" "outside the workspace"
+# SchemaQuench names a script relative to the directory it runs in, which is the workspace when product-path is relative.
+assert_eq "$(workspace_relative 'test-package/Templates/Main/Before Scripts/broken.sql' '/home/runner/work/db/db')" \
+  "test-package/Templates/Main/Before Scripts/broken.sql" "a relative path is already the workspace's"
+assert_eq "$(workspace_relative './pkg/x.sql' '/home/runner/work/db/db')" "pkg/x.sql" "a leading ./ goes"
+assert_eq "$(workspace_relative 'pkg\x.sql' 'D:\a\db\db')" "pkg/x.sql" "a relative windows path"
+assert_eq "$(workspace_relative '../other/x.sql' '/home/runner/work/db/db')" "" "a relative path that climbs out is not inside"
 
 # annotations from a failed run
 FAILED="$(annotations_from_summary "$DIR/fixtures/summary-failed.json" 'D:\a\billing-db\billing-db')"

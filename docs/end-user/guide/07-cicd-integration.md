@@ -51,7 +51,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Checkout schema package
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Deploy Schema
         env:
@@ -242,7 +242,7 @@ jobs:
 
     steps:
       - name: Checkout PR branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Deploy base schema
         env:
