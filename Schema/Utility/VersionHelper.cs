@@ -43,22 +43,23 @@ namespace Schema.Utility
         {
             Platform.SqlServer => "2008 (major 10)",
             Platform.PostgreSQL => "12",
-            Platform.MySQL => "5.7.22 / 8.0.23",
+            Platform.MySQL => "5.7.16 / 8.0.11",
             Platform.MariaDb => "10.2.13",
             _ => HardFloorComparable(platform).ToString()
         };
 
-        // MySQL's floor is a patch on two lines: 5.7.22 (JSON_ARRAYAGG) and 8.0.23 (the last of the 8.0 features to
-        // arrive). The feature gates turn on their own patches, but the patches below these floors are not certified.
-        private const int MySqlFloor57 = 50722;
-        private const int MySqlFloor80 = 80023;
+        // MySQL's floor is a patch on two lines: each line's oldest GA that can still be run. 5.7.16 is the oldest 5.7
+        // image current Docker loads (5.7.9-5.7.15 are manifest schema 1), and 8.0.11 is the first 8.0 GA (8.0.0-8.0.10
+        // are development and release-candidate builds). The 8.0 features turn on at their own patches.
+        private const int MySqlFloor57 = 50716;
+        private const int MySqlFloor80 = 80011;
 
         // MariaDB 10.2.7 is the first patch with the JSON type alias the kindled helpers declare, but 10.2.7 and 10.2.8 return
         // NULL from every JSON function that builds a string holding a backtick, which is every extracted name (fixed in
         // 10.2.9), and data delivery is wrong on 10.2.9-10.2.10 and exhausts the server's memory on 10.2.11-10.2.12.
         private const int MariaDbFloor = 100213;
 
-        // Major-level only: the MySQL family's floors are patches (5.7.22, 8.0.23, 10.2.13), which a comparable cannot see.
+        // Major-level only: the MySQL family's floors are patches (5.7.16, 8.0.11, 10.2.13), which a comparable cannot see.
         private static bool IsBelowMajorFloor(Platform platform, int serverComparable)
             => serverComparable < HardFloorComparable(platform);
 

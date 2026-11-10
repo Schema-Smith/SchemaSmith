@@ -1250,8 +1250,7 @@ public class DataTongsTests
             // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
             if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
             if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
-            // Data delivery detects the server version (TargetVersionDetector) and probes JSON_ARRAYAGG support,
-            // both via SELECT VERSION() — return a modern MySQL version so the JSON_ARRAYAGG path is taken.
+            // Data delivery detects the server version (TargetVersionDetector) via SELECT VERSION().
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
             if (command.CommandText?.Contains("@@SESSION.time_zone") == true) return "SYSTEM";
             if (command.CommandText?.Contains("@@SESSION.sql_mode") == true) return "STRICT_TRANS_TABLES";
@@ -1294,8 +1293,8 @@ public class DataTongsTests
 
     #region CastData — below-floor source
 
-    // DataTongs used to run against a below-floor source; on MySQL 5.7.21, which lacks JSON_ARRAYAGG, it wrote nothing
-    // and still exited 0. It now refuses the source before extracting, as SchemaQuench refuses a target.
+    // DataTongs used to run against a below-floor source, write nothing and still exit 0. It refuses the source before
+    // extracting, as SchemaQuench refuses a target.
     [Test]
     public void CastData_MySqlSourceBelowTheFloor_IsRefusedBeforeExtracting()
     {
@@ -1319,7 +1318,7 @@ public class DataTongsTests
 
         connectionFactory.GetDbConnection(Arg.Any<string>()).Returns(connection);
         connection.CreateCommand().Returns(command);
-        command.ExecuteScalar().Returns(_ => command.CommandText?.Contains("VERSION()") == true ? "5.7.21" : null);
+        command.ExecuteScalar().Returns(_ => command.CommandText?.Contains("VERSION()") == true ? "5.7.15" : null);
 
         lock (FactoryContainer.SharedLockObject)
         {
@@ -1332,7 +1331,7 @@ public class DataTongsTests
             {
                 var dt = new global::DataTongs.DataTongs(Platform.MySQL);
                 var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
-                Assert.That(ex!.Message, Does.Contain("5.7.21").And.Contain("5.7.22"));
+                Assert.That(ex!.Message, Does.Contain("5.7.15").And.Contain("5.7.16"));
                 fileWrapper.DidNotReceive().WriteAllText(Arg.Any<string>(), Arg.Any<string>());
             }
             finally
@@ -1659,7 +1658,7 @@ public class DataTongsTests
             // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
             if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
             if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
-            // Data delivery detects the server version and probes JSON_ARRAYAGG support, both via SELECT VERSION().
+            // Data delivery detects the server version via SELECT VERSION().
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
             if (command.CommandText?.Contains("@@SESSION.time_zone") == true) return "SYSTEM";
             if (command.CommandText?.Contains("@@SESSION.sql_mode") == true) return "STRICT_TRANS_TABLES";

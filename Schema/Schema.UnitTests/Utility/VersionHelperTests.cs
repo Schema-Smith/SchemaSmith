@@ -79,7 +79,7 @@ namespace Schema.UnitTests.Utility
 
         [TestCase(Platform.SqlServer, "2008 (major 10)")]
         [TestCase(Platform.PostgreSQL, "12")]
-        [TestCase(Platform.MySQL, "5.7.22 / 8.0.23")]
+        [TestCase(Platform.MySQL, "5.7.16 / 8.0.11")]
         [TestCase(Platform.MariaDb, "10.2.13")]
         public void HardFloorDisplay_MatchesSupportedFloorsTable(Platform platform, string expected)
         {
@@ -100,6 +100,7 @@ namespace Schema.UnitTests.Utility
         [TestCase("8.0.23", Platform.MySQL, 80023)]
         [TestCase("8.0.23-log", Platform.MySQL, 80023)]
         [TestCase("5.7.21", Platform.MySQL, 50721)]
+        [TestCase("8.0.11-0ubuntu0.20.04.1", Platform.MySQL, 80011)]
         [TestCase("26.7.0", Platform.MySQL, 260700)]      // calendar versioning
         [TestCase("8.0", Platform.MySQL, 80000)]
         [TestCase("10.5.2-MariaDB", Platform.MariaDb, 100502)]
@@ -115,6 +116,8 @@ namespace Schema.UnitTests.Utility
         [TestCase("8.4.0", "8.0.30", true)]
         [TestCase("8.0.22", "8.0", true)]
         [TestCase("5.7.44", "8.0", false)]
+        [TestCase("8.0.11", "8.0.23", false)]
+        [TestCase("8.0.11", "8.0.11", true)]
         public void MeetsDeclaredVersion_MySql_ComparesADeclaredPatch(string detected, string declared, bool expected)
         {
             var info = new TargetVersionInfo(Platform.MySQL, detected, VersionHelper.ParseDetectedVersion(detected, Platform.MySQL)!.Value);
@@ -138,14 +141,18 @@ namespace Schema.UnitTests.Utility
             Assert.That(VersionHelper.ParsePatchComparable(raw, platform), Is.Null);
         }
 
-        // P1: the MySQL floor is 5.7.22 on the 5.7 line and 8.0.23 on the 8.0 line. Below them DataTongs extracts
-        // nothing (5.7.21) and the 8.0 feature gates fire on patches that lack the feature.
+        // The MySQL floor is each line's oldest GA that can still be run: 5.7.16 and 8.0.11.
         [TestCase("5.6.51", true)]
-        [TestCase("5.7.21", true)]
+        [TestCase("5.7.15", true)]
+        [TestCase("5.7.16", false)]
+        [TestCase("5.7.21", false)]
         [TestCase("5.7.22", false)]
         [TestCase("5.7.44", false)]
-        [TestCase("8.0.12", true)]
-        [TestCase("8.0.22", true)]
+        [TestCase("8.0.4", true)]
+        [TestCase("8.0.10", true)]
+        [TestCase("8.0.11", false)]
+        [TestCase("8.0.12", false)]
+        [TestCase("8.0.22", false)]
         [TestCase("8.0.23", false)]
         [TestCase("8.4.0", false)]
         [TestCase("9.0.1", false)]
