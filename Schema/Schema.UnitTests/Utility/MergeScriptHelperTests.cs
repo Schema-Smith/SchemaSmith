@@ -499,12 +499,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_InsertOnly_ContainsMergeAndInsert()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id],[Name]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT,\r\n           [Name] NVARCHAR(100)",
-            insertCols: "        [Id],\r\n        [Name]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int"), new("Name", "nvarchar", 100)]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
@@ -522,12 +517,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_InsertUpdate_ContainsMatchedClause()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id],[Name]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT,\r\n           [Name] NVARCHAR(100)",
-            insertCols: "        [Id],\r\n        [Name]",
-            updateCols: "[Name]");
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int"), new("Name", "nvarchar", 100)]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
@@ -543,12 +533,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_InsertUpdateDelete_ContainsDeleteClause()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id],[Name]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT,\r\n           [Name] NVARCHAR(100)",
-            insertCols: "        [Id],\r\n        [Name]",
-            updateCols: "[Name]");
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int"), new("Name", "nvarchar", 100)]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
@@ -562,12 +547,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_WithMergeFilter_IncludesFilterInDelete()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id],[Name]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT,\r\n           [Name] NVARCHAR(100)",
-            insertCols: "        [Id],\r\n        [Name]",
-            updateCols: "[Name]");
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int"), new("Name", "nvarchar", 100)]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
@@ -580,12 +560,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_WithDisableTriggers_IncludesTriggerStatements()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
@@ -599,12 +574,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_WithIdentityInsert_IncludesIdentityStatements()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: true,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int", Identity: true)], flags: 1);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
@@ -618,12 +588,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_WithTokenize_UsesTokenPlaceholder()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
@@ -638,12 +603,7 @@ public class MergeScriptHelperTests
     {
         // #390 "derive the key once": DataTongs computes the key alongside the .tabledata filename
         // and passes it here; BuildMergeScript must embed exactly that value, not re-derive it.
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
@@ -659,12 +619,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_EscapesSingleQuotes()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id],[Name]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT,\r\n           [Name] NVARCHAR(100)",
-            insertCols: "        [Id],\r\n        [Name]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int"), new("Name", "nvarchar", 100)]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Name\":\"O'Brien\"}]", "[Id]",
@@ -677,12 +632,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_NullableKeyColumn_GeneratesIsNullComparison()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[]", "*[Id]",
@@ -695,12 +645,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_TrimsBracketsFromSchemaAndTable()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "[dbo]", "[TestTable]", "[]", "[Id]",
@@ -718,12 +663,7 @@ public class MergeScriptHelperTests
         // iteration value BEFORE calling BuildMergeScript. This test verifies that when
         // the caller passes the already-resolved schema, the MERGE INTO clause carries
         // the resolved name and no token leak occurs.
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[LookupID],[Code]",
-            needsIdentity: false,
-            jsonColDefs: "           [LookupID] INT,\r\n           [Code] NVARCHAR(32)",
-            insertCols: "        [LookupID],\r\n        [Code]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("LookupID", "int"), new("Code", "nvarchar", 32)]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "tenant_acme", "Lookups", "[{\"LookupID\":1}]", "[LookupID]",
@@ -1650,9 +1590,7 @@ public class MergeScriptHelperTests
         switch (platform)
         {
             case Platform.SqlServer:
-                cmd = CreateSqlServerXmlMockCommand(
-                    unsupportedComments: null,
-                    insertCols: "        [id],\n        [name]");
+                cmd = CreateSqlServerShapeCommand([new("id", "int"), new("name", "varchar", 100)]);
                 schemaOrDb = "dbo";
                 keyColumns = "[id]";
                 break;
@@ -1691,7 +1629,7 @@ public class MergeScriptHelperTests
     public void BuildMergeScript_AllPlatforms_InsertEscapesSingleQuotes()
     {
         // SQL Server
-        var sqlCmd = CreateSqlServerMockCommand("[Id]", false, "           [Id] INT", "        [Id]", null);
+        var sqlCmd = CreateSqlServerShapeCommand([new("Id", "int")]);
         var sqlResult = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, sqlCmd,
             "dbo", "T", "[{\"v\":\"it's\"}]", "[Id]", false, false, false, false, null);
         Assert.That(sqlResult, Does.Contain("it''s"));
@@ -2027,24 +1965,17 @@ public class MergeScriptHelperTests
     #region SQL Server GEOMETRY Support Tests
 
     [Test]
-    public void BuildMergeScript_SqlServer_GeometryColumn_UsesGeometryPrefix()
+    public void BuildMergeScript_SqlServer_GeometryColumn_ComparesItsText()
     {
-        // GEOMETRY columns get G[ prefix just like GEOGRAPHY
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "geometry::STGeomFromText([Shape], [Shape.STSrid]) AS [Shape],[Id]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT,\r\n           [Shape] NVARCHAR(4000), [Shape.STSrid] INT",
-            insertCols: "        [Id],\r\n        [Shape]",
-            updateCols: "G[Shape]");
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int"), new("Shape", "geometry")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
             mergeUpdate: true, mergeDelete: false, disableTriggers: false,
             tokenizeScripts: false, mergeFilter: null);
 
-        // G[ prefix triggers .ToString() comparison
+        // A spatial value has no = operator: compared as its text
         Assert.That(result, Does.Contain("Target.[Shape].ToString()) <> (Source.[Shape].ToString()"));
-        // SET clause strips prefix
         Assert.That(result, Does.Contain("[Shape] = Source.[Shape]"));
     }
 
@@ -2052,266 +1983,199 @@ public class MergeScriptHelperTests
     public void BuildMergeScript_SqlServer_GeometrySelectColumns_UsesGeometryType()
     {
         // Verify the SQL query for JSON select uses geometry::STGeomFromText
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "geometry::STGeomFromText([Shape], [Shape.STSrid]) AS [Shape]",
-            needsIdentity: false,
-            jsonColDefs: "           [Shape] NVARCHAR(4000), [Shape.STSrid] INT",
-            insertCols: "        [Shape]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Shape", "geometry")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[]", "[Id]",
             mergeUpdate: false, mergeDelete: false, disableTriggers: false,
             tokenizeScripts: false, mergeFilter: null);
 
-        Assert.That(result, Does.Contain("geometry::STGeomFromText([Shape], [Shape.STSrid]) AS [Shape]"));
-    }
-
-    [Test]
-    public void GetJsonSelectColumnsSqlServer_QueryContainsGeometryAndGeography()
-    {
-        // Verify the SQL query text checks for both GEOGRAPHY and GEOMETRY
-        var cmd = Substitute.For<IDbCommand>();
-        cmd.ExecuteScalar().Returns("[Id]");
-
-        // Use BuildMergeScript to trigger the SQL generation internally
-        var cmd2 = CreateSqlServerMockCommand("[Id]", false, "           [Id] INT", "        [Id]", null);
-        MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd2,
-            "dbo", "TestTable", "[]", "[Id]",
-            mergeUpdate: false, mergeDelete: false, disableTriggers: false,
-            tokenizeScripts: false, mergeFilter: null);
-
-        // Inspect the generated SQL queries. The first call sets up GetJsonSelectColumns
-        // which should contain IN ('geography', 'geometry')
-        var commandTexts = cmd2.ReceivedCalls()
-            .Where(c => c.GetMethodInfo().Name == "set_CommandText")
-            .Select(c => c.GetArguments()[0]?.ToString())
-            .Where(t => t == null || !t.Contains("compatibility_level")) // B1: drop the cliff-detect probe
-            .ToList();
-
-        // Second query is GetJsonSelectColumns (first is GetUnsupportedColumnComments) - should contain both types
-        Assert.That(commandTexts[1], Does.Contain("'geography'"));
-        Assert.That(commandTexts[1], Does.Contain("'geometry'"));
-    }
-
-    [Test]
-    public void GetUpdateColumnsSqlServer_QueryContainsGeometryAndGeography()
-    {
-        var cmd = CreateSqlServerMockCommand("[Id]", false, "           [Id] INT", "        [Id]", "[Name]");
-        MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
-            "dbo", "TestTable", "[]", "[Id]",
-            mergeUpdate: true, mergeDelete: false, disableTriggers: false,
-            tokenizeScripts: false, mergeFilter: null);
-
-        var commandTexts = cmd.ReceivedCalls()
-            .Where(c => c.GetMethodInfo().Name == "set_CommandText")
-            .Select(c => c.GetArguments()[0]?.ToString())
-            .Where(t => t == null || !t.Contains("compatibility_level")) // B1: drop the cliff-detect probe
-            .ToList();
-
-        // Fifth query is GetUpdateColumns - should check for both GEOGRAPHY and GEOMETRY
-        var updateQuery = commandTexts[4];
-        Assert.That(updateQuery, Does.Contain("'geography'"));
-        Assert.That(updateQuery, Does.Contain("'geometry'"));
-    }
-
-    [Test]
-    public void GetJsonColumnDefinitionsSqlServer_QueryContainsGeometryReplacement()
-    {
-        var cmd = CreateSqlServerMockCommand("[Id]", false, "           [Id] INT", "        [Id]", null);
-        MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
-            "dbo", "TestTable", "[]", "[Id]",
-            mergeUpdate: false, mergeDelete: false, disableTriggers: false,
-            tokenizeScripts: false, mergeFilter: null);
-
-        var commandTexts = cmd.ReceivedCalls()
-            .Where(c => c.GetMethodInfo().Name == "set_CommandText")
-            .Select(c => c.GetArguments()[0]?.ToString())
-            .Where(t => t == null || !t.Contains("compatibility_level")) // B1: drop the cliff-detect probe
-            .ToList();
-
-        // Fourth query is GetJsonColumnDefinitions - should contain GEOMETRY replacement
-        var jsonColDefsQuery = commandTexts[3];
-        Assert.That(jsonColDefsQuery, Does.Contain("'GEOMETRY'"));
-        Assert.That(jsonColDefsQuery, Does.Contain("'GEOGRAPHY'"));
-        // STSrid companion for both types
-        Assert.That(jsonColDefsQuery, Does.Contain("IN ('GEOGRAPHY', 'GEOMETRY')"));
+        Assert.That(result, Does.Contain("geometry::STGeomFromText([Shape], COALESCE([Shape.STSrid], 0)) AS [Shape]"));
     }
 
     #endregion
 
+    // A type with no = operator is compared through one that has it, so an unchanged row is not rewritten and a changed
+    // one is: each kind below, against a plain column compared as it is.
+    [TestCase("geography", "Target.[C].ToString()")]
+    [TestCase("geometry", "Target.[C].ToString()")]
+    [TestCase("xml", "CAST(Target.[C] AS NVARCHAR(MAX))")]
+    [TestCase("ntext", "CAST(Target.[C] AS NVARCHAR(MAX))")]
+    [TestCase("vector", "CAST(Target.[C] AS NVARCHAR(MAX))")]
+    [TestCase("text", "CAST(Target.[C] AS VARCHAR(MAX))")]
+    [TestCase("image", "CAST(Target.[C] AS VARBINARY(MAX))")]
+    [TestCase("datetimeoffset", "CAST(Target.[C] AS NVARCHAR(50))")]
+    [TestCase("int", "(Target.[C]) <> (Source.[C])")]
+    public void BuildMergeScript_SqlServer_UpdateCompare_ReadsEachTypeThroughOneWithEquality(string dataType, string expected)
+    {
+        var cmd = CreateSqlServerShapeCommand([new("C", dataType), new("Id", "int")]);
+
+        var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd, "dbo", "T", "[{\"Id\":1,\"C\":null}]", "[Id]",
+            mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+
+        var compare = result[result.IndexOf("WHEN MATCHED AND", StringComparison.Ordinal)..result.IndexOf("UPDATE SET", StringComparison.Ordinal)];
+        Assert.Multiple(() =>
+        {
+            Assert.That(compare, Does.Contain(expected));
+            Assert.That(compare, Does.Contain("(Target.[Id]) <> (Source.[Id])"), "a plain column is compared as it is");
+            Assert.That(result, Does.Contain("        [C] = Source.[C]"), "and assigned by its own name");
+        });
+    }
+
+    // The OPENJSON WITH clause: spatial and datetimeoffset values arrive as text (a spatial one with its SRID beside it),
+    // a typed xml column keeps its schema collection, an alias type is named as declared, and a character column gets an
+    // AS JSON reading whose path escapes the name for the path and the literal.
+    [Test]
+    public void BuildMergeScript_SqlServer_OpenJsonColumns_TypeEachColumnForItsShred()
+    {
+        var cmd = CreateSqlServerShapeCommand([
+            new("Id", "int"),
+            new("Geo", "geography"),
+            new("At", "datetimeoffset"),
+            new("Doc", "xml", XmlCollection: "[s].[docs]"),
+            new("Code", "nvarchar", 10, Declared: "s.Code"),
+            new("Big", "varchar", -1),
+            new("it's \"x\\", "nvarchar", 20)]);
+
+        var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd, "dbo", "T", "[{\"Id\":1}]", "[Id]",
+            mergeUpdate: false, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(result, Does.Contain("[Geo] NVARCHAR(4000), [Geo.STSrid] INT"));
+            Assert.That(result, Does.Contain("geography::STGeomFromText([Geo], COALESCE([Geo.STSrid], 4326)) AS [Geo]"));
+            Assert.That(result, Does.Contain("[At] NVARCHAR(50)"));
+            Assert.That(result, Does.Contain("[Doc] xml([s].[docs])"));
+            Assert.That(result, Does.Contain("[Code] s.Code,"), "an alias type is named as declared, and takes no length of its own");
+            Assert.That(result, Does.Contain("[Big] varchar(MAX)"), "a system type is named as the catalog names it");
+            Assert.That(result, Does.Contain("[it's \"x\\] nvarchar(20)").Or.Contain("[it's \"x\\] NVARCHAR(20)"));
+            Assert.That(result, Does.Contain("[it's \"x\\ (as JSON)] NVARCHAR(MAX) '$.\"it''s \\\"x\\\\\"' AS JSON"));
+            Assert.That(result, Does.Contain("COALESCE([it's \"x\\], [it's \"x\\ (as JSON)]) AS [it's \"x\\]"));
+        });
+    }
+
+    // IDENTITY_INSERT is for a delivery that carries the identity column's values; one that does not lets the table number
+    // its rows, and turning it on would fail the insert.
+    [TestCase(true, true)]
+    [TestCase(false, false)]
+    public void BuildMergeScript_SqlServer_IdentityInsert_OnlyWhenTheDataCarriesTheIdentityColumn(bool delivered, bool expected)
+    {
+        SsCol[] columns = delivered ? [new("Id", "int", Identity: true), new("Name", "nvarchar", 10)] : [new("Name", "nvarchar", 10)];
+        var cmd = CreateSqlServerShapeCommand(columns, flags: 1);
+
+        var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd, "dbo", "T", "[{\"Name\":\"a\"}]", "[Name]",
+            mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+
+        Assert.That(result.Contains("SET IDENTITY_INSERT [dbo].[T] ON", StringComparison.Ordinal), Is.EqualTo(expected));
+        if (delivered) Assert.That(result, Does.Not.Contain("[Id] = Source.[Id]"), "an identity column is never updated");
+    }
+
+    // Every clause of the MERGE comes from one read of the table: the columns, the unsupported ones and the table's flags.
+    // It took four to twelve round trips, one per clause and each with its own version probe.
+    [Test]
+    public void BuildMergeScript_SqlServer_ReadsTheCatalogOnce()
+    {
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int", Identity: true), new("G", "geography"), new("N", "nvarchar", 10)], flags: 1,
+            unsupported: [("V", "sql_variant")]);
+
+        var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd, "dbo", "T", "[{\"Id\":1,\"G\":null,\"N\":null}]", "[Id]",
+            mergeUpdate: true, mergeDelete: true, disableTriggers: true, tokenizeScripts: false, mergeFilter: null);
+
+        var reads = cmd.ReceivedCalls().Count(c => c.GetMethodInfo().Name is "ExecuteReader" or "ExecuteScalar" or "ExecuteNonQuery");
+        Assert.Multiple(() =>
+        {
+            Assert.That(reads, Is.EqualTo(1));
+            Assert.That(result, Does.StartWith("-- Column [V] skipped: sql_variant is not supported for data delivery"));
+            Assert.That(cmd.CommandText, Does.Contain("'sql_variant', 'rowversion', 'timestamp'"), "the read names the types it cannot deliver");
+        });
+    }
+
+    [Test]
+    public void GetUnsupportedColumnComments_SqlServer_NamesEachColumnItCannotDeliver()
+    {
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")], unsupported: [("VariantCol", "sql_variant"), ("VersionCol", "rowversion")]);
+
+        var result = MergeScriptHelper.GetUnsupportedColumnComments(Platform.SqlServer, cmd, "dbo", "TestTable");
+
+        Assert.That(result, Is.EqualTo("-- Column [VariantCol] skipped: sql_variant is not supported for data delivery\r\n" +
+                                       "-- Column [VersionCol] skipped: rowversion is not supported for data delivery"));
+    }
+
+    [Test]
+    public void GetUnsupportedColumnComments_SqlServer_NoUnsupportedColumns_ReturnsEmpty()
+    {
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")]);
+
+        Assert.That(MergeScriptHelper.GetUnsupportedColumnComments(Platform.SqlServer, cmd, "dbo", "TestTable"), Is.Empty);
+    }
+
+    // The update list is plain names: the type information it once carried as a one-letter prefix is in GetColumnMetadata.
+    [Test]
+    public void GetUpdateColumns_SqlServer_ListsTheUpdatableColumnsByName()
+    {
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int", Identity: true), new("G", "geography"), new("T", "datetimeoffset")]);
+
+        Assert.That(MergeScriptHelper.GetUpdateColumns(Platform.SqlServer, cmd, "dbo", "T"), Is.EqualTo("[G],[T]"));
+    }
+
     #region SQL Server DATETIMEOFFSET Support Tests
 
     [Test]
-    public void BuildMergeScript_SqlServer_DateTimeOffsetColumn_UsesDPrefix()
+    public void BuildMergeScript_SqlServer_DateTimeOffsetColumn_ComparesItsText()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id],[EventTime]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT,\r\n           [EventTime] NVARCHAR(50)",
-            insertCols: "        [Id],\r\n        [EventTime]",
-            updateCols: "D[EventTime]");
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int"), new("EventTime", "datetimeoffset")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
             mergeUpdate: true, mergeDelete: false, disableTriggers: false,
             tokenizeScripts: false, mergeFilter: null);
 
-        // D[ prefix triggers CAST to NVARCHAR(50) comparison
+        // An offset change naming the same instant is still a change: compared as its text
         Assert.That(result, Does.Contain("CAST(Target.[EventTime] AS NVARCHAR(50))) <> (CAST(Source.[EventTime] AS NVARCHAR(50))"));
-        // SET clause strips prefix
         Assert.That(result, Does.Contain("[EventTime] = Source.[EventTime]"));
-    }
-
-    [Test]
-    public void GetUpdateColumnsSqlServer_QueryContainsDateTimeOffset()
-    {
-        var cmd = CreateSqlServerMockCommand("[Id]", false, "           [Id] INT", "        [Id]", "[Name]");
-        MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
-            "dbo", "TestTable", "[]", "[Id]",
-            mergeUpdate: true, mergeDelete: false, disableTriggers: false,
-            tokenizeScripts: false, mergeFilter: null);
-
-        var commandTexts = cmd.ReceivedCalls()
-            .Where(c => c.GetMethodInfo().Name == "set_CommandText")
-            .Select(c => c.GetArguments()[0]?.ToString())
-            .Where(t => t == null || !t.Contains("compatibility_level")) // B1: drop the cliff-detect probe
-            .ToList();
-
-        var updateQuery = commandTexts[4];
-        Assert.That(updateQuery, Does.Contain("'datetimeoffset'"));
-        Assert.That(updateQuery, Does.Contain("'D'"));
-    }
-
-    [Test]
-    public void GetJsonColumnDefinitionsSqlServer_QueryContainsDateTimeOffsetReplacement()
-    {
-        var cmd = CreateSqlServerMockCommand("[Id]", false, "           [Id] INT", "        [Id]", null);
-        MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
-            "dbo", "TestTable", "[]", "[Id]",
-            mergeUpdate: false, mergeDelete: false, disableTriggers: false,
-            tokenizeScripts: false, mergeFilter: null);
-
-        var commandTexts = cmd.ReceivedCalls()
-            .Where(c => c.GetMethodInfo().Name == "set_CommandText")
-            .Select(c => c.GetArguments()[0]?.ToString())
-            .Where(t => t == null || !t.Contains("compatibility_level")) // B1: drop the cliff-detect probe
-            .ToList();
-
-        var jsonColDefsQuery = commandTexts[3];
-        Assert.That(jsonColDefsQuery, Does.Contain("'DATETIMEOFFSET'"));
-        Assert.That(jsonColDefsQuery, Does.Contain("'NVARCHAR(50)'"));
     }
 
     #endregion
 
     #region Helper Methods - SQL Server Mock
 
-    /// <summary>
-    /// Creates a SQL Server mock command. Call order for BuildMergeScript:
-    /// 1. GetUnsupportedColumnComments, 2. GetJsonSelectColumns, 3. NeedsIdentityInsert,
-    /// 4. IdentityColumnInJsonKeys (only if NeedsIdentityInsert=true), 5. GetJsonColumnDefinitions,
-    /// 6. GetUpdateColumns (only if mergeUpdate=true), 7. GetInsertColumns
-    /// </summary>
-    private static IDbCommand CreateSqlServerMockCommand(
-        string jsonSelectCols, bool needsIdentity, string jsonColDefs,
-        string insertCols, string updateCols, string unsupportedComments = null)
+    // A column of the table shape a SQL Server mock command answers with.
+    private sealed record SsCol(string Name, string DataType, int MaxLength = 0, bool Identity = false, string Declared = null, string XmlCollection = null);
+
+    // SQL Server reads a table's whole shape in one query: the flags (1 identity, 2 memory-optimized, 4 append-only
+    // ledger) on every row, beside each column, an unsupported one flagged. The flags row comes back with no column too.
+    private static IDbCommand CreateSqlServerShapeCommand(SsCol[] columns, int flags = 0, (string Name, string DataType)[] unsupported = null)
     {
         var cmd = Substitute.For<IDbCommand>();
-        // Every STRING_AGG-based builder self-detects the cliff with an extra ExecuteScalar first;
-        // 0 (not-below-cliff) selects the modern STRING_AGG path, matching this mock's assertions.
-        // GetJsonSelectColumns and GetJsonColumnDefinitions probe too — they previously called
-        // STRING_AGG unconditionally, which is what broke data delivery on SQL Server 2016 (#393).
-        var sequence = new List<object>
-        {
-            0,                    // cliff-check for GetUnsupportedColumnComments
-            unsupportedComments,  // 1. GetUnsupportedColumnComments
-            0,                    // cliff-check for GetJsonSelectColumns
-            jsonSelectCols,       // 2. GetJsonSelectColumns
-            needsIdentity         // 3. NeedsIdentityInsert
-        };
-        if (needsIdentity)
-            sequence.Add(true);   // 4. IdentityColumnInJsonKeysSqlServer (assume identity column is in jsonKeys for unit-test mocks)
-        sequence.Add(0);          // cliff-check for GetJsonColumnDefinitions
-        sequence.Add(jsonColDefs);// GetJsonColumnDefinitions
-        if (updateCols != null)
-        {
-            sequence.Add(0);          // cliff-check for GetUpdateColumns
-            sequence.Add(updateCols); // GetUpdateColumns (only if mergeUpdate)
-        }
-        sequence.Add(0);          // cliff-check for GetInsertColumns
-        sequence.Add(insertCols); // GetInsertColumns
-
-        var callCount = 0;
-        cmd.ExecuteScalar().Returns(ci =>
-        {
-            var idx = callCount++;
-            return idx < sequence.Count ? sequence[idx] : null;
-        });
+        cmd.ExecuteReader().Returns(_ => SqlServerShapeReader(columns, flags, unsupported ?? []));
         return cmd;
     }
 
-    /// <summary>
-    /// SQL Server mock command for the XML row-source path (isXml=true). Unlike CreateSqlServerMockCommand,
-    /// the XML path reads column metadata via GetColumnMetadataSqlServer (ExecuteReader) instead of the
-    /// STRING_AGG-based GetJsonSelectColumnsSqlServer, so it needs its own ExecuteReader stub. ExecuteScalar
-    /// order (mergeUpdate=false, needsIdentity=false, matching every call site here): 1. cliff-check for
-    /// GetUnsupportedColumnComments, 2. GetUnsupportedColumnComments, 3. NeedsIdentityInsertSqlServer,
-    /// 4. cliff-check for GetInsertColumns, 5. GetInsertColumns. ExecuteReader: GetColumnMetadataSqlServer
-    /// (called once, from BuildXmlShredSelectColumnsSqlServer) returns a fixed Id int / Name varchar(100) shape.
-    /// </summary>
-    private static IDbCommand CreateSqlServerXmlMockCommand(string unsupportedComments, string insertCols)
+    private static IDataReader SqlServerShapeReader(SsCol[] columns, int flags, (string Name, string DataType)[] unsupported)
     {
-        var cmd = Substitute.For<IDbCommand>();
-        var sequence = new List<object>
-        {
-            0,                    // cliff-check for GetUnsupportedColumnComments
-            unsupportedComments,  // GetUnsupportedColumnComments
-            false,                // NeedsIdentityInsertSqlServer
-            0,                    // cliff-check for GetInsertColumns
-            insertCols            // GetInsertColumns
-        };
-
-        var callCount = 0;
-        cmd.ExecuteScalar().Returns(ci =>
-        {
-            var idx = callCount++;
-            return idx < sequence.Count ? sequence[idx] : null;
-        });
-
-        cmd.ExecuteReader().Returns(ci => CreateSqlServerColumnMetadataReader());
-        return cmd;
-    }
-
-    private static IDataReader CreateSqlServerColumnMetadataReader(
-        (string Name, string DataType, string UserType, int? MaxLen, bool IsGeometry, bool IsBinary, bool IsXml)[] columns = null)
-    {
-        columns ??= new (string Name, string DataType, string UserType, int? MaxLen, bool IsGeometry, bool IsBinary, bool IsXml)[]
-        {
-            ("id", "int", "INT", null, false, false, false),
-            ("name", "varchar", "VARCHAR", 100, false, false, false)
-        };
-
+        var rows = columns.Select(c => (c.Name, c.DataType, Declared: c.Declared ?? c.DataType, c.MaxLength, c.Identity, c.XmlCollection, Unsupported: false))
+            .Concat(unsupported.Select(u => (u.Name, u.DataType, Declared: u.DataType, MaxLength: 0, Identity: false, XmlCollection: (string)null, Unsupported: true)))
+            .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
         var reader = Substitute.For<IDataReader>();
-        var idx = -1;
-        reader.Read().Returns(ci => { idx++; return idx < columns.Length; });
-        reader.GetString(0).Returns(ci => columns[idx].Name);
-        reader.GetString(1).Returns(ci => columns[idx].DataType);
-        reader.GetString(2).Returns(ci => columns[idx].UserType);
-        reader.IsDBNull(3).Returns(ci => columns[idx].MaxLen is null);
-        reader.GetValue(3).Returns(ci => (object)columns[idx].MaxLen ?? DBNull.Value);
-        reader.IsDBNull(4).Returns(true);
-        reader.GetValue(4).Returns(DBNull.Value);
+        var i = -1;
+        reader.Read().Returns(_ => ++i < Math.Max(rows.Length, 1));
+        reader.IsDBNull(0).Returns(false);
+        reader.GetValue(0).Returns(flags);
+        reader.IsDBNull(1).Returns(_ => rows.Length == 0);
+        reader.GetString(1).Returns(_ => rows[i].Name);
+        reader.GetString(2).Returns(_ => rows[i].DataType);
+        reader.GetString(3).Returns(_ => rows[i].Declared);
+        reader.IsDBNull(4).Returns(_ => rows[i].MaxLength == 0);
+        reader.GetValue(4).Returns(_ => (object)rows[i].MaxLength);
         reader.IsDBNull(5).Returns(true);
-        reader.GetValue(5).Returns(DBNull.Value);
         reader.IsDBNull(6).Returns(true);
-        reader.GetValue(6).Returns(DBNull.Value);
-        reader.GetString(7).Returns("YES");
-        reader.GetValue(8).Returns(false);
-        reader.GetValue(9).Returns(false);
-        reader.GetValue(10).Returns(ci => columns[idx].IsGeometry);
-        reader.GetValue(11).Returns(ci => columns[idx].IsBinary);
-        reader.GetValue(12).Returns(ci => columns[idx].IsXml);
+        reader.IsDBNull(7).Returns(true);
+        reader.GetString(8).Returns("YES");
+        reader.GetValue(9).Returns(_ => rows[i].Identity);
+        reader.IsDBNull(10).Returns(_ => rows[i].XmlCollection == null);
+        reader.GetString(10).Returns(_ => rows[i].XmlCollection);
+        reader.GetValue(11).Returns(_ => rows[i].Unsupported);
         return reader;
     }
 
@@ -2537,38 +2401,6 @@ public class MergeScriptHelperTests
     #region Unsupported Type Exclusion Tests
 
     [Test]
-    public void BuildMergeScript_SqlServer_QueriesContainUnsupportedTypeFilter()
-    {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id],[Name]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT,\r\n           [Name] NVARCHAR(100)",
-            insertCols: "        [Id],\r\n        [Name]",
-            updateCols: "[Name]");
-
-        MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
-            "dbo", "TestTable", "[{\"Id\":1,\"Name\":\"test\"}]", "[Id]",
-            mergeUpdate: true, mergeDelete: false, disableTriggers: false,
-            tokenizeScripts: false, mergeFilter: null);
-
-        // Verify that the unsupported type filter was included in queries
-        var allQueries = cmd.ReceivedCalls()
-            .Where(c => c.GetMethodInfo().Name == "set_CommandText")
-            .Select(c => c.GetArguments()[0]?.ToString())
-            .Where(t => t == null || !t.Contains("compatibility_level")) // B1: drop the cliff-detect probe
-            .ToList();
-
-        // GetJsonSelectColumns, GetJsonColumnDefinitions, GetInsertColumns, GetUpdateColumns should all have the filter
-        var filteredQueries = allQueries.Where(q => q != null && q.Contains("sql_variant")).ToList();
-        Assert.That(filteredQueries.Count, Is.GreaterThanOrEqualTo(4),
-            "Expected at least 4 queries (select, json defs, insert, update) to include sql_variant filter");
-
-        // Also check that timestamp and rowversion are excluded
-        var timestampQueries = allQueries.Where(q => q != null && q.Contains("'timestamp'")).ToList();
-        Assert.That(timestampQueries.Count, Is.GreaterThanOrEqualTo(4));
-    }
-
-    [Test]
     public void BuildMergeScript_PostgreSQL_QueriesContainUnsupportedTypeFilter()
     {
         var cmd = CreatePostgreSqlMockCommand(
@@ -2657,29 +2489,6 @@ public class MergeScriptHelperTests
     #region Unsupported Column Comments Tests
 
     [Test]
-    public void GetUnsupportedColumnComments_SqlServer_ReturnsCommentLines()
-    {
-        var cmd = Substitute.For<IDbCommand>();
-        cmd.ExecuteScalar().Returns("-- Column [VariantCol] skipped: sql_variant is not supported for data delivery\r\n-- Column [VersionCol] skipped: rowversion is not supported for data delivery");
-
-        var result = MergeScriptHelper.GetUnsupportedColumnComments(Platform.SqlServer, cmd, "dbo", "TestTable");
-
-        Assert.That(result, Does.Contain("-- Column [VariantCol] skipped: sql_variant is not supported for data delivery"));
-        Assert.That(result, Does.Contain("-- Column [VersionCol] skipped: rowversion is not supported for data delivery"));
-    }
-
-    [Test]
-    public void GetUnsupportedColumnComments_SqlServer_NoUnsupportedColumns_ReturnsEmpty()
-    {
-        var cmd = Substitute.For<IDbCommand>();
-        cmd.ExecuteScalar().Returns(null);
-
-        var result = MergeScriptHelper.GetUnsupportedColumnComments(Platform.SqlServer, cmd, "dbo", "TestTable");
-
-        Assert.That(result, Is.Empty);
-    }
-
-    [Test]
     public void GetUnsupportedColumnComments_PostgreSQL_ReturnsCommentLines()
     {
         var cmd = Substitute.For<IDbCommand>();
@@ -2704,14 +2513,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_WithUnsupportedColumns_PrependsComments()
     {
-        var comments = "-- Column [VariantCol] skipped: sql_variant is not supported for data delivery";
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null,
-            unsupportedComments: comments);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")], unsupported: [("VariantCol", "sql_variant")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
@@ -2725,13 +2527,7 @@ public class MergeScriptHelperTests
     [Test]
     public void BuildMergeScript_SqlServer_NoUnsupportedColumns_DoesNotPrependComments()
     {
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null,
-            unsupportedComments: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "TestTable", "[{\"Id\":1}]", "[Id]",
@@ -2907,12 +2703,7 @@ public class MergeScriptHelperTests
         // own test below because tokenizeScripts:true sets jsonKeys=null which short-circuits
         // the IDENTITY-column-in-keys check away — that combination is the realistic schema-
         // template case but it suppresses IDENTITY_INSERT regardless of override.
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "tenant_seed", "Customers", "[{\"Id\":1}]", "[Id]",
@@ -2935,12 +2726,7 @@ public class MergeScriptHelperTests
         // tokenizeScripts:false populates jsonKeys from tableData; an identity key column
         // present in jsonKeys then enables the IDENTITY_INSERT block. Verify it uses the
         // override.
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: true,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int", Identity: true)], flags: 1);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "tenant_seed", "Customers", "[{\"Id\":1}]", "[Id]",
@@ -2960,12 +2746,7 @@ public class MergeScriptHelperTests
         // The content-file token must reference the unqualified content filename in
         // schema-template mode — DataTongs writes the .tabledata file with an unqualified
         // name (Customers.tabledata), so the token in the merge body must match.
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "tenant_seed", "Customers", "[]", "[Id]",
@@ -3016,12 +2797,7 @@ public class MergeScriptHelperTests
     {
         // Regression guard: omitting destSchemaOverride or passing null must produce
         // exactly the same output as before slice 7 (literal source schema everywhere).
-        var cmd = CreateSqlServerMockCommand(
-            jsonSelectCols: "[Id]",
-            needsIdentity: false,
-            jsonColDefs: "           [Id] INT",
-            insertCols: "        [Id]",
-            updateCols: null);
+        var cmd = CreateSqlServerShapeCommand([new("Id", "int")]);
 
         var result = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, cmd,
             "dbo", "Users", "[]", "[Id]",

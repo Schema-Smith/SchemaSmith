@@ -44,4 +44,15 @@ public class MergeColumnInfo
 
     /// <summary>Numeric scale.</summary>
     public int Scale { get; set; }
+
+    /// <summary>Fractional-seconds precision of a date/time type.</summary>
+    public int DateTimePrecision { get; set; }
+
+    /// <summary>SQL Server: the column's type as the catalog names it -- an alias type by its own name, schema-qualified
+    /// outside dbo and sys. Null on the other engines.</summary>
+    public string DeclaredType { get; set; }
+
+    /// <summary>SQL Server: the bracketed schema-qualified XML schema collection a typed xml column is bound to; null when
+    /// it has none.</summary>
+    public string XmlSchemaCollection { get; set; }
 }

@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Data;
 using System.Linq;
 using System.Text;
@@ -456,58 +457,79 @@ public static class MergeScriptHelper
     }
 
     private static List<MergeColumnInfo> GetColumnMetadataSqlServer(IDbCommand cmd, string schemaOrDb, string tableName, HashSet<string> jsonKeys)
+        => ReadTableShapeSqlServer(cmd, schemaOrDb, tableName, jsonKeys).Columns;
+
+    // Everything the SQL Server merge builder reads about a table, in one round trip: the columns it delivers (computed,
+    // graph-internal and hidden columns left out, and, when the data names its keys, only those), the columns whose type
+    // it cannot deliver, and the table's flags -- 1 an identity column, 2 memory-optimized (OBJECTPROPERTY returns NULL
+    // before 2014), 4 an append-only ledger table (sys.tables.ledger_type is a 2022 column, so the text naming it is only
+    // compiled there). The flags row comes back even when no column does.
+    private sealed class SqlServerTableShape
+    {
+        public List<MergeColumnInfo> Columns { get; } = new();
+        public List<(string Name, string DataType)> Unsupported { get; } = new();
+        public int Flags { get; set; }
+    }
+
+    private static SqlServerTableShape ReadTableShapeSqlServer(IDbCommand cmd, string schemaOrDb, string tableName, HashSet<string> jsonKeys)
     {
         var schema = Identifier.Unwrap(schemaOrDb.Trim(), Platform.SqlServer);
         var table = Identifier.Unwrap(tableName.Trim(), Platform.SqlServer);
 
-        BindIdentifierParameters(cmd, ("@schema", schema), ("@table", table));
+        BindIdentifierParameters(cmd, ("@schema", schema), ("@table", table), ("@objname", SqlServerObjectName(schema, table)));
         cmd.CommandText = $@"
-SELECT c.COLUMN_NAME, c.DATA_TYPE,
-       CASE WHEN SCHEMA_NAME(st.[schema_id]) IN ('sys', 'dbo')
-            THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END + st.[name] AS USER_TYPE,
-       c.CHARACTER_MAXIMUM_LENGTH, c.NUMERIC_PRECISION, c.NUMERIC_SCALE, c.DATETIME_PRECISION,
-       c.IS_NULLABLE, CAST(CASE WHEN ident.[Name] IS NOT NULL THEN 1 ELSE 0 END AS BIT) AS IsIdentity,
-       CAST(CASE WHEN cc.[name] IS NOT NULL THEN 1 ELSE 0 END AS BIT) AS IsComputed,
-       CAST(CASE WHEN c.DATA_TYPE IN ('geography','geometry') THEN 1 ELSE 0 END AS BIT) AS IsGeometry,
-       CAST(CASE WHEN c.DATA_TYPE IN ('binary','varbinary','image') THEN 1 ELSE 0 END AS BIT) AS IsBinary,
-       CAST(CASE WHEN c.DATA_TYPE = 'xml' THEN 1 ELSE 0 END AS BIT) AS IsXml
-  FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
-  JOIN (SELECT CASE WHEN SCHEMA_NAME(st2.[schema_id]) IN ('sys', 'dbo')
-                    THEN '' ELSE SCHEMA_NAME(st2.[schema_id]) + '.' END + st2.[name] AS [name], st2.user_type_id, st2.[schema_id]
-          FROM sys.types st2) st ON st.user_type_id = sc.user_type_id
-  LEFT JOIN sys.identity_columns ident ON ident.[Name] = c.COLUMN_NAME
-                                                    AND ident.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
-  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
-  WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
-    AND cc.[name] IS NULL
-    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.SqlServer)}
-  ORDER BY c.COLUMN_NAME
+DECLARE @v_ss_ledger INT = 0;
+IF CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(50)), 4) AS INT) >= 16
+    EXEC sp_executesql N'SELECT @l = ledger_type FROM sys.tables WHERE [object_id] = OBJECT_ID(@o)',
+         N'@o NVARCHAR(776), @l INT OUTPUT', @o = @objname, @l = @v_ss_ledger OUTPUT;
+SELECT f.Flags, col.*
+  FROM (SELECT CASE WHEN EXISTS (SELECT * FROM sys.identity_columns WHERE [object_id] = OBJECT_ID(@objname)) THEN 1 ELSE 0 END
+             + CASE WHEN OBJECTPROPERTY(OBJECT_ID(@objname), 'TableIsMemoryOptimized') = 1 THEN 2 ELSE 0 END
+             + CASE WHEN @v_ss_ledger = 3 THEN 4 ELSE 0 END AS Flags) f
+  LEFT JOIN (
+    SELECT c.COLUMN_NAME, c.DATA_TYPE,
+           CASE WHEN SCHEMA_NAME(st.[schema_id]) IN ('sys', 'dbo') THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END + st.[name] AS USER_TYPE,
+           c.CHARACTER_MAXIMUM_LENGTH, c.NUMERIC_PRECISION, c.NUMERIC_SCALE, c.DATETIME_PRECISION, c.IS_NULLABLE,
+           CAST(CASE WHEN ident.[name] IS NOT NULL THEN 1 ELSE 0 END AS BIT) AS IsIdentity,
+           CASE WHEN sc.xml_collection_id <> 0 THEN QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) END AS XmlCollection,
+           CAST(CASE WHEN c.DATA_TYPE IN ('sql_variant', 'rowversion', 'timestamp') THEN 1 ELSE 0 END AS BIT) AS IsUnsupported
+      FROM INFORMATION_SCHEMA.COLUMNS c
+      JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
+      JOIN sys.types st ON st.user_type_id = sc.user_type_id
+      LEFT JOIN sys.xml_schema_collections xc ON xc.xml_collection_id = sc.xml_collection_id
+      LEFT JOIN sys.identity_columns ident ON ident.[object_id] = sc.[object_id] AND ident.column_id = sc.column_id
+      LEFT JOIN sys.computed_columns cc ON cc.[object_id] = sc.[object_id] AND cc.column_id = sc.column_id
+     WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
+       AND (c.DATA_TYPE IN ('sql_variant', 'rowversion', 'timestamp')
+            OR (cc.[name] IS NULL {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.SqlServer)}))
+  ) col ON 1 = 1
+ ORDER BY col.COLUMN_NAME
 ";
-        var results = new List<MergeColumnInfo>();
+        var shape = new SqlServerTableShape();
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            var userType = reader.GetString(2).ToUpperInvariant();
-            var maxLen = reader.IsDBNull(3) ? 0 : Convert.ToInt32(reader.GetValue(3));
-            var precision = reader.IsDBNull(4) ? 0 : Convert.ToInt32(reader.GetValue(4));
-            var scale = reader.IsDBNull(5) ? 0 : Convert.ToInt32(reader.GetValue(5));
-            var dtPrecision = reader.IsDBNull(6) ? 0 : Convert.ToInt32(reader.GetValue(6));
+            shape.Flags = reader.IsDBNull(0) ? 0 : Convert.ToInt32(reader.GetValue(0), CultureInfo.InvariantCulture);
+            if (reader.IsDBNull(1)) continue;
+            var name = reader.GetString(1);
+            var dataType = reader.GetString(2);
+            if (Convert.ToBoolean(reader.GetValue(11), CultureInfo.InvariantCulture))
+            {
+                shape.Unsupported.Add((name, dataType));
+                continue;
+            }
+            var declaredType = reader.GetString(3);
+            // The base type: .value() refuses an alias type as its target, and DATA_TYPE names an alias type's base.
+            var userType = dataType.ToUpperInvariant();
+            var maxLen = reader.IsDBNull(4) ? 0 : Convert.ToInt32(reader.GetValue(4), CultureInfo.InvariantCulture);
+            var precision = reader.IsDBNull(5) ? 0 : Convert.ToInt32(reader.GetValue(5), CultureInfo.InvariantCulture);
+            var scale = reader.IsDBNull(6) ? 0 : Convert.ToInt32(reader.GetValue(6), CultureInfo.InvariantCulture);
+            var dtPrecision = reader.IsDBNull(7) ? 0 : Convert.ToInt32(reader.GetValue(7), CultureInfo.InvariantCulture);
 
-            // Build JSON parse type with proper size/precision qualifiers. This is a cast target for
-            // shredding delivered data (OPENJSON WITH / .value()), not a faithful DDL rendering, so it
-            // deliberately does NOT share the catalog-derived DataType function C1-0a introduced for the
-            // engine scripts' drift comparison and extraction — those two jobs have different correctness
-            // requirements (faithful DDL text vs. "a type the shred can safely cast to").
-            //
-            // There is no TIME case below (unlike DATETIME2) — that gap looks like C1-0a's defect but is
-            // not reachable the same way: this is a cast target, and an unqualified TIME/DATETIME2 casts
-            // at precision 7 (the max), so the destination column governs final rounding regardless.
-            // The DATETIME2 precision suffix just above is defensive, not load-bearing: forcing it to
-            // `(dtPrecision * 0)` and rerunning the full suite left every test green, including the
-            // delivery round-trip tests below — proof, not just the documented-defaults argument, that
-            // nothing downstream depends on this value being correct. Do not "fix" the missing TIME case.
+            // A cast target for shredding delivered data (.value() in the XML row source), not a faithful DDL rendering,
+            // so it does not share the catalog-derived DataType function the engine scripts use. There is no TIME case
+            // (unlike DATETIME2): an unqualified TIME/DATETIME2 casts at precision 7, and the destination column governs
+            // the final rounding -- zeroing the DATETIME2 precision below left every delivery round-trip test green.
             // A vector is read as its text, which the INSERT converts back; VECTOR is no shred target without its dimension.
             var parseType = userType
                 .Replace("VECTOR", "NVARCHAR(MAX)")
@@ -520,29 +542,31 @@ SELECT c.COLUMN_NAME, c.DATA_TYPE,
                 .Replace("IMAGE", "VARBINARY(MAX)");
 
             if (userType.Contains("CHAR") || userType.Contains("BINARY"))
-                parseType += $"({(maxLen == -1 ? "MAX" : maxLen.ToString())})";
+                parseType += $"({(maxLen == -1 ? "MAX" : maxLen.ToString(CultureInfo.InvariantCulture))})";
             else if (userType is "NUMERIC" or "DECIMAL")
                 parseType += $"({precision}, {scale})";
             else if (userType == "DATETIME2")
                 parseType += $"({dtPrecision})";
 
-            results.Add(new MergeColumnInfo
+            shape.Columns.Add(new MergeColumnInfo
             {
-                Name = reader.GetString(0),
-                DataType = reader.GetString(1),
+                Name = name,
+                DataType = dataType,
+                DeclaredType = declaredType,
                 JsonParseType = parseType,
                 MaxLength = maxLen,
                 Precision = precision,
                 Scale = scale,
-                IsNullable = reader.GetString(7) == "YES",
-                IsIdentity = (bool)reader.GetValue(8),
-                IsComputed = (bool)reader.GetValue(9),
-                IsGeometry = (bool)reader.GetValue(10),
-                IsBinary = (bool)reader.GetValue(11),
-                IsXml = (bool)reader.GetValue(12)
+                DateTimePrecision = dtPrecision,
+                IsNullable = reader.GetString(8) == "YES",
+                IsIdentity = Convert.ToBoolean(reader.GetValue(9), CultureInfo.InvariantCulture),
+                XmlSchemaCollection = reader.IsDBNull(10) ? null : reader.GetString(10),
+                IsGeometry = dataType is "geography" or "geometry",
+                IsBinary = dataType is "binary" or "varbinary" or "image",
+                IsXml = dataType == "xml"
             });
         }
-        return results;
+        return shape;
     }
 
     private static List<MergeColumnInfo> GetColumnMetadataPostgreSql(IDbCommand cmd, string schemaOrDb, string tableName, HashSet<string> jsonKeys)
@@ -902,23 +926,10 @@ WHERE tc.CONSTRAINT_TYPE = 'PRIMARY KEY'
     }
 
     private static string GetUnsupportedColumnCommentsSqlServer(IDbCommand cmd, string tableSchema, string tableName)
-    {
-        var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
-        BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
-        const string aggExpr = "'-- Column [' + c.COLUMN_NAME + '] skipped: ' + c.DATA_TYPE + ' is not supported for data delivery'";
-        const string filters = @"
-  FROM INFORMATION_SCHEMA.COLUMNS c
-  WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
-    AND c.DATA_TYPE IN ('sql_variant', 'rowversion', 'timestamp')
-";
-        if (belowCliff)
-        {
-            cmd.CommandText = $"SELECT {aggExpr}{filters}  ORDER BY c.COLUMN_NAME";
-            return string.Join("\r\n", ReadStringColumn(cmd));
-        }
-        cmd.CommandText = $"SELECT STRING_AGG({aggExpr}, CHAR(13) + CHAR(10)){filters}";
-        return cmd.ExecuteScalar()?.ToString() ?? "";
-    }
+        => UnsupportedColumnCommentsSqlServer(ReadTableShapeSqlServer(cmd, tableSchema, tableName, null));
+
+    private static string UnsupportedColumnCommentsSqlServer(SqlServerTableShape shape) =>
+        string.Join("\r\n", shape.Unsupported.Select(c => $"-- Column [{c.Name}] skipped: {c.DataType} is not supported for data delivery"));
 
     private static string GetUnsupportedColumnCommentsPostgreSql(IDbCommand cmd, string tableSchema, string tableName)
     {
@@ -956,22 +967,17 @@ SELECT STRING_AGG('-- Column ""' || c.column_name || '"" skipped: ' || c.udt_nam
             ? tableSchema
             : Identifier.Unwrap(destSchemaOverride.Trim(), Platform.SqlServer);
 
-        var unsupportedComments = GetUnsupportedColumnCommentsSqlServer(cmd, tableSchema, tableName);
+        var shape = ReadTableShapeSqlServer(cmd, tableSchema, tableName, jsonKeys);
+        var columns = shape.Columns;
+        var unsupportedComments = UnsupportedColumnCommentsSqlServer(shape);
         var matchColumns = BuildSqlServerMatchColumns(keyColumns);
-        // Select-column list for the MERGE source, computed here (before identityInsert) so the catalog-query
-        // call order is identical to the JSON-only path that predates the XML encoding. XML shreds with
-        // .nodes()/.value(); JSON reads OPENJSON WITH columns (the WITH clause is jsonColumns, below).
-        var selectColumns = isXml
-            ? BuildXmlShredSelectColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys)
-            : GetJsonSelectColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys);
-        // IDENTITY_INSERT must be ON only when tabledata provides values for an identity column.
-        // NeedsIdentityInsertSqlServer returns true whenever ANY identity column exists; filter by data keys.
-        var targetFlags = SqlServerTargetFlags(cmd, tableSchema, tableName);
-        var identityInsert = (targetFlags & 1) != 0
-                             && IdentityColumnInJsonKeysSqlServer(cmd, tableSchema, tableName, jsonKeys);
-        var memoryOptimized = (targetFlags & 2) != 0;
-        var appendOnlyLedger = (targetFlags & 4) != 0;
-        var jsonColumns = isXml ? null : GetJsonColumnDefinitionsSqlServer(cmd, tableSchema, tableName, jsonKeys);
+        // XML shreds with .nodes()/.value(); JSON reads OPENJSON WITH columns (the WITH clause is jsonColumns, below).
+        var selectColumns = isXml ? XmlShredSelectColumnsSqlServer(columns) : JsonSelectColumnsSqlServer(columns);
+        // IDENTITY_INSERT is ON only when the data carries a value for the identity column.
+        var identityInsert = (shape.Flags & 1) != 0 && jsonKeys is { Count: > 0 } && columns.Any(c => c.IsIdentity);
+        var memoryOptimized = (shape.Flags & 2) != 0;
+        var appendOnlyLedger = (shape.Flags & 4) != 0;
+        var jsonColumns = isXml ? null : JsonColumnDefinitionsSqlServer(columns);
 
         // Content-file token: DataTongs passes the exact key it wrote alongside the .tabledata filename
         // (see MergeScriptHelper.BuildMergeScript's contentFileToken doc). The fallback below — the same
@@ -1003,7 +1009,7 @@ SELECT STRING_AGG('-- Column ""' || c.column_name || '"" skipped: ' || c.udt_nam
         if (memoryOptimized || appendOnlyLedger)
             return (string.IsNullOrEmpty(unsupportedComments) ? "" : unsupportedComments + "\r\n") +
                    BuildSeparateStatementsSqlServer(cmd, tableSchema, tableName, destSchema, declareLine, sourceSelect, keyColumns,
-                       mergeUpdate, mergeDelete, mergeFilter, jsonKeys, identityInsert, disableTriggers, memoryOptimized, appendOnlyLedger);
+                       mergeUpdate, mergeDelete, mergeFilter, columns, identityInsert, disableTriggers, memoryOptimized, appendOnlyLedger);
 
         var mergeSQL = (string.IsNullOrEmpty(unsupportedComments) ? "" : unsupportedComments + "\r\n") + $@"
 {declareLine}
@@ -1016,10 +1022,9 @@ ON {matchColumns}
 ";
 
         // A table whose only columns are identity or computed has nothing to update.
-        var sqlServerUpdateColumns = mergeUpdate ? GetUpdateColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys) : null;
-        if (!string.IsNullOrWhiteSpace(sqlServerUpdateColumns))
+        var updateColumns = mergeUpdate ? UpdatableColumnsSqlServer(columns) : new List<MergeColumnInfo>();
+        if (updateColumns.Count > 0)
         {
-            var updateColumns = sqlServerUpdateColumns;
             mergeSQL += $"""
 
 WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
@@ -1028,14 +1033,13 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
 """;
         }
 
-        var insertColumns = GetInsertColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys);
         mergeSQL += $@"
 
  WHEN NOT MATCHED BY TARGET THEN
    INSERT (
- {insertColumns}
+ {InsertColumnsSqlServer(columns)}
    ) VALUES (
- {SourceColumnsSqlServer(insertColumns)}
+ {SourceColumnsSqlServer(columns)}
    )
  ";
 
@@ -1054,29 +1058,31 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
 
     // NULL-safe inequality: fires update when exactly one side is NULL, or when both are non-NULL but differ.
     // The original "NOT (T = S OR (both NULL))" form falls into three-valued-logic NULL for the asymmetric cases.
-    private static string BuildUpdateCompareSqlServer(string updateColumns)
+    // A type with no = operator is compared through a type that has one: spatial as its text, xml, ntext and vector as
+    // NVARCHAR(MAX), text as VARCHAR(MAX), image as VARBINARY(MAX), and datetimeoffset as its text so a change of offset
+    // that names the same instant is still a change.
+    private static string BuildUpdateCompareSqlServer(IEnumerable<MergeColumnInfo> updateColumns)
     {
         static string NullSafeNotEqual(string tExpr, string sExpr) =>
             $"((({tExpr}) IS NULL AND ({sExpr}) IS NOT NULL) OR (({tExpr}) IS NOT NULL AND ({sExpr}) IS NULL) OR ({tExpr}) <> ({sExpr}))";
-        return string.Join(" OR ",
-            Identifier.SplitDelimitedList(updateColumns, Platform.SqlServer).Select(c => c.StartsWith("G[")
-                ? NullSafeNotEqual($"Target.{c.Substring(1)}.ToString()", $"Source.{c.Substring(1)}.ToString()")
-                : c.StartsWith("X[") || c.StartsWith("N[") || c.StartsWith("V[")
-                    ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS NVARCHAR(MAX))", $"CAST(Source.{c.Substring(1)} AS NVARCHAR(MAX))")
-                    : c.StartsWith("T[")
-                        ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS VARCHAR(MAX))", $"CAST(Source.{c.Substring(1)} AS VARCHAR(MAX))")
-                        : c.StartsWith("I[")
-                            ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS VARBINARY(MAX))", $"CAST(Source.{c.Substring(1)} AS VARBINARY(MAX))")
-                            : c.StartsWith("D[")
-                                ? NullSafeNotEqual($"CAST(Target.{c.Substring(1)} AS NVARCHAR(50))", $"CAST(Source.{c.Substring(1)} AS NVARCHAR(50))")
-                                : NullSafeNotEqual($"Target.{c}", $"Source.{c}")));
+        static string Compared(string side, MergeColumnInfo c)
+        {
+            var column = $"{side}.{SqlServerBracket(c.Name)}";
+            return c.DataType.ToLowerInvariant() switch
+            {
+                "geography" or "geometry" => $"{column}.ToString()",
+                "xml" or "ntext" or "vector" => $"CAST({column} AS NVARCHAR(MAX))",
+                "text" => $"CAST({column} AS VARCHAR(MAX))",
+                "image" => $"CAST({column} AS VARBINARY(MAX))",
+                "datetimeoffset" => $"CAST({column} AS NVARCHAR(50))",
+                _ => column
+            };
+        }
+        return string.Join(" OR ", updateColumns.Select(c => NullSafeNotEqual(Compared("Target", c), Compared("Source", c))));
     }
 
-    private static string BuildUpdateAssignmentsSqlServer(string updateColumns)
-    {
-        static string Plain(string c) => c[0] == '[' ? c : c[1..];
-        return string.Join(",\r\n", Identifier.SplitDelimitedList(updateColumns, Platform.SqlServer).Select(c => $"        {Plain(c)} = Source.{Plain(c)}"));
-    }
+    private static string BuildUpdateAssignmentsSqlServer(IEnumerable<MergeColumnInfo> updateColumns) =>
+        string.Join(",\r\n", updateColumns.Select(c => $"        {SqlServerBracket(c.Name)} = Source.{SqlServerBracket(c.Name)}"));
 
     // SQL Server refuses MERGE outright on a memory-optimized table, and UPDATE and DELETE on an append-only ledger table,
     // so those take the same work as separate statements over a staged copy of the source rows. A memory-optimized table
@@ -1084,7 +1090,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
     // the rows that differ, or would have been deleted, are counted in a message and left as they are.
     private static string BuildSeparateStatementsSqlServer(IDbCommand cmd, string tableSchema, string tableName, string destSchema,
         string declareLine, string sourceSelect, string keyColumns, bool mergeUpdate, bool mergeDelete, string mergeFilter,
-        HashSet<string> jsonKeys, bool identityInsert, bool disableTriggers, bool memoryOptimized, bool appendOnlyLedger)
+        List<MergeColumnInfo> columns, bool identityInsert, bool disableTriggers, bool memoryOptimized, bool appendOnlyLedger)
     {
         var target = SqlServerObjectName(destSchema, tableName);
         // #v_ss_Source's column names follow the server's collation, not the database's, so a key named in another case
@@ -1105,9 +1111,8 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
             // A memory-optimized table refuses an UPDATE that names a primary key column, even to its own value.
             var keys = Identifier.SplitDelimitedList(keyColumns, Platform.SqlServer)
                 .Select(k => Identifier.Unwrap(k.TrimStart('*').Trim(), Platform.SqlServer)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-            var updateColumns = string.Join(",", Identifier.SplitDelimitedList(GetUpdateColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys), Platform.SqlServer)
-                .Where(c => !keys.Contains(Identifier.Unwrap(c[c.IndexOf('[')..], Platform.SqlServer))));
-            if (updateColumns.Length > 0)
+            var updateColumns = UpdatableColumnsSqlServer(columns).Where(c => !keys.Contains(c.Name)).ToList();
+            if (updateColumns.Count > 0)
             {
                 var compare = BuildUpdateCompareSqlServer(updateColumns);
                 sb.Append(appendOnlyLedger
@@ -1117,8 +1122,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
             }
         }
 
-        var insertColumns = GetInsertColumnsSqlServer(cmd, tableSchema, tableName, jsonKeys);
-        sb.Append($"INSERT INTO {target} (\r\n {insertColumns}\r\n)\r\nSELECT {SourceColumnsSqlServer(insertColumns)}\r\n  FROM #v_ss_Source AS Source\r\n" +
+        sb.Append($"INSERT INTO {target} (\r\n {InsertColumnsSqlServer(columns)}\r\n)\r\nSELECT {SourceColumnsSqlServer(columns)}\r\n  FROM #v_ss_Source AS Source\r\n" +
                   $" WHERE NOT EXISTS (SELECT 1 FROM {target} AS Target{hint} WHERE {matchColumns});\r\n\r\n");
 
         if (mergeDelete)
@@ -1163,49 +1167,35 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
     }
 
     private static string GetJsonSelectColumnsSqlServer(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys)
-    {
-        var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
-        BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
-        var aggExpr = $@"CASE WHEN c.DATA_TYPE IN ('geography', 'geometry')
-                       THEN CASE WHEN c.DATA_TYPE = 'geography' THEN 'geography' ELSE 'geometry' END + '::STGeomFromText(' + QUOTENAME(c.COLUMN_NAME) + ', COALESCE(' + QUOTENAME(c.COLUMN_NAME + '.STSrid') + ', ' + CASE WHEN c.DATA_TYPE = 'geography' THEN '4326' ELSE '0' END + ')) AS ' + QUOTENAME(c.COLUMN_NAME)
-                       WHEN c.DATA_TYPE IN {SqlServerCharacterTypeList}
-                       THEN 'COALESCE(' + QUOTENAME(c.COLUMN_NAME) + ', ' + QUOTENAME(c.COLUMN_NAME + '{AsJsonSuffix}') + ') AS ' + QUOTENAME(c.COLUMN_NAME)
-                       ELSE QUOTENAME(c.COLUMN_NAME) END";
-        var filters = $@"
-  FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
-  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
-  WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
-    AND cc.[name] IS NULL
-    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.SqlServer)}
-";
-        if (belowCliff)
-        {
-            cmd.CommandText = $"SELECT {aggExpr}{filters}  ORDER BY c.COLUMN_NAME";
-            var rows = ReadStringColumn(cmd);
-            return rows.Count == 0 ? null : string.Join(",", rows);
-        }
-        cmd.CommandText = $"SELECT STRING_AGG({aggExpr}, ',') WITHIN GROUP (ORDER BY c.COLUMN_NAME){filters}";
-        return cmd.ExecuteScalar()?.ToString();
-    }
+        => JsonSelectColumnsSqlServer(ReadTableShapeSqlServer(cmd, tableSchema, tableName, jsonKeys).Columns);
 
-    // B1: builds the XML-shred SELECT column list for a SQL Server data-delivery MERGE source. Assembled
-    // in C# from GetColumnMetadata (whose column set matches GetJsonSelectColumns exactly — same
-    // computed/unsupported-type exclusions and data-key filter), so the emitted Source exposes
-    // exactly the columns the MERGE's insert/update/match clauses reference. The delivery XML shape is
-    // <rows><row><c n="ColName">value</c>…</row></rows>; each column is shredded with
-    // Src.n.value(N'(c[@n="ColName"]/text())[1]', <type>). NULL = absent <c>.
-    private static string BuildXmlShredSelectColumnsSqlServer(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys)
+    private static string SqlServerBracket(string name) => $"[{Identifier.EscapeDelimited(name, Platform.SqlServer)}]";
+
+    // The OPENJSON source's select list. A spatial value arrives as its text with its SRID beside it (#584: a NULL one
+    // takes the type's default); a character column takes whichever of its two readings is set (#567).
+    internal static string JsonSelectColumnsSqlServer(IReadOnlyList<MergeColumnInfo> columns) =>
+        columns.Count == 0 ? null : string.Join(",", columns.Select(c =>
+        {
+            var column = SqlServerBracket(c.Name);
+            if (c.IsGeometry)
+            {
+                var spatialType = c.DataType.Equals("geography", StringComparison.OrdinalIgnoreCase) ? "geography" : "geometry";
+                return $"{spatialType}::STGeomFromText({column}, COALESCE({SqlServerBracket(c.Name + ".STSrid")}, {DefaultSridSqlServer(spatialType)})) AS {column}";
+            }
+            return IsSqlServerCharacterType(c.DataType) ? $"COALESCE({column}, {SqlServerBracket(c.Name + AsJsonSuffix)}) AS {column}" : column;
+        }));
+
+    // B1: the XML-shred select list. The delivery XML shape is <rows><row><c n="ColName">value</c>…</row></rows>; each
+    // column is shredded with Src.n.value(N'(c[@n="ColName"]/text())[1]', <type>). NULL = absent <c>.
+    internal static string XmlShredSelectColumnsSqlServer(IReadOnlyList<MergeColumnInfo> columns)
     {
-        var columns = GetColumnMetadataSqlServer(cmd, tableSchema, tableName, jsonKeys);
         if (columns.Count == 0) return "*";
 
         static string Node(string name) => $"({XPathNode(name)})[1]";
 
         return string.Join(",", columns.Select(c =>
         {
-            var alias = $"[{Identifier.EscapeDelimited(c.Name, Platform.SqlServer)}]";
+            var alias = SqlServerBracket(c.Name);
             if (c.IsGeometry)
             {
                 var spatialType = c.DataType.Equals("geography", StringComparison.OrdinalIgnoreCase) ? "geography" : "geometry";
@@ -1224,12 +1214,17 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
         }));
     }
 
+    internal static string InsertColumnsSqlServer(IReadOnlyList<MergeColumnInfo> columns) =>
+        columns.Count == 0 ? null : string.Join(",\r\n", columns.Select(c => $"        {SqlServerBracket(c.Name)}"));
+
+    private static List<MergeColumnInfo> UpdatableColumnsSqlServer(IEnumerable<MergeColumnInfo> columns) =>
+        columns.Where(c => !c.IsIdentity).ToList();
+
     private static string SqlServerObjectName(string schema, string name) =>
         $"[{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(name, Platform.SqlServer)}]";
 
-    // The insert list's columns as the source's: each item of the list prefixed, never a bracket inside a name.
-    private static string SourceColumnsSqlServer(string insertColumns) =>
-        string.Join(",\r\n", Identifier.SplitDelimitedList(insertColumns, Platform.SqlServer).Select(c => $"        Source.{c}"));
+    private static string SourceColumnsSqlServer(IEnumerable<MergeColumnInfo> columns) =>
+        string.Join(",\r\n", columns.Select(c => $"        Source.{SqlServerBracket(c.Name)}"));
 
     internal static string PgQuote(string name) => $"\"{Identifier.EscapeDelimited(name, Platform.PostgreSQL)}\"";
 
@@ -1281,32 +1276,12 @@ SELECT CASE WHEN EXISTS (SELECT * FROM sys.identity_columns WHERE [object_id] = 
         };
     }
 
-    private static bool IdentityColumnInJsonKeysSqlServer(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys)
-    {
-        if (jsonKeys == null || jsonKeys.Count == 0) return false;
-        var names = string.Join(",", jsonKeys.Select(k => $"'{k.Replace("'", "''")}'"));
-        BindIdentifierParameters(cmd, ("@objname", SqlServerObjectName(tableSchema, tableName)));
-        cmd.CommandText = $@"
-SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
-                              WHERE c.[object_id] = OBJECT_ID(@objname)
-                                AND c.[name] IN ({names}))
-                 THEN 1 ELSE 0 END AS BIT)
-";
-        return cmd.ExecuteScalar() as bool? ?? false;
-    }
-
-    // Builds the OPENJSON WITH clause's column types — the T-SQL twin of GetColumnMetadataSqlServer's
-    // parseType above, evaluated server-side (STRING_AGG) instead of client-side because this feeds the
-    // JSON row source directly rather than a per-column MergeColumnInfo list. Same reasoning applies: a
-    // cast target for shredding, not a DDL rendering, so it stays separate from C1-0a's catalog-derived
-    // DataType function; and the missing TIME precision case (only DATETIME2 is handled here too) is not
-    // reachable for the same mechanism proven at the C# twin above (zeroing its DATETIME2 precision left
-    // the full suite green) — this copy's DATETIME2 case was not itself mutated, but it is a cast target
-    // read by the same OPENJSON/INSERT machinery, so the same "destination column governs" argument holds.
+    // The OPENJSON WITH clause's column types: a cast target for shredding, not a DDL rendering, so it stays separate from
+    // the catalog-derived DataType function the engine scripts use; TIME needs no precision for the reason given at
+    // ReadTableShapeSqlServer.
     // #567: OPENJSON reads an object or array value as NULL into a plain column, so a character column has a second,
     // AS JSON, reading under this suffix.
     internal const string AsJsonSuffix = " (as JSON)";
-    private const string SqlServerCharacterTypeList = "('char', 'varchar', 'nchar', 'nvarchar', 'text', 'ntext')";
 
     // #584: a NULL spatial value has no SRID, and STGeomFromText refuses a NULL one even for NULL text; a value from a file
     // written without its SRID has none either. Each takes the type's own default.
@@ -1318,115 +1293,54 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
 
     // A column's name as the key in a quoted JSON path ($."key"), inside a T-SQL literal: a backslash and a double quote
     // escaped for the path, a single quote doubled for the literal.
-    private const string SqlServerJsonPathKey = @"REPLACE(REPLACE(REPLACE(c.COLUMN_NAME, '\', '\\'), '""', '\""'), '''', '''''')";
+    private static string SqlServerJsonPathKey(string name) => name.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("'", "''");
 
     private static string GetJsonColumnDefinitionsSqlServer(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys)
-    {
-        var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
-        BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
-        // A character column is read twice: plainly, which gives NULL for an object or array value, and AS JSON, which
-        // gives NULL for anything else. The select takes whichever is set (#567).
-        var aggExpr = $@"'           ' + QUOTENAME(c.COLUMN_NAME) + ' ' +
-                  CASE UPPER(USER_TYPE) WHEN 'HIERARCHYID' THEN 'NVARCHAR(4000)' WHEN 'GEOGRAPHY' THEN 'NVARCHAR(4000)'
-                                        WHEN 'GEOMETRY' THEN 'NVARCHAR(4000)' WHEN 'DATETIMEOFFSET' THEN 'NVARCHAR(50)'
-                                        WHEN 'NTEXT' THEN 'NVARCHAR(MAX)' WHEN 'TEXT' THEN 'VARCHAR(MAX)' WHEN 'IMAGE' THEN 'VARBINARY(MAX)'
-                                        WHEN 'VECTOR' THEN 'NVARCHAR(MAX)'
-                                        ELSE USER_TYPE END +
-                      CASE WHEN UPPER(USER_TYPE) IN ('CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR', 'BINARY', 'VARBINARY')
-                           THEN '(' + CASE WHEN CHARACTER_MAXIMUM_LENGTH = -1 THEN 'MAX' ELSE CONVERT(NVARCHAR(20), CHARACTER_MAXIMUM_LENGTH) END + ')'
-                                           WHEN UPPER(USER_TYPE) IN ('NUMERIC', 'DECIMAL')
-                                           THEN '(' + CONVERT(NVARCHAR(20), NUMERIC_PRECISION) + ', ' + CONVERT(NVARCHAR(20), NUMERIC_SCALE) + ')'
-                                           WHEN UPPER(USER_TYPE) = 'DATETIME2'
-                                           THEN '(' + CONVERT(NVARCHAR(20), DATETIME_PRECISION) + ')'
-                                           WHEN UPPER(USER_TYPE) = 'XML' AND sc.xml_collection_id <> 0
-                                           THEN '(' + QUOTENAME(SCHEMA_NAME(xc.[schema_id])) + '.' + QUOTENAME(xc.[name]) + ')'
-                                           ELSE '' END +
-                      CASE WHEN UPPER(USER_TYPE) IN ('GEOGRAPHY', 'GEOMETRY') THEN ', ' + QUOTENAME(c.COLUMN_NAME + '.STSrid') + ' INT' ELSE '' END +
-                      CASE WHEN c.DATA_TYPE IN {SqlServerCharacterTypeList} THEN ',' + CHAR(13) + CHAR(10) + '           ' + QUOTENAME(c.COLUMN_NAME + '{AsJsonSuffix}') + ' NVARCHAR(MAX) ''$.""' + {SqlServerJsonPathKey} + '""'' AS JSON' ELSE '' END";
-        var filters = $@"
-  FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
-  JOIN (SELECT CASE WHEN SCHEMA_NAME(st.[schema_id]) IN ('sys', 'dbo')
-                    THEN '' ELSE SCHEMA_NAME(st.[schema_id]) + '.' END + st.[name] AS USER_TYPE, st.user_type_id
-          FROM sys.types st) st ON st.user_type_id = sc.user_type_id
-  LEFT JOIN sys.xml_schema_collections xc ON xc.xml_collection_id = sc.xml_collection_id
-  LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
-                                                    AND ident.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
-  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
-  WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
-    AND cc.[name] IS NULL
-    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.SqlServer)}
-";
-        if (belowCliff)
+        => JsonColumnDefinitionsSqlServer(ReadTableShapeSqlServer(cmd, tableSchema, tableName, jsonKeys).Columns);
+
+    // A character column is read twice: plainly, which gives NULL for an object or array value, and AS JSON, which gives
+    // NULL for anything else. The select takes whichever is set (#567).
+    internal static string JsonColumnDefinitionsSqlServer(IReadOnlyList<MergeColumnInfo> columns) =>
+        columns.Count == 0 ? null : string.Join(",\r\n", columns.Select(c =>
         {
-            cmd.CommandText = $"SELECT {aggExpr}{filters}  ORDER BY c.COLUMN_NAME";
-            var rows = ReadStringColumn(cmd);
-            return rows.Count == 0 ? null : string.Join(",\r\n", rows);
-        }
-        cmd.CommandText = $"SELECT STRING_AGG({aggExpr}, ',' + CHAR(13) + CHAR(10)) WITHIN GROUP (ORDER BY c.COLUMN_NAME){filters}";
-        return cmd.ExecuteScalar()?.ToString();
+            var definition = $"           {SqlServerBracket(c.Name)} {OpenJsonTypeSqlServer(c)}";
+            if (c.IsGeometry) definition += $", {SqlServerBracket(c.Name + ".STSrid")} INT";
+            if (IsSqlServerCharacterType(c.DataType))
+                definition += $",\r\n           {SqlServerBracket(c.Name + AsJsonSuffix)} NVARCHAR(MAX) '$.\"{SqlServerJsonPathKey(c.Name)}\"' AS JSON";
+            return definition;
+        }));
+
+    private static string OpenJsonTypeSqlServer(MergeColumnInfo c)
+    {
+        var declared = c.DeclaredType ?? c.DataType;
+        var upper = declared.ToUpperInvariant();
+        var type = upper switch
+        {
+            "HIERARCHYID" or "GEOGRAPHY" or "GEOMETRY" => "NVARCHAR(4000)",
+            "DATETIMEOFFSET" => "NVARCHAR(50)",
+            "NTEXT" or "VECTOR" => "NVARCHAR(MAX)",
+            "TEXT" => "VARCHAR(MAX)",
+            "IMAGE" => "VARBINARY(MAX)",
+            _ => declared
+        };
+        return type + upper switch
+        {
+            "CHAR" or "VARCHAR" or "NCHAR" or "NVARCHAR" or "BINARY" or "VARBINARY"
+                => $"({(c.MaxLength == -1 ? "MAX" : c.MaxLength.ToString(CultureInfo.InvariantCulture))})",
+            "NUMERIC" or "DECIMAL" => $"({c.Precision}, {c.Scale})",
+            "DATETIME2" => $"({c.DateTimePrecision})",
+            "XML" when c.XmlSchemaCollection != null => $"({c.XmlSchemaCollection})",
+            _ => ""
+        };
     }
 
     private static string GetInsertColumnsSqlServer(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys)
-    {
-        var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
-        BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
-        var aggExpr = "'        ' + QUOTENAME(c.COLUMN_NAME)";
-        var filters = $@"
-  FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
-  LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
-                                                    AND ident.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
-  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
-  WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
-    AND cc.[name] IS NULL
-    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.SqlServer)}
-";
-        if (belowCliff)
-        {
-            cmd.CommandText = $"SELECT {aggExpr}{filters}  ORDER BY c.COLUMN_NAME";
-            var rows = ReadStringColumn(cmd);
-            return rows.Count == 0 ? null : string.Join(",\r\n", rows);
-        }
-        cmd.CommandText = $"SELECT STRING_AGG({aggExpr}, ',' + CHAR(13) + CHAR(10)) WITHIN GROUP (ORDER BY c.COLUMN_NAME){filters}";
-        return cmd.ExecuteScalar()?.ToString();
-    }
+        => InsertColumnsSqlServer(ReadTableShapeSqlServer(cmd, tableSchema, tableName, jsonKeys).Columns);
 
     private static string GetUpdateColumnsSqlServer(IDbCommand cmd, string tableSchema, string tableName, HashSet<string> jsonKeys)
     {
-        var belowCliff = IsBelowStringAggCliffSqlServer(cmd);
-        BindIdentifierParameters(cmd, ("@schema", tableSchema), ("@table", tableName));
-        const string aggExpr = @"CASE WHEN c.DATA_TYPE IN ('geography', 'geometry') THEN 'G'
-                       WHEN c.DATA_TYPE = 'datetimeoffset' THEN 'D'
-                       WHEN c.DATA_TYPE = 'xml' THEN 'X'
-                       WHEN c.DATA_TYPE = 'ntext' THEN 'N'
-                       WHEN c.DATA_TYPE = 'text' THEN 'T'
-                       WHEN c.DATA_TYPE = 'image' THEN 'I'
-                       WHEN c.DATA_TYPE = 'vector' THEN 'V'
-                       ELSE '' END +
-                  QUOTENAME(c.COLUMN_NAME)";
-        var filters = $@"
-  FROM INFORMATION_SCHEMA.COLUMNS c
-  JOIN sys.columns sc ON sc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME)) AND sc.[name] = c.COLUMN_NAME
-  LEFT JOIN sys.identity_columns ident ON ident.[Name] = COLUMN_NAME
-                                                    AND ident.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
-  LEFT JOIN sys.computed_columns cc ON cc.[name] = c.COLUMN_NAME
-                                                 AND cc.[object_id] = OBJECT_ID(QUOTENAME(c.TABLE_SCHEMA) + '.' + QUOTENAME(c.TABLE_NAME))
-  WHERE c.TABLE_SCHEMA = @schema AND c.TABLE_NAME = @table
-    AND ident.[Name] IS NULL
-    AND cc.[name] IS NULL
-    {SqlServerGraphColumnFilter}{SqlServerUnsupportedTypeFilter}{BuildJsonKeyFilter(jsonKeys, "c.COLUMN_NAME", Platform.SqlServer)}
-";
-        if (belowCliff)
-        {
-            cmd.CommandText = $"SELECT {aggExpr}{filters}  ORDER BY c.COLUMN_NAME";
-            var rows = ReadStringColumn(cmd);
-            return rows.Count == 0 ? null : string.Join(",", rows);
-        }
-        cmd.CommandText = $"SELECT STRING_AGG({aggExpr}, ',') WITHIN GROUP (ORDER BY c.COLUMN_NAME){filters}";
-        return cmd.ExecuteScalar()?.ToString();
+        var updatable = UpdatableColumnsSqlServer(ReadTableShapeSqlServer(cmd, tableSchema, tableName, jsonKeys).Columns);
+        return updatable.Count == 0 ? null : string.Join(",", updatable.Select(c => SqlServerBracket(c.Name)));
     }
 
     #endregion

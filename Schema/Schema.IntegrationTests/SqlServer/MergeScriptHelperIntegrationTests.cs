@@ -611,6 +611,51 @@ CREATE TABLE [dbo].[{tableName}] (
         }
     }
 
+    // The XML shred cast each value to the column's declared type, which .value() refuses when it is an alias type -- and
+    // named one outside dbo twice over (s.s.type) -- so an XML delivery into an alias-typed column failed. It casts to the
+    // base type now; OPENJSON accepted the alias all along, and is covered so that stays true.
+    [TestCase("Json")]
+    [TestCase("Xml")]
+    public void BuildMergeScript_AnAliasTypedColumn_DeliversItsValue(string encoding)
+    {
+        using var command = _connection.CreateCommand();
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var schema = $"_test_alias_{suffix}";
+        var dboType = $"_test_alias_code_{suffix}";
+        var tableName = $"_test_alias_tbl_{suffix}";
+
+        try
+        {
+            command.CommandText = $"CREATE SCHEMA [{schema}]";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TYPE [{schema}].[Code] FROM NVARCHAR(10) NULL; CREATE TYPE [dbo].[{dboType}] FROM VARCHAR(5) NULL";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE [{schema}].[{tableName}] ([Id] INT PRIMARY KEY, [C] [{schema}].[Code] NULL, [D] [dbo].[{dboType}] NULL)";
+            command.ExecuteNonQuery();
+
+            var data = encoding == "Xml"
+                ? "<rows><row><c n=\"Id\">1</c><c n=\"C\">abc</c><c n=\"D\">xy</c></row></rows>"
+                : "[{\"Id\":1,\"C\":\"abc\",\"D\":\"xy\"}]";
+            var script = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command,
+                schema, tableName, data, "[Id]",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false,
+                tokenizeScripts: false, mergeFilter: null, contentEncoding: encoding);
+            command.CommandText = script;
+            command.ExecuteNonQuery();
+
+            command.CommandText = $"SELECT [C] + '|' + [D] FROM [{schema}].[{tableName}] WHERE [Id] = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("abc|xy"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [{schema}].[{tableName}]; " +
+                                  $"IF TYPE_ID('{schema}.Code') IS NOT NULL DROP TYPE [{schema}].[Code]; " +
+                                  $"IF TYPE_ID('dbo.{dboType}') IS NOT NULL DROP TYPE [dbo].[{dboType}]; " +
+                                  $"IF SCHEMA_ID('{schema}') IS NOT NULL DROP SCHEMA [{schema}]";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void BuildMergeScript_TimeColumnWithPrecision_XmlEncoding_RoundTripsSubSecondPrecision()
     {
