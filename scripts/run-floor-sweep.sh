@@ -86,9 +86,16 @@ FLOORS=(
   "floor-mariadb-10213:mariadb:10.2.13:13429:MariaDb"
   "band-mariadb-10221:mariadb:10.2.21:13421:MariaDb"
   "floor-mysql-57:mysql:5.7:13457:MySQL"
-  # The supported floor patches: the 5.7 and 8.0 tags resolve to each line's newest, past every patch-level gate.
-  "floor-mysql-5722:mysql:5.7.22:13422:MySQL"
-  "floor-mysql-8023:mysql:8.0.23:13423:MySQL"
+  # The supported floor patches, and a band at every patch-level gate the floor now sits below: 8.0.12 (INSTANT,
+  # geometry indexes become SPATIAL), 8.0.13 (functional index, DEFAULT expression, the JSON_TABLE integer wrap), 8.0.14
+  # (a foreign key's referenced column keeps its case), 8.0.16 (CHECK), 8.0.17 (multi-valued), 8.0.23 (invisible
+  # column); 5.7.21 is the last patch before JSON_ARRAYAGG. The 5.7 and 8.0 tags resolve to each line's newest.
+  "floor-mysql-5716:mysql:5.7.16:13416:MySQL"
+  "band-mysql-5721:mysql:5.7.21:13432:MySQL"
+  "floor-mysql-8011:mysql:8.0.11:13411:MySQL"
+  "band-mysql-8012:mysql:8.0.12:13433:MySQL"
+  "band-mysql-8015:mysql:8.0.15:13415:MySQL"
+  "band-mysql-8022:mysql:8.0.22:13434:MySQL"
   "floor-postgres-12:postgres:12:15412:PostgreSQL"
   # System versioning without the 10.5 SYSTEM_TIME partitioning forms (STARTS, the interval count) and without AUTO:
   # the only band whose downgrades for them are not empty, and no CI leg runs it.
@@ -216,7 +223,8 @@ for f in "${FLOORS[@]}"; do
     if [ "$image" = "postgres" ]; then
       docker exec "$name" pg_isready -U "$TEST_USER" -d TestMain >/dev/null 2>&1 && ready=1 && break
     else
-      docker exec "$name" sh -c "{ command -v mariadb-admin >/dev/null && P=mariadb-admin || P=mysqladmin; } ; \$P ping -h 127.0.0.1 -u root -p'$TEST_PASSWORD'" >/dev/null 2>&1 && ready=1 && break
+      # The mysql:8.0.11 image ships no mysqladmin; the plain client over TCP answers the same question there.
+      docker exec "$name" sh -c "if command -v mariadb-admin >/dev/null; then mariadb-admin ping -h 127.0.0.1 -u root -p'$TEST_PASSWORD'; elif command -v mysqladmin >/dev/null; then mysqladmin ping -h 127.0.0.1 -u root -p'$TEST_PASSWORD'; else mysql -h 127.0.0.1 -u root -p'$TEST_PASSWORD' -e 'SELECT 1'; fi" >/dev/null 2>&1 && ready=1 && break
     fi
     echo -n "."; sleep 2
   done

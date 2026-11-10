@@ -7,12 +7,12 @@
 #
 # CI's MySQL, MariaDB and lctn1 jobs run it with the runner's own mysql client (MySQL 8.0, OpenSSL 3); the local sweeps
 # run the same file through a mysql:8.0 client container over TCP, so the step they check is the step CI runs. A copy
-# inside the server container with its own client is not that step: it passed while CI's grant failed on MySQL 5.7.22.
+# inside the server container with its own client is not that step: it passed while CI's grant failed on MySQL 5.7.
 set -u
 host=$1 port=$2 image=$3 expect=${4:-}
 : "${TEST_USER:?}" "${TEST_PASSWORD:?}"
 
-# MySQL 5.7.22 offers only TLS 1.0/1.1, which an OpenSSL 3 client refuses; the tests run with SslMode=None there too.
+# MySQL 5.7 offers only TLS 1.0/1.1, which an OpenSSL 3 client refuses; the tests run with SslMode=None there too.
 ssl=()
 case "$image" in mysql:5.7*) ssl=(--ssl-mode=DISABLED) ;; esac
 q() { mysql -h "$host" -P "$port" -u root -p"$TEST_PASSWORD" "${ssl[@]}" -N "$@"; }

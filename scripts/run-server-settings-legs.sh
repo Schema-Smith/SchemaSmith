@@ -80,7 +80,8 @@ for engine in $ENGINES; do
       port=14452; prefix=MySQL; user=root; image=$MYSQL_IMAGE
       docker run -d --rm --name "$name" --memory 1g --memory-swap 1g -p "$port:3306" \
         -e MYSQL_ROOT_PASSWORD="$PASSWORD" "$image" >/dev/null
-      probe="mysqladmin ping -h 127.0.0.1 -u root -p'$PASSWORD'"
+      # The mysql:8.0.11 image ships no mysqladmin; the plain client over TCP answers the same question there.
+      probe="mysqladmin ping -h 127.0.0.1 -u root -p'$PASSWORD' || mysql -h 127.0.0.1 -u root -p'$PASSWORD' -e 'SELECT 1'"
       # MySQL 5.7's TLS handshake fails with the modern connector on the stock image; CI turns SSL off for it too.
       case "$image" in mysql:5.7*) extra_env+=("SmithySettings_MySQL__ConnectionProperties__SslMode=None") ;; esac ;;
     MariaDb)

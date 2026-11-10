@@ -446,12 +446,12 @@ jobs:
     needs: [build-and-unit-tests, sweep-record]
     # Current 8.0 + the supported floor (5.7). MySQL 5.7 lacks JSON_TABLE, CHECK constraints, descending indexes,
     # and RENAME COLUMN — the version-adaptive engine takes an equivalent path or degrades via the policy.
-    # 8.0.23 and 5.7.22 are the supported floor patches. The 8.0 and 5.7 tags resolve to each line's newest patch, so
-    # without these legs the patch-level gates (8.0.13, 8.0.16, 8.0.17, 8.0.23) run only on servers past all of them.
+    # 8.0.11 and 5.7.16 are the supported floor patches. The 8.0 and 5.7 tags resolve to each line's newest patch; the
+    # patch-level gates in between (8.0.12, 8.0.13, 8.0.14, 8.0.16, 8.0.17, 8.0.23) are proven locally by the floor sweep's bands.
     strategy:
       fail-fast: false
       matrix:
-        mysql: ${{ github.event_name == 'pull_request' && fromJSON('["26","5.7"]') || fromJSON('["26","9.7","8.4","8.0","8.0.23","5.7","5.7.22"]') }}
+        mysql: ${{ github.event_name == 'pull_request' && fromJSON('["26","5.7"]') || fromJSON('["26","9.7","8.4","8.0","8.0.11","5.7","5.7.16"]') }}
     permissions:
       contents: read
       checks: write
@@ -475,8 +475,9 @@ jobs:
           MYSQL_DATABASE: TestMain
         ports:
           - 3306:3306
+        # The mysql:8.0.11 image ships no mysqladmin; the plain client over TCP answers the same question there.
         options: >-
-          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root -p'aCa2d805-41E5@40c4!98e7#92F93zzxo176'"
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -u root -p'aCa2d805-41E5@40c4!98e7#92F93zzxo176' || mysql -h 127.0.0.1 -u root -p'aCa2d805-41E5@40c4!98e7#92F93zzxo176' -e 'SELECT 1'"
           --health-interval 10s
           --health-timeout 5s
           --health-retries 10
