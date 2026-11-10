@@ -21,7 +21,7 @@ SchemaSmith is a state-based database schema management toolset for SQL Server, 
 
 This package installs four self-contained command-line tools:
 
-- **schemaquench** — Deploys schema packages to a target database. Computes the exact DDL needed to bring the target in line with the package definition, with WhatIf analysis, idempotent deployments, and 9 ordered execution slots for fine-grained control.
+- **schemaquench** — Deploys schema packages to a target database. Computes the exact DDL needed to bring the target in line with the package definition, with WhatIf analysis, idempotent deployments, and 10 ordered execution slots for fine-grained control.
 - **schematongs** — Extracts a live database schema into a deployable package. Pure SQL extraction (no SMO), preserves subfolder organization, validates scripts post-extraction, detects orphans.
 - **datatongs** — Extracts table data and generates idempotent MERGE scripts. Auto-detects primary keys, supports complex types, tokenized output for cross-environment reuse.
 - **schemashears** — Carves an object-level patch (a subset of a full product) from a schema package using a manifest, for surgical deployments that update only the objects in scope. VCS-driven — turn a `git diff` into a patch definition.
