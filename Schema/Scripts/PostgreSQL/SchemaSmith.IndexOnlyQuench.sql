@@ -23,6 +23,7 @@ DECLARE
   table_json TEXT = CASE WHEN LEFT(p_TableDefinitions, 1) = '[' THEN p_TableDefinitions ELSE '[' || p_TableDefinitions || ']' END;
   sql_script TEXT = '';
   missing_tablespaces TEXT;
+  attached_changed TEXT;
 BEGIN
     -- Dropped first like every other temp table in this procedure. A PostgreSQL TEMPORARY table lives for
     -- the SESSION, not the call, so without this a second IndexOnlyQuench on the same connection dies with
@@ -344,7 +345,24 @@ BEGIN
                                               AND i."Name" = ei."IndexName"))));
 
     -- A partition's index attached to its parent's index belongs to that one ("cannot drop index ... because index ...
-    -- requires it"), so it is never a drop candidate here, whatever the package says about the partition.
+    -- requires it"), so it is never a drop candidate here, whatever the package says about the partition. One the package
+    -- declares differently cannot be changed on the partition alone, so it is refused by name rather than left as it was.
+    SELECT STRING_AGG(d."TableSchema" || '.' || d."IndexName" || ' (attached to ' || pn.nspname || '.' || pc.relname || ')', ', '
+                      ORDER BY d."TableSchema", d."IndexName")
+      INTO attached_changed
+      FROM temp_indexes_to_drop d
+      JOIN pg_catalog.pg_namespace n ON n.nspname = d."TableSchema"
+      JOIN pg_catalog.pg_class ic ON ic.relnamespace = n.oid AND ic.relname = d."IndexName" AND ic.relkind = 'i'
+      JOIN pg_catalog.pg_inherits ih ON ih.inhrelid = ic.oid
+      JOIN pg_catalog.pg_class pc ON pc.oid = ih.inhparent
+      JOIN pg_catalog.pg_namespace pn ON pn.oid = pc.relnamespace
+     WHERE EXISTS (SELECT 1 FROM temp_indexes i
+                    WHERE i."TableSchema" = d."TableSchema" AND i."TableName" = d."TableName" AND i."Name" = d."IndexName");
+    IF attached_changed IS NOT NULL THEN
+      RAISE EXCEPTION 'A partition''s index that belongs to its parent''s index is declared differently: %. It can change only through the parent''s index: change the parent''s declaration, or declare the partition''s as it is.',
+        attached_changed;
+    END IF;
+
     DELETE FROM temp_indexes_to_drop d
       WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_inherits ih
                       JOIN pg_catalog.pg_class ic ON ic.oid = ih.inhrelid

@@ -182,6 +182,49 @@ public class TableQuench_PartitionedParentTests : BaseTableQuenchTests
         }
     }
 
+    // P5: a partition declared as a table of its own, with the index it inherits from its parent's declared differently.
+    // That index belongs to the parent's and cannot be dropped or re-created on its own, so the deploy used to leave it as it
+    // was, report nothing and record the declared form as deployed. It is refused by name, in both table passes, and an
+    // unchanged declaration still deploys.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void AChangedIndexAPartitionInherits_IsRefusedByName(bool indexOnly)
+    {
+        var table = "part_chg_" + Guid.NewGuid().ToString("N")[..8];
+        var product = "PartChg_" + table;
+        using var conn = Open(_mainDb);
+        try
+        {
+            Exec(conn, $"CREATE TABLE public.{table} (id integer NOT NULL, d date NOT NULL) PARTITION BY RANGE (d); " +
+                       $"CREATE TABLE public.{table}_2025 PARTITION OF public.{table} FOR VALUES FROM ('2025-01-01') TO ('2026-01-01'); " +
+                       $"CREATE INDEX ix_{table}_id ON public.{table} (id);");
+            var inherited = Scalar(conn, $"SELECT ic.relname FROM pg_index i JOIN pg_class ic ON ic.oid = i.indexrelid WHERE i.indrelid = 'public.{table}_2025'::regclass");
+            string Json(string columns) => $$"""
+                [{ "Schema": "public", "Name": "{{table}}_2025",
+                   "Columns": [ { "Name": "id", "DataType": "integer", "Nullable": false }, { "Name": "d", "DataType": "date", "Nullable": false } ],
+                   "Indexes": [ { "Name": "{{inherited}}", "IndexColumns": "{{columns}}" } ] }]
+                """;
+            string Definition() => Scalar(conn, $"SELECT pg_get_indexdef('public.{inherited}'::regclass)");
+            var before = Definition();
+
+            using (var cmd = conn.CreateCommand())
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, Json("id"), indexOnly: indexOnly, productName: product), "declared as it is");
+
+            using (var cmd = conn.CreateCommand())
+            {
+                var e = Assert.Catch(() => RunTableQuenchProc(cmd, Json("id,d"), indexOnly: indexOnly, productName: product));
+                Assert.That(e.Message, Does.Contain(inherited).And.Contain($"ix_{table}_id"));
+            }
+            Assert.That(Definition(), Is.EqualTo(before), "the index is as it was");
+        }
+        finally
+        {
+            Exec(conn, $"DROP TABLE IF EXISTS public.{table} CASCADE");
+            Exec(conn, $"DELETE FROM \"SchemaSmith\".\"ProductOwnership\" WHERE \"ProductName\" = '{product}'");
+            Exec(conn, $"DELETE FROM \"SchemaSmith\".\"ExpressionMap\" WHERE \"ObjectTable\" LIKE '%{table}%'");
+        }
+    }
+
     [Test]
     public void IndexOnly_OnAPartitionedParent_RunsTwiceWithoutRecreatingAnything()
     {
