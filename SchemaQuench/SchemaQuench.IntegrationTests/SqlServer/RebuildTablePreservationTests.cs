@@ -64,11 +64,11 @@ public class RebuildTablePreservationTests : BaseTableQuenchTests
         }
 
         // The deploy's table and foreign-key passes in one session, as SchemaQuench runs them.
-        public void Deploy(string json, string product, bool foreignKeys = true, bool dropRemovedTables = false)
+        public void Deploy(string json, string product, bool foreignKeys = true, bool dropRemovedTables = false, bool dropUnknownIndexes = false)
         {
             Parse(json);
             Exec("EXEC SchemaSmith.MissingTableAndColumnQuench @WhatIf = 0");
-            Exec($"EXEC SchemaSmith.ModifiedTableQuench @ProductName = '{product}', @WhatIf = 0, @DropUnknownIndexes = 0, @DropTablesRemovedFromProduct = {(dropRemovedTables ? 1 : 0)}, @RebuildPolicyMode = 'ALWAYS'");
+            Exec($"EXEC SchemaSmith.ModifiedTableQuench @ProductName = '{product}', @WhatIf = 0, @DropUnknownIndexes = {(dropUnknownIndexes ? 1 : 0)}, @DropTablesRemovedFromProduct = {(dropRemovedTables ? 1 : 0)}, @RebuildPolicyMode = 'ALWAYS'");
             Exec($"EXEC SchemaSmith.MissingIndexesAndConstraintsQuench '{product}', 0");
             if (foreignKeys) Exec($"EXEC SchemaSmith.ForeignKeyQuench @ProductName = '{product}', @WhatIf = 0");
         }
@@ -114,6 +114,27 @@ IF OBJECT_ID('SchemaSmith.RebuildSetAsideForeignKeys') IS NOT NULL DELETE FROM S
         r.Deploy(r.ParentJson("NVARCHAR(50)"), _productName);
         r.Exec($"INSERT INTO dbo.[{r.Parent}] (Id, Val) VALUES (1, 'a'), (2, 'b')");
         return r;
+    }
+
+    // Paul, 2026-11-10: a rebuild never loses an index the deploy keeps. One the package does not declare is refused by
+    // name with DropUnknownIndexes off, before anything changes; with it on the deploy drops it anyway, and the rebuild runs.
+    [Test]
+    public void AnIndexThePackageDoesNotDeclare_RefusesTheRebuildByName_UnlessDropUnknownIndexes()
+    {
+        using var r = Seeded();
+        r.Exec($"CREATE INDEX [{r.Token}_IX] ON dbo.[{r.Parent}] (Val)");
+        var before = r.Scalar($"SELECT OBJECT_ID('dbo.{r.Parent}')");
+
+        var ex = Assert.Throws<SqlException>(() => r.Deploy(r.ParentJson("NVARCHAR(60)"), _productName));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex.Message, Does.Contain($"{r.Token}_IX").And.Contain("Table rebuild refused"));
+            Assert.That(r.Scalar($"SELECT OBJECT_ID('dbo.{r.Parent}')"), Is.EqualTo(before), "the table was not rebuilt");
+            Assert.That(r.Scalar($"SELECT COUNT(*) FROM sys.indexes WHERE [name] = '{r.Token}_IX'"), Is.EqualTo("1"), "and the index is still there");
+        });
+
+        r.Deploy(r.ParentJson("NVARCHAR(60)"), _productName, dropUnknownIndexes: true);
+        Assert.That(r.Scalar($"SELECT OBJECT_ID('dbo.{r.Parent}')"), Is.Not.EqualTo(before), "with DropUnknownIndexes the rebuild runs");
     }
 
     [Test]

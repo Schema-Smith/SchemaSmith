@@ -33,7 +33,6 @@ namespace SchemaQuench.IntegrationTests.SqlServer;
 [NonParallelizable]
 public class RebuildDecisionTests : BaseTableQuenchTests
 {
-    private const string MarkerIndex = "ix_rebuild_decision_marker";
 
     // ---- harness ------------------------------------------------------------
 
@@ -117,8 +116,15 @@ public class RebuildDecisionTests : BaseTableQuenchTests
 
     private static int ObjectId(IDbCommand cmd, string table) => Int(cmd, $"SELECT OBJECT_ID('dbo.{table}')");
 
-    private static int MarkerCount(IDbCommand cmd, string table)
-        => Int(cmd, $"SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.{table}') AND [name] = {Lit(MarkerIndex)}");
+    // Whether the table is the one the test marked, or was replaced: a rebuild swaps in a new table, and an in-place
+    // ALTER keeps it. It used to be an index the package does not declare, which a rebuild lost; a rebuild now refuses
+    // to lose one (Paul, 2026-11-10), so the table's own identity is read instead.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> _marked = new();
+
+    private void Mark(IDbCommand cmd, string table) => _marked[table] = ObjectId(cmd, table);
+
+    private int MarkerCount(IDbCommand cmd, string table)
+        => _marked.TryGetValue(table, out var marked) && ObjectId(cmd, table) == marked ? 1 : 0;
 
     private static string ColumnType(IDbCommand cmd, string table, string column)
         => Str(cmd, "SELECT DATA_TYPE + ISNULL('(' + CONVERT(NVARCHAR(10), CHARACTER_MAXIMUM_LENGTH) + ')', '') "
@@ -210,7 +216,7 @@ public class RebuildDecisionTests : BaseTableQuenchTests
         Exec(cmd, includeD
             ? $"INSERT INTO dbo.[{table}] (Id, Marker, A, D, B, C) VALUES (1, 10, 'a1', 'd1', 'b1', 'c1'), (2, 20, 'a2', 'd2', 'b2', 'c2')"
             : $"INSERT INTO dbo.[{table}] (Id, Marker, A, B, C) VALUES (1, 10, 'a1', 'b1', 'c1'), (2, 20, 'a2', 'b2', 'c2')");
-        Exec(cmd, $"CREATE INDEX [{MarkerIndex}] ON dbo.[{table}] ([Marker])");
+        Mark(cmd, table);
 
         Assert.That(MarkerCount(cmd, table), Is.EqualTo(1),
             "Setup precondition: the live-only marker index must exist, or its absence later proves nothing.");
@@ -558,7 +564,7 @@ public class RebuildDecisionTests : BaseTableQuenchTests
 
         // The rebuild took the marker index with the old table, so re-create it: without a live-only object
         // in place there is nothing for the second deploy's "was this table replaced?" check to read.
-        Exec(cmd, $"CREATE INDEX [{MarkerIndex}] ON dbo.[{table}] ([Marker])");
+        Mark(cmd, table);
         Assert.That(MarkerCount(cmd, table), Is.EqualTo(1),
             "Setup precondition: the fresh marker index must exist before the second deploy.");
 

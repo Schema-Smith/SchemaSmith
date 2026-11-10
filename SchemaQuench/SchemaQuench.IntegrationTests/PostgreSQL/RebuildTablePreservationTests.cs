@@ -71,7 +71,30 @@ public class RebuildTablePreservationTests : BaseTableQuenchTests
         }
     }
 
-    private void Deploy(Run r, string json) => RunTableQuenchProc(r.Conn.CreateCommand(), json);
+    private void Deploy(Run r, string json, bool dropUnknownIndexes = false) => RunTableQuenchProc(r.Conn.CreateCommand(), json, dropUnknownIndexes: dropUnknownIndexes);
+
+    private string Oid(Run r) => r.Scalar($"SELECT to_regclass('\"{r.Schema}\".\"Parent\"')::oid::text");
+
+    // Paul, 2026-11-10: a rebuild never loses an index the deploy keeps. One the package does not declare is refused by
+    // name with DropUnknownIndexes off, before anything changes; with it on the deploy drops it anyway, and the rebuild runs.
+    [Test]
+    public void AnIndexThePackageDoesNotDeclare_RefusesTheRebuildByName_UnlessDropUnknownIndexes()
+    {
+        using var r = Seeded();
+        r.Exec($@"CREATE INDEX ix_dba ON ""{r.Schema}"".""Parent"" (""Id"", ""Val"")");
+        var before = Oid(r);
+
+        var ex = Assert.Catch(() => Deploy(r, r.Json("VARCHAR(60)")));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain("ix_dba").And.Contain("Table rebuild refused"));
+            Assert.That(Oid(r), Is.EqualTo(before), "the table was not rebuilt");
+            Assert.That(r.Scalar($@"SELECT COUNT(*) FROM pg_indexes WHERE schemaname = '{r.Schema}' AND indexname = 'ix_dba'"), Is.EqualTo("1"), "and the index is still there");
+        });
+
+        Deploy(r, r.Json("VARCHAR(60)"), dropUnknownIndexes: true);
+        Assert.That(Oid(r), Is.Not.EqualTo(before), "with DropUnknownIndexes the rebuild runs");
+    }
 
     private Run Seeded()
     {

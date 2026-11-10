@@ -27,7 +27,9 @@ CREATE PROCEDURE SchemaSmith.RebuildTable
   @p_Schema NVARCHAR(128),
   @p_Table NVARCHAR(128),
   @p_WhatIf BIT = 0,
-  @p_DropUndeclaredKeys BIT = 0
+  @p_DropUndeclaredKeys BIT = 0,
+  @p_DropUnknownIndexes BIT = 0,
+  @p_DropIndexesRemovedFromProduct BIT = 1
 AS
 BEGIN
   SET NOCOUNT ON
@@ -256,6 +258,45 @@ BEGIN
                WHERE c.[Schema] = @v_SchemaBr AND c.[TableName] = @v_TableBr AND ISNULL(c.[FileStream], 0) = 1)
   BEGIN
     RAISERROR('Table rebuild refused for %s: the declared definition has a FILESTREAM column. The shadow copy cannot be created with one -- SQL Server needs the ROWGUIDCOL unique key to exist first. Change this table with Before/After migration scripts.', 16, 1, @v_Qualified)
+    RETURN
+  END
+
+  -- AN INDEX THE PACKAGE DOES NOT DECLARE (Paul, 2026-11-10). The shadow gets the declared indexes only, so one the deploy
+  -- keeps -- an unknown index with DropUnknownIndexes off, or one the product no longer declares with
+  -- DropIndexesRemovedFromProduct off -- would be lost. Re-creating it could put it over a column the rebuild changes or
+  -- drops, so the rebuild is refused by name instead of losing it.
+  IF OBJECT_ID('tempdb..#RebuildDeclaredIndexNames') IS NOT NULL DROP TABLE #RebuildDeclaredIndexNames
+  CREATE TABLE #RebuildDeclaredIndexNames ([Name] NVARCHAR(500) COLLATE DATABASE_DEFAULT)
+  IF OBJECT_ID('tempdb..#Indexes') IS NOT NULL
+    INSERT INTO #RebuildDeclaredIndexNames SELECT SchemaSmith.fn_StripBracketWrapping([IndexName]) FROM #Indexes WITH (NOLOCK) WHERE [Schema] = @v_SchemaBr AND [TableName] = @v_TableBr
+  IF OBJECT_ID('tempdb..#XmlIndexes') IS NOT NULL
+    INSERT INTO #RebuildDeclaredIndexNames SELECT SchemaSmith.fn_StripBracketWrapping([IndexName]) FROM #XmlIndexes WITH (NOLOCK) WHERE [Schema] = @v_SchemaBr AND [TableName] = @v_TableBr
+  IF OBJECT_ID('tempdb..#SpatialIndexes') IS NOT NULL
+    INSERT INTO #RebuildDeclaredIndexNames SELECT SchemaSmith.fn_StripBracketWrapping([IndexName]) FROM #SpatialIndexes WITH (NOLOCK) WHERE [Schema] = @v_SchemaBr AND [TableName] = @v_TableBr
+  IF OBJECT_ID('tempdb..#JsonIndexes') IS NOT NULL
+    INSERT INTO #RebuildDeclaredIndexNames SELECT SchemaSmith.fn_StripBracketWrapping([IndexName]) FROM #JsonIndexes WITH (NOLOCK) WHERE [Schema] = @v_SchemaBr AND [TableName] = @v_TableBr
+  IF OBJECT_ID('tempdb..#RebuildRemovedIndexNames') IS NOT NULL DROP TABLE #RebuildRemovedIndexNames
+  CREATE TABLE #RebuildRemovedIndexNames ([Name] NVARCHAR(500) COLLATE DATABASE_DEFAULT)
+  IF OBJECT_ID('tempdb..#IndexesRemovedFromProduct') IS NOT NULL
+    INSERT INTO #RebuildRemovedIndexNames SELECT SchemaSmith.fn_StripBracketWrapping([IndexName]) FROM #IndexesRemovedFromProduct WITH (NOLOCK)
+     WHERE SchemaSmith.fn_StripBracketWrapping([Schema]) = @p_Schema AND SchemaSmith.fn_StripBracketWrapping([TableName]) = @p_Table
+  DECLARE @v_DropRemovedIndexes BIT = @p_DropIndexesRemovedFromProduct
+  IF OBJECT_ID('tempdb..#Tables') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) WHERE t.[Schema] = @v_SchemaBr AND t.[Name] = @v_TableBr AND t.[DropIndexesRemovedFromProduct] = 0)
+    SET @v_DropRemovedIndexes = 0
+  DECLARE @v_KeptUndeclared NVARCHAR(MAX)
+  SELECT @v_KeptUndeclared = STUFF((
+    SELECT ', ' + QUOTENAME(si.[name])
+      FROM sys.indexes si
+     WHERE si.[object_id] = @v_ObjectId AND si.index_id > 0 AND si.[name] IS NOT NULL AND si.is_hypothetical = 0
+       AND NOT EXISTS (SELECT 1 FROM #RebuildDeclaredIndexNames d WHERE d.[Name] = si.[name] COLLATE DATABASE_DEFAULT)
+       AND CASE WHEN EXISTS (SELECT 1 FROM #RebuildRemovedIndexNames r WHERE r.[Name] = si.[name] COLLATE DATABASE_DEFAULT)
+                THEN @v_DropRemovedIndexes ELSE @p_DropUnknownIndexes END = 0
+     ORDER BY si.[name]
+       FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF @v_KeptUndeclared IS NOT NULL
+  BEGIN
+    RAISERROR('Table rebuild refused for %s: the package does not declare %s, which the deploy keeps, and a rebuild would lose. Declare them, turn on DropUnknownIndexes (DropIndexesRemovedFromProduct for one the product no longer declares), or change this table with Before/After migration scripts.', 16, 1, @v_Qualified, @v_KeptUndeclared)
     RETURN
   END
 

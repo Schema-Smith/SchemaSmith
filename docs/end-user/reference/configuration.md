@@ -912,6 +912,12 @@ scripts for these.
 | MySQL | is partitioned |
 | MariaDB | is system-versioned, has an application-time period (seen from MariaDB 11.4, where the catalog first reports periods), or is partitioned |
 
+On every engine a rebuild is also refused when the table has an index the package does not declare and the deploy
+would keep: an unknown one with [`DropUnknownIndexes`](#dropunknownindexes) off, or one the product no longer declares
+with [`DropIndexesRemovedFromProduct`](#dropindexesremovedfromproduct) off. The rebuilt table has the declared
+indexes only, so it would lose that index. Declare it, turn the setting on, or change the table with Before/After
+migration scripts.
+
 The refusal fires under `WhatIfONLY` too, so a preview shows the impossibility rather than leaving it to the
 real run.
 

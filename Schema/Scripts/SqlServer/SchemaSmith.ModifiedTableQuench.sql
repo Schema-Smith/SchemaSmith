@@ -1307,7 +1307,8 @@ BEGIN TRY
       -- altering in place: that would let a package ask for a rebuild and silently get something else,
       -- and the states that block a rebuild are exactly the ones where that difference matters.
       EXEC SchemaSmith.RebuildTable @p_Schema = @v_RebuildSchema, @p_Table = @v_RebuildTable, @p_WhatIf = @WhatIf,
-                                    @p_DropUndeclaredKeys = @DropForeignKeysRemovedFromProduct
+                                    @p_DropUndeclaredKeys = @DropForeignKeysRemovedFromProduct,
+                                    @p_DropUnknownIndexes = @DropUnknownIndexes, @p_DropIndexesRemovedFromProduct = @DropIndexesRemovedFromProduct
       FETCH NEXT FROM rebuild_cursor INTO @v_RebuildSchema, @v_RebuildTable
     END
     CLOSE rebuild_cursor

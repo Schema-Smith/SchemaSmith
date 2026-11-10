@@ -41,7 +41,8 @@ public abstract class BaseTableQuenchTests
     /// <param name="cmd">The database command to use</param>
     /// <param name="json">JSON array of table definitions</param>
     /// <param name="indexOnly">If true, runs IndexOnlyQuench instead of full TableQuench</param>
-    protected void RunTableQuenchProc(IDbCommand cmd, string json, bool indexOnly = false, bool dropTablesRemovedFromProduct = false, bool whatIf = false, string productName = "", Action? beforeRetry = null)
+    protected void RunTableQuenchProc(IDbCommand cmd, string json, bool indexOnly = false, bool dropTablesRemovedFromProduct = false, bool whatIf = false, string productName = "", Action? beforeRetry = null,
+        bool dropUnknownIndexes = false)
     {
         var prod = string.IsNullOrEmpty(productName) ? _productName : productName;
         cmd.CommandTimeout = 300;
@@ -49,7 +50,7 @@ public abstract class BaseTableQuenchTests
 
         cmd.CommandText = indexOnly
             ? $"CALL SchemaSmith_IndexOnlyQuench('{prod}', '{_mainDb}', 0, 1, 1); CALL SchemaSmith_FixupIndexOwnership('{prod}');"
-            : $"CALL SchemaSmith_TableQuench('{prod}', '{_mainDb}', '{escapedJson}', {(whatIf ? 1 : 0)}, 0, {(dropTablesRemovedFromProduct ? 1 : 0)});";
+            : $"CALL SchemaSmith_TableQuench('{prod}', '{_mainDb}', '{escapedJson}', {(whatIf ? 1 : 0)}, {(dropUnknownIndexes ? 1 : 0)}, {(dropTablesRemovedFromProduct ? 1 : 0)});";
 
         // For index only mode, we need to first parse the table JSON
         if (indexOnly)

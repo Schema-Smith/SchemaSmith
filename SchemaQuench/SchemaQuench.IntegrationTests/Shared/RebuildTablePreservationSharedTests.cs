@@ -103,7 +103,8 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         }
     }
 
-    private void Deploy(Run r, string json, string productName = "") => RunTableQuenchProc(r.Conn.CreateCommand(), json, productName: productName);
+    private void Deploy(Run r, string json, string productName = "", bool dropUnknownIndexes = false)
+        => RunTableQuenchProc(r.Conn.CreateCommand(), json, productName: productName, dropUnknownIndexes: dropUnknownIndexes);
 
     private Run Seeded(bool uniqueCode = false)
     {
@@ -186,6 +187,8 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         });
     }
 
+    // With DropUnknownIndexes on the deploy would drop the undeclared unique key anyway, so it is the inbound key that
+    // cannot be restored; with it off, the rebuild is refused for the key itself first (the test after this one).
     [Test]
     public void AnUndeclaredKeyWithNoDeclaredKeyToReference_RefusesTheRebuildByName()
     {
@@ -194,7 +197,7 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
                   CREATE TABLE `{r.Other}` (`Id` INT NOT NULL PRIMARY KEY, `Code` VARCHAR(20) NULL,
                     CONSTRAINT `fk_code_{r.Uid}` FOREIGN KEY (`Code`) REFERENCES `{r.Parent}` (`Code`));");
 
-        var ex = Assert.Catch(() => Deploy(r, r.Json("VARCHAR(60)")));
+        var ex = Assert.Catch(() => Deploy(r, r.Json("VARCHAR(60)"), dropUnknownIndexes: true));
 
         Assert.Multiple(() =>
         {
@@ -202,6 +205,41 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
             Assert.That(r.Log(), Does.Contain("a declared primary key or unique index over exactly (`Code`)"));
             Assert.That(r.Key(r.Other, $"fk_code_{r.Uid}"), Is.Not.Null, r.Why());
         });
+    }
+
+    // Paul, 2026-11-10: a rebuild never loses an index the deploy keeps. The shadow has the declared indexes only, so one
+    // the package does not declare is refused by name, with DropUnknownIndexes off, before anything changes.
+    [Test]
+    public void AnIndexThePackageDoesNotDeclare_RefusesTheRebuildByName()
+    {
+        using var r = Seeded();
+        r.Exec($"CREATE INDEX `ix_dba_{r.Uid}` ON `{r.Parent}` (`Code`)");
+        var before = r.CreateTime();
+        NextSecond();
+
+        var ex = Assert.Catch(() => Deploy(r, r.Json("VARCHAR(60)")));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain($"ix_dba_{r.Uid}"), r.Why());
+            Assert.That(r.CreateTime(), Is.EqualTo(before), "the table was not rebuilt");
+            Assert.That(r.Scalar($"SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = '{r.Db}' AND TABLE_NAME = '{r.Parent}' AND INDEX_NAME = 'ix_dba_{r.Uid}'"),
+                Is.EqualTo("1"), "and the index is still there");
+        });
+    }
+
+    // With DropUnknownIndexes on the deploy drops an unknown index anyway, so there is nothing for the rebuild to lose.
+    [Test]
+    public void AnIndexThePackageDoesNotDeclare_WithDropUnknownIndexes_DoesNotStopTheRebuild()
+    {
+        using var r = Seeded();
+        r.Exec($"CREATE INDEX `ix_dba_{r.Uid}` ON `{r.Parent}` (`Code`)");
+        var before = r.CreateTime();
+        NextSecond();
+
+        Assert.DoesNotThrow(() => Deploy(r, r.Json("VARCHAR(60)"), dropUnknownIndexes: true));
+
+        Assert.That(r.CreateTime(), Is.Not.EqualTo(before), "the table was rebuilt");
     }
 
     [Test]

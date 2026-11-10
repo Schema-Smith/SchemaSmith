@@ -1152,6 +1152,40 @@ BEGIN
     SET @v_rebuild_id := (SELECT MIN(RowId) FROM _SchemaSmith_RebuildElection);
     WHILE @v_rebuild_id IS NOT NULL DO
         SELECT TableName INTO @v_rebuild_table FROM _SchemaSmith_RebuildElection WHERE RowId = @v_rebuild_id;
+        -- An index the package does not declare (Paul, 2026-11-10). The shadow gets the declared indexes only, so one the
+        -- deploy keeps -- an unknown index with DropUnknownIndexes off, or one the product no longer declares with
+        -- DropIndexesRemovedFromProduct off -- would be lost. Re-creating it could put it over a column the rebuild changes
+        -- or drops, so the rebuild is refused by name. An index MySQL made for a foreign key goes and comes with the key.
+        SET @v_kept_undeclared := NULL;
+        SELECT GROUP_CONCAT(DISTINCT s.INDEX_NAME ORDER BY s.INDEX_NAME SEPARATOR ', ') INTO @v_kept_undeclared
+          FROM information_schema.statistics s
+          LEFT JOIN _SchemaSmith_Tables t
+            ON SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(t.TableName)) = SchemaSmith_IdentifierKey(s.TABLE_NAME)
+         WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
+           AND SchemaSmith_IdentifierKey(s.TABLE_NAME) = SchemaSmith_IdentifierKey(@v_rebuild_table)
+           AND s.INDEX_NAME <> 'PRIMARY'
+           AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
+                            WHERE i.TableKey = SchemaSmith_IdentifierKey(@v_rebuild_table) AND i.IndexKey = SchemaSmith_NameKeyCI(s.INDEX_NAME))
+           AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_FullTextIndexes f
+                            WHERE SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(f.TableName)) = SchemaSmith_IdentifierKey(@v_rebuild_table)
+                              AND SchemaSmith_NameKeyCI(SchemaSmith_StripBacktickWrapping(f.IndexName)) = SchemaSmith_NameKeyCI(s.INDEX_NAME))
+           AND NOT EXISTS (SELECT 1 FROM information_schema.table_constraints c
+                            WHERE c.CONSTRAINT_SCHEMA = s.TABLE_SCHEMA AND c.TABLE_NAME = s.TABLE_NAME
+                              AND c.CONSTRAINT_TYPE = 'FOREIGN KEY' AND c.CONSTRAINT_NAME = s.INDEX_NAME)
+           AND CASE WHEN EXISTS (SELECT 1 FROM SchemaSmith_ProductOwnership po
+                                  WHERE po.ProductName COLLATE utf8mb4_unicode_ci = CONVERT(p_ProductName USING utf8mb4) COLLATE utf8mb4_unicode_ci
+                                    AND SchemaSmith_IdentifierKey(po.ObjectSchema) = SchemaSmith_IdentifierKey(p_DatabaseName)
+                                    AND po.ObjectType COLLATE utf8mb4_unicode_ci = _utf8mb4'INDEX' COLLATE utf8mb4_unicode_ci
+                                    AND SchemaSmith_OwnedNameMatches(po.ObjectName, s.TABLE_NAME, s.INDEX_NAME) = 1)
+                    THEN p_DropIndexesRemovedFromProduct = 1 AND COALESCE(t.DropIndexesRemovedFromProduct, 1) = 1
+                    ELSE p_DropUnknownIndexes = 1 END = 0;
+        IF @v_kept_undeclared IS NOT NULL THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            VALUES (CONNECTION_ID(), CONCAT('  Table rebuild refused for `', @v_rebuild_table, '`: the package does not declare ', @v_kept_undeclared,
+                    ', which the deploy keeps, and a rebuild would lose. Declare them, turn on DropUnknownIndexes (DropIndexesRemovedFromProduct for one the product no longer declares), or change this table with Before/After migration scripts.'));
+            SET @ss_msg = LEFT(CONCAT('Table rebuild refused for ', @v_rebuild_table, ': undeclared index ', @v_kept_undeclared, ' would be lost. See the deploy log.'), 128);
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
+        END IF;
         CALL SchemaSmith_RebuildTable(p_DatabaseName, @v_rebuild_table, p_WhatIf);
         SET @v_rebuild_id := (SELECT MIN(RowId) FROM _SchemaSmith_RebuildElection WHERE RowId > @v_rebuild_id);
     END WHILE;

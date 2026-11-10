@@ -43,6 +43,7 @@ DECLARE
   protect_notice TEXT;
   partitioned_tables TEXT;
   attached_changed TEXT;
+  kept_undeclared TEXT;
   rebuild_target RECORD;
   undeclared_dependents TEXT;
 BEGIN
@@ -518,6 +519,30 @@ BEGIN
       -- deliberately. It does NOT quietly fall back to altering in place: that would let a package ask for
       -- a rebuild and silently get something else, and the states that block a rebuild are exactly the
       -- ones where that difference matters.
+      -- An index the package does not declare (Paul, 2026-11-10). The shadow gets the declared indexes only, so one the
+      -- deploy keeps -- an unknown index with DropUnknownIndexes off, or one the product no longer declares with
+      -- DropIndexesRemovedFromProduct off -- would be lost. Re-creating it could put it over a column the rebuild changes
+      -- or drops, so the rebuild is refused by name.
+      SELECT STRING_AGG(ic.relname, ', ' ORDER BY ic.relname) INTO kept_undeclared
+        FROM pg_catalog.pg_index ix
+        JOIN pg_catalog.pg_class ic ON ic.oid = ix.indexrelid
+        JOIN pg_catalog.pg_class tc ON tc.oid = ix.indrelid
+        JOIN pg_catalog.pg_namespace n ON n.oid = tc.relnamespace
+       WHERE n.nspname = rebuild_target."Schema" AND tc.relname = rebuild_target."Name"
+         AND NOT EXISTS (SELECT 1 FROM temp_indexes i
+                          WHERE i."TableSchema" = rebuild_target."Schema" AND i."TableName" = rebuild_target."Name" AND i."Name" = ic.relname)
+         AND NOT EXISTS (SELECT 1 FROM temp_excludes x
+                          WHERE x."TableSchema" = rebuild_target."Schema" AND x."TableName" = rebuild_target."Name" AND x."Name" = ic.relname)
+         AND NOT CASE WHEN EXISTS (SELECT 1 FROM temp_product_ownership tp
+                                    WHERE tp."Schema" = rebuild_target."Schema" AND tp."TableName" = rebuild_target."Name" AND tp."IndexName" = ic.relname)
+                      THEN p_DropIndexesRemovedFromProduct
+                           AND COALESCE((SELECT t."DropIndexesRemovedFromProduct" FROM temp_tables t
+                                          WHERE t."Schema" = rebuild_target."Schema" AND t."Name" = rebuild_target."Name"), TRUE)
+                      ELSE p_DropUnknownIndexes END;
+      IF kept_undeclared IS NOT NULL THEN
+        RAISE EXCEPTION 'Table rebuild refused for %.%: the package does not declare %, which the deploy keeps, and a rebuild would lose. Declare them, turn on DropUnknownIndexes (DropIndexesRemovedFromProduct for one the product no longer declares), or change this table with Before/After migration scripts.',
+          rebuild_target."Schema", rebuild_target."Name", kept_undeclared;
+      END IF;
       CALL "SchemaSmith"."RebuildTable"(rebuild_target."Schema", rebuild_target."Name", p_WhatIf);
     END LOOP;
 

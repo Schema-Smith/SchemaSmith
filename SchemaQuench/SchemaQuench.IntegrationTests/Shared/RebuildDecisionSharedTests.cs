@@ -31,7 +31,6 @@ namespace SchemaQuench.IntegrationTests.Shared;
 [Category("Integration")]
 public abstract class RebuildDecisionSharedTests : BaseTableQuenchTests
 {
-    private const string MarkerIndex = "ix_rebuild_decision_marker";
 
     // ---- harness ------------------------------------------------------------
 
@@ -115,9 +114,24 @@ public abstract class RebuildDecisionSharedTests : BaseTableQuenchTests
         return v == null || v == DBNull.Value ? null : v.ToString();
     }
 
+    // Whether the table is the one the test marked, or was replaced: a rebuild swaps in a new table, and an in-place
+    // ALTER keeps it. It used to be an index the package does not declare, which a rebuild lost; a rebuild now refuses
+    // to lose one (Paul, 2026-11-10), so the table's own identity is read instead.
+    // InnoDB's own id for the table (INNODB_TABLES on MySQL 8, INNODB_SYS_TABLES on 5.7 and MariaDB). The changes these
+    // tests make in place are INPLACE ones, which keep it; a copying ALTER would not, so they avoid one.
+    private long TableId(IDbCommand cmd, string table)
+    {
+        var name = Lit($"{_mainDb}/{table}");
+        try { return Long(cmd, $"SELECT TABLE_ID FROM information_schema.INNODB_TABLES WHERE NAME = {name}"); }
+        catch (MySqlConnector.MySqlException) { return Long(cmd, $"SELECT TABLE_ID FROM information_schema.INNODB_SYS_TABLES WHERE NAME = {name}"); }
+    }
+
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _marked = new();
+
+    private void Mark(IDbCommand cmd, string table) => _marked[table] = TableId(cmd, table);
+
     private int MarkerCount(IDbCommand cmd, string table)
-        => Int(cmd, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.STATISTICS "
-                    + $"WHERE TABLE_SCHEMA = {Lit(_mainDb)} AND TABLE_NAME = {Lit(table)} AND INDEX_NAME = {Lit(MarkerIndex)}");
+        => _marked.TryGetValue(table, out var marked) && TableId(cmd, table) == marked ? 1 : 0;
 
     private string? ColumnType(IDbCommand cmd, string table, string column)
         => Str(cmd, "SELECT LOWER(COLUMN_TYPE) FROM INFORMATION_SCHEMA.COLUMNS "
@@ -193,7 +207,7 @@ public abstract class RebuildDecisionSharedTests : BaseTableQuenchTests
         Exec(cmd, includeD
             ? $"INSERT INTO `{table}` (Id, Marker, A, D, B, C) VALUES (1, 10, 'a1', 'd1', 'b1', 'c1'), (2, 20, 'a2', 'd2', 'b2', 'c2')"
             : $"INSERT INTO `{table}` (Id, Marker, A, B, C) VALUES (1, 10, 'a1', 'b1', 'c1'), (2, 20, 'a2', 'b2', 'c2')");
-        Exec(cmd, $"CREATE INDEX `{MarkerIndex}` ON `{table}` (Marker)");
+        Mark(cmd, table);
 
         Assert.That(MarkerCount(cmd, table), Is.EqualTo(1),
             "Setup precondition: the live-only marker index must exist, or its absence later proves nothing.");
@@ -522,7 +536,7 @@ public abstract class RebuildDecisionSharedTests : BaseTableQuenchTests
 
         // The rebuild took the marker index with the old table, so re-create it: without a live-only object
         // in place there is nothing for the second deploy's "was this table replaced?" check to read.
-        Exec(cmd, $"CREATE INDEX `{MarkerIndex}` ON `{table}` (Marker)");
+        Mark(cmd, table);
         Assert.That(MarkerCount(cmd, table), Is.EqualTo(1),
             "Setup precondition: the fresh marker index must exist before the second deploy.");
 
