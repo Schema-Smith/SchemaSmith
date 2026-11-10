@@ -53,6 +53,8 @@ public class ProductQuench
     private readonly IReadOnlyDictionary<string, TemplateTarget> _templateTargets;
     private readonly ICheckpointing _checkpointing;
     private readonly SessionTimeouts _timeouts = SessionTimeouts.Default;
+    private int _warnedOverrideWithoutUserVariables;
+    private readonly Dictionary<string, TargetVersionInfo> _detectedVersions = new(StringComparer.OrdinalIgnoreCase);
     private readonly ContentionLog _contention = new();
     private readonly DestructivePolicy _destructive = DestructivePolicy.Default;
     private bool _updateFailed;
@@ -449,18 +451,9 @@ public class ProductQuench
         _progressLog.Info("Validate server version floor");
         foreach (var server in _secondaryServers.Union([_primaryServer]))
         {
-            using var command = GetCommand(server);
-            try
-            {
-                var info = TargetVersionDetector.Detect(command, _product.Platform);
-                _progressLog.Info($"  {server}: detected {info.Platform} version {VersionHelper.DisplayVersion(info)}");
-                PreFlightVersionGuard.CheckOrThrow(info, server);
-            }
-            finally
-            {
-                command.Connection?.Close();
-                command.Connection?.Dispose();
-            }
+            var info = DetectedVersion(server);
+            _progressLog.Info($"  {server}: detected {info.Platform} version {VersionHelper.DisplayVersion(info)}");
+            PreFlightVersionGuard.CheckOrThrow(info, server);
         }
     }
 
@@ -479,6 +472,22 @@ public class ProductQuench
         }
     }
 
+    // The connection test reads each server's version on the connection it opens; a check run on its own opens one.
+    private TargetVersionInfo DetectedVersion(string server)
+    {
+        if (_detectedVersions.TryGetValue(server, out var known)) return known;
+        using var command = GetCommand(server);
+        try
+        {
+            return _detectedVersions[server] = TargetVersionDetector.Detect(command, _product.Platform);
+        }
+        finally
+        {
+            command.Connection?.Close();
+            command.Connection?.Dispose();
+        }
+    }
+
     internal void ValidateMinimumVersion()
     {
         if (string.IsNullOrWhiteSpace(_product.MinimumVersion))
@@ -491,18 +500,7 @@ public class ProductQuench
         _progressLog.Info("Validate Minimum Version");
         var detected = new List<(string Server, TargetVersionInfo Info)>();
         foreach (var server in _secondaryServers.Union([_primaryServer]))
-        {
-            using var command = GetCommand(server);
-            try
-            {
-                detected.Add((server, TargetVersionDetector.Detect(command, _product.Platform)));
-            }
-            finally
-            {
-                command.Connection?.Close();
-                command.Connection?.Dispose();
-            }
-        }
+            detected.Add((server, DetectedVersion(server)));
 
         var failures = BuildMinimumVersionFailures(detected, required.Value, _product.MinimumVersion);
         if (failures.Count > 0)
@@ -597,51 +595,56 @@ public class ProductQuench
     private string ConnectionStringOverrideFor(string server)
     {
         var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
-        if (string.IsNullOrEmpty(connectionStringOverride) || string.Equals(server, _primaryServer, StringComparison.OrdinalIgnoreCase)) return connectionStringOverride;
+        if (string.IsNullOrEmpty(connectionStringOverride)) return connectionStringOverride;
+        if (_product.Platform.GetBasePlatform() == Platform.MySQL
+            && !connectionStringOverride.Contains("AllowUserVariables", StringComparison.OrdinalIgnoreCase)
+            && System.Threading.Interlocked.Exchange(ref _warnedOverrideWithoutUserVariables, 1) == 0)
+            _progressLog.Warn("Connection string override for MySQL does not contain AllowUserVariables=true. " +
+                              "This is required for SchemaSmith stored procedures that use PREPARE/EXECUTE.");
+        if (string.Equals(server, _primaryServer, StringComparison.OrdinalIgnoreCase)) return connectionStringOverride;
         return ConnectionString.RetargetServer(connectionStringOverride, server, _product.Platform);
+    }
+
+    // Every connection the run opens, whatever database it targets. A failure to connect names the server (and the
+    // database when it is not the init one), which a raw driver message does not.
+    private IDbCommand OpenCommand(string server, string connectionString, string target = "", string logMessagesFor = null)
+    {
+        var connection = DbConnectionFactory.ForPlatform(_product.Platform).GetDbConnection(connectionString);
+        if (logMessagesFor != null) LogServerMessagesOf(connection, server, logMessagesFor);
+        try
+        {
+            connection.Open();
+        }
+        // prepush-allow: generic-catch -- any failure to connect is reported with the server it was for
+        catch (Exception e)
+        {
+            connection.Dispose();
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, target, _config[SettingsKeys.Target.User], e.Message), e);
+        }
+        _timeouts.ApplyLockTimeout(connection, _product.Platform);
+        return _timeouts.NewCommand(connection);
+    }
+
+    private void LogServerMessagesOf(IDbConnection connection, string server, string database)
+    {
+        if (connection is Microsoft.Data.SqlClient.SqlConnection sqlConnection)
+            sqlConnection.InfoMessage += (_, e) => LogServerMessages(server, database, e.Errors);
+        else if (connection is Npgsql.NpgsqlConnection pgConnection)
+            pgConnection.Notice += (_, e) =>
+            {
+                if (DatabaseQuench.ShouldLogPostgreSqlNotice(e.Notice.MessageText, e.Notice.Where, VerboseLogging))
+                    LogServerMessage(server, database, e.Notice.MessageText);
+            };
     }
 
     internal virtual IDbCommand GetCommand(string server)
     {
         var initDb = GetInitDatabase(_product.Platform);
         var connectionStringOverride = ConnectionStringOverrideFor(server);
-        string connectionString;
-        if (!string.IsNullOrEmpty(connectionStringOverride))
-        {
-            if (_product.Platform.GetBasePlatform() == Platform.MySQL &&
-                !connectionStringOverride.Contains("AllowUserVariables", StringComparison.OrdinalIgnoreCase))
-            {
-                LogFactory.GetLogger("ProgressLog").Warn("Connection string override for MySQL does not contain AllowUserVariables=true. " +
-                                                         "This is required for SchemaSmith stored procedures that use PREPARE/EXECUTE.");
-            }
-            connectionString = connectionStringOverride;
-        }
-        else
-        {
-            connectionString = TargetConnectionString.Build(_product.Platform, server, initDb, _config);
-        }
-        var factory = DbConnectionFactory.ForPlatform(_product.Platform);
-        var connection = factory.GetDbConnection(connectionString);
-        if (connection is Microsoft.Data.SqlClient.SqlConnection sqlConnection)
-            sqlConnection.InfoMessage += (_, e) => LogServerMessages(server, initDb, e.Errors);
-        else if (connection is Npgsql.NpgsqlConnection pgConnection)
-            pgConnection.Notice += (_, e) =>
-            {
-                if (DatabaseQuench.ShouldLogPostgreSqlNotice(e.Notice.MessageText, e.Notice.Where, VerboseLogging))
-                    LogServerMessage(server, initDb, e.Notice.MessageText);
-            };
-        try
-        {
-            connection.Open();
-        }
-        catch (Exception e)
-        {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User], e.Message), e);
-        }
-        _timeouts.ApplyLockTimeout(connection, _product.Platform);
-        var command = _timeouts.NewCommand(connection);
-
-        return command;
+        var connectionString = !string.IsNullOrEmpty(connectionStringOverride)
+            ? connectionStringOverride
+            : TargetConnectionString.Build(_product.Platform, server, initDb, _config);
+        return OpenCommand(server, connectionString, logMessagesFor: initDb);
     }
 
     // A product script's messages are logged as a template script's are: on SQL Server those raised with state 100, on
@@ -694,20 +697,8 @@ public class ProductQuench
         if (string.IsNullOrWhiteSpace(ResolveIdentificationDatabase(template)))
             return GetCommand(server);
 
-        var connectionString = ComposeIdentificationConnectionString(server, template);
-        var factory = DbConnectionFactory.ForPlatform(_product.Platform);
-        var connection = factory.GetDbConnection(connectionString);
-        try
-        {
-            connection.Open();
-        }
-        catch (Exception e)
-        {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, $" [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]", _config[SettingsKeys.Target.User], e.Message), e);
-        }
-        _timeouts.ApplyLockTimeout(connection, _product.Platform);
-        var command = _timeouts.NewCommand(connection);
-        return command;
+        return OpenCommand(server, ComposeIdentificationConnectionString(server, template),
+            $" [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]");
     }
 
     /// <summary>
@@ -740,24 +731,7 @@ public class ProductQuench
     /// transaction AND cannot target a non-admin DB; SQL Server / MySQL happen to tolerate the
     /// override's target DB but the admin-DB target is the correct contract across all engines.
     /// </summary>
-    internal virtual IDbCommand GetCommandForAdminDb(string server)
-    {
-        var connectionString = ComposeAdminDbConnectionString(server);
-        var factory = DbConnectionFactory.ForPlatform(_product.Platform);
-        var connection = factory.GetDbConnection(connectionString);
-        try
-        {
-            connection.Open();
-        }
-        catch (Exception e)
-        {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User], e.Message), e);
-        }
-        _timeouts.ApplyLockTimeout(connection, _product.Platform);
-        var command = _timeouts.NewCommand(connection);
-
-        return command;
-    }
+    internal virtual IDbCommand GetCommandForAdminDb(string server) => OpenCommand(server, ComposeAdminDbConnectionString(server));
 
     /// <summary>
     /// Composes the admin-database connection string used by <see cref="GetCommandForAdminDb"/>.
@@ -770,15 +744,7 @@ public class ProductQuench
         var initDb = GetInitDatabase(_product.Platform);
         var connectionStringOverride = ConnectionStringOverrideFor(server);
         if (!string.IsNullOrEmpty(connectionStringOverride))
-        {
-            if (_product.Platform.GetBasePlatform() == Platform.MySQL &&
-                !connectionStringOverride.Contains("AllowUserVariables", StringComparison.OrdinalIgnoreCase))
-            {
-                LogFactory.GetLogger("ProgressLog").Warn("Connection string override for MySQL does not contain AllowUserVariables=true. " +
-                                                         "This is required for SchemaSmith stored procedures that use PREPARE/EXECUTE.");
-            }
             return ConnectionString.RetargetDatabase(connectionStringOverride, initDb, _product.Platform);
-        }
         return TargetConnectionString.Build(_product.Platform, server, initDb, _config);
     }
 
@@ -1520,6 +1486,7 @@ public class ProductQuench
                     cmd.CommandText = GetServerIdQuery(_product.Platform);
                     var serverName = cmd.ExecuteScalar()?.ToString() ?? "UNKNOWN";
                     serverNames.Add(server, serverName);
+                    _detectedVersions[server] = TargetVersionDetector.Detect(cmd, _product.Platform);
 
                     _progressLog.Info($"  {server} ({serverName}) connection succeeded");
                 }
@@ -2213,21 +2180,10 @@ public class ProductQuench
     internal virtual IDbCommand GetCommandForDatabase(string server, string databaseName)
     {
         var connectionStringOverride = ConnectionStringOverrideFor(server);
-        string connectionString;
-        if (!string.IsNullOrEmpty(connectionStringOverride))
-        {
-            connectionString = ConnectionString.RetargetDatabase(connectionStringOverride, databaseName, _product.Platform);
-        }
-        else
-        {
-            connectionString = TargetConnectionString.Build(_product.Platform, server, databaseName, _config);
-        }
-        var factory = DbConnectionFactory.ForPlatform(_product.Platform);
-        var connection = factory.GetDbConnection(connectionString);
-        connection.Open();
-        _timeouts.ApplyLockTimeout(connection, _product.Platform);
-        var command = _timeouts.NewCommand(connection);
-        return command;
+        var connectionString = !string.IsNullOrEmpty(connectionStringOverride)
+            ? ConnectionString.RetargetDatabase(connectionStringOverride, databaseName, _product.Platform)
+            : TargetConnectionString.Build(_product.Platform, server, databaseName, _config);
+        return OpenCommand(server, connectionString, $" [Database: {databaseName}]");
     }
 
     /// <summary>

@@ -188,6 +188,75 @@ namespace SchemaQuench.UnitTests
             }
         }
 
+        private sealed class CountingProductQuench : ProductQuench
+        {
+            public int Opened;
+
+            internal override IDbCommand GetCommand(string server)
+            {
+                Opened++;
+                var command = Substitute.For<IDbCommand>();
+                command.Connection.Returns(Substitute.For<IDbConnection>());
+                command.ExecuteScalar().Returns("16");
+                return command;
+            }
+        }
+
+        // The connection test, the engine floor and the product's MinimumVersion each opened their own connection to every
+        // server, and the two version checks each read its version. One connection per server answers all three.
+        [Test]
+        public void PreFlight_OpensOneConnectionPerServer_AndReadsItsVersionOnce()
+        {
+            lock (FactoryContainer.SharedLockObject)
+            {
+                FactoryContainer.Clear();
+                try
+                {
+                    ConfigureProduct("SqlServer", minimumVersion: "2019");
+                    var quench = new CountingProductQuench();
+
+                    Assert.That(quench.RunPreFlight(previewTargets: false), Is.True);
+                    Assert.That(quench.Opened, Is.EqualTo(1));
+                }
+                finally { FactoryContainer.Clear(); }
+            }
+        }
+
+        // Every connection the run composed from a MySQL --ConnectionString without AllowUserVariables logged the same
+        // warning again, so one setting counted as several warnings under --ExitNonZeroOnWarning.
+        [Test]
+        public void AMySqlOverrideWithoutAllowUserVariables_IsWarnedAboutOncePerRun()
+        {
+            lock (FactoryContainer.SharedLockObject)
+            {
+                FactoryContainer.Clear();
+                LogFactory.Clear();
+                try
+                {
+                    ConfigureProduct("MySQL", minimumVersion: "");
+                    var env = Substitute.For<IEnvironment>();
+                    env.CommandLine.Returns("schemaquench.exe --ConnectionString=\"Server=primary-server;Database=app;Uid=u\"");
+                    FactoryContainer.Register<IEnvironment>(env);
+                    var warnings = new List<string>();
+                    var progressLog = Substitute.For<log4net.ILog>();
+                    progressLog.When(l => l.Warn(Arg.Any<object>())).Do(ci => warnings.Add($"{ci.Arg<object>()}"));
+                    LogFactory.Register("ProgressLog", progressLog);
+                    var quench = new StubDetectProductQuench("80036");
+
+                    quench.ComposeAdminDbConnectionString("primary-server");
+                    quench.ComposeAdminDbConnectionString("primary-server");
+                    quench.ComposeIdentificationConnectionString("primary-server", new Template { IdentificationDatabase = "registry" });
+
+                    Assert.That(warnings.Count(w => w.Contains("AllowUserVariables")), Is.EqualTo(1), string.Join(Environment.NewLine, warnings));
+                }
+                finally
+                {
+                    FactoryContainer.Clear();
+                    LogFactory.Clear();
+                }
+            }
+        }
+
         [Test]
         public void ValidateServerVersionFloor_Throws_WhenBelowIntrinsicFloor_NoMinimumVersionDeclared()
         {
