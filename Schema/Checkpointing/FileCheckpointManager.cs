@@ -65,7 +65,7 @@ public class FileCheckpointManager : ICheckpointing
             SaveDatabaseCheckpoint(checkpoint);
         }
         else
-            throw new ArgumentException("Checkpoints are kept per database: the scope names no template and database.", nameof(scope));
+            throw new ArgumentException("Checkpoints are kept per database: the scope names no database.", nameof(scope));
     }
 
     public bool ResumedAny { get; private set; }
@@ -100,7 +100,7 @@ public class FileCheckpointManager : ICheckpointing
     {
         if (IsDatabaseScope(scope))
             return GetOrLoadDatabaseCheckpoint(scope).HasCompletedStep(stepName);
-        throw new ArgumentException("Checkpoints are kept per database: the scope names no template and database.", nameof(scope));
+        throw new ArgumentException("Checkpoints are kept per database: the scope names no database.", nameof(scope));
     }
 
     public bool HasCompletedScript(TrackingScope scope, string slot, string scriptPath)
@@ -111,7 +111,7 @@ public class FileCheckpointManager : ICheckpointing
             return GetOrLoadDatabaseCheckpoint(scope).HasCompletedScript(scriptSlot, scriptPath);
         }
 
-        throw new ArgumentException("Checkpoints are kept per database: the scope names no template and database.", nameof(scope));
+        throw new ArgumentException("Checkpoints are kept per database: the scope names no database.", nameof(scope));
     }
 
     public void MarkStepCompleted(TrackingScope scope, string stepName)
@@ -123,7 +123,7 @@ public class FileCheckpointManager : ICheckpointing
             SaveDatabaseCheckpoint(checkpoint);
         }
         else
-            throw new ArgumentException("Checkpoints are kept per database: the scope names no template and database.", nameof(scope));
+            throw new ArgumentException("Checkpoints are kept per database: the scope names no database.", nameof(scope));
     }
 
     public void MarkScriptCompleted(TrackingScope scope, string slot, string scriptPath)
@@ -136,7 +136,7 @@ public class FileCheckpointManager : ICheckpointing
             SaveDatabaseCheckpoint(checkpoint);
         }
         else
-            throw new ArgumentException("Checkpoints are kept per database: the scope names no template and database.", nameof(scope));
+            throw new ArgumentException("Checkpoints are kept per database: the scope names no database.", nameof(scope));
     }
 
     public DatabaseCheckpointSummary GetDatabaseCheckpointSummary(TrackingScope scope)
@@ -152,8 +152,9 @@ public class FileCheckpointManager : ICheckpointing
             TotalCompletedScripts: checkpoint.CompletedScripts.Values.Sum(s => s.Count));
     }
 
+    // A template need not be named, so a database scope is known by its database.
     private static bool IsDatabaseScope(TrackingScope scope) =>
-        !string.IsNullOrEmpty(scope.TemplateName) && !string.IsNullOrEmpty(scope.DatabaseName);
+        !string.IsNullOrEmpty(scope.DatabaseName);
 
     #region Database Checkpoint I/O
 

@@ -42,7 +42,22 @@ public class FileCheckpointManagerTests
         mgr.MarkScriptCompleted(scope, slot, scriptPath);
     }
 
-    // Product-scope checkpoints stopped being written in 2.8; a scope without a template and database is a defect.
+    // A template need not be named (Template.json's Name defaults to empty), and its databases are checkpointed one by
+    // one like any other's.
+    [Test]
+    public void AnUnnamedTemplatesDatabases_AreCheckpointedEachOnItsOwn()
+    {
+        var mgr = new FileCheckpointManager(_tempDir);
+        var ran = new System.Collections.Generic.List<string>();
+
+        mgr.Track(DbScope(template: "", database: "One"), "KindleForge", () => ran.Add("One"));
+        mgr.Track(DbScope(template: "", database: "Two"), "KindleForge", () => ran.Add("Two"));
+        mgr.Track(DbScope(template: "", database: "One"), "KindleForge", () => ran.Add("One again"));
+
+        Assert.That(ran, Is.EqualTo(new[] { "One", "Two" }));
+    }
+
+    // Product-scope checkpoints stopped being written in 2.8; a scope that names no database is a defect.
     [Test]
     public void ANonDatabaseScope_IsRefused()
     {
