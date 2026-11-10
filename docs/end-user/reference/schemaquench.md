@@ -1506,7 +1506,7 @@ Changing a column that already holds data is where a declarative deploy earns it
 | Default | Drop and re-create the default constraint | -- |
 | Computed column expression | Drop and re-create the column | Indexes and statistics over it, as above. |
 | Identity added or removed, column set added or removed, a definition change on a column declared `AnsiPadding: false` | Replace: a new column is added, the data copied, the old column dropped and the new one renamed into place | The dependents above; a CDC capture instance is rotated, since the change table cannot follow a replaced column. The column comes back last in column order, which only a rebuild can correct. |
-| New column | Added by the missing-column step | A CDC capture instance is rotated. |
+| New column | Added by the missing-column step | A CDC capture instance is rotated, unless the column is computed: SQL Server captures a computed column as NULL. |
 | Renamed (`OldName`) | `sp_rename`, before any other change | -- |
 | Removed from the package | Dropped under `DropColumnsRemovedFromProduct` | Foreign keys and indexes over it first. |
 | Column order | Only by a [rebuild](configuration.md#rebuildpolicy) | A rebuild is refused for a temporal, change-tracked, replicated, CDC-enabled or ledger table. |

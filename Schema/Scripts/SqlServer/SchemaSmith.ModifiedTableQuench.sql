@@ -797,7 +797,7 @@ BEGIN TRY
            t.CdcSupportsNetChanges AS DeclaredNetChanges,
            newest.index_name AS NewestIndexName,
            SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName) AS DeclaredIndexName,
-           -- Only a change the capture instance cannot follow rotates (#509): a new column, or a column replaced rather than
+           -- Only a change the capture instance cannot follow rotates (#509): a new stored column, or a column replaced rather than
            -- altered (an identity, column-set or padding change), whose new position the instance does not record. A column
            -- altered in place is carried into the change table by SQL Server itself, a dropped column stays in it as NULL, a
            -- computed column captures NULL whatever its expression, and an option (NOT FOR REPLICATION, ROWGUIDCOL, a mask)
@@ -805,7 +805,8 @@ BEGIN TRY
            ColumnChange = CONVERT(BIT, CASE WHEN EXISTS (SELECT 1 FROM #ColumnChanges cc WITH (NOLOCK)
                                                           WHERE cc.[Schema] = t.[Schema] AND cc.[TableName] = t.[Name] AND cc.[DefinitionChanged] = 1
                                                             AND (cc.MustDropAndRecreate = 1 OR cc.MustSwapColumn = 1) AND cc.[ColumnScript] NOT LIKE 'AS (%')
-                                              OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1)
+                                              OR EXISTS (SELECT 1 FROM #Columns c WITH (NOLOCK) WHERE c.[Schema] = t.[Schema] AND c.[TableName] = t.[Name] AND c.NewColumn = 1
+                                                                                                  AND RTRIM(ISNULL(c.[ComputedExpression], '')) = '')
                                             THEN 1 ELSE 0 END)
       INTO #CdcCandidates
       FROM #Tables t WITH (NOLOCK)

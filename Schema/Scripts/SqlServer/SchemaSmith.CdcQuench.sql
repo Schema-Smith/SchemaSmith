@@ -70,8 +70,9 @@ BEGIN TRY
                     WHERE ct.source_object_id = st.[object_id]
                     ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
       WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
+        -- A computed column is captured as NULL whatever it is, so an instance without one loses nothing (#618).
         AND EXISTS (SELECT 1 FROM sys.columns sc
-                     WHERE sc.[object_id] = st.[object_id] AND sc.is_column_set = 0
+                     WHERE sc.[object_id] = st.[object_id] AND sc.is_column_set = 0 AND sc.is_computed = 0
                        AND NOT EXISTS (SELECT 1 FROM cdc.captured_columns cc WITH (NOLOCK)
                                         WHERE cc.[object_id] = newest.ChangeTableId AND cc.column_name = sc.[name]))
 

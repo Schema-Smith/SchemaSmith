@@ -1740,9 +1740,9 @@ SQL Server's answer is to allow **two capture instances per table** so a new one
 |---|---|
 | A column altered in place: type, length, precision or scale, nullability, collation, sparse | No. SQL Server's capture job alters the change table's column to match, so the one instance keeps capturing. |
 | A column dropped | No. It stays in the change table and captures NULL from then on. |
-| A computed column's expression changed | No. A captured computed column is always NULL, whatever its expression. |
+| A computed column added, or its expression changed | No. A captured computed column is always NULL, persisted or not, so an instance without it loses nothing. |
 | A column option toggled: `NOT FOR REPLICATION`, `ROWGUIDCOL`, a `DataMaskFunction` | No. None of them is captured. |
-| A column added | Yes. Only a new instance captures it. |
+| A column added (other than a computed one) | Yes. Only a new instance captures it. |
 | A column replaced rather than altered: an identity added or removed, a column-set change, an `AnsiPadding` change | Yes. The replacement has a new position, which the old instance does not record, so it would capture NULL. |
 | `CdcFilegroup`, `CdcSupportsNetChanges` or `CdcIndexName` changed | Yes. Each is fixed per instance. |
 
@@ -1752,7 +1752,7 @@ When a deploy rotates a tracked table it:
 2. Creates a second capture instance covering the new column set, named `<schema>_<table>_2` (or the base `<schema>_<table>` if the surviving instance already carries the `_2` suffix).
 3. Leaves the original instance and everything it has captured untouched, and names it in the deploy log along with the command to remove it.
 
-The same rotation happens whenever a tracked table's newest capture instance does not capture one of the table's columns, even when the deploy changed none. That catches a column a previous deploy added but never got to capture -- because it stopped partway, say -- and an instance created before its computed columns existed.
+The same rotation happens whenever a tracked table's newest capture instance does not capture one of the table's stored columns, even when the deploy changed none. That catches a column a previous deploy added but never got to capture -- because it stopped partway, say -- or one another tool added. A computed column the instance lacks is left alone, for the reason above.
 
 > **Warning: a type change the change table cannot take.** SQL Server applies a column's type change to *every* change table that captures it -- a retired instance you have not yet dropped included -- inside the capture job, after the deploy. When a change table holds values the new type cannot take (a `VARCHAR(50)` narrowed to `VARCHAR(10)` over history with longer values), that fails there, and the capture job stops for the **whole database** until the instance is dropped. A rotation does not avoid it. SchemaSmith tries each in-place type change against the change tables first and refuses the deploy before anything changes, naming the column, the instance and the error. Drain that instance, drop it, and re-run.
 
