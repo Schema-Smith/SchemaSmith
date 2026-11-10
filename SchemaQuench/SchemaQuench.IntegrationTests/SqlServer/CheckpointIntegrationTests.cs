@@ -47,6 +47,11 @@ public class CheckpointIntegrationTests
     [TearDown]
     public void TearDown()
     {
+        // A test that stops early skips its own clean-up; what Program.Main registered for this directory, and the
+        // setting that names it, would otherwise be taken up by a later fixture's deploy.
+        FactoryContainer.Unregister<Schema.Checkpointing.ICheckpointing>();
+        if (FactoryContainer.Resolve<IConfigurationRoot>() is { } config && config["CheckpointDirectory"] == _checkpointDir)
+            config["CheckpointDirectory"] = null;
         try
         {
             if (Directory.Exists(_checkpointDir))

@@ -184,9 +184,15 @@ public abstract class ObjectScriptDeployFixture
     protected DriftRun RunDrift(string switches = "--Drift", IReadOnlyDictionary<string, string> settings = null)
     {
         var reportBase = Path.Join(Path.GetTempPath(), $"DriftReport_{Guid.NewGuid():N}");
+        var checkpointDir = Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
         lock (FactoryContainer.SharedLockObject)
         {
             var savedConfig = FactoryContainer.Resolve<IConfigurationRoot>();
+            // A run of the tool is a process of its own: it decides from its own command line whether to take up a checkpoint,
+            // and finds none another test left. A manager registered by an earlier test (one built for --ResumeQuench) would
+            // otherwise resume this run and skip its scripts.
+            var savedCheckpointing = FactoryContainer.Resolve<ICheckpointing>();
+            FactoryContainer.Register<ICheckpointing>(new FileCheckpointManager(checkpointDir, switches.Contains("--ResumeQuench")));
             try
             {
                 var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
@@ -247,6 +253,9 @@ public abstract class ObjectScriptDeployFixture
                 LogFactory.Clear();
                 FactoryContainer.Unregister<IEnvironment>();
                 FactoryContainer.Register<IConfigurationRoot>(savedConfig);
+                FactoryContainer.Unregister<ICheckpointing>();
+                if (savedCheckpointing != null) FactoryContainer.Register(savedCheckpointing);
+                if (Directory.Exists(checkpointDir)) Directory.Delete(checkpointDir, true);
                 foreach (var ext in new[] { ".json", ".md" })
                     if (File.Exists(reportBase + ext)) File.Delete(reportBase + ext);
             }

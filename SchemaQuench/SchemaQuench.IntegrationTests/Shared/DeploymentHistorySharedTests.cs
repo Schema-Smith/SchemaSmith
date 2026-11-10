@@ -54,6 +54,8 @@ public abstract class DeploymentHistorySharedTests : ObjectScriptDeployFixture
 
     private object Field(Guid runId, string column) => Scalar($"SELECT {C(column)} FROM {Table} WHERE {C("RunId")} = '{runId}'");
 
+    private static string FullLog(DriftRun run) => run.Describe() + " || full log: " + string.Join(" | ", run.Log);
+
     private Guid NewRun()
     {
         RunContext.Start("SchemaQuench");
@@ -90,7 +92,7 @@ public abstract class DeploymentHistorySharedTests : ObjectScriptDeployFixture
         WriteFile("Views", $"{View}.sql", "CREATE VIEW history_broken AS SELEC 1");
         var runId = NewRun();
         var run = RunDrift(switches: "");
-        Assert.That(run.ExitCode, Is.EqualTo(2), run.Describe());
+        Assert.That(run.ExitCode, Is.EqualTo(2), FullLog(run));
 
         Assert.Multiple(() =>
         {
@@ -124,10 +126,11 @@ public abstract class DeploymentHistorySharedTests : ObjectScriptDeployFixture
     [Test]
     public void ADriftCheck_WritesNothing()
     {
-        Assert.That(RunDrift(switches: "").ExitCode, Is.EqualTo(0));
+        var deploy = RunDrift(switches: "");
+        Assert.That(deploy.ExitCode, Is.EqualTo(0), FullLog(deploy));
         var runId = NewRun();
         var run = RunDrift(settings: new Dictionary<string, string> { ["KindleTheForge"] = "false" });
-        Assert.That(run.ExitCode, Is.EqualTo(0), run.Describe());
+        Assert.That(run.ExitCode, Is.EqualTo(0), "the drift check: " + FullLog(run) + " ||| the deploy before it: " + FullLog(deploy));
 
         Assert.That(Rows(runId), Is.EqualTo(0));
     }
