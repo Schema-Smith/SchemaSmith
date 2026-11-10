@@ -186,7 +186,8 @@ public class ProductQuenchTests
     public void ReadSecondaryServers_AnArrayNamesEachServerWhole()
     {
         var json = """{ "Target": { "SecondaryServers": [ "replica-1,14330", "replica-2" ] } }""";
-        var config = new ConfigurationBuilder().AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json))).Build();
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
+        var config = new ConfigurationBuilder().AddJsonStream(stream).Build();
 
         Assert.That(ProductQuench.ReadSecondaryServers(config), Is.EqualTo(new[] { "replica-1,14330", "replica-2" }));
     }
