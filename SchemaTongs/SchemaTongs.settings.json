@@ -14,7 +14,7 @@
                                        // User/Password above — for when a credential is present
                                        // but should not be used.
         // "CompatEncoding": "", // Override the payload encoding chosen for the source server
-                                 // (Json | Xml). Blank = choose automatically.
+                                 // auto | legacy (XML) | modern (JSON). Blank = auto.
         // "CommandTimeoutSeconds": 0, // How long one extraction command may run. 0 (default) = no limit.
         "ConnectionProperties": {
             // Extra connection-string properties, and they are PER ENGINE -- a key one engine does not know
@@ -131,8 +131,7 @@
         // Optional — extra names whose values are masked in logs, beyond the built-in sensitive-name list.
         // Names are matched case-insensitively against setting and token names.
         // "ScrubTokens": [ "ApiKey" ]
-    },
-    "ScriptTokens": {} // Token values substituted into extracted scripts, e.g. { "MainDB": "AppDb" }.
+    }
     // "ExitNonZeroOnWarning": false // Exit 1 instead of 0 when the run logged a warning, for pipelines that treat warnings as failures. Also the --ExitNonZeroOnWarning switch.
     // "LogFormat": "text" // text, or json: one JSON object per line on the console and in the log files, for a log platform to read with no parse rules. Also --LogFormat:json.
 }

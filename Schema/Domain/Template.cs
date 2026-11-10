@@ -152,9 +152,9 @@ namespace Schema.Domain
         public bool ContinueOnSchemaFailure { get; set; } = true;
 
         /// <summary>
-        /// Failure-isolation parity at the database level — applies to BOTH regular and schema
-        /// templates. When true (default), one database's failure does not abort the product run
-        /// across other databases. When false, the run aborts at the first DB-level failure.
+        /// Failure isolation at the database level, for a regular template (a schema template follows
+        /// <see cref="ContinueOnSchemaFailure"/>). When true (default), one database's failure does not abort
+        /// the product run across other databases. When false, the run aborts at the first DB-level failure.
         /// </summary>
         [JsonProperty(Order = 15)]
         [DefaultValue(true)]
@@ -1322,12 +1322,6 @@ namespace Schema.Domain
             return $"{objectName[(objectName.LastIndexOf('.') + 1)..]}{bareName[objectName.Length..]}.json";
         }
 
-        /// <summary>
-        /// Per design §3.3, schema-only fields set non-default on a regular template are almost
-        /// certainly a configuration mistake. Don't fail the load — surface a clear warning
-        /// through the progress log so the user can correct it. <see cref="ContinueOnDatabaseFailure"/>
-        /// is excluded: it is the regular template's own setting.
-        /// </summary>
         // Every engine refuses a nullable primary-key column (PostgreSQL on every deploy after the first), and nobody
         // who puts a column in the key means it to hold NULL. A conditional key may not deploy, so its columns stay as declared.
         private void MakePrimaryKeyColumnsNotNull()
@@ -1374,6 +1368,12 @@ namespace Schema.Domain
                     "Remove the quotes so the declaration says what deploys.");
         }
 
+        /// <summary>
+        /// Per design §3.3, schema-only fields set non-default on a regular template are almost
+        /// certainly a configuration mistake. Don't fail the load — surface a clear warning
+        /// through the progress log so the user can correct it. <see cref="ContinueOnDatabaseFailure"/>
+        /// is excluded: it is the regular template's own setting.
+        /// </summary>
         private void WarnIfSchemaOnlyFieldsSetOnRegularTemplate()
         {
             if (IsSchemaTemplate) return;

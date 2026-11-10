@@ -17,7 +17,8 @@ namespace Schema.Utility;
 
 /// <summary>
 /// Generates platform-aware data delivery merge scripts.
-/// SQL Server and PostgreSQL use MERGE syntax; MySQL uses INSERT/REPLACE/ON DUPLICATE KEY UPDATE.
+/// SQL Server uses MERGE; PostgreSQL uses MERGE from 15 and, below it, an UPDATE then an INSERT ... WHERE NOT EXISTS;
+/// MySQL and MariaDB use INSERT ... ON DUPLICATE KEY UPDATE.
 /// </summary>
 public static class MergeScriptHelper
 {
@@ -1480,8 +1481,8 @@ SELECT CAST(CASE WHEN EXISTS (SELECT 1 FROM sys.identity_columns c
         var tag = PostgreSqlDataBlockTag(jsonValue);
 
         var modernDelete = pgServerVersionNum == 0 || pgServerVersionNum >= 17;
-        // PostgreSQL MERGE is a v15 feature; below 15 the upsert is emitted as INSERT ... ON CONFLICT
-        // DO UPDATE instead. The delete-on-absence below is a standalone MERGE-free DELETE that already
+        // PostgreSQL MERGE is a v15 feature; below 15 the upsert is emitted as an UPDATE then an INSERT ... WHERE
+        // NOT EXISTS (see the legacy method). The delete-on-absence below is a standalone MERGE-free DELETE that already
         // covers every pre-17 server, so it serves the pre-15 path unchanged.
         var legacyUpsert = pgServerVersionNum != 0 && pgServerVersionNum < 15;
 

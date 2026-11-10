@@ -65,7 +65,7 @@ public static class SettingsKeys
         public const string Name = "Product:Name";
         public const string Path = "Product:Path";
         public const string CheckConstraintStyle = "Product:CheckConstraintStyle";
-        /// <summary>Extraction ordering for a table's object lists: Name (default) or Physical.</summary>
+        /// <summary>Extraction ordering for a table's object lists: Name or Physical (default).</summary>
         public const string ObjectOrder = "Product:ObjectOrder";
         /// <summary>When true (default), a re-extract keeps the order the file being replaced already had.</summary>
         public const string PreserveExistingOrder = "Product:PreserveExistingOrder";
