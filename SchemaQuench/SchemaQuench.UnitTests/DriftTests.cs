@@ -150,6 +150,23 @@ public class DriftTests
         });
     }
 
+    // Nothing counted is not "matches": a target whose modules cannot be compared is reported as a warning, so it exits 1
+    // under ExitNonZeroOnWarning and 0 otherwise. A clean target's lines are not warnings.
+    [Test]
+    public void AnUnverifiableTarget_IsAWarning_AndACleanOneIsNot()
+    {
+        var capture = new DriftCapture();
+        capture.RecordModule(Db1, "Procedures/Get.sql", DriftModuleState.Unverifiable);
+        var unverifiable = DriftVerdict.ConsoleLines(Decide([Unit()], [], capture)).ToList();
+        var clean = DriftVerdict.ConsoleLines(Decide([Unit()], [])).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(unverifiable.Where(l => l.Warn).Select(l => l.Line), Has.Some.Contains("cannot be compared"));
+            Assert.That(clean.Where(l => l.Warn), Is.Empty);
+        });
+    }
+
     [Test]
     public void APendingMigration_IsReportedButNotCountedByDefault()
     {
@@ -271,7 +288,7 @@ public class DriftTests
         var bolt = new ChangeTarget("srv", "Shop", "t_bolt");
         var report = Decide([Unit(schema: "t_acme", template: "Tenant"), Unit(schema: "t_bolt", template: "Tenant"), Unit(schema: "t_zeta", template: "Tenant")],
             [Row("column", "t_acme.Orders.Region", "wouldModify", acme), Row("column", "t_bolt.Orders.Region", "wouldModify", bolt)]);
-        var lines = DriftVerdict.ConsoleLines(report).ToList();
+        var lines = DriftVerdict.ConsoleLines(report).Select(l => l.Line).ToList();
         Assert.Multiple(() =>
         {
             Assert.That(lines, Has.Some.Contains("Tenant: drift").And.Some.Contains("on 2 of 3 target(s)"));

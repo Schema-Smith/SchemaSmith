@@ -980,8 +980,9 @@ public class ProductQuench
             .OrderBy(u => u.Display, StringComparer.Ordinal)
             .ToList();
         DriftReport = DriftVerdict.Decide(units, _changeAudit.Snapshot(), _driftCapture, _driftFailOn);
-        foreach (var line in DriftVerdict.ConsoleLines(DriftReport))
-            _progressLog.Info(line);
+        foreach (var (warn, line) in DriftVerdict.ConsoleLines(DriftReport))
+            if (warn) _progressLog.Warn(line);
+            else _progressLog.Info(line);
     }
 
     private void QuenchProductCore(bool suppressKindlingForTesting)

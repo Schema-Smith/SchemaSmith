@@ -802,7 +802,7 @@ A table the package dropped, under `DropTablesRemovedFromProduct: false`, is not
   a server setting counts on every target on that server.
 - **Reported, not counted:** a run-once migration not yet run (`pendingMigrations`) -- this release is not deployed
   yet; an object script never stamped, so whether it changed cannot be said (`unverifiable`); and a drop
-  [`PreventDrop`](#preventdrop) kept (`extra`).
+  [`PreventDrop`](#preventdrop) kept (`extra`). An `unverifiable` target is logged as a warning, since nothing counted is not the same as matching: it exits `0`, or `1` under [`--ExitNonZeroOnWarning`](configuration.md#exit-codes).
 - **Left out:** Setup scripts, data delivery and the version stamp, which act on every deploy by design, and scripts
   that run every deploy (`[ALWAYS]` and product Before/After scripts).
 

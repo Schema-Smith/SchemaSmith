@@ -232,7 +232,14 @@ public static class DriftVerdict
     /// <summary>
     /// The console verdict: one line per plan of each template rather than the detail of every target, then the answer.
     /// </summary>
-    public static IEnumerable<string> ConsoleLines(DriftReport report)
+    // A target whose modules cannot be compared, or that was skipped, is a warning: nothing counted is not the same as
+    // matches, so a pipeline under ExitNonZeroOnWarning stops on it, and one without it passes (Paul, 2026-11-10).
+    public static IEnumerable<(bool Warn, string Line)> ConsoleLines(DriftReport report) =>
+        Lines(report).Select(l => (l.StartsWith(UnverifiableMark, StringComparison.Ordinal), l.Replace(UnverifiableMark, "")));
+
+    private const string UnverifiableMark = "\u0001";
+
+    private static IEnumerable<string> Lines(DriftReport report)
     {
         foreach (var template in report.Targets.GroupBy(t => t.Template).OrderBy(g => g.Key, StringComparer.Ordinal))
         {
@@ -251,14 +258,15 @@ public static class DriftVerdict
                 var these = template.Where(t => t.Status == status).Select(Display).ToList();
                 if (these.Count == 0) continue;
                 var word = status == "failed" ? "could not be checked" : "nothing counted, but some modules cannot be compared";
-                yield return $"  {template.Key}: {word} on {these.Count} of {total} target(s): {string.Join(", ", these.Take(5))}{(these.Count > 5 ? ", ..." : "")}";
+                yield return (status == "unverifiable" ? UnverifiableMark : "")
+                             + $"  {template.Key}: {word} on {these.Count} of {total} target(s): {string.Join(", ", these.Take(5))}{(these.Count > 5 ? ", ..." : "")}";
             }
         }
         if (report.PendingMigrations.Count > 0)
             yield return $"  {report.PendingMigrations.Count} run-once migration script(s) not yet run"
                          + (report.FailOn.Contains(DriftFailOn.Migrations) ? "" : " (not counted; --DriftFailOn:migrations counts them)");
         if (report.Unverifiable.Count > 0)
-            yield return $"  {report.Unverifiable.Count} module script(s) were never stamped, so whether they changed cannot be said; the summary lists them";
+            yield return UnverifiableMark + $"  {report.Unverifiable.Count} module script(s) were never stamped, so whether they changed cannot be said; the summary lists them";
         var driftedTargets = report.Targets.Count(t => t.Status == "drifted");
         yield return driftedTargets > 0
             ? $"Drift found on {driftedTargets} of {report.Targets.Count} target(s)"
