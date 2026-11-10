@@ -4,6 +4,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using NSubstitute;
 using Schema.Isolators;
 using Schema.Utility;
@@ -85,6 +86,47 @@ public class GettingStartedTests
         Assert.That(output, Does.Contain("No settings file was found, so nothing was run."));
         Assert.That(output, Does.Contain(Path.Join(_cwd, "SchemaQuench.settings.json")));
         Assert.That(output, Does.Contain(Path.Join(_toolDir, "SchemaQuench.settings.json")));
+    }
+
+    // #498: run from the tool's own folder, it looked in one place, so it must not send the user to "one of those places".
+    [Test]
+    public void NoSettingsFile_RunFromTheToolsFolder_NamesTheOnePlace()
+    {
+        Assert.That(GettingStarted.ShowIfUnconfigured("SchemaQuench", "deploys a schema package to a database", QuenchSettings, [], _toolDir, _toolDir), Is.True);
+
+        _environment.Received(1).Exit(2);
+        var output = _console.ToString();
+        var path = Path.Join(_toolDir, "SchemaQuench.settings.json");
+        Assert.That(output.Split(path).Length - 1, Is.EqualTo(1), output);
+        Assert.That(output, Does.Contain("Put a SchemaQuench.settings.json there with these settings:"));
+        Assert.That(output, Does.Not.Contain("one of those places"));
+    }
+
+    // #498: the blank file that was read sits beside the tool (under Program Files for a Chocolatey install), which a user
+    // may not be able to edit, so the screen leads with a settings file of their own and environment variables.
+    [Test]
+    public void BlankSettingsBesideTheTool_LeadWithAFileOfYourOwnAndEnvironmentVariables()
+    {
+        WriteSettings(_toolDir, "{ \"Target\": { \"Server\": \"\" }, \"SchemaPackagePath\": \"\" }");
+
+        Assert.That(Show(), Is.True);
+
+        var output = _console.ToString();
+        var lines = output.Split('\n').Select(l => l.TrimEnd('\r')).ToList();
+        var lead = lines.FindIndex(l => l.EndsWith(':') && l.Contains("settings"));
+        Assert.That(lines[lead], Does.Contain("--ConfigFile"), output);
+        Assert.That(output.IndexOf("SmithySettings_Target__Server", StringComparison.Ordinal),
+            Is.LessThan(output.IndexOf(Path.Join(_toolDir, "SchemaQuench.settings.json"), StringComparison.Ordinal)), output);
+    }
+
+    [Test]
+    public void BlankSettingsInTheCurrentDirectory_AreFilledInThere()
+    {
+        WriteSettings(_cwd, "{ \"Target\": { \"Server\": \"\" }, \"SchemaPackagePath\": \"\" }");
+
+        Assert.That(Show(), Is.True);
+
+        Assert.That(_console.ToString(), Does.Contain($"Fill in these settings in {Path.Join(_cwd, "SchemaQuench.settings.json")}:"));
     }
 
     [Test]
