@@ -973,6 +973,8 @@ Before SchemaQuench can shape your database, it needs its tools in place. Kindle
 
 KindleTheForge runs on every quench, but the install itself is **version-stamped and self-skipping**: SchemaSmith records a content-hash stamp of the helper objects in each target database and the call returns immediately when the stamp matches the current tooling — so a normal deployment pays the install cost only when the tooling actually changes. In a normal release pipeline, always leave this `true`. See [`ForceReKindle`](#forcerekindle) for the override that re-installs unconditionally.
 
+On MySQL and MariaDB the helper tables are created `ROW_FORMAT=DYNAMIC` whatever the server's `innodb_default_row_format`, because several of their keys index a column wider than the 767 bytes `COMPACT` and `REDUNDANT` allow. MySQL 5.7 and MariaDB 10.2 with `innodb_large_prefix` turned off hold `DYNAMIC` to 767 bytes too, and kindling stops with "Specified key was too long"; turn it back on (its default) before deploying.
+
 **When to set false:** Partial-package datafix deployments flip this off along with the rest of the datafix profile. See [Partial-Package Deployments (Data Fixes)](#partial-package-deployments-data-fixes) for the full profile and the reasoning behind each flag.
 
 ---

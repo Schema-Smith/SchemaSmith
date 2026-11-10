@@ -215,12 +215,24 @@ BEGIN
         END WHILE;
     END IF;
 
+    -- DYNAMIC: on a server whose innodb_default_row_format is COMPACT or REDUNDANT an index key stops at 767 bytes, short
+    -- of the unique keys these tables carry. One created that way before is converted, so a key added to it fits.
     SET v_Sql = CONCAT('CREATE TABLE IF NOT EXISTS `', v_TableName, '` (', v_ColumnList, v_PkClause,
-                       ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+                       ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC');
     SET @v_stmt = v_Sql;
     PREPARE stmt FROM @v_stmt;
     EXECUTE stmt;
     DEALLOCATE PREPARE stmt;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey
+                  AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
+                  AND UPPER(row_format) IN ('COMPACT', 'REDUNDANT')) THEN
+        SET @v_stmt = CONCAT('ALTER TABLE `', v_TableName, '` ROW_FORMAT=DYNAMIC');
+        PREPARE stmt FROM @v_stmt;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
 
     -- Step 3: COLUMN-level declarative rename (OldName), run BEFORE the existing-columns snapshot
     -- below (Step 4 add-missing-columns) so a renamed column's data is not left behind under an
