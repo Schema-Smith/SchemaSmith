@@ -211,7 +211,7 @@ For the full explanation of configuration loading, environment variable mapping,
 }
 ```
 
-The platform-specific `ShouldCast` flags are simply ignored when they don't apply to the configured `Source:Platform`. You can leave the full set in place across all your environments. Every `ShouldCast` object flag defaults to `true` when it is left out; `ValidateScripts` and the deprecated `ScriptDynamicDependencyRemovalForFunctions` default to `false`. `Sequences` and `Packages` act on MariaDB only -- MySQL has neither object, so the flags mean nothing there whatever they say. `Source:CompatEncoding` takes `auto` (the default when blank), `legacy` or `modern`, choosing the payload encoding SchemaTongs uses against a SQL Server source; `auto` picks the legacy form when the database's compatibility level is below 130 or the server is older than SQL Server 2017.
+The platform-specific `ShouldCast` flags are simply ignored when they don't apply to the configured `Source:Platform`. You can leave the full set in place across all your environments. Every `ShouldCast` object flag defaults to `true` when it is left out; `ValidateScripts` and the deprecated `ScriptDynamicDependencyRemovalForFunctions` default to `false`. In the MySQL family, `Sequences` and `Packages` act on MariaDB only -- MySQL has neither object, so the flags mean nothing there whatever they say. `Source:CompatEncoding` takes `auto` (the default when blank), `legacy` or `modern`, choosing the payload encoding SchemaTongs uses against a SQL Server source; `auto` picks the legacy form when the database's compatibility level is below 130 or the server is older than SQL Server 2017.
 
 ### Source connection
 
@@ -258,7 +258,6 @@ Control exactly what gets cast from the database. Each object type can be indivi
 | `ObjectList` | _(empty)_ | Comma- or semicolon-separated list of specific objects to extract. See [ObjectList Filtering](#objectlist-filtering). |
 | `ValidateScripts` | `false` | Parses each extracted SQL script for validity. See [Script Validation](#script-validation). |
 | `SaveInvalidScripts` | `true` | When `ValidateScripts` is enabled, saves failing scripts as `.sqlerror` files. |
-| `ScriptDynamicDependencyRemovalForFunctions` | `false` | Deprecated and ignored; SchemaTongs warns when it is set. See [ScriptDynamicDependencyRemovalForFunctions](#scriptdynamicdependencyremovalforfunctions). |
 
 ### SQL Server and PostgreSQL
 
@@ -266,7 +265,7 @@ Control exactly what gets cast from the database. Each object type can be indivi
 |---|---|---|
 | `Schemas` | `true` | Schema creation scripts (MySQL and MariaDB don't have schemas distinct from databases) |
 
-### SQL Server only
+### SQL Server
 
 | Flag | Default | What It Extracts |
 |---|---|---|
@@ -276,15 +275,17 @@ Control exactly what gets cast from the database. Each object type can be indivi
 | `DDLTriggers` | `true` | Database-level DDL triggers |
 | `XMLSchemaCollections` | `true` | XML schema collections |
 | `IndexedViews` | `true` | Indexed (materialized) view definitions as JSON files |
+| `Sequences` | `true` | Sequence objects (SQL Server 2012 and later) |
 | `Synonyms` | `true` | Synonyms |
 | `SecurityPolicies` | `true` | Row-level security policies (SQL Server 2016+), to `SecurityPolicies/`. See [Security policies](#security-policies-sql-server). |
 | `ModuleSyntax` | `CreateOrAlter` | The statement form module scripts are written in: `CreateOrAlter` (SQL Server 2016 SP1 and later) or `Legacy` (every supported version). See [ModuleSyntax](#modulesyntax). |
+| `ScriptDynamicDependencyRemovalForFunctions` | `false` | Deprecated and ignored; SchemaTongs warns when it is set. See [ScriptDynamicDependencyRemovalForFunctions](#scriptdynamicdependencyremovalforfunctions). |
 
 **What the SQL Server scripts carry.** A table type is written with its identity, computed columns, defaults, a `COLLATE` that differs from the database's, its named indexes (`HASH`, `INCLUDE` and filter forms included), `IGNORE_DUP_KEY` and `MEMORY_OPTIMIZED` (2014+). A sequence keeps its type's precision, an alias type's name and an explicit `CACHE` or `NO CACHE`. A full-text catalog keeps `ACCENT_SENSITIVITY` and `AS DEFAULT`. A module renamed with `sp_rename` still carries its old name in its stored text; SchemaTongs writes it under the current name and logs a warning naming the old one, so review the body for references to it. A table trigger script ends with a `DISABLE TRIGGER` batch when the trigger is disabled and an `sp_settriggerorder` batch for each statement it is set first or last for; a database DDL trigger script ends with `DISABLE TRIGGER ... ON DATABASE` when it is disabled. Neither is part of the trigger's definition, so without the tail a redeploy would enable and unorder it.
 
 **Created once, not converged.** Schemas, user-defined and table types, sequences, synonyms, full-text catalogs and stop lists, and XML schema collections are written as a `CREATE` inside an existence check (`IF NOT EXISTS (...)`). SQL Server cannot alter most of them in place, and a type cannot be dropped while a column or parameter uses it, so the script never replaces what is there. A redeploy is therefore safe, and an edited script changes nothing once the object exists. To change one, write the change as a [migration script](schemaquench.md#migration-script-tracking): an `ALTER` where SQL Server has one (`ALTER SEQUENCE`, `ALTER XML SCHEMA COLLECTION ... ADD`, `ALTER FULLTEXT CATALOG`), otherwise a drop and re-create in an order its dependents allow. Module scripts (views, functions, procedures, triggers) are different: they are written as `CREATE OR ALTER` (or the `Legacy` stub and `ALTER`), so an edit deploys.
 
-### PostgreSQL only
+### PostgreSQL
 
 | Flag | Default | What It Extracts |
 |---|---|---|
@@ -323,6 +324,7 @@ Range types, operators and casts are created where they are missing and left alo
 |---|---|---|
 | `Events` | `true` | Scheduled events |
 | `Packages` | `true` | MariaDB packages (10.3+) and their bodies, to `Packages/` |
+| `Sequences` | `true` | MariaDB sequences (10.3+), as declared JSON in `Sequences/` |
 
 **Views, functions, procedures and triggers are written from the engine's own DDL** (`SHOW CREATE`), so everything the server knows about the object comes with it: parameter modes and character sets, defaults, `AGGREGATE` and `RETURNS ROW` functions, multi-event and `UPDATE OF` triggers, `COMMENT`, `SQL SECURITY`, a view's `ALGORITHM` and `CHECK OPTION`, and MySQL 9.4's JSON duality views. The `DEFINER` clause is removed, so a deployed object's definer is the account that deploys it. Two things are added to what the server returns:
 
