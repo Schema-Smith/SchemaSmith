@@ -2638,11 +2638,12 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     private static string JsonReadScalarMySql(MySqlColumnInfo column, string name, bool isMariaDb)
     {
         var value = $"_ss_jt.{MyQuote(name)}";
+        var dataType = column?.DataType;
         if (column?.IsJson == true) return $"{value} AS {MyQuote(name)}";
         var scalar = isMariaDb ? $"SchemaSmith_JsonScalarStr({value})" : $"JSON_UNQUOTE({value})";
-        if (column != null && MySqlNumberTypes.Contains(column.DataType))
+        if (dataType != null && MySqlNumberTypes.Contains(dataType))
             scalar = $"IF(JSON_TYPE({value}) = 'BOOLEAN', IF(JSON_UNQUOTE({value}) = 'true', '1', '0'), {scalar})";
-        if (column != null && column.DataType.Equals("year", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(dataType, "year", StringComparison.OrdinalIgnoreCase))
             scalar = $"CAST({scalar} AS SIGNED)";
         return isMariaDb
             ? $"{scalar} AS {MyQuote(name)}"

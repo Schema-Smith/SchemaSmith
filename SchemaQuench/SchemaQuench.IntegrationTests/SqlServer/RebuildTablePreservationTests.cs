@@ -155,7 +155,7 @@ IF OBJECT_ID('SchemaSmith.RebuildSetAsideForeignKeys') IS NOT NULL DELETE FROM S
         // The deploy holds r.Conn until it finishes, so nothing reads through it before the wait.
         Exception failure = null;
         try { deploy.Wait(TimeSpan.FromMinutes(2)); }
-        catch (Exception ex) { failure = ex; }
+        catch (AggregateException ex) { failure = ex; }
         Assert.That(failure, Is.Null, () => "the declared key is there, so there is nothing for this deploy to fail on: " + failure?.GetBaseException().Message);
         Assert.Multiple(() =>
         {
