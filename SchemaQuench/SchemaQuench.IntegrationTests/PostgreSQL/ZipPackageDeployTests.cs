@@ -1,92 +1,19 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
-using System;
-using System.IO;
-using System.IO.Compression;
-using System.Linq;
-using log4net;
-using Microsoft.Extensions.Configuration;
-using NSubstitute;
-using Schema.Checkpointing;
-using Schema.IntegrationTests;
-using Schema.Isolators;
-using Schema.Utility;
+using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
-/// <summary>
-/// SchemaPackagePath may name a .zip of the package folder, read in place; nothing deployed one end to end. The zip is
-/// the ValidProduct folder, so the run has to do what a deploy of the folder does.
-/// </summary>
 [Category("PostgreSQL")]
-[NonParallelizable]
-public class ZipPackageDeployTests
+[Category("Integration")]
+[TestFixture]
+public class ZipPackageDeployTests : ZipPackageDeploySharedTests
 {
-    // The three rows public.TestTable.tabledata carries, read from the zip.
-    private static long DeliveredRows(string database)
-    {
-        using var conn = Schema.DataAccess.DbConnectionFactory.ForPlatform(Schema.Domain.Platform.PostgreSQL)
-            .GetDbConnection(Schema.IntegrationTests.PostgreSQL.FixtureSetup.GetMainDbConnectionString());
-        conn.Open();
-        conn.ChangeDatabase(database);
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT COUNT(*) FROM public.\"TestTable\" WHERE \"TestID\"::text IN ('1f1290c7-8e05-4d93-9080-2ee836b297ca', 'd18a72c7-94b1-4e90-8c07-882ab1339721', '4b68bc1e-afa6-41e2-b602-88829807b191')";
-        return Convert.ToInt64(cmd.ExecuteScalar());
-    }
-
-    [Test]
-    public void AZippedPackage_DeploysEveryTemplateLikeItsFolder()
-    {
-        var zip = Path.Join(Path.GetTempPath(), $"ValidProduct_{Guid.NewGuid():N}.zip");
-        var checkpointDir = Path.Join(Path.GetTempPath(), $"SchemaQuench_Zip_{Guid.NewGuid():N}");
-        ZipFile.CreateFromDirectory(TestHelper.GetTestProductPath("PostgreSQL", "ValidProduct"), zip);
-        var errorLog = Substitute.For<ILog>();
-        var errors = new System.Collections.Generic.List<string>();
-        errorLog.When(l => l.Error(Arg.Any<object>())).Do(ci => errors.Add(ci.ArgAt<object>(0)?.ToString()));
-        errorLog.When(l => l.Error(Arg.Any<object>(), Arg.Any<Exception>())).Do(ci => errors.Add(ci.ArgAt<object>(0) + " " + ci.ArgAt<Exception>(1)?.Message));
-        var progressLog = Substitute.For<ILog>();
-        progressLog.When(l => l.Error(Arg.Any<object>())).Do(ci => errors.Add(ci.ArgAt<object>(0)?.ToString()));
-        progressLog.When(l => l.Fatal(Arg.Any<object>())).Do(ci => errors.Add(ci.ArgAt<object>(0)?.ToString()));
-        progressLog.When(l => l.Warn(Arg.Any<object>())).Do(ci => errors.Add("WARN " + ci.ArgAt<object>(0)));
-        var environment = Substitute.For<IEnvironment>();
-        environment.CommandLine.Returns("--SkipKindlingForge");
-
-        lock (FactoryContainer.SharedLockObject)
-        {
-            var config = FactoryContainer.Resolve<IConfigurationRoot>();
-            var packagePath = config["SchemaPackagePath"];
-            var checkpoints = config["CheckpointDirectory"];
-            FactoryContainer.Register(environment);
-            LogFactory.Register("ErrorLog", errorLog);
-            LogFactory.Register("ProgressLog", progressLog);
-            config["SchemaPackagePath"] = zip;
-            config["CheckpointDirectory"] = checkpointDir;
-            try
-            {
-                Program.Main(["SkipKindlingForge"]);
-
-                Assert.Multiple(() =>
-                {
-                    var exits = environment.ReceivedCalls().Where(c => c.GetMethodInfo().Name == nameof(IEnvironment.Exit)).Select(c => (int)c.GetArguments()[0]!);
-                    Assert.That(exits, Is.EqualTo(new[] { 0 }), "the run failed: " + string.Join(" | ", errors));
-                    progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching Template: Main")));
-                    progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching Template: Secondary")));
-                    Assert.That(DeliveredRows(config["ScriptTokens:MainDB"]!), Is.EqualTo(3), "the table data inside the zip was delivered");
-                });
-            }
-            finally
-            {
-                config["SchemaPackagePath"] = packagePath;
-                config["CheckpointDirectory"] = checkpoints;
-                (FactoryContainer.Resolve<ZipFileWrapper>() as IDisposable)?.Dispose();
-                FactoryContainer.Unregister<ZipFileWrapper>();
-                FactoryContainer.Unregister<ZipDirectoryWrapper>();
-                LogFactory.Clear();
-                FactoryContainer.Unregister<IEnvironment>();
-                FactoryContainer.Unregister<ICheckpointing>();
-                File.Delete(zip);
-                if (Directory.Exists(checkpointDir)) Directory.Delete(checkpointDir, true);
-            }
-        }
-    }
+    protected override Platform Platform => Platform.PostgreSQL;
+    protected override string TestProductsFolder => "PostgreSQL";
+    protected override string MainConnectionString => Schema.IntegrationTests.PostgreSQL.FixtureSetup.GetMainDbConnectionString();
+    // The rows the zipped TestTable.tabledata carries.
+    protected override string DeliveredRowsSql => "SELECT COUNT(*) FROM public.\"TestTable\" WHERE \"TestID\"::text IN ('1f1290c7-8e05-4d93-9080-2ee836b297ca', 'd18a72c7-94b1-4e90-8c07-882ab1339721', '4b68bc1e-afa6-41e2-b602-88829807b191')";
+    protected override int ExpectedDeliveredRows => 3;
 }

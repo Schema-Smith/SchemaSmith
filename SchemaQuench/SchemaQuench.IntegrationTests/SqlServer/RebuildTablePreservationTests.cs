@@ -126,8 +126,6 @@ IF OBJECT_ID('SchemaSmith.RebuildSetAsideForeignKeys') IS NOT NULL DELETE FROM S
         var child = $"{r.Token}_C";
         var key = $"{r.Token}_fk_decl";
         r.Exec($"CREATE TABLE dbo.[{child}] (Id INT NOT NULL, ParentId INT NULL)");
-        r.Exec($@"INSERT INTO SchemaSmith.RebuildSetAsideForeignKeys ([ChildSchema], [ChildTable], [KeyName], [ParentSchema], [ParentTable], [Definition], [WasTrusted], [WasEnabled], [Declared])
-                  VALUES ('dbo', '{child}', '{key}', 'dbo', '{r.Parent}', 'FOREIGN KEY ([ParentId]) REFERENCES [dbo].[{r.Parent}] ([Id])', 1, 1, 1)");
         r.Parse($$"""
 [ { "Schema": "[dbo]", "Name": "[{{child}}]",
     "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[ParentId]", "DataType": "INT", "Nullable": true } ],
@@ -141,6 +139,10 @@ IF OBJECT_ID('SchemaSmith.RebuildSetAsideForeignKeys') IS NOT NULL DELETE FROM S
         using var otherCmd = other.CreateCommand();
         otherCmd.CommandText = $"BEGIN TRAN; SELECT TOP (0) * FROM dbo.[{child}] WITH (TABLOCKX, HOLDLOCK);";
         otherCmd.ExecuteNonQuery();
+        // Recorded only now: every deploy restores every set-aside key, so a row visible before the lock let another test's
+        // deploy put the key back first and left this one nothing to wait on.
+        r.Exec($@"INSERT INTO SchemaSmith.RebuildSetAsideForeignKeys ([ChildSchema], [ChildTable], [KeyName], [ParentSchema], [ParentTable], [Definition], [WasTrusted], [WasEnabled], [Declared])
+                  VALUES ('dbo', '{child}', '{key}', 'dbo', '{r.Parent}', 'FOREIGN KEY ([ParentId]) REFERENCES [dbo].[{r.Parent}] ([Id])', 1, 1, 1)");
 
         var deploy = Task.Run(() => r.Exec($"EXEC SchemaSmith.ForeignKeyQuench @ProductName = 'Declares_{r.Token}', @WhatIf = 0"));
         // Add the key only once the deploy's own ADD is waiting for the table: it has already looked, and found no key.

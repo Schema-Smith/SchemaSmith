@@ -276,6 +276,7 @@ public class RebuildTablePreservationTests : BaseTableQuenchTests
                                   ALTER TABLE ""{r.Other}"".""C"" ADD CONSTRAINT fk_other FOREIGN KEY (""ParentId"") REFERENCES ""{r.Schema}"".""Parent"" (""Id"");";
             begin.ExecuteNonQuery();
         }
+        var deployPid = r.Scalar("SELECT pg_backend_pid()");
         var deploy = System.Threading.Tasks.Task.Run(() => RunTableQuenchProc(r.Conn.CreateCommand(), $$"""
 [ { "Schema": "{{r.Other}}", "Name": "C",
     "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "ParentId", "DataType": "INT", "Nullable": true } ],
@@ -283,7 +284,8 @@ public class RebuildTablePreservationTests : BaseTableQuenchTests
 """, productName: $"Declares_{r.Schema}"));
         // Commit only once the deploy's ADD is waiting on the open transaction's lock: it has looked, and found no key.
         using var poll = other.CreateCommand();
-        poll.CommandText = $@"SELECT COUNT(*) FROM pg_locks WHERE NOT granted AND relation = '""{r.Other}"".""C""'::regclass";
+        // This deploy's own wait: another test's deploy restoring set-aside keys can be queued on the same table.
+        poll.CommandText = $@"SELECT COUNT(*) FROM pg_locks WHERE NOT granted AND pid = {deployPid} AND relation = '""{r.Other}"".""C""'::regclass";
         var waiting = System.Diagnostics.Stopwatch.StartNew();
         while (Convert.ToInt64(poll.ExecuteScalar()) == 0 && !deploy.IsCompleted && waiting.Elapsed < TimeSpan.FromSeconds(60))
             System.Threading.Thread.Sleep(100);

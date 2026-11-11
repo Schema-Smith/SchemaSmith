@@ -34,7 +34,8 @@ public class GeneratedDataScriptAcrossVersionsTests : ObjectScriptDeployFixture
     public void AScriptGeneratedOnANewerMySql_DeliversJsonNullsAsSqlNull_OnAPatchThatMisreadsThem()
     {
         var targetVersion = Scalar("SELECT VERSION()")?.ToString() ?? "";
-        if (!MergeScriptHelper.JsonTableMisreadsScalarsMySql(targetVersion))
+        // 5.7 has no JSON_TABLE at all, so no generated script runs there; the misread is an 8.0 patch-range defect.
+        if (!targetVersion.StartsWith("8.0.", StringComparison.Ordinal) || !MergeScriptHelper.JsonTableMisreadsScalarsMySql(targetVersion))
             Assert.Ignore($"Needs a MySQL target whose JSON_TABLE misreads scalars (8.0.11-8.0.20); this one is {targetVersion}.");
 
         var source = new MySqlConnectionStringBuilder(MainConnectionString) { Port = 3306, Database = "" }.ConnectionString;

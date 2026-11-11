@@ -13,7 +13,7 @@ public class SchemaShearsSubsetSafetyTests : SchemaShearsSubsetSafetyTestsShared
 {
     protected override Platform Platform => Platform.MariaDb;
     protected override string MainDb => FixtureSetup.MainDb;
-    protected override string BaseConnectionString => FixtureSetup.ConnectionString;
+    protected override string TestConnectionString => FixtureSetup.ConnectionString + "Database=information_schema;";
     protected override IConfigurationRoot FixtureConfig => FixtureSetup.Config;
     protected override string ProductPlatformFolder => "MariaDb";
 }

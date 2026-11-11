@@ -97,13 +97,14 @@ public class TaskQueueManagerTests
     public void WaitForAll_InvokesActionWhileWaiting()
     {
         using var manager = new TaskQueueManager<string>(maxTasks: 1);
-        var actionCalled = false;
+        using var actionCalled = new ManualResetEventSlim(false);
 
-        manager.AddToQueue("item1", _ => Thread.Sleep(200));
+        // The item finishes only once the action has run, so the action can only have run while WaitForAll waited.
+        manager.AddToQueue("item1", _ => actionCalled.Wait(System.TimeSpan.FromSeconds(10)));
 
-        manager.WaitForAll(() => actionCalled = true);
+        manager.WaitForAll(() => actionCalled.Set());
 
-        Assert.That(actionCalled, Is.True);
+        Assert.That(actionCalled.IsSet, Is.True);
     }
 
     [Test]

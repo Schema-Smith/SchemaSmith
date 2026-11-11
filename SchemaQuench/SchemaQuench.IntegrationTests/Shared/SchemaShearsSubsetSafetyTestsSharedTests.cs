@@ -22,9 +22,18 @@ public abstract class SchemaShearsSubsetSafetyTestsSharedTests
 {
     protected abstract Platform Platform { get; }
     protected abstract string MainDb { get; }
-    protected abstract string BaseConnectionString { get; }
-    protected abstract Microsoft.Extensions.Configuration.IConfigurationRoot FixtureConfig { get; }
+    /// <summary>A connection string the test can open and switch to <see cref="MainDb"/> on.</summary>
+    protected abstract string TestConnectionString { get; }
+    /// <summary>The configuration a deploy reads; null where the fixture has already registered it.</summary>
+    protected virtual Microsoft.Extensions.Configuration.IConfigurationRoot FixtureConfig => null;
     protected abstract string ProductPlatformFolder { get; }
+    /// <summary>The kept table's file in the patch manifest, named as the engine's package names it.</summary>
+    protected virtual string KeptTableManifestEntry => "Templates/Main/Tables/ShearsKeep.json";
+    protected virtual string TableExistsSql(string tableName) =>
+        $"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '{MainDb}' AND TABLE_NAME = '{tableName}'";
+    protected virtual string DropTablesSql => $@"
+DROP TABLE IF EXISTS `{MainDb}`.`ShearsRemovable`;
+DROP TABLE IF EXISTS `{MainDb}`.`ShearsKeep`;";
 
     private readonly ILog _errorLog = Substitute.For<ILog>();
     private readonly ILog _progressLog = Substitute.For<ILog>();
@@ -34,7 +43,7 @@ public abstract class SchemaShearsSubsetSafetyTestsSharedTests
 
     protected SchemaShearsSubsetSafetyTestsSharedTests()
     {
-        _connectionString = BaseConnectionString + "Database=information_schema;";
+        _connectionString = TestConnectionString;
         _mainDb = MainDb;
     }
 
@@ -67,7 +76,7 @@ public abstract class SchemaShearsSubsetSafetyTestsSharedTests
 
                 // Build a patch that includes only ShearsKeep; AllowDrops is empty so
                 // DropTablesRemovedFromProduct is stamped false in the patch Product.json.
-                File.WriteAllText(manifestFile, "Templates/Main/Tables/ShearsKeep.json");
+                File.WriteAllText(manifestFile, KeptTableManifestEntry);
                 new PatchBuilder().Build(new PatchBuildRequest
                 {
                     SourcePath = sourcePath,
@@ -134,7 +143,7 @@ public abstract class SchemaShearsSubsetSafetyTestsSharedTests
 
                 // Build a patch with AllowDrops = ["Tables"]: DropTablesRemovedFromProduct is
                 // NOT stamped false, so the patch Product.json defaults true → drop executes.
-                File.WriteAllText(manifestFile, "Templates/Main/Tables/ShearsKeep.json");
+                File.WriteAllText(manifestFile, KeptTableManifestEntry);
                 new PatchBuilder().Build(new PatchBuildRequest
                 {
                     SourcePath = sourcePath,
@@ -177,7 +186,7 @@ public abstract class SchemaShearsSubsetSafetyTestsSharedTests
         _progressLog.ClearReceivedCalls();
         _errorLog.ClearReceivedCalls();
         _environment.ClearReceivedCalls();
-        FactoryContainer.Register(FixtureConfig);
+        if (FixtureConfig != null) FactoryContainer.Register(FixtureConfig);
         FactoryContainer.Register(_environment);
         LogFactory.Register("ErrorLog", _errorLog);
         LogFactory.Register("ProgressLog", _progressLog);
@@ -187,15 +196,13 @@ public abstract class SchemaShearsSubsetSafetyTestsSharedTests
 
     private bool TableExists(System.Data.IDbCommand cmd, string tableName)
     {
-        cmd.CommandText = $"SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '{_mainDb}' AND TABLE_NAME = '{tableName}'";
+        cmd.CommandText = TableExistsSql(tableName);
         return Convert.ToInt32(cmd.ExecuteScalar()) > 0;
     }
 
     private void DropTablesAndCleanup(System.Data.IDbCommand cmd)
     {
-        cmd.CommandText = $@"
-DROP TABLE IF EXISTS `{_mainDb}`.`ShearsRemovable`;
-DROP TABLE IF EXISTS `{_mainDb}`.`ShearsKeep`;";
+        cmd.CommandText = DropTablesSql;
         cmd.ExecuteNonQuery();
     }
 }

@@ -378,8 +378,6 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         using var r = Seeded();
         var key = $"fk_decl_{r.Uid}";
         r.Exec($"CREATE TABLE `{r.Other}` (`Id` INT NOT NULL PRIMARY KEY, `ParentId` INT NULL)");
-        r.Exec($@"INSERT INTO SchemaSmith_RebuildSetAsideForeignKeys (ChildSchema, ChildTable, KeyName, ParentSchema, ParentTable, ReferencedColumns, Definition, Declared)
-                  VALUES ('{r.Db}', '{r.Other}', '{key}', '{r.Db}', '{r.Parent}', '`Id`', 'FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`)', 1)");
         var json = $$"""
 [ { "Name": "{{r.Other}}",
     "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "ParentId", "DataType": "INT", "Nullable": true } ],
@@ -396,6 +394,10 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         using var otherCmd = other.CreateCommand();
         otherCmd.CommandText = $"USE `{r.Db}`; LOCK TABLES `{r.Other}` WRITE, `{r.Parent}` WRITE";
         otherCmd.ExecuteNonQuery();
+        // Recorded only now: every deploy restores every set-aside key, so a row visible before the lock let another test's
+        // deploy put the key back first and left this one nothing to wait on.
+        r.Exec($@"INSERT INTO SchemaSmith_RebuildSetAsideForeignKeys (ChildSchema, ChildTable, KeyName, ParentSchema, ParentTable, ReferencedColumns, Definition, Declared)
+                  VALUES ('{r.Db}', '{r.Other}', '{key}', '{r.Db}', '{r.Parent}', '`Id`', 'FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`)', 1)");
 
         var deploy = System.Threading.Tasks.Task.Run(() =>
             r.Exec($"CALL SchemaSmith_ForeignKeyQuench('Declares_{r.Uid}', '{r.Db}', 0, 0, 1)"));

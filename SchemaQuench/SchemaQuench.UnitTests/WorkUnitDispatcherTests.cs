@@ -60,9 +60,12 @@ public class WorkUnitDispatcherTests
             });
 
         // Release after we've had a chance to fill up the pool.
+        // Release once two workers are in flight (a generous deadline otherwise), after a short window in which a worker
+        // past the limit would show up.
         var releaser = new Thread(() =>
         {
-            Thread.Sleep(150);
+            SpinWait.SpinUntil(() => { lock (lockObj) return peak > 1; }, TimeSpan.FromSeconds(10));
+            Thread.Sleep(50);
             release.Set();
         }) { IsBackground = true };
         releaser.Start();
@@ -293,9 +296,12 @@ public class WorkUnitDispatcherTests
                 lock (lockObj) { inFlight--; }
             });
 
+        // Release once two workers are in flight (a generous deadline otherwise), after a short window in which a worker
+        // past the limit would show up.
         var releaser = new Thread(() =>
         {
-            Thread.Sleep(150);
+            SpinWait.SpinUntil(() => { lock (lockObj) return peak > 1; }, TimeSpan.FromSeconds(10));
+            Thread.Sleep(50);
             release.Set();
         }) { IsBackground = true };
         releaser.Start();
