@@ -279,7 +279,7 @@ When `false`, the first iteration failure stops the dispatcher: no new iteration
 
 **How failures surface.** Each iteration's log lines carry a `[Schema: <name>]` prefix, so failures are traceable per tenant even in a parallel run. The deployment log will show the per-iteration error line for the failed schema, then continue with remaining iterations (in continue mode) or stop (in abort mode). The exit code is 2 whenever any iteration failed, regardless of mode.
 
-`ContinueOnSchemaFailure` is ignored on regular templates. If set non-default on a regular template, SchemaQuench logs a warning at load time. For database-level failure isolation on any template, use `ContinueOnDatabaseFailure`.
+`ContinueOnSchemaFailure` is ignored on regular templates. If set non-default on a regular template, SchemaQuench logs a warning at load time. For failure isolation on a regular template, use `ContinueOnDatabaseFailure`; a schema template ignores it.
 
 ---
 
