@@ -2021,8 +2021,8 @@ CALL ""SchemaSmith"".""ConstraintDescriptionQuench""(p_WhatIf := {SqlFlag(_whatI
     }
 
     /// <summary>
-    /// Converges DECLARED sequences (PostgreSQL). Runs beside enum types, before tables: a column DEFAULT
-    /// can call nextval() on one, so the sequence has to exist before the table that references it.
+    /// Converges DECLARED sequences (PostgreSQL, MariaDB and SQL Server). Runs beside enum types, before tables: a column
+    /// DEFAULT can draw from one, so the sequence has to exist before the table that references it.
     /// </summary>
     internal void QuenchSequences(IDbCommand tableCommand)
     {
