@@ -118,7 +118,9 @@ public abstract class RebuildDecisionSharedTests : BaseTableQuenchTests
     // ALTER keeps it. It used to be an index the package does not declare, which a rebuild lost; a rebuild now refuses
     // to lose one (Paul, 2026-11-10), so the table's own identity is read instead.
     // InnoDB's own id for the table (INNODB_TABLES on MySQL 8, INNODB_SYS_TABLES on 5.7 and MariaDB). The changes these
-    // tests make in place are INPLACE ones, which keep it; a copying ALTER would not, so they avoid one.
+    // tests make in place are INPLACE ones, which keep it; a copying ALTER would not, so they avoid one. A DROP COLUMN
+    // is the exception below MySQL 8.0.29 (and on MariaDB before its instant drop): the engine rebuilds the table in
+    // place under a new id, so a test that drops a column marks the table again after the drop.
     private long TableId(IDbCommand cmd, string table)
     {
         var name = Lit($"{_mainDb}/{table}");
@@ -638,6 +640,10 @@ public abstract class RebuildDecisionSharedTests : BaseTableQuenchTests
             "A column leaving the package is a metadata-only drop. The columns that remain are in declared "
             + "order, so there was no drift to elect on.");
 
+        // Before INSTANT DROP COLUMN (MySQL 8.0.29) the engine's own in-place drop gives the table a new id, so the
+        // identity is taken again here and the audit row above is deploy 1's proof.
+        Mark(cmd, table);
+
         // Deploy 2: the identical package against the post-drop table. This is the deploy that an
         // absolute-position comparison would rebuild.
         Quench(cmd, Package(table, rebuildPolicy: """{"OnOrderMismatch": true}"""));
@@ -646,8 +652,7 @@ public abstract class RebuildDecisionSharedTests : BaseTableQuenchTests
             "The table's columns are in exactly the declared order. Electing it here would mean the trigger "
             + "rebuilds every table that has ever lost a column, on every deploy, forever.");
         Assert.That(MarkerCount(cmd, table), Is.EqualTo(1),
-            "The live-only marker index must have survived both deploys -- the proof the table was never "
-            + "replaced.");
+            "The table must be the one deploy 2 started with -- the proof it was not replaced.");
         Assert.That(RowCount(cmd, table), Is.EqualTo(2), "Rows are untouched throughout.");
 
         Exec(cmd, $"DROP TABLE IF EXISTS `{table}`");
