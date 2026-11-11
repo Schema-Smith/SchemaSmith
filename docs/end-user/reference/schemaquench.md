@@ -1913,7 +1913,7 @@ You can use both. For each target database, SchemaQuench first delivers every ta
 
 Long deployments fail. Network blips, transient lock timeouts, a migration script that tripped on bad data at step 14 of 20. Without checkpointing, a failure in the final stretch means the next run starts from zero -- re-running every step you've already successfully applied.
 
-SchemaQuench writes checkpoints as it goes. Every completed quench step and every completed migration script is recorded to disk. On the next run, already-completed work is skipped and execution resumes at the first incomplete step.
+SchemaQuench writes checkpoints as it goes. Every completed checkpointed step (see [Checkpoint scopes](#checkpoint-scopes)) and every completed script is recorded to disk. On the next run, already-completed work is skipped and execution resumes at the first incomplete step.
 
 ### Enabling resume
 
