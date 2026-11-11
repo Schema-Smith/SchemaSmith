@@ -419,9 +419,11 @@ public abstract class TableQuench_IndexOnlySharedTests
         return Convert.ToInt32(command.ExecuteScalar());
     }
 
-    // MySQL 8.0.13 is where functional indexes arrive; below it the feature cannot be created at all, so
-    // these bodies have nothing to assert beyond the gate itself reporting 0.
-    private bool ServerSupportsFunctionalIndex() => Platform != Platform.MariaDb && ServerVersionNum() >= 800;
+    // MySQL 8.0.13 is where functional indexes arrive and 8.0.17 multi-valued ones; below them the feature cannot be
+    // created at all, so these bodies have nothing to assert beyond the gate itself reporting 0.
+    private bool ServerSupportsFunctionalIndex() => TestVersionGates.SupportsFunctionalIndex(Platform, MainConnectionString);
+
+    private bool ServerSupportsMultiValuedIndex() => TestVersionGates.SupportsMultiValuedIndex(Platform, MainConnectionString);
 
     [Test]
     public void IndexOnlyQuench_SupportsFunctionalIndex_GateMatchesPlatform()
@@ -604,9 +606,7 @@ public abstract class TableQuench_IndexOnlySharedTests
         // populated EXPRESSION -- so it rides the same SchemaSmith_SupportsFunctionalIndex() gate as any
         // other functional index; there is no dedicated gate to check (see SchemaSmith_SupportsFunctionalIndex.sql).
         // MariaDB has no equivalent feature at all.
-        // ServerVersionNum() is major*100+minor, so it cannot separate 8.0.17 from 8.0.13 -- but it does
-        // separate both from a 5.7 that has neither, which is the distinction that matters here.
-        if (Platform == Platform.MariaDb || !ServerSupportsFunctionalIndex())
+        if (!ServerSupportsMultiValuedIndex())
             Assert.Ignore("Multi-valued indexes need MySQL 8.0.17+; MariaDB has no equivalent form and an "
                           + "older MySQL cannot create one.");
 
@@ -662,9 +662,7 @@ public abstract class TableQuench_IndexOnlySharedTests
         // when it stores EXPRESSION -- the same reformatting already stripped from CHECK_CLAUSE. Left
         // unstripped on the index side, the declared (introducer-free) and catalog (introducer-bearing)
         // forms would never match, and the index would be dropped + recreated on every single deploy.
-        // ServerVersionNum() is major*100+minor, so it cannot separate 8.0.17 from 8.0.13 -- but it does
-        // separate both from a 5.7 that has neither, which is the distinction that matters here.
-        if (Platform == Platform.MariaDb || !ServerSupportsFunctionalIndex())
+        if (!ServerSupportsMultiValuedIndex())
             Assert.Ignore("Multi-valued indexes need MySQL 8.0.17+; MariaDB has no equivalent form and an "
                           + "older MySQL cannot create one.");
 

@@ -17,11 +17,24 @@ internal static class TestVersionGates
     public static bool SupportsCheckConstraints(Platform platform, string connectionString)
     {
         if (platform.GetBasePlatform() != Platform.MySQL) return true;
+        var patch = Patch(platform, connectionString);
+        return patch == null || patch >= (platform == Platform.MariaDb ? 100222 : 80016);
+    }
+
+    /// <summary>Functional (expression) index key parts: MySQL 8.0.13; MariaDB has no equivalent form.</summary>
+    public static bool SupportsFunctionalIndex(Platform platform, string connectionString) =>
+        platform == Platform.MySQL && (Patch(platform, connectionString) ?? 80013) >= 80013;
+
+    /// <summary>Multi-valued index key parts (CAST(... AS ... ARRAY)): MySQL 8.0.17; MariaDB has no equivalent form.</summary>
+    public static bool SupportsMultiValuedIndex(Platform platform, string connectionString) =>
+        platform == Platform.MySQL && (Patch(platform, connectionString) ?? 80017) >= 80017;
+
+    private static int? Patch(Platform platform, string connectionString)
+    {
         using var conn = DbConnectionFactory.ForPlatform(platform).GetDbConnection(connectionString);
         conn.Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT VERSION()";
-        var patch = VersionHelper.ParsePatchComparable(cmd.ExecuteScalar()?.ToString(), platform);
-        return patch == null || patch >= (platform == Platform.MariaDb ? 100222 : 80016);
+        return VersionHelper.ParsePatchComparable(cmd.ExecuteScalar()?.ToString(), platform);
     }
 }
