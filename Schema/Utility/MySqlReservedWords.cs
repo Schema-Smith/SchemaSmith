@@ -15,7 +15,8 @@ public static class MySqlReservedWords
 {
     private static readonly HashSet<string> ReservedWordSet = new(StringComparer.OrdinalIgnoreCase)
     {
-        "ACCESSIBLE", "ADD", "ALL", "ALTER", "ANALYZE", "AND", "AS", "ASC",
+        // ADMIN, PERSIST and PERSIST_ONLY are reserved on early 8.0 patches (8.0.11 among them) and not on later ones.
+        "ACCESSIBLE", "ADD", "ADMIN", "ALL", "ALTER", "ANALYZE", "AND", "AS", "ASC",
         "ASENSITIVE", "BEFORE", "BETWEEN", "BIGINT", "BINARY", "BLOB", "BOTH",
         "BY", "CALL", "CASCADE", "CASE", "CHANGE", "CHAR", "CHARACTER", "CHECK",
         "COLLATE", "COLUMN", "CONDITION", "CONSTRAINT", "CONTINUE", "CONVERT",
@@ -41,7 +42,7 @@ public static class MySqlReservedWords
         "MINUTE_MICROSECOND", "MINUTE_SECOND", "MOD", "MODIFIES", "NATURAL",
         "NOT", "NO_WRITE_TO_BINLOG", "NTH_VALUE", "NTILE", "NULL", "NUMERIC",
         "OF", "ON", "OPTIMIZE", "OPTIMIZER_COSTS", "OPTION", "OPTIONALLY", "OR",
-        "ORDER", "OUT", "OUTER", "OUTFILE", "OVER", "PARTITION", "PERCENT_RANK",
+        "ORDER", "OUT", "OUTER", "OUTFILE", "OVER", "PARTITION", "PERCENT_RANK", "PERSIST", "PERSIST_ONLY",
         "PRECISION", "PRIMARY", "PROCEDURE", "PURGE", "QUALIFY", "RANGE", "RANK", "READ",
         "READS", "READ_WRITE", "REAL", "RECURSIVE", "REFERENCES", "REGEXP",
         "RELEASE", "RENAME", "REPEAT", "REPLACE", "REQUIRE", "RESIGNAL",
