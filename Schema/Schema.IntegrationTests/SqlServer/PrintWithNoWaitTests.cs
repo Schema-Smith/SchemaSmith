@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Data.SqlClient;
 using NUnit.Framework;
 using Schema.DataAccess;
@@ -155,6 +156,22 @@ public class PrintWithNoWaitTests
         }
 
         Assert.That(Print(message.ToString()), Is.EqualTo(expected));
+    }
+
+    // A server message holds 2,047 characters, so one line of a wide statement past that reached the preview cut short.
+    [Test]
+    public void ALineLongerThanAServerMessageHolds_IsPrintedWhole()
+    {
+        var columns = string.Join(", ", Enumerable.Range(1, 250).Select(i => $"[Column{i:000}] INT NULL"));
+        var line = $"CREATE TABLE [dbo].[Wide] ({columns}); -- end";
+        Assert.That(line.Length, Is.GreaterThan(4500), "setup: the line is longer than two messages");
+
+        var printed = Print(line);
+        Assert.Multiple(() =>
+        {
+            Assert.That(printed, Has.All.Length.LessThanOrEqualTo(2047));
+            Assert.That(string.Join(" ", printed), Is.EqualTo(line));
+        });
     }
 
     [Test]
