@@ -36,6 +36,8 @@ public abstract class DataTongsEndToEndSharedTests
     // and EXECUTE it, so they need a target with native JSON_TABLE (MySQL 8.0 / MariaDB 10.6). The recursive-CTE
     // path for MariaDB 10.2-10.5 and the below-MySQL-8.0 skip are exercised by the SchemaQuench delivery tests.
     private int _serverVersionNum;
+    // The version DataTongs passes when it writes a script: the source server's, so the row source fits it.
+    private int DeliveryVersionNum => _serverVersionNum == int.MaxValue ? 0 : _serverVersionNum;
     private bool TargetHasNativeJsonTable => Platform == Platform.MySQL ? _serverVersionNum >= 800 : _serverVersionNum >= 1006;
 
     [SetUp]
@@ -121,7 +123,7 @@ public abstract class DataTongsEndToEndSharedTests
             // Generate merge script for target table (Upsert: mergeUpdate=true, mergeDelete=false)
             var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, keyColumns,
                 mergeUpdate: true, mergeDelete: false, disableTriggers: false,
-                tokenizeScripts: false, mergeFilter: null);
+                tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
 
             // Write script file
             var scriptFile = Path.Combine(_testOutputDir, $"Populate {targetTable}.sql");
@@ -208,7 +210,7 @@ public abstract class DataTongsEndToEndSharedTests
             // .tabledata filename so they can never disagree (#390's fix).
             var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, keyColumns,
                 mergeUpdate: true, mergeDelete: false, disableTriggers: false,
-                tokenizeScripts: true, mergeFilter: null, contentFileToken: contentFileToken);
+                tokenizeScripts: true, mergeFilter: null, contentFileToken: contentFileToken, mySqlServerVersionNum: DeliveryVersionNum);
 
             Assert.That(script, Does.Contain($"{{{{{contentFileToken}}}}}"),
                 "The script must embed the same key the content file was written under.");
@@ -280,7 +282,7 @@ public abstract class DataTongsEndToEndSharedTests
         // Verify it can be parsed and used in MergeScriptHelper (Upsert: mergeUpdate=true, mergeDelete=false)
         var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, "country", json, keyColumns,
             mergeUpdate: true, mergeDelete: false, disableTriggers: false,
-            tokenizeScripts: false, mergeFilter: null);
+            tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
         Assert.That(script, Is.Not.Empty);
         Assert.That(script, Does.Contain("INSERT INTO"));
     }
@@ -331,7 +333,7 @@ public abstract class DataTongsEndToEndSharedTests
 
             var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, tableName, json, "`id`",
                 mergeUpdate: false, mergeDelete: false, disableTriggers: false,
-                tokenizeScripts: false, mergeFilter: null);
+                tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
 
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
             {
@@ -433,7 +435,7 @@ public abstract class DataTongsEndToEndSharedTests
 
             var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, tableName, json, "`id`",
                 mergeUpdate: false, mergeDelete: false, disableTriggers: false,
-                tokenizeScripts: false, mergeFilter: null);
+                tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
 
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
             {
@@ -482,7 +484,7 @@ public abstract class DataTongsEndToEndSharedTests
             var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
             var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
             var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
-                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
             {
                 if (string.IsNullOrWhiteSpace(batch)) continue;
@@ -536,7 +538,7 @@ public abstract class DataTongsEndToEndSharedTests
             var selectColumns = _dataTongs.GetSelectColumns(command, _testDb, sourceTable);
             var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
             var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
-                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
             {
                 if (string.IsNullOrWhiteSpace(batch)) continue;
@@ -593,7 +595,7 @@ public abstract class DataTongsEndToEndSharedTests
             var json = _dataTongs.GetTableDataJson(command, selectColumns, _testDb, sourceTable, "`id`", null);
             Assert.DoesNotThrow(() => JsonText.ParseArray(json), "the extracted file must be valid JSON: " + json);
             var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
-                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
             {
                 if (string.IsNullOrWhiteSpace(batch)) continue;
@@ -640,7 +642,7 @@ public abstract class DataTongsEndToEndSharedTests
             Assert.That(json.Length, Is.GreaterThan(1048576), "the extract must pass 1 MiB for this to test anything");
             Assert.That(JsonText.ParseArray(json).Count, Is.EqualTo(1200), "the extracted file must be complete, valid JSON");
             var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
-                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
             {
                 if (string.IsNullOrWhiteSpace(batch)) continue;
@@ -725,7 +727,7 @@ public abstract class DataTongsEndToEndSharedTests
             Assert.That(json, Does.Contain("\"2024-03-05T10:11:12\"").And.Contain("10:11:12.123456"),
                 "a whole-second column keeps its old form; a fractional one carries its fraction: " + json);
             var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
-                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
             {
                 if (string.IsNullOrWhiteSpace(batch)) continue;
@@ -785,6 +787,8 @@ public abstract class DataTongsEndToEndSharedTests
         var parts = version.Split('.', '-');
         if (Platform == Platform.MariaDb && int.Parse(parts[0]) * 100 + int.Parse(parts[1]) < 1005)
             Assert.Ignore("MariaDB has JSON_ARRAYAGG from 10.5.");
+        if (Platform == Platform.MySQL && int.Parse(parts[0]) * 10000 + int.Parse(parts[1]) * 100 + int.Parse(parts[2]) < 50722)
+            Assert.Ignore("MySQL has JSON_ARRAYAGG from 5.7.22; the test reads its output as the expected form.");
         var table = $"_e2e_fmt_{Guid.NewGuid():N}".Substring(0, 30);
         try
         {
@@ -828,7 +832,7 @@ public abstract class DataTongsEndToEndSharedTests
             var json = _dataTongs.GetTableDataJsonMySql(command, _testDb, sourceTable, "`id`", null, "`id`, `bl`, `dt6`");
             Assert.That(json, Does.Not.Contain("other"), "a column that was not selected must not be extracted: " + json);
             var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, targetTable, json, "`id`",
-                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null);
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false, tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries))
             {
                 if (string.IsNullOrWhiteSpace(batch)) continue;
@@ -914,10 +918,10 @@ public abstract class DataTongsEndToEndSharedTests
         // Generate scripts (Upsert: mergeUpdate=true, mergeDelete=false)
         var countryScript = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, "country", countryJson, countryKeys,
             mergeUpdate: true, mergeDelete: false, disableTriggers: false,
-            tokenizeScripts: false, mergeFilter: null);
+            tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
         var cityScript = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, "city", cityJson, cityKeys,
             mergeUpdate: true, mergeDelete: false, disableTriggers: false,
-            tokenizeScripts: false, mergeFilter: null);
+            tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
 
         File.WriteAllText(Path.Combine(_testOutputDir, "Populate country.sql"), countryScript);
         File.WriteAllText(Path.Combine(_testOutputDir, "Populate city.sql"), cityScript);
