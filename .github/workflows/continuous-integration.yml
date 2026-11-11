@@ -750,7 +750,8 @@ jobs:
           # the version the SERVER reports is the only answer that matches what was tested.
           actual_postgresql=$(docker run --rm postgres:latest postgres --version | grep -oE '[0-9]+' | head -1)
           actual_mysql=$(docker run --rm mysql:latest mysqld --version | grep -oE '[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
-          actual_mariadb=$(docker run --rm mariadb:latest mariadbd --version | grep -oE '[0-9]+\.[0-9]+' | head -1 | cut -d. -f1)
+          # MariaDB is compared on MAJOR.MINOR (see engine-ceilings.json): its features ship in rolling minors.
+          actual_mariadb=$(docker run --rm mariadb:latest mariadbd --version | grep -oE '[0-9]+\.[0-9]+' | head -1)
 
           # SQL Server resolves by MANIFEST DIGEST rather than by booting the server: the image is ~1.5 GB
           # and needs an SA password and a startup wait just to answer a version query, while MCR publishes
@@ -803,6 +804,8 @@ jobs:
               mysql)       key='mysql:' ;;
               mariadb)     key='mariadb:' ;;
             esac
+            # MariaDB's leg is its major (`13`), which floats across the minors its ceiling names.
+            [ "$engine" = mariadb ] && want=${want%%.*}
             if ! grep -F "$key" .github/workflows/continuous-integration.yml | grep -qE "\"$want\""; then
               echo "::error::$engine declares a ceiling of $want in .github/engine-ceilings.json, but no"\
                    "leg in this workflow pins $want. Add the leg, or lower the declared ceiling on purpose."
