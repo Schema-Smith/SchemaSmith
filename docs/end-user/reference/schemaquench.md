@@ -1972,7 +1972,7 @@ Resume is for finishing the run that failed, with the fix confined to what faile
 
 ### WhatIf and checkpoints
 
-A `--WhatIf` run checkpoints the same way a real run does: the baseline validation, the PostgreSQL type and sequence steps and the three table steps (`ModifiedTables`, `IndexesAndConstraints`, `TableFeatures`) are recorded under the same names as they are previewed, and the scripts it lists are not. A preview that completes deletes its own checkpoints, as any clean run does. A preview that fails leaves them, and a later real run with `--ResumeQuench` reads them as completed work and skips those steps. Do not resume a real run from a failed preview's checkpoints: delete the files, or run without `--ResumeQuench`.
+A `--WhatIf` run checkpoints the same way a real run does: the baseline validation, the PostgreSQL type steps, the sequence step (PostgreSQL and MariaDB) and the three table steps (`ModifiedTables`, `IndexesAndConstraints`, `TableFeatures`) are recorded under the same names as they are previewed, and the scripts it lists are not. A preview that completes deletes its own checkpoints, as any clean run does. A preview that fails leaves them, and a later real run with `--ResumeQuench` reads them as completed work and skips those steps. Do not resume a real run from a failed preview's checkpoints: delete the files, or run without `--ResumeQuench`.
 
 ### Automatic cleanup after success
 
