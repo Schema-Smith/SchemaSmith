@@ -30,6 +30,8 @@ public abstract class ZipPackageDeploySharedTests
     /// <summary>Counts the rows the zipped Main template's TestTable.tabledata delivers.</summary>
     protected abstract string DeliveredRowsSql { get; }
     protected abstract int ExpectedDeliveredRows { get; }
+    /// <summary>False where data delivery is a recorded downgrade (MySQL below 8.0): the run then exits 1 and delivers nothing.</summary>
+    protected virtual bool TargetDeliversData => true;
 
     private long DeliveredRows(string database)
     {
@@ -58,6 +60,7 @@ public abstract class ZipPackageDeploySharedTests
         var environment = Substitute.For<IEnvironment>();
         environment.CommandLine.Returns("--SkipKindlingForge");
 
+        var delivers = TargetDeliversData;
         lock (FactoryContainer.SharedLockObject)
         {
             var config = FactoryContainer.Resolve<IConfigurationRoot>();
@@ -75,10 +78,10 @@ public abstract class ZipPackageDeploySharedTests
                 Assert.Multiple(() =>
                 {
                     var exits = environment.ReceivedCalls().Where(c => c.GetMethodInfo().Name == nameof(IEnvironment.Exit)).Select(c => (int)c.GetArguments()[0]!);
-                    Assert.That(exits, Is.EqualTo(new[] { 0 }), "the run failed: " + string.Join(" | ", errors));
+                    Assert.That(exits, Is.EqualTo(new[] { delivers ? 0 : 1 }), "the run's exit: " + string.Join(" | ", errors));
                     progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching Template: Main")));
                     progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching Template: Secondary")));
-                    Assert.That(DeliveredRows(config["ScriptTokens:MainDB"]!), Is.EqualTo(ExpectedDeliveredRows), "the table data inside the zip was delivered");
+                    Assert.That(DeliveredRows(config["ScriptTokens:MainDB"]!), Is.EqualTo(delivers ? ExpectedDeliveredRows : 0), "the table data inside the zip was delivered");
                 });
             }
             finally

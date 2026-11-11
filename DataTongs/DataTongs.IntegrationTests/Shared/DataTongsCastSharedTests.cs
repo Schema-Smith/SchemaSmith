@@ -61,12 +61,13 @@ public abstract class DataTongsCastSharedTests
         var (exitCode, _) = Cast(outputScripts: true);
 
         var files = Directory.GetFiles(_outputDir).Select(Path.GetFileName).ToList();
+        var writesScripts = WritesScripts();
         Assert.Multiple(() =>
         {
-            Assert.That(exitCode, Is.Zero);
+            // Below MySQL 8.0 the script is skipped with a warning and the run reports itself incomplete.
+            Assert.That(exitCode, Is.EqualTo(writesScripts ? 0 : 1));
             Assert.That(File.ReadAllText(Path.Join(_outputDir, $"{Table}.tabledata")), Does.Contain("\"Test Item 1\"").And.Contain("\"Test Item 3\""));
-            if (WritesScripts())
-                Assert.That(files, Does.Contain($"Populate {Table}.sql"), string.Join(", ", files));
+            Assert.That(files, writesScripts ? Does.Contain($"Populate {Table}.sql") : Does.Not.Contain($"Populate {Table}.sql"), string.Join(", ", files));
         });
     }
 
