@@ -227,7 +227,7 @@ Each tool therefore checks the settings it was given against the settings it act
 WARN  Configuration key 'Target:Sever' is not read by SchemaQuench and will have no effect. Check for a typo.
 ```
 
-This is the same treatment `--NoSuchSwitch` already gets on the command line, and it covers every configuration source -- settings file, `SmithySettings_` environment variables, and CLI overrides all land in the same configuration and are all checked.
+It covers every configuration source -- settings file, `SmithySettings_` environment variables, and `--Key=value` overrides on the command line all land in the same configuration and are all checked. A bare switch the tool does not recognize, such as `--NoSuchSwitch`, is stricter: it stops the run before anything happens (`Not recognized: … Nothing was run.`, exit code `2`).
 
 Three things are deliberately **not** reported:
 
@@ -424,7 +424,7 @@ The console is a live mirror of the progress log, not a separate channel. Watchi
 
 When a script fails, you see a short error summary on the console and in the progress log (red, so it's hard to miss): `Unable to quench '<path>': <engine error>`, along with a pointer to the resolved SQL -- `Resolved SQL written to:` with [`WriteDebugSql`](#writedebugsql) on, or a `Rerun with --WriteDebugSql` hint with it off. That's enough to know what failed and where to look. The SQL itself never goes to a log: with `WriteDebugSql` on it is in the [debug file](#debug-sql-files), and the error log gets one line per failed script naming the error and that file. The error log also carries, on every engine, the failures that stop a run before or outside a script -- a refused argument or setting, a connection that could not be opened or was lost, a database or schema discovery that failed, a validation or version check -- each with its full exception. On SQL Server it additionally receives every error the engine raises on the deploy connection with its line number (`at Line: N`), which the progress log does not carry. The engine-by-engine split is in [Where errors are logged](error-codes-and-reporting.md#where-errors-are-logged).
 
-> **Tip:** CI agents that capture stdout get the progress stream for free. If your pipeline step only saves stdout, you still have a readable transcript of successes and error summaries; archive the error log separately to keep the failed-batch detail.
+> **Tip:** CI agents that capture stdout get the progress stream for free. If your pipeline step only saves stdout, you still have a readable transcript of successes and error summaries; archive the error log separately to keep each failure's full exception and, on SQL Server, the engine's line-numbered errors.
 
 ### Failure triage roll-up
 
