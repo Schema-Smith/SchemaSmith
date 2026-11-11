@@ -87,7 +87,10 @@ public abstract class ObjectScriptDeployFixture
     /// Starts the package over: Product.json, a Main template whose ScriptFolders are the given JSON array body, and
     /// an empty folder for each name (Tables is always there).
     /// </summary>
-    protected void WritePackage(string scriptFoldersJson, params string[] folders)
+    protected void WritePackage(string scriptFoldersJson, params string[] folders) => WritePackageWith("", scriptFoldersJson, folders);
+
+    /// <param name="templateJson">More Template.json properties, written after ScriptFolders (", \"ScriptTokens\": { ... }").</param>
+    protected void WritePackageWith(string templateJson, string scriptFoldersJson, params string[] folders)
     {
         if (Directory.Exists(PackageDir)) Directory.Delete(PackageDir, true);
         foreach (var folder in folders.Append("Tables")) Directory.CreateDirectory(Path.Join(TemplateDir, folder));
@@ -95,7 +98,7 @@ public abstract class ObjectScriptDeployFixture
             { "Name": "{{ProductName}}", "Platform": "{{Platform}}", "TemplateOrder": [ "Main" ] }
             """);
         File.WriteAllText(Path.Join(TemplateDir, "Template.json"), $$"""
-            { "Name": "Main", "DatabaseIdentificationScript": "SELECT '{{MainDb}}'", "ScriptFolders": [ {{scriptFoldersJson}} ] }
+            { "Name": "Main", "DatabaseIdentificationScript": "SELECT '{{MainDb}}'", "ScriptFolders": [ {{scriptFoldersJson}} ]{{templateJson}} }
             """);
     }
 

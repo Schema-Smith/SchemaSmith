@@ -133,7 +133,7 @@ public partial class DatabaseQuench
             new("SetupScripts", null, () => _iteration.SetupScripts.Count > 0, () =>
             {
                 SafeProgressLog("  Quenching Setup scripts");
-                QuenchSetupScripts(command, _iteration.SetupScripts);
+                QuenchSetupScripts(command, silentCmd, _iteration.SetupScripts);
             }, StepPreview.Log, () =>
             {
                 SafeProgressLog("  [WhatIf] Setup scripts:");

@@ -30,6 +30,7 @@ public abstract class SetupSlotSharedTests : ObjectScriptDeployFixture
     {
         Exec(ForgetRunOnceScriptsSql);
         Exec("DROP TABLE IF EXISTS setup_log");
+        Exec("DROP TABLE IF EXISTS setup_made");
         Exec("CREATE TABLE setup_log (step VARCHAR(40) NOT NULL)");
     }
 
@@ -38,6 +39,7 @@ public abstract class SetupSlotSharedTests : ObjectScriptDeployFixture
     {
         Exec(ForgetRunOnceScriptsSql);
         Exec("DROP TABLE IF EXISTS setup_log");
+        Exec("DROP TABLE IF EXISTS setup_made");
     }
 
     private long Steps(string step) => Count($"SELECT COUNT(*) FROM setup_log WHERE step = '{step}'");
@@ -64,6 +66,26 @@ public abstract class SetupSlotSharedTests : ObjectScriptDeployFixture
             var setupLine = first.Log.FindIndex(l => l != null && l.Contains("Quenching Setup scripts"));
             var objectsLine = first.Log.FindIndex(l => l != null && l.Contains("Quenching object scripts without unresolved tokens"));
             Assert.That(setupLine, Is.GreaterThanOrEqualTo(0).And.LessThan(objectsLine), "Setup runs before the first object pass");
+        });
+    }
+
+    // A query token in a Setup script is resolved before the script runs, against the database as it stands then: a token
+    // reading a table an earlier Setup script creates resolves too, which resolving every token ahead of Setup could not do.
+    [Test]
+    public void AQueryTokenInASetupScript_IsResolvedWhenTheScriptRuns()
+    {
+        WritePackageWith(""", "ScriptTokens": { "SetupAnswer": "<*Query*>SELECT 42", "MadeCount": "<*Query*>SELECT n FROM setup_made" }""",
+            Folders, "Setup", "Early Objects", "Before Scripts");
+        WriteFile("Setup", "01-answer.sql", "INSERT INTO setup_log (step) VALUES ('answer-{{SetupAnswer}}');");
+        WriteFile("Setup", "02-make.sql", "CREATE TABLE setup_made (n INT NOT NULL); INSERT INTO setup_made (n) VALUES (7);");
+        WriteFile("Setup", "03-read.sql", "INSERT INTO setup_log (step) VALUES ('made-{{MadeCount}}');");
+
+        Deploy();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Steps("answer-42"), Is.EqualTo(1), "the token reached the engine unresolved");
+            Assert.That(Steps("made-7"), Is.EqualTo(1), "a token reading what an earlier Setup script made");
         });
     }
 

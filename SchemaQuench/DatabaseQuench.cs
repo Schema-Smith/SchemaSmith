@@ -1194,11 +1194,38 @@ public partial class DatabaseQuench
     {
         if (_template.QueryTokens.Count == 0) return;
 
+        var isSchemaIteration = !string.IsNullOrEmpty(_schemaName);
+        SafeProgressLog(isSchemaIteration ? "  Resolving template query tokens (per-iteration)" : "  Resolving template query tokens");
+        var tokenList = ResolveIterationQueryTokens(silentCmd, _ => true, useCache: true);
+
+        // Apply resolved values to this iteration's cloned scripts. Setup scripts have run by now; each resolved its own
+        // tokens just before it ran (QuenchSetupScripts).
+        ApplyToIteration(_iteration.BeforeScripts, tokenList);
+        ApplyToIteration(_iteration.ObjectScripts, tokenList);
+        ApplyToIteration(_iteration.AfterTablesObjectScripts, tokenList);
+        ApplyToIteration(_iteration.BetweenTablesAndKeysScripts, tokenList);
+        ApplyToIteration(_iteration.AfterTableScripts, tokenList);
+        ApplyToIteration(_iteration.TableDataScripts, tokenList);
+        ApplyToIteration(_iteration.AfterScripts, tokenList);
+    }
+
+    // A Setup script runs before the query tokens are resolved for the rest of the deploy, and may create what a later
+    // token reads, so it resolves only the tokens it names, against the database as it stands when it runs. The values
+    // are not cached: the later slots read the database after Setup has changed it.
+    private void ResolveOwnQueryTokens(IDbCommand silentCmd, SqlScript script)
+    {
+        if (_template.QueryTokens.Count == 0) return;
+        var named = new HashSet<string>(script.Batches.SelectMany(TokenHelper.GetTokensFromString), StringComparer.OrdinalIgnoreCase);
+        if (!_template.QueryTokens.Keys.Any(named.Contains)) return;
+        script.ReplaceQueryTokens(ResolveIterationQueryTokens(silentCmd, named.Contains, useCache: false));
+    }
+
+    private List<KeyValuePair<string, string>> ResolveIterationQueryTokens(IDbCommand silentCmd, Func<string, bool> include, bool useCache)
+    {
         // Resolve into a per-iteration copy so every iteration of the template -- each database of a regular
         // template, each schema of a schema template -- starts from the template's pristine <*Query*> bodies.
         // Resolving into the shared dictionary gave every later database the first one's values (#475).
         var isSchemaIteration = !string.IsNullOrEmpty(_schemaName);
-        SafeProgressLog(isSchemaIteration ? "  Resolving template query tokens (per-iteration)" : "  Resolving template query tokens");
 
         // 1. Build the per-iteration NonQueryTokens list — any iteration-scoped non-query token
         //    body (one containing {{SchemaName}} directly or transitively) needs the substitution
@@ -1221,7 +1248,7 @@ public partial class DatabaseQuench
         //    pass through unchanged — their resolved value does not depend on the iteration
         //    schema, so it can be cached across iterations (step 3 below).
         var iterationQueryTokens = new Dictionary<string, string>(_template.QueryTokens.Count);
-        foreach (var kv in _template.QueryTokens)
+        foreach (var kv in _template.QueryTokens.Where(t => include(t.Key)))
         {
             var body = kv.Value;
             if (isSchemaIteration && _template.IsIterationScoped(kv.Key) && !string.IsNullOrEmpty(body))
@@ -1241,7 +1268,7 @@ public partial class DatabaseQuench
         //    The cache reduces query-token connection round-trips from O(tokens × tenants) to
         //    O(tokens + tenants) for the per-DB subset. Iteration-scoped tokens still resolve
         //    every iteration as before — their resolved value differs per iteration by design.
-        var perDbCache = _template.GetOrCreatePerDbTokenCache(_server, _databaseName);
+        var perDbCache = useCache ? _template.GetOrCreatePerDbTokenCache(_server, _databaseName) : null;
         var cachedResolvedValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         if (perDbCache != null)
         {
@@ -1276,16 +1303,7 @@ public partial class DatabaseQuench
         foreach (var kv in cachedResolvedValues)
             iterationQueryTokens[kv.Key] = kv.Value;
 
-        // 7. Apply resolved values to this iteration's cloned scripts.
-        var tokenList = iterationQueryTokens.ToList();
-        ApplyToIteration(_iteration.SetupScripts, tokenList);
-        ApplyToIteration(_iteration.BeforeScripts, tokenList);
-        ApplyToIteration(_iteration.ObjectScripts, tokenList);
-        ApplyToIteration(_iteration.AfterTablesObjectScripts, tokenList);
-        ApplyToIteration(_iteration.BetweenTablesAndKeysScripts, tokenList);
-        ApplyToIteration(_iteration.AfterTableScripts, tokenList);
-        ApplyToIteration(_iteration.TableDataScripts, tokenList);
-        ApplyToIteration(_iteration.AfterScripts, tokenList);
+        return iterationQueryTokens.ToList();
     }
 
     private static void ApplyToIteration(
@@ -3411,7 +3429,7 @@ SET NOCOUNT ON
 
     // D13: always run, so no run-once tracking; a resumed run skips the scripts that succeeded in it. Stops at the first
     // failure and reports that script alone -- the scripts after it did not run, and did not fail.
-    private void QuenchSetupScripts(IDbCommand destCmd, List<SqlScript> scripts)
+    private void QuenchSetupScripts(IDbCommand destCmd, IDbCommand silentCmd, List<SqlScript> scripts)
     {
         foreach (var script in scripts.Where(s => !s.HasBeenQuenched))
         {
@@ -3422,6 +3440,7 @@ SET NOCOUNT ON
                 continue;
             }
 
+            ResolveOwnQueryTokens(silentCmd, script);
             QuenchOneScript(destCmd, script, _runScriptsTwice);
             if (!script.HasBeenQuenched)
             {
