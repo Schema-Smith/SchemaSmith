@@ -55,7 +55,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 {
   "schemaVersion": "1.2",           // contract version of this report shape
   "tool": "SchemaQuench",
-  "toolVersion": "2.2.0.0",
+  "toolVersion": "2.8.0.0",
   "run": {
     "product": "Northwind",
     "platform": "SqlServer",        // SqlServer | PostgreSQL | MySQL | MariaDb
