@@ -57,7 +57,7 @@ The same table on PostgreSQL:
   "Name": "promotions",
   "Schema": "public",
   "Columns": [
-    { "Name": "promotion_id",   "DataType": "INTEGER GENERATED ALWAYS AS IDENTITY", "Nullable": false },
+    { "Name": "promotion_id",   "DataType": "INTEGER", "Generated": "GENERATED ALWAYS AS IDENTITY", "Nullable": false },
     { "Name": "promotion_name", "DataType": "VARCHAR(100)",                         "Nullable": false },
     { "Name": "discount_percent", "DataType": "NUMERIC(5,2)", "Nullable": false, "Default": "0" },
     { "Name": "start_date", "DataType": "DATE", "Nullable": false },
