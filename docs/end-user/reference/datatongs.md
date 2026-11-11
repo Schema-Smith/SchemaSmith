@@ -1,6 +1,6 @@
 # DataTongs Reference
 
-Lookup tables, configuration rows, seed data -- every database has reference data that needs to travel with the schema. DataTongs grips that data from a live database and produces self-contained synchronization scripts that bring it into any target. Point it at a source, list the tables you care about, and it produces one SQL file per table -- ready to drop into a schema package's `Table Data` folder or run directly against any compatible instance.
+Lookup tables, configuration rows, seed data -- every database has reference data that needs to travel with the schema. DataTongs grips that data from a live database and produces synchronization scripts that bring it into any target. Point it at a source, list the tables you care about, and it produces one SQL file per table -- ready to drop into a schema package's `Table Data` folder. By default each script reads its rows through a `{{<table>.tabledata}}` content token that SchemaQuench resolves from the template at deploy; with `ShouldCast:TokenizeScripts` set to `false` the rows are embedded instead, and the script runs directly against any compatible instance.
 
 DataTongs supports **SQL Server**, **PostgreSQL**, **MySQL**, and **MariaDB**. The script syntax adapts per platform: SQL Server and PostgreSQL use `MERGE`, while MySQL and MariaDB use `INSERT ... ON DUPLICATE KEY UPDATE` (paired with a conditional `DELETE WHERE NOT EXISTS` step when full delete sync is enabled). The configuration shape and the workflow are identical across all four.
 
@@ -122,11 +122,11 @@ For environment variable mapping, see [Configuration Reference -- Environment Va
 
 ## Generated Script Anatomy
 
-What DataTongs writes to disk depends on the platform. The data extraction step is the same: query the source table in deterministic key order and serialize each row to JSON. The substitution into a sync script is platform-specific.
+What DataTongs writes to disk depends on the platform. The data extraction step is the same: query the source table in deterministic key order and serialize each row to JSON (or to XML, with the XML delivery encoding). The substitution into a sync script is platform-specific. The samples below show the inline form (`TokenizeScripts: false`, JSON encoding), with the rows embedded in the script; by default the literal is replaced by the table's `{{<table>.tabledata}}` content token, which SchemaQuench resolves from the template's `ScriptTokens` at deploy.
 
 ### SQL Server
 
-SQL Server uses `MERGE` with `OPENJSON` to parse the embedded data:
+SQL Server uses `MERGE` with `OPENJSON` to parse the embedded data. XML-encoded content is shredded with the XML data-type methods (`.nodes()` / `.value()`) instead, and a memory-optimized or append-only ledger target, which refuses `MERGE`, gets separate `UPDATE`, `INSERT` and `DELETE` statements (see [Special Type Handling](#special-type-handling)):
 
 ```sql
 DECLARE @v_json NVARCHAR(MAX) = '[
@@ -363,7 +363,7 @@ MariaDB uses the MySQL delivery path with the same behaviors as above. One opera
 
 ## Source Query
 
-DataTongs extracts data using a deterministic, JSON-shaped query. The exact form differs per platform (SQL Server uses `FOR JSON AUTO`, PostgreSQL uses `jsonb_agg(row_to_json(...))`, MySQL uses `JSON_OBJECT` aggregation), but the principles are the same:
+DataTongs extracts data using a deterministic query. The exact form differs per platform (SQL Server uses `FOR JSON AUTO`, or `FOR XML PATH` when extracting the XML encoding, PostgreSQL uses `jsonb_agg(row_to_json(...))`, MySQL uses `JSON_OBJECT` aggregation), but the principles are the same:
 
 - **Read-friendly hints** -- Where the platform supports a non-blocking read hint (`WITH (NOLOCK)` on SQL Server, no special hint needed on PostgreSQL, MySQL, or MariaDB), DataTongs uses it to avoid blocking production workloads. This is appropriate because DataTongs is extracting a snapshot of reference data, not transactional data requiring strict consistency.
 - **Deterministic order** -- Results are ordered by the key columns to produce diff-friendly output. Run DataTongs twice against unchanged data and you get identical files.
@@ -523,7 +523,7 @@ or in `DataTongs.settings.json`:
 
 With `Xml`, DataTongs writes each `.tabledata` file in the [XML delivery shape](schema-packages.md#content-encoding) -- `<rows><row><c n="Col">value</c>...</row></rows>`, with the database's native text forms (binary base64, geometry WKT + an SRID companion, ISO-8601 dates) and `NULL` columns omitted -- and, when `--ConfigureDataDelivery` is on, stamps `"ContentEncoding": "Xml"` on the reconciled `DataDelivery` entry so the extract → deploy round-trip works against a compatibility-level-100 database.
 
-**A SQL Server source older than 2017 extracts XML by default.** The JSON extraction uses `FOR JSON` (2016) and `STRING_AGG` (2017), so with `DeliveryEncoding` unset, DataTongs extracts XML from SQL Server 2008 R2 through 2016 and logs why. Setting `DeliveryEncoding` to `Json` against such a source stops the run with a message naming the setting.
+**A SQL Server source older than 2017 extracts XML by default.** The JSON extraction uses `FOR JSON` (2016) and `STRING_AGG` (2017), so with `DeliveryEncoding` unset, DataTongs extracts XML from SQL Server 2008 through 2016 and logs why. Setting `DeliveryEncoding` to `Json` against such a source stops the run with a message naming the setting.
 
 **Available on every source engine.** SQL Server extracts XML natively. PostgreSQL, MySQL, and MariaDB have no native XML producer, so DataTongs extracts the engine's normal JSON and converts it to the identical shape above -- one delivery XML dialect regardless of source engine, not a per-engine variant. That parity is useful even when the deployment target is never SQL Server: the `.tabledata` file is a standalone artifact, and `Xml` is a reasonable choice whenever a downstream consumer -- a third-party system, a hand-off package -- wants XML rather than JSON, independent of whether SchemaSmith ever reads the file back.
 
