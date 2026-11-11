@@ -6,6 +6,7 @@ using System.Linq;
 using System.Reflection;
 using Newtonsoft.Json.Linq;
 using Schema.Domain;
+using Schema.Domain.MariaDb;
 using Schema.Domain.MySQL;
 using Schema.Domain.PostgreSQL;
 using Schema.Domain.SqlServer;
@@ -211,6 +212,18 @@ public static class ImportTableHelper
             Reorder(ssNew.XmlIndexes, ssOrig.XmlIndexes, fallbackOrder);
             Reorder(ssNew.SpatialIndexes, ssOrig.SpatialIndexes, fallbackOrder);
             Reorder(ssNew.JsonIndexes, ssOrig.JsonIndexes, fallbackOrder);
+        }
+        else if (original is PostgreSqlTable pgOrig && extracted is PostgreSqlTable pgNew)
+        {
+            Reorder(pgNew.Statistics, pgOrig.Statistics, fallbackOrder);
+            Reorder(pgNew.ExcludeConstraints, pgOrig.ExcludeConstraints, fallbackOrder);
+            Reorder(pgNew.Policies, pgOrig.Policies, fallbackOrder);
+        }
+        else if (original is MySqlTable myOrig && extracted is MySqlTable myNew)
+        {
+            Reorder(myNew.FullTextIndexes, myOrig.FullTextIndexes, fallbackOrder);
+            if (original is MariaDbTable mariaOrig && extracted is MariaDbTable mariaNew)
+                Reorder(mariaNew.Periods, mariaOrig.Periods, fallbackOrder);
         }
     }
 
