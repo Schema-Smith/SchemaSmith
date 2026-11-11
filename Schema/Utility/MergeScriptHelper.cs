@@ -2632,19 +2632,28 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "decimal", "numeric", "float", "double", "bit", "year"
     };
 
-    // One JSON-typed column turned back into the scalar a typed JSON_TABLE column gives: a JSON boolean is its number
+    // One raw JSON value turned back into the scalar a typed JSON_TABLE column gives: a JSON boolean is its number
     // in a number column (as text, 'true' fails the insert), and a YEAR is a number, since the text '0' stores 2000.
-    private static string JsonReadScalarMySql(MySqlColumnInfo column, string name)
+    // MariaDB unquotes through SchemaSmith_JsonScalarStr, which keeps 4-byte characters and maps JSON null itself.
+    private static string JsonReadScalarMySql(MySqlColumnInfo column, string name, bool isMariaDb)
     {
         var value = $"_ss_jt.{MyQuote(name)}";
         if (column?.IsJson == true) return $"{value} AS {MyQuote(name)}";
-        var scalar = $"JSON_UNQUOTE({value})";
+        var scalar = isMariaDb ? $"SchemaSmith_JsonScalarStr({value})" : $"JSON_UNQUOTE({value})";
         if (column != null && MySqlNumberTypes.Contains(column.DataType))
-            scalar = $"IF(JSON_TYPE({value}) = 'BOOLEAN', IF({scalar} = 'true', '1', '0'), {scalar})";
+            scalar = $"IF(JSON_TYPE({value}) = 'BOOLEAN', IF(JSON_UNQUOTE({value}) = 'true', '1', '0'), {scalar})";
         if (column != null && column.DataType.Equals("year", StringComparison.OrdinalIgnoreCase))
             scalar = $"CAST({scalar} AS SIGNED)";
-        return $"IF(JSON_TYPE({value}) = 'NULL', NULL, {scalar}) AS {MyQuote(name)}";
+        return isMariaDb
+            ? $"{scalar} AS {MyQuote(name)}"
+            : $"IF(JSON_TYPE({value}) = 'NULL', NULL, {scalar}) AS {MyQuote(name)}";
     }
+
+    private static List<string> JsonValueNamesMySql(List<MySqlColumnInfo> columns) =>
+        columns.SelectMany(c => IsGeometryTypeMySql(c.DataType) ? new[] { c.Name, c.Name + ".STSrid" } : new[] { c.Name }).ToList();
+
+    private static string JsonReadScalarsMySql(List<MySqlColumnInfo> columns, List<string> names, bool isMariaDb) =>
+        string.Join(",\n      ", names.Select(n => JsonReadScalarMySql(columns.FirstOrDefault(c => c.Name == n), n, isMariaDb)));
 
     internal static string BuildJsonRowSourceMySql(List<MySqlColumnInfo> columns, int versionNum)
         => BuildJsonRowSourceMySql(columns, versionNum, jsonTableMisreadsScalars: false);
@@ -2655,10 +2664,10 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         var hasJsonTable = MySqlFamilyHasJsonTable(versionNum);
         if (hasJsonTable && jsonTableMisreadsScalars)
         {
-            var names = columns.SelectMany(c => IsGeometryTypeMySql(c.DataType) ? new[] { c.Name, c.Name + ".STSrid" } : new[] { c.Name }).ToList();
+            var names = JsonValueNamesMySql(columns);
             var jsonColumns = string.Join(",\n        ", names.Select(n => $"{MyQuote(n)} JSON PATH '$.{MyJsonPathMember(n)}'"));
-            var values = string.Join(",\n      ", names.Select(n => JsonReadScalarMySql(columns.FirstOrDefault(c => c.Name == n), n)));
-            return "(\n    SELECT\n      " + values + "\n    FROM JSON_TABLE(\n      @json_data,\n      '$[*]' COLUMNS (\n        " +
+            return "(\n    SELECT\n      " + JsonReadScalarsMySql(columns, names, isMariaDb: false) +
+                   "\n    FROM JSON_TABLE(\n      @json_data,\n      '$[*]' COLUMNS (\n        " +
                    jsonColumns + "\n      )\n    ) AS _ss_jt\n  ) AS jt";
         }
         if (hasJsonTable)
@@ -2670,37 +2679,17 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
                 $"Automatic data delivery requires JSON_TABLE (MySQL 8.0+); it is unavailable on MySQL {versionNum / 100}.{versionNum % 100}. " +
                 "Deliver data on this target with manual data scripts.");
 
-        // MariaDB 10.2-10.5: recursive-CTE shred (cap-free), embedded in the derived table. The outer WHERE
-        // bounds the sequence to the array length so an empty payload yields zero rows (JSON_TABLE parity).
-        var extractions = string.Join(",\n      ", columns.SelectMany(BuildCteExtractionsMySql));
-        return "(\n" +
-               "    WITH RECURSIVE _ss_seq AS (SELECT 0 i UNION ALL SELECT i + 1 FROM _ss_seq WHERE i + 1 < JSON_LENGTH(@json_data))\n" +
-               "    SELECT\n      " + extractions + "\n" +
-               "    FROM _ss_seq WHERE _ss_seq.i < JSON_LENGTH(@json_data)\n" +
-               "  ) AS jt";
-    }
-
-    // The recursive-CTE extraction expressions for one column, matching the JSON_TABLE columns they
-    // replace -- geometry yields TWO, the value and its `<col>.STSrid` companion, just as JSON_TABLE does.
-    // their structure (JSON_EXTRACT); every other column is read as a null-safe scalar via
-    // SchemaSmith_JsonScalarStr so an explicit JSON null becomes SQL NULL (a bare JSON_UNQUOTE would yield the
-    // string 'null') -- the target column type coerces the extracted text on INSERT, matching JSON_TABLE.
-    private static IEnumerable<string> BuildCteExtractionsMySql(MySqlColumnInfo col)
-    {
-        var extract = $"JSON_EXTRACT(@json_data, CONCAT('$[', _ss_seq.i, '].{MyJsonPathMember(col.Name)}'))";
-        yield return col.IsJson
-            ? $"{extract} AS {MyQuote(col.Name)}"
-            : $"SchemaSmith_JsonScalarStr({extract}) AS {MyQuote(col.Name)}";
-
-        // Geometry carries a "<col>.STSrid" companion, exactly as the JSON_TABLE path declares it.
-        // Without it the SELECT built by BuildSingleSelectExpressionMySql reads a column this row
-        // source never produced, and delivery fails with "Unknown column '<col>.STSrid'". The key
-        // always contains a dot, so the JSON path is always the quoted form.
-        if (!IsGeometryTypeMySql(col.DataType)) yield break;
-
-        var sridExtract =
-            $"JSON_EXTRACT(@json_data, CONCAT('$[', _ss_seq.i, '].{MyJsonPathMember(col.Name + ".STSrid")}'))";
-        yield return $"SchemaSmith_JsonScalarStr({sridExtract}) AS {MyQuote(col.Name + ".STSrid")}";
+        // MariaDB 10.2-10.5: recursive-CTE shred (cap-free) of the raw JSON values, read into scalars by the outer
+        // SELECT. The WHERE bounds the sequence to the array length so an empty payload yields zero rows (JSON_TABLE
+        // parity). Geometry yields TWO values, the WKT and its `<col>.STSrid` companion, just as JSON_TABLE does.
+        var cteNames = JsonValueNamesMySql(columns);
+        var extractions = string.Join(",\n        ", cteNames.Select(n =>
+            $"JSON_EXTRACT(@json_data, CONCAT('$[', _ss_seq.i, '].{MyJsonPathMember(n)}')) AS {MyQuote(n)}"));
+        return "(\n    SELECT\n      " + JsonReadScalarsMySql(columns, cteNames, isMariaDb: true) + "\n    FROM (\n" +
+               "      WITH RECURSIVE _ss_seq AS (SELECT 0 i UNION ALL SELECT i + 1 FROM _ss_seq WHERE i + 1 < JSON_LENGTH(@json_data))\n" +
+               "      SELECT\n        " + extractions + "\n" +
+               "      FROM _ss_seq WHERE _ss_seq.i < JSON_LENGTH(@json_data)\n" +
+               "    ) AS _ss_jt\n  ) AS jt";
     }
 
     private static string BuildJsonTableColumnsMySql(List<MySqlColumnInfo> columns)
@@ -2758,7 +2747,8 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
             "time" => col.DatetimePrecision.HasValue && col.DatetimePrecision > 0
                 ? $"TIME({col.DatetimePrecision})"
                 : "TIME",
-            "year" => "YEAR",
+            // Read as a number: MariaDB's JSON_TABLE YEAR column turned 0 into 2000; the number 0 stores as 0000.
+            "year" => "SMALLINT",
             "char" => col.CharMaxLength.HasValue
                 ? $"CHAR({col.CharMaxLength})"
                 : "CHAR(255)",

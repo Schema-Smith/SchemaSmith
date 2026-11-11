@@ -280,9 +280,15 @@ public abstract class DataTongsEndToEndSharedTests
         Assert.That(content, Does.Contain("\"last_update\""));
 
         // Verify it can be parsed and used in MergeScriptHelper (Upsert: mergeUpdate=true, mergeDelete=false)
-        var script = MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, "country", json, keyColumns,
+        string Build() => MergeScriptHelper.BuildMergeScript(Platform, command, _testDb, "country", json, keyColumns,
             mergeUpdate: true, mergeDelete: false, disableTriggers: false,
             tokenizeScripts: false, mergeFilter: null, mySqlServerVersionNum: DeliveryVersionNum);
+        if (Platform == Platform.MySQL && _serverVersionNum < 800)
+        {
+            Assert.That(() => Build(), Throws.TypeOf<NotSupportedException>().With.Message.Contains("JSON_TABLE"));
+            return;
+        }
+        var script = Build();
         Assert.That(script, Is.Not.Empty);
         Assert.That(script, Does.Contain("INSERT INTO"));
     }
@@ -898,6 +904,8 @@ public abstract class DataTongsEndToEndSharedTests
     [Test]
     public void EndToEnd_MultipleTablesWorkflow()
     {
+        if (Platform == Platform.MySQL && _serverVersionNum < 800)
+            Assert.Ignore("Data delivery requires JSON_TABLE on MySQL (8.0+); the refusal below it is asserted by EndToEnd_ContentFileCanBeConsumedBySchemaQuench.");
         // Simulate extracting multiple related tables
         using var command = _connection.CreateCommand();
 

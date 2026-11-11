@@ -26,10 +26,6 @@ public abstract class MergeScriptHelperSharedTests
     protected abstract string MainConnectionString { get; }
 
     // JSON_TABLE coerces the JSON numeric literal 0 into a YEAR column differently per engine:
-    // MySQL yields 0 (the YEAR "zero" value), MariaDB yields 2000. Documented engine divergence
-    // (only the value 0 diverges; real YEAR values 1901-2155 agree).
-    protected virtual int ExpectedYearZeroValue => 0;
-
     private IDbConnection _connection = null!;
     private string _testDb = null!;
     private int _serverVersionNum;
@@ -444,6 +440,37 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
 
             command.CommandText = $"SELECT GROUP_CONCAT(id, ':', ti, ':', i, ':', d, ':', t ORDER BY id SEPARATOR ' ') FROM `{_testDb}`.`{tableName}`";
             Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1:1:0:1.00:true 2:0:1:0.00:false"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // Read as text, YEAR 0 is the string '0', which a YEAR column stores as 2000.
+    [Test]
+    public void BuildMergeScript_YearZero_ArrivesAsZero()
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"zz_year_{Guid.NewGuid():N}";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, y YEAR NULL)";
+            command.ExecuteNonQuery();
+
+            var script = BuildMergeScript(command, _testDb, tableName,
+                "[{\"id\":1,\"y\":0},{\"id\":2,\"y\":1999},{\"id\":3,\"y\":null}]",
+                "`id`", true, false, false, false, null!);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT GROUP_CONCAT(id, ':', COALESCE(y, '<NULL>') ORDER BY id SEPARATOR ' ') FROM `{_testDb}`.`{tableName}`";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1:0000 2:1999 3:<NULL>"));
         }
         finally
         {
@@ -1060,7 +1087,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
             Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(1901));
 
             command.CommandText = $"SELECT release_year FROM `{_testDb}`.`{tableName}` WHERE id = 3";
-            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(ExpectedYearZeroValue));
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(0), "YEAR 0 is the zero year on every engine, not 2000");
         }
         finally
         {

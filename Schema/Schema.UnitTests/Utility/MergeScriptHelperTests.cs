@@ -2779,6 +2779,29 @@ public class MergeScriptHelperTests
         });
     }
 
+    // Paired with the integration tests that deliver booleans and YEAR 0: MariaDB 10.2-10.5 shreds raw JSON and reads it
+    // as a typed JSON_TABLE column would, keeping SchemaSmith_JsonScalarStr for text so 4-byte characters survive.
+    [Test]
+    public void BuildJsonRowSourceMySql_MariaDbShred_ReadsBooleansAndYearsAsNumbers()
+    {
+        var cols = new List<MergeScriptHelper.MySqlColumnInfo>
+        {
+            new() { Name = "i", DataType = "int", ColumnType = "int" },
+            new() { Name = "j", DataType = "json", ColumnType = "json", IsJson = true },
+            new() { Name = "t", DataType = "varchar", ColumnType = "varchar(10)", CharMaxLength = 10 },
+            new() { Name = "y", DataType = "year", ColumnType = "year" },
+        };
+        var shred = MergeScriptHelper.BuildJsonRowSourceMySql(cols, 1002);
+        Assert.Multiple(() =>
+        {
+            Assert.That(shred, Does.Contain("WITH RECURSIVE _ss_seq").And.Contain(") AS _ss_jt"));
+            Assert.That(shred, Does.Contain("SchemaSmith_JsonScalarStr(_ss_jt.`t`) AS `t`"));
+            Assert.That(shred, Does.Contain("IF(JSON_TYPE(_ss_jt.`i`) = 'BOOLEAN', IF(JSON_UNQUOTE(_ss_jt.`i`) = 'true', '1', '0'), SchemaSmith_JsonScalarStr(_ss_jt.`i`)) AS `i`"));
+            Assert.That(shred, Does.Contain("CAST(IF(JSON_TYPE(_ss_jt.`y`) = 'BOOLEAN'"));
+            Assert.That(shred, Does.Contain("_ss_jt.`j` AS `j`").And.EndWith(") AS jt"));
+        });
+    }
+
     // MySQL went 5.7, 8.x, 9.x, then calendar years from 26: 26.7 reads 2607. Only MariaDB 10.2-10.5 lacks JSON_TABLE.
     [TestCase(0, true)]
     [TestCase(507, false)]
