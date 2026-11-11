@@ -1943,7 +1943,10 @@ ORDER BY rulename;";
         var insertColumns = string.Join(", ", columns.Select(c => MyQuote(c.Name)));
         var selectExpressions = BuildSelectExpressionsMySql(columns);
         mySqlServerVersionNum = RowSourceVersionNumMySql(cmd, mySqlServerVersionNum);
-        var jsonSource = BuildJsonRowSourceMySql(columns, mySqlServerVersionNum, JsonTableMisreadsScalarsMySql(cmd, mySqlServerVersionNum));
+        var misreadsScalars = JsonTableMisreadsScalarsMySql(cmd, mySqlServerVersionNum);
+        var jsonSource = BuildJsonRowSourceMySql(columns, mySqlServerVersionNum, misreadsScalars);
+        if (!misreadsScalars && !IsMariaDbVersionNum(mySqlServerVersionNum) && MySqlFamilyHasJsonTable(mySqlServerVersionNum))
+            jsonSource = MarkTypedRowSourceMySql(tableName, jsonSource);
         tableData = DecodeSurrogateEscapesMySql(QuoteDecimalNumbersMySql(StringifyStructuredTextValuesMySql(tableData, columns),
             mySqlServerVersionNum, columns), mySqlServerVersionNum);
 
@@ -2626,6 +2629,45 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
     internal static bool JsonTableMisreadsScalarsMySql(string serverVersion) =>
         serverVersion != null && !serverVersion.Contains("MariaDB", StringComparison.OrdinalIgnoreCase)
         && VersionHelper.ParsePatchComparable(serverVersion, Platform.MySQL) is < 80021;
+
+    // A script built where JSON_TABLE reads scalars correctly can be delivered to MySQL 8.0.11-8.0.20, which misreads them
+    // (DataTongs writes scripts on one server for another). Its typed row source is marked with the table it reads into,
+    // so delivery there can rebuild the clause in the read-as-JSON form from that table's columns. The table name is
+    // base64 so no name can end the comment.
+    internal const string TypedRowSourceOpenMySql = "/*ss-typed-row-source:";
+    internal const string TypedRowSourceCloseMySql = "/*ss-typed-row-source-end*/";
+
+    private static readonly Regex TypedRowSourceMySql = new(
+        @"/\*ss-typed-row-source:([A-Za-z0-9+/=]*)\*/(.*?)/\*ss-typed-row-source-end\*/",
+        RegexOptions.Singleline | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(10));
+
+    private static string MarkTypedRowSourceMySql(string tableName, string rowSource) =>
+        TypedRowSourceOpenMySql + Convert.ToBase64String(Encoding.UTF8.GetBytes(tableName)) + "*/" + rowSource + TypedRowSourceCloseMySql;
+
+    /// <summary>Rebuilds each marked typed row source in <paramref name="sql"/> in the read-as-JSON form, when the server
+    /// <paramref name="cmd"/> is connected to misreads JSON_TABLE scalars; otherwise returns <paramref name="sql"/>.</summary>
+    internal static string RewriteTypedRowSourcesForTargetMySql(IDbCommand cmd, string sql)
+    {
+        if (!sql.Contains(TypedRowSourceOpenMySql, StringComparison.Ordinal)) return sql;
+        cmd.Parameters.Clear();
+        cmd.CommandText = "SELECT VERSION()";
+        if (!JsonTableMisreadsScalarsMySql(cmd.ExecuteScalar()?.ToString())) return sql;
+        cmd.CommandText = "SELECT DATABASE()";
+        var database = cmd.ExecuteScalar()?.ToString() ?? "";
+        var rewritten = RewriteTypedRowSourcesMySql(sql, table => GetColumnInfoMySql(cmd, database, table, excludeAutoIncrement: false));
+        cmd.Parameters.Clear();
+        return rewritten;
+    }
+
+    // The clause keeps exactly the columns it declared (by their quoted names), read from the target's catalog.
+    internal static string RewriteTypedRowSourcesMySql(string sql, Func<string, List<MySqlColumnInfo>> columnsOf) =>
+        TypedRowSourceMySql.Replace(sql, m =>
+        {
+            var table = Encoding.UTF8.GetString(Convert.FromBase64String(m.Groups[1].Value));
+            var clause = m.Groups[2].Value;
+            var columns = columnsOf(table).Where(c => clause.Contains(MyQuote(c.Name) + " ", StringComparison.Ordinal)).ToList();
+            return BuildJsonRowSourceMySql(columns, 800, jsonTableMisreadsScalars: true);
+        });
 
     private static readonly HashSet<string> MySqlNumberTypes = new(StringComparer.OrdinalIgnoreCase)
     {

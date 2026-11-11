@@ -109,7 +109,8 @@ public abstract class ObjectScriptDeployFixture
     /// <param name="resume">Adopt the checkpoint a previous deploy left, as --ResumeQuench does.</param>
     protected DeployResult Deploy(bool skipUnchanged = true, bool whatIf = false, bool runTwice = false, bool expectSuccess = true, bool dropSchemaBoundDependents = false,
         bool updateTables = true, (string User, string Password)? login = null, bool dropRemovedTables = false,
-        string checkpointDir = null, bool resume = false, IReadOnlyDictionary<string, string> settings = null, bool keepColumns = false)
+        string checkpointDir = null, bool resume = false, IReadOnlyDictionary<string, string> settings = null, bool keepColumns = false,
+        bool deliverData = false)
     {
         var ownsCheckpointDir = checkpointDir == null;
         checkpointDir ??= Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
@@ -149,7 +150,7 @@ public abstract class ObjectScriptDeployFixture
                 LogFactory.Register("ErrorLog", errorLog);
                 var audit = new ChangeAuditCapture();
                 var contention = new ContentionLog();
-                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = MainDb, SuppressKindling = login != null, WhatIf = whatIf, RunScriptsTwice = runTwice, UpdateTables = updateTables, DeliverData = false, Drops = new DropPolicy(Tables: dropRemovedTables, Columns: !keepColumns, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true), Destructive = DestructivePolicy.Read(FactoryContainer.Resolve<IConfigurationRoot>()) }, new FileCheckpointManager(checkpointDir, resume)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents, Contention = contention };
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = MainDb, SuppressKindling = login != null, WhatIf = whatIf, RunScriptsTwice = runTwice, UpdateTables = updateTables, DeliverData = deliverData, Drops = new DropPolicy(Tables: dropRemovedTables, Columns: !keepColumns, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true), Destructive = DestructivePolicy.Read(FactoryContainer.Resolve<IConfigurationRoot>()) }, new FileCheckpointManager(checkpointDir, resume)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents, Contention = contention };
                 quench.Execute();
                 var scripts = quench.IterationObjectScripts.Concat(quench.IterationAfterTablesObjectScripts).ToList();
                 var errors = scripts.Where(s => s.Error != null).Select(s => $"{Path.GetFileName(s.LogPath)}: {s.Error.Message}");

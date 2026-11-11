@@ -2688,6 +2688,8 @@ SET NOCOUNT ON
                 for (var batchIndex = 0; batchIndex < script.Batches.Count; batchIndex++)
                 {
                     var batch = script.Batches[batchIndex];
+                    // A data script generated on a newer MySQL reads its rows through typed JSON_TABLE columns, which 8.0.11-8.0.20 misread.
+                    if (_mySqlServerVersionNum == 800) batch = MergeScriptHelper.RewriteTypedRowSourcesForTargetMySql(destCmd, batch);
                     script.FailedBatchIndex = batchIndex;
                     needDBReset = needDBReset || batch.ContainsIgnoringCase("USE ");
                     _infoMessageException = null;

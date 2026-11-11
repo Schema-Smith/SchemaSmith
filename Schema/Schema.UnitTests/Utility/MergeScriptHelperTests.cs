@@ -2779,6 +2779,36 @@ public class MergeScriptHelperTests
         });
     }
 
+    // A script generated on a server whose JSON_TABLE reads scalars correctly is delivered to one that misreads them: the
+    // marked typed clause is rebuilt in the read-as-JSON form from the target table's columns, only the columns it declared.
+    [Test]
+    public void RewriteTypedRowSourcesMySql_RebuildsAMarkedClause_InTheReadAsJsonForm()
+    {
+        var cols = new List<MergeScriptHelper.MySqlColumnInfo>
+        {
+            new() { Name = "id", DataType = "int", ColumnType = "int" },
+            new() { Name = "note", DataType = "varchar", ColumnType = "varchar(20)", CharMaxLength = 20 },
+            new() { Name = "y", DataType = "year", ColumnType = "year" },
+        };
+        var target = cols.Append(new MergeScriptHelper.MySqlColumnInfo { Name = "added_later", DataType = "int", ColumnType = "int" }).ToList();
+        const string table = "odd*/name";
+        var typed = MergeScriptHelper.BuildJsonRowSourceMySql(cols, 800);
+        var script = "INSERT INTO `t` (`id`) SELECT jt.`id` FROM " + MergeScriptHelper.TypedRowSourceOpenMySql +
+                     Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(table)) + "*/" + typed + MergeScriptHelper.TypedRowSourceCloseMySql + ";";
+        string asked = null;
+
+        var rewritten = MergeScriptHelper.RewriteTypedRowSourcesMySql(script, t => { asked = t; return target; });
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(asked, Is.EqualTo(table), "the marker names the table the clause reads into");
+            Assert.That(rewritten, Is.EqualTo("INSERT INTO `t` (`id`) SELECT jt.`id` FROM " +
+                                              MergeScriptHelper.BuildJsonRowSourceMySql(cols, 800, jsonTableMisreadsScalars: true) + ";"),
+                "the typed clause becomes the read-as-JSON form, over the clause's own columns only");
+            Assert.That(MergeScriptHelper.RewriteTypedRowSourcesMySql("SELECT 1", _ => throw new AssertionException("asked")), Is.EqualTo("SELECT 1"));
+        });
+    }
+
     // Paired with the integration tests that deliver booleans and YEAR 0: MariaDB 10.2-10.5 shreds raw JSON and reads it
     // as a typed JSON_TABLE column would, keeping SchemaSmith_JsonScalarStr for text so 4-byte characters survive.
     [Test]
