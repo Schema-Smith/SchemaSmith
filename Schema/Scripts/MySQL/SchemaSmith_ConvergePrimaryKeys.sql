@@ -146,7 +146,7 @@ BEGIN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Converge primary keys');
     END IF;
 
-    SET @ss_pk_id := (SELECT MIN(RowId) FROM _SchemaSmith_PrimaryKeyStmts);
+    SELECT (SELECT MIN(RowId) FROM _SchemaSmith_PrimaryKeyStmts) INTO @ss_pk_id;
     WHILE @ss_pk_id IS NOT NULL DO
         SELECT TableName, AuditName, HasKey, ForeignKeyBlocks,
                -- The key MySQL generated for a keyless table goes with its column, in the statement that adds the
@@ -217,7 +217,7 @@ BEGIN
                 INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_pk_audit, 'created');
             END IF;
         END IF;
-        SET @ss_pk_id := (SELECT MIN(RowId) FROM _SchemaSmith_PrimaryKeyStmts WHERE RowId > @ss_pk_id);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_PrimaryKeyStmts WHERE RowId > @ss_pk_id) INTO @ss_pk_id;
     END WHILE;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PrimaryKeyStmts;

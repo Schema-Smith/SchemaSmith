@@ -319,13 +319,13 @@ BEGIN
         FROM _SchemaSmith_IndexRenames
         GROUP BY TableName;
 
-        SET @v_rename_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexRenameStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexRenameStmts) INTO @v_rename_id;
         WHILE @v_rename_id IS NOT NULL DO
             SELECT Stmt INTO @exec_sql FROM _SchemaSmith_IndexRenameStmts WHERE RowId = @v_rename_id;
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
-            SET @v_rename_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexRenameStmts WHERE RowId > @v_rename_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexRenameStmts WHERE RowId > @v_rename_id) INTO @v_rename_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexRenameStmts;
 
@@ -383,14 +383,14 @@ BEGIN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
             SELECT CONNECTION_ID(), Stmt FROM _SchemaSmith_IndexCaseRenames ORDER BY RowId;
         ELSE
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames) INTO @ss_id;
             WHILE @ss_id IS NOT NULL DO
                 SELECT LogMsg, Stmt INTO @ss_log, @exec_sql FROM _SchemaSmith_IndexCaseRenames WHERE RowId = @ss_id;
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
-                SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames WHERE RowId > @ss_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames WHERE RowId > @ss_id) INTO @ss_id;
             END WHILE;
         END IF;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCaseRenames;
@@ -524,7 +524,7 @@ BEGIN
           JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
            SET s.OnlineMode = t.OnlineMode;
 
-        SET @v_indexmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexModStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexModStmts) INTO @v_indexmod_id;
         WHILE @v_indexmod_id IS NOT NULL DO
             SELECT LogMsg, Stmt, AuditName, TableName, IndexName, AlterStmt, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_tbl, @ss_idx, @ss_online_sql_alter, @ss_online_mode
               FROM _SchemaSmith_IndexModStmts WHERE RowId = @v_indexmod_id;
@@ -548,7 +548,7 @@ BEGIN
                 INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped', @ss_online_form);
             END IF;
             DEALLOCATE PREPARE stmt;
-            SET @v_indexmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexModStmts WHERE RowId > @v_indexmod_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexModStmts WHERE RowId > @v_indexmod_id) INTO @v_indexmod_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexModStmts;
     END IF;
@@ -823,7 +823,7 @@ BEGIN
               JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
                SET s.OnlineMode = t.OnlineMode;
 
-            SET @v_indexdrop_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexDropStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexDropStmts) INTO @v_indexdrop_id;
             WHILE @v_indexdrop_id IS NOT NULL DO
                 SELECT LogMsg, Stmt, AuditName, TableName, AlterStmt, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_tbl, @ss_online_sql_alter, @ss_online_mode
                   FROM _SchemaSmith_IndexDropStmts WHERE RowId = @v_indexdrop_id;
@@ -848,7 +848,7 @@ BEGIN
                     INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped', @ss_online_form);
                 END IF;
                 DEALLOCATE PREPARE stmt;
-                SET @v_indexdrop_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexDropStmts WHERE RowId > @v_indexdrop_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexDropStmts WHERE RowId > @v_indexdrop_id) INTO @v_indexdrop_id;
             END WHILE;
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexDropStmts;
 
@@ -989,7 +989,7 @@ BEGIN
           JOIN _SchemaSmith_Tables t ON t.TableKey = s.TableKey
            SET s.OnlineMode = t.OnlineMode;
 
-        SET @v_indexcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCreateStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexCreateStmts) INTO @v_indexcreate_id;
         WHILE @v_indexcreate_id IS NOT NULL DO
             SELECT Stmt, AuditName, IsSwap, OnlineMode INTO @exec_sql, @ss_auditname, @ss_swap, @ss_online_mode FROM _SchemaSmith_IndexCreateStmts WHERE RowId = @v_indexcreate_id;
             PREPARE stmt FROM @exec_sql;
@@ -1011,7 +1011,7 @@ BEGIN
                 INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created', @ss_online_form);
             END IF;
             DEALLOCATE PREPARE stmt;
-            SET @v_indexcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCreateStmts WHERE RowId > @v_indexcreate_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexCreateStmts WHERE RowId > @v_indexcreate_id) INTO @v_indexcreate_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCreateStmts;
     END IF;
@@ -1094,13 +1094,13 @@ BEGIN
             FROM _SchemaSmith_FTIndexesToDrop
             GROUP BY TableName;
 
-            SET @v_ftdrop_id := (SELECT MIN(RowId) FROM _SchemaSmith_FTDropStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FTDropStmts) INTO @v_ftdrop_id;
             WHILE @v_ftdrop_id IS NOT NULL DO
                 SELECT Stmt INTO @exec_sql FROM _SchemaSmith_FTDropStmts WHERE RowId = @v_ftdrop_id;
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
-                SET @v_ftdrop_id := (SELECT MIN(RowId) FROM _SchemaSmith_FTDropStmts WHERE RowId > @v_ftdrop_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FTDropStmts WHERE RowId > @v_ftdrop_id) INTO @v_ftdrop_id;
             END WHILE;
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FTDropStmts;
 

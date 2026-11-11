@@ -47,7 +47,7 @@ proc: BEGIN
     -- APPLIED, not re-baselined, and is not counted.
     -- BINARY on every comparison: the map is utf8mb4_unicode_ci, VERSION() and the parameter carry the server
     -- default, and mixing them is an error rather than a wrong answer.
-    SET @v_emRebaselined := (
+    SELECT (
         SELECT COUNT(*) FROM SchemaSmith_ExpressionMap em
          WHERE CAST(em.ObjectSchema AS BINARY) = CAST(p_DatabaseName AS BINARY)
            AND CAST(em.EngineVersion AS BINARY) != CAST(VERSION() AS BINARY)
@@ -71,7 +71,7 @@ proc: BEGIN
                  AND EXISTS (SELECT 1 FROM _SchemaSmith_CheckConstraints k
                               WHERE CAST(SchemaSmith_StripBacktickWrapping(k.TableName) AS BINARY) = CAST(em.ObjectTable AS BINARY)
                                 AND CAST(SchemaSmith_StripBacktickWrapping(k.ConstraintName) AS BINARY) = CAST(em.ObjectName AS BINARY)
-                                AND CAST(k.Expression AS BINARY) = CAST(em.AuthoredText AS BINARY)))));
+                                AND CAST(k.Expression AS BINARY) = CAST(em.AuthoredText AS BINARY))))) INTO @v_emRebaselined;
     IF IFNULL(@v_emRebaselined, 0) > 0 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         VALUES (CONNECTION_ID(), CONCAT('  Re-baselined ', @v_emRebaselined,

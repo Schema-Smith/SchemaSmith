@@ -92,7 +92,7 @@ BEGIN
         )
         ORDER BY ft.RowId;
 
-        SET @v_ftcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_FTCreateStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FTCreateStmts) INTO @v_ftcreate_id;
         WHILE @v_ftcreate_id IS NOT NULL DO
             SELECT Stmt, AuditName, TableRef, DisplayName INTO @exec_sql, @ss_auditname, @ss_ft_table, @ss_ft_display FROM _SchemaSmith_FTCreateStmts WHERE RowId = @v_ftcreate_id;
             -- MariaDB 10.4 and later leave the rows already in an InnoDB table out of a full-text index added to it in
@@ -115,7 +115,7 @@ BEGIN
             -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'fullTextIndex', @ss_auditname, 'created');
             DEALLOCATE PREPARE stmt;
-            SET @v_ftcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_FTCreateStmts WHERE RowId > @v_ftcreate_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FTCreateStmts WHERE RowId > @v_ftcreate_id) INTO @v_ftcreate_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FTCreateStmts;
 

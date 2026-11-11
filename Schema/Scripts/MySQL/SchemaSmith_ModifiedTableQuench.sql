@@ -1149,7 +1149,7 @@ BEGIN
     -- fails -- deliberately. It does NOT quietly fall back to altering in place: that would let a package
     -- ask for a rebuild and silently get something else, and the states that block a rebuild are exactly
     -- the ones where that difference matters.
-    SET @v_rebuild_id := (SELECT MIN(RowId) FROM _SchemaSmith_RebuildElection);
+    SELECT (SELECT MIN(RowId) FROM _SchemaSmith_RebuildElection) INTO @v_rebuild_id;
     WHILE @v_rebuild_id IS NOT NULL DO
         SELECT TableName INTO @v_rebuild_table FROM _SchemaSmith_RebuildElection WHERE RowId = @v_rebuild_id;
         -- An index the package does not declare (Paul, 2026-11-10). The shadow gets the declared indexes only, so one the
@@ -1187,7 +1187,7 @@ BEGIN
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         END IF;
         CALL SchemaSmith_RebuildTable(p_DatabaseName, @v_rebuild_table, p_WhatIf);
-        SET @v_rebuild_id := (SELECT MIN(RowId) FROM _SchemaSmith_RebuildElection WHERE RowId > @v_rebuild_id);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_RebuildElection WHERE RowId > @v_rebuild_id) INTO @v_rebuild_id;
     END WHILE;
 
     -- A preview rebuilt nothing, so the column passes below would list the in-place changes the rebuild replaces; they
@@ -1411,7 +1411,7 @@ BEGIN
                AND NOT (VERSION() LIKE '%MariaDB%' AND SchemaSmith_ServerVersionNum() >= 1102) THEN
                 CALL SchemaSmith_SnapshotQuenchColumns(p_DatabaseName);
                 -- A scalar subquery, for the reason the undeclared-key check below gives.
-                SET @ss_online_refuse = (SELECT CONCAT(CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4), _utf8mb4'.',
+                SELECT (SELECT CONCAT(CONVERT(SchemaSmith_StripBacktickWrapping(c.TableName) USING utf8mb4), _utf8mb4'.',
                                                        CONVERT(SchemaSmith_StripBacktickWrapping(c.ColumnName) USING utf8mb4))
                   FROM _SchemaSmith_Columns c
                   INNER JOIN _SchemaSmith_Tables t ON t.TableName = c.TableName AND t.OnlineMode = 'REQUIRE'
@@ -1427,7 +1427,7 @@ BEGIN
                                   AND ((SchemaSmith_IdentifierKey(kcu.TABLE_NAME) = c.TableKey AND SchemaSmith_NameKeyCI(kcu.COLUMN_NAME) = c.ColumnKey)
                                        OR (SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = c.TableKey AND SchemaSmith_NameKeyCI(kcu.REFERENCED_COLUMN_NAME) = c.ColumnKey)))
                  ORDER BY c.TableName, c.ColumnName
-                 LIMIT 1);
+                 LIMIT 1) INTO @ss_online_refuse;
                 IF @ss_online_refuse IS NOT NULL THEN
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
                     VALUES (CONNECTION_ID(), CONCAT('  OnlineApply is Require, and changing ', @ss_online_refuse,
@@ -1442,17 +1442,17 @@ BEGIN
             -- anything is dropped, as it does on the other engines.
             -- Scalar subqueries, not SELECT ... INTO: no row would raise NOT FOUND, which the cursor's handler in this block
             -- takes as the end of the drop loop. Not one aggregate either: 5.7 refuses MIN over a CONCAT of these columns.
-            SET @ss_undeclared_fk_table = (SELECT d.TableName FROM _SchemaSmith_ColumnCollationFKsToDrop d
+            SELECT (SELECT d.TableName FROM _SchemaSmith_ColumnCollationFKsToDrop d
                                             WHERE NOT EXISTS (SELECT 1 FROM _SchemaSmith_ForeignKeys f
                                                                WHERE f.TableKey = SchemaSmith_IdentifierKey(d.TableName)
                                                                  AND f.KeyNameKey = SchemaSmith_NameKeyCI(d.ConstraintName))
-                                            ORDER BY d.TableName, d.ConstraintName LIMIT 1);
-            SET @ss_undeclared_fk_name = (SELECT d.ConstraintName FROM _SchemaSmith_ColumnCollationFKsToDrop d
+                                            ORDER BY d.TableName, d.ConstraintName LIMIT 1) INTO @ss_undeclared_fk_table;
+            SELECT (SELECT d.ConstraintName FROM _SchemaSmith_ColumnCollationFKsToDrop d
                                            WHERE d.TableName = @ss_undeclared_fk_table
                                              AND NOT EXISTS (SELECT 1 FROM _SchemaSmith_ForeignKeys f
                                                               WHERE f.TableKey = SchemaSmith_IdentifierKey(d.TableName)
                                                                 AND f.KeyNameKey = SchemaSmith_NameKeyCI(d.ConstraintName))
-                                           ORDER BY d.ConstraintName LIMIT 1);
+                                           ORDER BY d.ConstraintName LIMIT 1) INTO @ss_undeclared_fk_name;
             SET @ss_undeclared_fk = IF(@ss_undeclared_fk_table IS NULL, NULL, CONCAT(@ss_undeclared_fk_table, '.', @ss_undeclared_fk_name));
             IF @ss_undeclared_fk IS NOT NULL THEN
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -1941,7 +1941,7 @@ BEGIN
           )
         GROUP BY c.TableName;
 
-        SET @v_modifycol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ModifyColStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_ModifyColStmts) INTO @v_modifycol_id;
         WHILE @v_modifycol_id IS NOT NULL DO
             SELECT Stmt, OnlineMode, TableName INTO @exec_sql, @ss_online_mode, @ss_online_table FROM _SchemaSmith_ModifyColStmts WHERE RowId = @v_modifycol_id;
             -- Each table's statement is logged just before it runs, so its form line follows it.
@@ -1953,7 +1953,7 @@ BEGIN
             SELECT CONNECTION_ID(), 'column', a.ObjectName, 'modified', @ss_online_form
               FROM _SchemaSmith_ModifyColAudit a
              WHERE a.TableName = @ss_online_table;
-            SET @v_modifycol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ModifyColStmts WHERE RowId > @v_modifycol_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_ModifyColStmts WHERE RowId > @v_modifycol_id) INTO @v_modifycol_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColAudit;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ModifyColStmts;
@@ -2096,13 +2096,13 @@ BEGIN
           )
         GROUP BY c.TableName;
 
-        SET @v_genstatus_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenStatusStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_GenStatusStmts) INTO @v_genstatus_id;
         WHILE @v_genstatus_id IS NOT NULL DO
             SELECT Stmt INTO @exec_sql FROM _SchemaSmith_GenStatusStmts WHERE RowId = @v_genstatus_id;
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
-            SET @v_genstatus_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenStatusStmts WHERE RowId > @v_genstatus_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_GenStatusStmts WHERE RowId > @v_genstatus_id) INTO @v_genstatus_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenStatusStmts;
     END IF;
@@ -2286,13 +2286,13 @@ BEGIN
         GROUP BY TableName;
 
         IF p_WhatIf = 0 THEN
-            SET @v_fkcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKDropForColStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKDropForColStmts) INTO @v_fkcol_id;
             WHILE @v_fkcol_id IS NOT NULL DO
                 SELECT Stmt INTO @exec_sql FROM _SchemaSmith_FKDropForColStmts WHERE RowId = @v_fkcol_id;
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
-                SET @v_fkcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKDropForColStmts WHERE RowId > @v_fkcol_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKDropForColStmts WHERE RowId > @v_fkcol_id) INTO @v_fkcol_id;
             END WHILE;
         END IF;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKDropForColStmts;
@@ -2353,13 +2353,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         GROUP BY TableName;
 
         IF p_WhatIf = 0 THEN
-            SET @v_ckcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_CKDropStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CKDropStmts) INTO @v_ckcol_id;
             WHILE @v_ckcol_id IS NOT NULL DO
                 SELECT Stmt INTO @exec_sql FROM _SchemaSmith_CKDropStmts WHERE RowId = @v_ckcol_id;
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
-                SET @v_ckcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_CKDropStmts WHERE RowId > @v_ckcol_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CKDropStmts WHERE RowId > @v_ckcol_id) INTO @v_ckcol_id;
             END WHILE;
         END IF;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CKDropStmts;
@@ -2402,13 +2402,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         GROUP BY TableName;
 
         IF p_WhatIf = 0 THEN
-            SET @v_idxcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_IdxDropStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IdxDropStmts) INTO @v_idxcol_id;
             WHILE @v_idxcol_id IS NOT NULL DO
                 SELECT Stmt INTO @exec_sql FROM _SchemaSmith_IdxDropStmts WHERE RowId = @v_idxcol_id;
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
-                SET @v_idxcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_IdxDropStmts WHERE RowId > @v_idxcol_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IdxDropStmts WHERE RowId > @v_idxcol_id) INTO @v_idxcol_id;
             END WHILE;
         END IF;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IdxDropStmts;
@@ -2464,13 +2464,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         GROUP BY TableName;
 
         IF p_WhatIf = 0 THEN
-            SET @v_gencol_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenColDropStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_GenColDropStmts) INTO @v_gencol_id;
             WHILE @v_gencol_id IS NOT NULL DO
                 SELECT Stmt INTO @exec_sql FROM _SchemaSmith_GenColDropStmts WHERE RowId = @v_gencol_id;
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
-                SET @v_gencol_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenColDropStmts WHERE RowId > @v_gencol_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_GenColDropStmts WHERE RowId > @v_gencol_id) INTO @v_gencol_id;
             END WHILE;
         END IF;
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -2522,7 +2522,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         WHERE (isc.GENERATION_EXPRESSION IS NULL OR isc.GENERATION_EXPRESSION = '');
 
         IF p_WhatIf = 0 THEN
-            SET @v_dropcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColDropStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_ColDropStmts) INTO @v_dropcol_id;
             WHILE @v_dropcol_id IS NOT NULL DO
                 SELECT s.Stmt, COALESCE(MAX(t.OnlineMode), 'OFF'), s.TableName INTO @exec_sql, @ss_online_mode, @ss_online_table
                   FROM _SchemaSmith_ColDropStmts s
@@ -2531,7 +2531,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                  GROUP BY s.Stmt, s.TableName;
                 CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
                 UPDATE _SchemaSmith_ColDropStmts SET Form = @ss_online_form WHERE RowId = @v_dropcol_id;
-                SET @v_dropcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColDropStmts WHERE RowId > @v_dropcol_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_ColDropStmts WHERE RowId > @v_dropcol_id) INTO @v_dropcol_id;
             END WHILE;
         END IF;
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode)
@@ -2601,7 +2601,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     IF EXISTS (SELECT 1 FROM _SchemaSmith_ReorderStmts) THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Put columns in their declared order');
     END IF;
-    SET @v_reorder_id := (SELECT MIN(RowId) FROM _SchemaSmith_ReorderStmts);
+    SELECT (SELECT MIN(RowId) FROM _SchemaSmith_ReorderStmts) INTO @v_reorder_id;
     WHILE @v_reorder_id IS NOT NULL DO
         SELECT Stmt, OnlineMode, SchemaSmith_StripBacktickWrapping(TableName) INTO @exec_sql, @ss_online_mode, @ss_online_table
           FROM _SchemaSmith_ReorderStmts WHERE RowId = @v_reorder_id;
@@ -2612,7 +2612,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'table', @ss_online_table, 'modified', @ss_online_form);
         END IF;
-        SET @v_reorder_id := (SELECT MIN(RowId) FROM _SchemaSmith_ReorderStmts WHERE RowId > @v_reorder_id);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_ReorderStmts WHERE RowId > @v_reorder_id) INTO @v_reorder_id;
     END WHILE;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ReorderStmts;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ReorderCols;
@@ -3009,14 +3009,14 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
             SELECT CONNECTION_ID(), Stmt FROM _SchemaSmith_CompressionStmts ORDER BY RowId;
         ELSE
-            SET @v_cmp_id := (SELECT MIN(RowId) FROM _SchemaSmith_CompressionStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CompressionStmts) INTO @v_cmp_id;
             WHILE @v_cmp_id IS NOT NULL DO
                 SELECT Stmt INTO @exec_sql FROM _SchemaSmith_CompressionStmts WHERE RowId = @v_cmp_id;
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Change compression: ', @exec_sql));
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
-                SET @v_cmp_id := (SELECT MIN(RowId) FROM _SchemaSmith_CompressionStmts WHERE RowId > @v_cmp_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CompressionStmts WHERE RowId > @v_cmp_id) INTO @v_cmp_id;
             END WHILE;
         END IF;
     END IF;
@@ -3055,14 +3055,14 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), Stmt FROM _SchemaSmith_AutoIncStmts ORDER BY RowId;
     ELSE
-        SET @v_autoinc_id := (SELECT MIN(RowId) FROM _SchemaSmith_AutoIncStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_AutoIncStmts) INTO @v_autoinc_id;
         WHILE @v_autoinc_id IS NOT NULL DO
             SELECT Stmt INTO @exec_sql FROM _SchemaSmith_AutoIncStmts WHERE RowId = @v_autoinc_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Set auto-increment: ', @exec_sql));
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
-            SET @v_autoinc_id := (SELECT MIN(RowId) FROM _SchemaSmith_AutoIncStmts WHERE RowId > @v_autoinc_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_AutoIncStmts WHERE RowId > @v_autoinc_id) INTO @v_autoinc_id;
         END WHILE;
     END IF;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_AutoIncStmts;
@@ -3108,7 +3108,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- offender and truncates it defensively -- comfortably inside the cap even at MySQL's 64-character
     -- identifier ceiling -- so the exception message itself names the table.
     CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
-    SET @ss_sysver_refuse_table := (
+    SELECT (
         SELECT LEFT(SchemaSmith_StripBacktickWrapping(t.TableName), 40)
         FROM _SchemaSmith_Tables t
         INNER JOIN _SchemaSmith_CatTables ist
@@ -3117,7 +3117,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           AND t.IsSystemVersioned = 0
           AND ist.TABLE_TYPE = 'SYSTEM VERSIONED'
         LIMIT 1
-    );
+    ) INTO @ss_sysver_refuse_table;
 
     CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
     IF @ss_sysver_refuse_table IS NOT NULL THEN
@@ -3466,13 +3466,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         GROUP BY TableName;
 
         IF p_WhatIf = 0 THEN
-            SET @v_inboundfk_id := (SELECT MIN(RowId) FROM _SchemaSmith_InboundFKDropStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_InboundFKDropStmts) INTO @v_inboundfk_id;
             WHILE @v_inboundfk_id IS NOT NULL DO
                 SELECT Stmt INTO @exec_sql FROM _SchemaSmith_InboundFKDropStmts WHERE RowId = @v_inboundfk_id;
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
-                SET @v_inboundfk_id := (SELECT MIN(RowId) FROM _SchemaSmith_InboundFKDropStmts WHERE RowId > @v_inboundfk_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_InboundFKDropStmts WHERE RowId > @v_inboundfk_id) INTO @v_inboundfk_id;
             END WHILE;
         END IF;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_InboundFKDropStmts;
@@ -3485,10 +3485,10 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         -- A CustomTableDrop hook (e.g. a recyclebin pattern) replaces the plain DROP TABLE when the
         -- user has installed a SchemaSmith_CustomTableDrop procedure in this database, mirroring the
         -- SQL Server / PostgreSQL hook.
-        SET @has_custom_drop = (SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES
+        SELECT (SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES
                                 WHERE ROUTINE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ROUTINE_SCHEMA) = v_DbKey
                                   AND ROUTINE_NAME = 'SchemaSmith_CustomTableDrop'
-                                  AND ROUTINE_TYPE = 'PROCEDURE');
+                                  AND ROUTINE_TYPE = 'PROCEDURE') INTO @has_custom_drop;
 
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop tables removed from product');
@@ -3579,13 +3579,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 -- The CustomTableDrop hook takes exactly one table per CALL, so multiple tables
                 -- can't fold into a single statement here. Drain via WHILE (still removes the
                 -- cursor, even though each row stays its own statement).
-                SET @v_droptbl_id := (SELECT MIN(RowId) FROM _SchemaSmith_TablesToDrop);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_TablesToDrop) INTO @v_droptbl_id;
                 WHILE @v_droptbl_id IS NOT NULL DO
                     SELECT DropSql INTO @exec_sql FROM _SchemaSmith_TablesToDrop WHERE RowId = @v_droptbl_id;
                     PREPARE stmt FROM @exec_sql;
                     EXECUTE stmt;
                     DEALLOCATE PREPARE stmt;
-                    SET @v_droptbl_id := (SELECT MIN(RowId) FROM _SchemaSmith_TablesToDrop WHERE RowId > @v_droptbl_id);
+                    SELECT (SELECT MIN(RowId) FROM _SchemaSmith_TablesToDrop WHERE RowId > @v_droptbl_id) INTO @v_droptbl_id;
                 END WHILE;
             ELSE
                 -- Fold ALL tables to drop into ONE multi-target DROP TABLE statement.
@@ -3598,13 +3598,13 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 FROM _SchemaSmith_TablesToDrop
                 HAVING COUNT(*) > 0;
 
-                SET @v_droptblfold_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropTableFoldStmt);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropTableFoldStmt) INTO @v_droptblfold_id;
                 WHILE @v_droptblfold_id IS NOT NULL DO
                     SELECT Stmt INTO @exec_sql FROM _SchemaSmith_DropTableFoldStmt WHERE RowId = @v_droptblfold_id;
                     PREPARE stmt FROM @exec_sql;
                     EXECUTE stmt;
                     DEALLOCATE PREPARE stmt;
-                    SET @v_droptblfold_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropTableFoldStmt WHERE RowId > @v_droptblfold_id);
+                    SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropTableFoldStmt WHERE RowId > @v_droptblfold_id) INTO @v_droptblfold_id;
                 END WHILE;
                 DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropTableFoldStmt;
             END IF;
@@ -3957,14 +3957,14 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                    SchemaSmith_BuildIndexRenameClause(p_DatabaseName, TableName, OldIndexName, NewIndexName))
         FROM _SchemaSmith_IndexRenames;
 
-        SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_RenameStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_RenameStmts) INTO @ss_id;
         WHILE @ss_id IS NOT NULL DO
             SELECT LogMsg, Stmt INTO @ss_log, @exec_sql FROM _SchemaSmith_RenameStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_RenameStmts WHERE RowId > @ss_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_RenameStmts WHERE RowId > @ss_id) INTO @ss_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RenameStmts;
 
@@ -4024,14 +4024,14 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
             SELECT CONNECTION_ID(), Stmt FROM _SchemaSmith_IndexCaseRenames ORDER BY RowId;
         ELSE
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames) INTO @ss_id;
             WHILE @ss_id IS NOT NULL DO
                 SELECT LogMsg, Stmt INTO @ss_log, @exec_sql FROM _SchemaSmith_IndexCaseRenames WHERE RowId = @ss_id;
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
-                SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames WHERE RowId > @ss_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_IndexCaseRenames WHERE RowId > @ss_id) INTO @ss_id;
             END WHILE;
         END IF;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_IndexCaseRenames;
@@ -4166,7 +4166,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
           JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
            SET s.OnlineMode = t.OnlineMode;
 
-        SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModIdxStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropModIdxStmts) INTO @ss_id;
         WHILE @ss_id IS NOT NULL DO
             SELECT LogMsg, Stmt, AuditName, TableName, IndexName, AlterStmt, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_tbl, @ss_idx, @ss_online_sql_alter, @ss_online_mode
               FROM _SchemaSmith_DropModIdxStmts WHERE RowId = @ss_id;
@@ -4190,7 +4190,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped', @ss_online_form);
             END IF;
             DEALLOCATE PREPARE stmt;
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModIdxStmts WHERE RowId > @ss_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropModIdxStmts WHERE RowId > @ss_id) INTO @ss_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropModIdxStmts;
     END IF;
@@ -4475,7 +4475,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
               JOIN _SchemaSmith_Tables t ON t.TableKey = SchemaSmith_IdentifierKey(s.TableName)
                SET s.OnlineMode = t.OnlineMode;
 
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropIdxStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropIdxStmts) INTO @ss_id;
             WHILE @ss_id IS NOT NULL DO
                 SELECT LogMsg, Stmt, AuditName, TableName, AlterStmt, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_tbl, @ss_online_sql_alter, @ss_online_mode
                   FROM _SchemaSmith_DropIdxStmts WHERE RowId = @ss_id;
@@ -4506,7 +4506,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                     INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'dropped', @ss_online_form);
                 END IF;
                 DEALLOCATE PREPARE stmt;
-                SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropIdxStmts WHERE RowId > @ss_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropIdxStmts WHERE RowId > @ss_id) INTO @ss_id;
             END WHILE;
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropIdxStmts;
 
@@ -4548,9 +4548,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
     -- Counted in TWO statements, not one OR-ed EXISTS. MySQL and MariaDB refuse to reference the same
     -- TEMPORARY table twice in a single statement -- "Can't reopen table" (1137) -- and both arms need
     -- _SchemaSmith_Tables. Folding them into one expression cost 37 tests across the suite.
-    SET @ss_pd_work = (SELECT COUNT(*) FROM _SchemaSmith_Periods pd
+    SELECT (SELECT COUNT(*) FROM _SchemaSmith_Periods pd
                        INNER JOIN _SchemaSmith_Tables t ON t.TableName = pd.TableName
-                       WHERE COALESCE(t.NewTable, 0) = 0);
+                       WHERE COALESCE(t.NewTable, 0) = 0) INTO @ss_pd_work;
     SET @ss_pd_work = COALESCE(@ss_pd_work, 0) + (SELECT COUNT(*) FROM _SchemaSmith_Tables t
                        WHERE COALESCE(t.NewTable, 0) = 0
                          AND COALESCE(t.DropPeriodsRemovedFromProduct, @ss_drop_periods_removed, 0) = 1);
@@ -4624,7 +4624,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                 EXECUTE ss_pdd_stmt;
                 DEALLOCATE PREPARE ss_pdd_stmt;
 
-                SET @ss_pdd_id := (SELECT MIN(RowId) FROM _SchemaSmith_PeriodsToDrop);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_PeriodsToDrop) INTO @ss_pdd_id;
                 WHILE @ss_pdd_id IS NOT NULL DO
                     SELECT TableName, PeriodName INTO @ss_pdd_table, @ss_pdd_name
                       FROM _SchemaSmith_PeriodsToDrop WHERE RowId = @ss_pdd_id;
@@ -4654,16 +4654,16 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                                        SchemaSmith_StripBacktickWrapping(@ss_pdd_name)), 'wouldDrop');
                     END IF;
 
-                    SET @ss_pdd_id := (SELECT MIN(RowId) FROM _SchemaSmith_PeriodsToDrop WHERE RowId > @ss_pdd_id);
+                    SELECT (SELECT MIN(RowId) FROM _SchemaSmith_PeriodsToDrop WHERE RowId > @ss_pdd_id) INTO @ss_pdd_id;
                 END WHILE;
 
                 DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PeriodsToDrop;
             END IF;
 
             SET @ss_pd_done = 0;
-            SET @ss_pd_id := (SELECT MIN(pd.RowId) FROM _SchemaSmith_Periods pd
+            SELECT (SELECT MIN(pd.RowId) FROM _SchemaSmith_Periods pd
                               INNER JOIN _SchemaSmith_Tables t ON t.TableName = pd.TableName
-                              WHERE COALESCE(t.NewTable, 0) = 0);
+                              WHERE COALESCE(t.NewTable, 0) = 0) INTO @ss_pd_id;
             WHILE @ss_pd_id IS NOT NULL DO
                 SELECT pd.TableName, pd.PeriodName, pd.StartColumn, pd.EndColumn
                   INTO @ss_pd_table, @ss_pd_name, @ss_pd_start, @ss_pd_end
@@ -4701,9 +4701,9 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                     END IF;
                 END IF;
 
-                SET @ss_pd_id := (SELECT MIN(pd.RowId) FROM _SchemaSmith_Periods pd
+                SELECT (SELECT MIN(pd.RowId) FROM _SchemaSmith_Periods pd
                                   INNER JOIN _SchemaSmith_Tables t ON t.TableName = pd.TableName
-                                  WHERE COALESCE(t.NewTable, 0) = 0 AND pd.RowId > @ss_pd_id);
+                                  WHERE COALESCE(t.NewTable, 0) = 0 AND pd.RowId > @ss_pd_id) INTO @ss_pd_id;
             END WHILE;
         ELSE
             -- Not a degrade row: nothing was suppressed and nothing was lost. The period may well

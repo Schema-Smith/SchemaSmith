@@ -127,7 +127,7 @@ BEGIN
           AND c.NewColumn = 1
         ORDER BY c.TableName, c.DependencyLevel, c.OrdinalPosition;
 
-        SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenColStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_GenColStmts) INTO @ss_id;
         WHILE @ss_id IS NOT NULL DO
             SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_GenColStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
@@ -136,7 +136,7 @@ BEGIN
             -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'column', @ss_auditname, 'created');
             DEALLOCATE PREPARE stmt;
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenColStmts WHERE RowId > @ss_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_GenColStmts WHERE RowId > @ss_id) INTO @ss_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColStmts;
     END IF;
@@ -311,7 +311,7 @@ BEGIN
                                   WHEN t.IsSystemVersioned = 1 THEN 2 ELSE 0 END,
                s.OnlineMode = t.OnlineMode;
 
-        SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts) INTO @ss_id;
         WHILE @ss_id IS NOT NULL DO
             SELECT LogMsg, Stmt, AuditName, IsSwap, Versioned, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_swap, @ss_versioned, @ss_online_mode
               FROM _SchemaSmith_CreateIdxStmts WHERE RowId = @ss_id;
@@ -358,7 +358,7 @@ BEGIN
                 INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created', @ss_online_form);
             END IF;
             DEALLOCATE PREPARE stmt;
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts WHERE RowId > @ss_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts WHERE RowId > @ss_id) INTO @ss_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateIdxStmts;
     END IF;
@@ -448,7 +448,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
             CONCAT(TableName, '.', ConstraintName)
         FROM _SchemaSmith_ModifiedChecks;
 
-        SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts) INTO @ss_id;
         WHILE @ss_id IS NOT NULL DO
             SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_DropModChkStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
@@ -456,7 +456,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'constraint', @ss_auditname, 'dropped');
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts WHERE RowId > @ss_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts WHERE RowId > @ss_id) INTO @ss_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropModChkStmts;
     END IF;
@@ -623,7 +623,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
                    CONCAT(TableName, '.', ConstraintName)
             FROM _SchemaSmith_ChecksToDropByAbsence;
 
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropAbsChkStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropAbsChkStmts) INTO @ss_id;
             WHILE @ss_id IS NOT NULL DO
                 SELECT Stmt, AuditName INTO @exec_sql, @ss_auditname FROM _SchemaSmith_DropAbsChkStmts WHERE RowId = @ss_id;
                 PREPARE stmt FROM @exec_sql;
@@ -631,7 +631,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
                 -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
                 INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'constraint', @ss_auditname, 'dropped');
                 DEALLOCATE PREPARE stmt;
-                SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropAbsChkStmts WHERE RowId > @ss_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropAbsChkStmts WHERE RowId > @ss_id) INTO @ss_id;
             END WHILE;
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropAbsChkStmts;
         END IF;
@@ -790,7 +790,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
               AND tc.ConstraintKey = c.ConstraintKey
         );
 
-        SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateChkStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CreateChkStmts) INTO @ss_id;
         WHILE @ss_id IS NOT NULL DO
             SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_CreateChkStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
@@ -799,7 +799,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
             -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'constraint', @ss_auditname, 'created');
             DEALLOCATE PREPARE stmt;
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateChkStmts WHERE RowId > @ss_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CreateChkStmts WHERE RowId > @ss_id) INTO @ss_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateChkStmts;
     END IF;

@@ -269,10 +269,10 @@ BEGIN
 
     -- A CustomTableRestore hook restores tables being added in case they were custom-dropped
     -- (recycled) previously; mirrors the SQL Server / PostgreSQL hook.
-    SET @has_custom_restore = (SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES
+    SELECT (SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES
                                WHERE ROUTINE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ROUTINE_SCHEMA) = v_DbKey
                                  AND ROUTINE_NAME = 'SchemaSmith_CustomTableRestore'
-                                 AND ROUTINE_TYPE = 'PROCEDURE');
+                                 AND ROUTINE_TYPE = 'PROCEDURE') INTO @has_custom_restore;
 
     -- =========================================================================
     -- Degrade column DEFAULT expressions below MySQL 8.0.13 (extraction already recognises this stored
@@ -828,13 +828,13 @@ BEGIN
         FROM _SchemaSmith_Tables t
         WHERE t.RowId IN (SELECT RowId FROM _SchemaSmith_TableRenameReady);
 
-        SET @v_tablerename_id := (SELECT MIN(RowId) FROM _SchemaSmith_TableRenameStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_TableRenameStmts) INTO @v_tablerename_id;
         WHILE @v_tablerename_id IS NOT NULL DO
             SELECT Stmt INTO @exec_sql FROM _SchemaSmith_TableRenameStmts WHERE RowId = @v_tablerename_id;
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
-            SET @v_tablerename_id := (SELECT MIN(RowId) FROM _SchemaSmith_TableRenameStmts WHERE RowId > @v_tablerename_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_TableRenameStmts WHERE RowId > @v_tablerename_id) INTO @v_tablerename_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_TableRenameStmts;
 
@@ -933,9 +933,9 @@ BEGIN
             SELECT CONNECTION_ID(), CONCAT('  A column rename would break ', Kind, ' ', SchemaSmith_StripBacktickWrapping(TableName), '.', DependentName,
                                            ', which the package does not declare. Declare it in the table''s JSON, or drop it in a Before script.')
               FROM _SchemaSmith_RenameDependents WHERE Declared = 0;
-            SET @ss_msg = (SELECT LEFT(CONCAT('A column rename would break undeclared ', Kind, ' ', DependentName, ' on ',
+            SELECT (SELECT LEFT(CONCAT('A column rename would break undeclared ', Kind, ' ', DependentName, ' on ',
                                               SchemaSmith_StripBacktickWrapping(TableName), '; see the deploy log.'), 128)
-                             FROM _SchemaSmith_RenameDependents WHERE Declared = 0 ORDER BY TableName, DependentName LIMIT 1);
+                             FROM _SchemaSmith_RenameDependents WHERE Declared = 0 ORDER BY TableName, DependentName LIMIT 1) INTO @ss_msg;
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         END IF;
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
@@ -1004,13 +1004,13 @@ BEGIN
         FROM _SchemaSmith_Columns c
         JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId;
 
-        SET @v_colrename_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColRenameStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_ColRenameStmts) INTO @v_colrename_id;
         WHILE @v_colrename_id IS NOT NULL DO
             SELECT Stmt INTO @exec_sql FROM _SchemaSmith_ColRenameStmts WHERE RowId = @v_colrename_id;
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
-            SET @v_colrename_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColRenameStmts WHERE RowId > @v_colrename_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_ColRenameStmts WHERE RowId > @v_colrename_id) INTO @v_colrename_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColRenameStmts;
 
@@ -1042,13 +1042,13 @@ BEGIN
             FROM _SchemaSmith_Tables t
             WHERE t.NewTable = 1;
 
-            SET @v_restore_id := (SELECT MIN(RowId) FROM _SchemaSmith_RestoreStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_RestoreStmts) INTO @v_restore_id;
             WHILE @v_restore_id IS NOT NULL DO
                 SELECT Stmt INTO @exec_sql FROM _SchemaSmith_RestoreStmts WHERE RowId = @v_restore_id;
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
-                SET @v_restore_id := (SELECT MIN(RowId) FROM _SchemaSmith_RestoreStmts WHERE RowId > @v_restore_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_RestoreStmts WHERE RowId > @v_restore_id) INTO @v_restore_id;
             END WHILE;
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RestoreStmts;
 
@@ -1198,13 +1198,13 @@ BEGIN
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)
         GROUP BY c.TableName, ist.TABLE_TYPE, t.OnlineMode;
 
-        SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts) INTO @v_addcol_id;
         WHILE @v_addcol_id IS NOT NULL DO
             SELECT Stmt, Mode, SchemaSmith_StripBacktickWrapping(TableName) INTO @exec_sql, @ss_online_mode, @ss_online_table
               FROM _SchemaSmith_AddColumnStmts WHERE RowId = @v_addcol_id;
             CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
             UPDATE _SchemaSmith_AddColumnStmts SET Form = @ss_online_form WHERE RowId = @v_addcol_id;
-            SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts WHERE RowId > @v_addcol_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts WHERE RowId > @v_addcol_id) INTO @v_addcol_id;
         END WHILE;
 
         -- Object-change audit (#243 E5): one row per physical column added to an existing table.

@@ -69,7 +69,7 @@ BEGIN
                           SchemaSmith_EscapeBackticks(TableName), '` DROP INDEX `', SchemaSmith_EscapeBackticks(IndexName), '`'),
                    CONCAT(TableName, '.', IndexName)
             FROM _SchemaSmith_FTModified;
-            SET @v_ftmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_FTModStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FTModStmts) INTO @v_ftmod_id;
             WHILE @v_ftmod_id IS NOT NULL DO
                 SELECT Stmt, AuditName INTO @exec_sql, @ss_auditname FROM _SchemaSmith_FTModStmts WHERE RowId = @v_ftmod_id;
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), CONCAT('  Drop modified fulltext index: ', @exec_sql));
@@ -77,7 +77,7 @@ BEGIN
                 EXECUTE stmt;
                 INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'fullTextIndex', @ss_auditname, 'dropped');
                 DEALLOCATE PREPARE stmt;
-                SET @v_ftmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_FTModStmts WHERE RowId > @v_ftmod_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FTModStmts WHERE RowId > @v_ftmod_id) INTO @v_ftmod_id;
             END WHILE;
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FTModStmts;
         END IF;

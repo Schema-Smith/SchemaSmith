@@ -212,7 +212,7 @@ BEGIN
                            WHERE i.TableKey = SchemaSmith_IdentifierKey(m.TableName)
                              AND i.IndexKey = SchemaSmith_NameKeyCI(m.ConstraintName));
 
-        SET @v_fkmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKModStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKModStmts) INTO @v_fkmod_id;
         WHILE @v_fkmod_id IS NOT NULL DO
             SELECT Stmt, IndexName INTO @exec_sql, @ss_fk_index FROM _SchemaSmith_FKModStmts WHERE RowId = @v_fkmod_id;
             PREPARE stmt FROM @exec_sql;
@@ -227,7 +227,7 @@ BEGIN
                 INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
                 VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_fk_index, ': a foreign key needs it'));
             END IF;
-            SET @v_fkmod_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKModStmts WHERE RowId > @v_fkmod_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKModStmts WHERE RowId > @v_fkmod_id) INTO @v_fkmod_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKModStmts;
     END IF;
@@ -334,13 +334,13 @@ BEGIN
         )
         GROUP BY f.TableName;
 
-        SET @v_fkcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKCreateStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKCreateStmts) INTO @v_fkcreate_id;
         WHILE @v_fkcreate_id IS NOT NULL DO
             SELECT Stmt INTO @exec_sql FROM _SchemaSmith_FKCreateStmts WHERE RowId = @v_fkcreate_id;
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
-            SET @v_fkcreate_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKCreateStmts WHERE RowId > @v_fkcreate_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKCreateStmts WHERE RowId > @v_fkcreate_id) INTO @v_fkcreate_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKCreateStmts;
     END IF;
@@ -646,7 +646,7 @@ BEGIN
             SELECT CONNECTION_ID(), 'foreignKey', CONCAT(TableName, '.', ConstraintName), 'dropped'
             FROM _SchemaSmith_FKsToDrop;
 
-            SET @v_fkdrop_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKDropStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKDropStmts) INTO @v_fkdrop_id;
             WHILE @v_fkdrop_id IS NOT NULL DO
                 SELECT Stmt, IndexName INTO @exec_sql, @ss_fk_index FROM _SchemaSmith_FKDropStmts WHERE RowId = @v_fkdrop_id;
                 PREPARE stmt FROM @exec_sql;
@@ -661,7 +661,7 @@ BEGIN
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
                     VALUES (CONNECTION_ID(), CONCAT('  Kept index ', @ss_fk_index, ': a foreign key needs it'));
                 END IF;
-                SET @v_fkdrop_id := (SELECT MIN(RowId) FROM _SchemaSmith_FKDropStmts WHERE RowId > @v_fkdrop_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKDropStmts WHERE RowId > @v_fkdrop_id) INTO @v_fkdrop_id;
             END WHILE;
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKDropStmts;
 

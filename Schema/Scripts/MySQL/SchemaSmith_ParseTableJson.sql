@@ -523,7 +523,7 @@ BEGIN
     -- (utf8mb3_general_ci); earlier servers under utf8 (utf8_general_ci), and each lists only its own form in
     -- COLLATIONS (checked on 8.0.28, 8.0.45, 10.5.29 and 11.4.12). Declared names are written the way this server
     -- reports them, so a package in either form compares equal on both kinds of server.
-    SET @ss_utf8_is_mb3 = (SELECT COUNT(*) FROM information_schema.COLLATIONS WHERE COLLATION_NAME = 'utf8mb3_general_ci');
+    SELECT (SELECT COUNT(*) FROM information_schema.COLLATIONS WHERE COLLATION_NAME = 'utf8mb3_general_ci') INTO @ss_utf8_is_mb3;
     UPDATE _SchemaSmith_Columns
     SET CharacterSet = CASE WHEN @ss_utf8_is_mb3 > 0 AND LOWER(TRIM(CharacterSet)) = 'utf8' THEN 'utf8mb3'
                             WHEN @ss_utf8_is_mb3 = 0 AND LOWER(TRIM(CharacterSet)) = 'utf8mb3' THEN 'utf8'

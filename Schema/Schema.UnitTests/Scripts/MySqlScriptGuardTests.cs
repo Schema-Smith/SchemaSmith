@@ -143,6 +143,31 @@ public class MySqlScriptGuardTests
             + "(a RowId INT AUTO_INCREMENT PRIMARY KEY column also works ahead of a SELECT):\n  " + string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// MySQL 8.0.22 misreads SET @var := (SELECT ...) inside a stored program from its second execution in a session:
+    /// the variable comes back NULL. A loop that advances that way stops after two rows with no error, and a check
+    /// computed that way passes on every call after the first. SELECT (SELECT ...) INTO @var gives the same value,
+    /// NULL when no row matches, on every patch.
+    /// </summary>
+    [Test]
+    public void NoUserVariable_IsSetFromABareSubquery()
+    {
+        var offenders = new List<string>();
+        var selectIntoVariable = 0;
+        foreach (var (name, sql) in Scripts())
+        {
+            var code = Regex.Replace(sql, @"--[^\r\n]*", string.Empty);
+            selectIntoVariable += Regex.Matches(code, @"\bINTO\s+@\w+", RegexOptions.IgnoreCase).Count;
+            offenders.AddRange(Regex.Matches(code, @"\bSET\s+@\w+\s*:?=\s*\(\s*SELECT\b", RegexOptions.IgnoreCase)
+                .Select(m => $"{name}: {Regex.Replace(m.Value, @"\s+", " ")}"));
+        }
+
+        Assert.That(selectIntoVariable, Is.GreaterThan(50), "too few SELECT ... INTO @var found; the scan is broken");
+        Assert.That(offenders, Is.Empty,
+            "A user variable is set from a bare subquery, which MySQL 8.0.22 reads as NULL from the second execution in a "
+            + "session. Write SELECT (SELECT ...) INTO @var instead:\n  " + string.Join("\n  ", offenders));
+    }
+
     private static int ClosingParen(string text, int open)
     {
         var depth = 0;

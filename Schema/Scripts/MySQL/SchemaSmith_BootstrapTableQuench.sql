@@ -373,13 +373,13 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapExistingCols;
 
-    SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddColStmts);
+    SELECT (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddColStmts) INTO @v_addcol_id;
     WHILE @v_addcol_id IS NOT NULL DO
         SELECT Stmt INTO @exec_sql FROM _SchemaSmith_BootstrapAddColStmts WHERE RowId = @v_addcol_id;
         PREPARE stmt FROM @exec_sql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
-        SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddColStmts WHERE RowId > @v_addcol_id);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddColStmts WHERE RowId > @v_addcol_id) INTO @v_addcol_id;
     END WHILE;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapAddColStmts;
 
@@ -639,13 +639,13 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapExistingIdxs;
 
-    SET @v_addidx_id := (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddIdxStmts);
+    SELECT (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddIdxStmts) INTO @v_addidx_id;
     WHILE @v_addidx_id IS NOT NULL DO
         SELECT Stmt INTO @exec_sql FROM _SchemaSmith_BootstrapAddIdxStmts WHERE RowId = @v_addidx_id;
         PREPARE stmt FROM @exec_sql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
-        SET @v_addidx_id := (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddIdxStmts WHERE RowId > @v_addidx_id);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddIdxStmts WHERE RowId > @v_addidx_id) INTO @v_addidx_id;
     END WHILE;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapAddIdxStmts;
 END//
