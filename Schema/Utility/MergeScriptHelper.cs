@@ -1287,7 +1287,7 @@ WHEN MATCHED AND ({BuildUpdateCompareSqlServer(updateColumns)}) THEN
     // 1: an identity column. 2: memory-optimized (OBJECTPROPERTY returns NULL before 2014). 4: an append-only ledger
     // table -- sys.tables.ledger_type is a 2022 column, so the text naming it is only compiled there. One round trip,
     // because the merge builder's catalog reads are a fixed sequence.
-    private static int SqlServerTargetFlags(IDbCommand cmd, string tableSchema, string tableName)
+    internal static int SqlServerTargetFlags(IDbCommand cmd, string tableSchema, string tableName)
     {
         BindIdentifierParameters(cmd, ("@objname", SqlServerObjectName(tableSchema, tableName)));
         cmd.CommandText = $@"

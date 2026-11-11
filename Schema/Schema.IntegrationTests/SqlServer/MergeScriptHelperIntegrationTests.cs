@@ -6,6 +6,7 @@ using System.Data;
 using System.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
+using Schema.Delivery;
 using Schema.Domain;
 using Schema.Utility;
 
@@ -514,6 +515,64 @@ CREATE TABLE [dbo].[{tableName.Replace("]", "]]")}] (
 
             cmd.CommandText = "SELECT STRING_AGG(CONCAT(Id, ':', V), ',') WITHIN GROUP (ORDER BY Id) FROM dbo.L";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("1:a,2:c"));
+        }
+        finally
+        {
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
+            TestDatabaseDrop.Drop(masterCmd, db);
+        }
+    }
+
+    // Rows that wait on a foreign key are delivered by a second, insert-only pass. SQL Server refuses MERGE on a
+    // memory-optimized table, so that pass failed on a table the first pass delivers.
+    [TestCase("memory-optimized")]
+    [TestCase("append-only ledger")]
+    public void DeferredPass_InsertsTheMissingRows_OnATableMergeCannotTarget(string kind)
+    {
+        using var master = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
+            new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(FixtureSetup.GetMainDbConnectionString()) { InitialCatalog = "master" }.ConnectionString);
+        master.Open();
+        using var masterCmd = master.CreateCommand();
+        masterCmd.CommandText = "SELECT CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(50)), 4) AS INT), CONVERT(INT, ISNULL(SERVERPROPERTY('IsXTPSupported'), 0))";
+        using (var reader = masterCmd.ExecuteReader())
+        {
+            reader.Read();
+            if (kind == "append-only ledger" && reader.GetInt32(0) < 16) Assert.Ignore("Ledger tables need SQL Server 2022.");
+            if (kind == "memory-optimized" && (reader.GetInt32(0) < 13 || reader.GetInt32(1) != 1))
+                Assert.Ignore("Memory-optimized tables with foreign keys need SQL Server 2016 and an edition that supports them.");
+        }
+
+        var db = $"DeferMo_Test_{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}"[..37];
+        masterCmd.CommandText = $"CREATE DATABASE [{db}]";
+        masterCmd.ExecuteNonQuery();
+        try
+        {
+            if (kind == "memory-optimized")
+            {
+                masterCmd.CommandText = $@"
+DECLARE @v_Path NVARCHAR(500) = (SELECT LEFT(physical_name, LEN(physical_name) - CHARINDEX('\', REVERSE(physical_name)) + 1) FROM sys.master_files WHERE database_id = DB_ID('{db}') AND file_id = 1);
+ALTER DATABASE [{db}] ADD FILEGROUP [MOD_fg] CONTAINS MEMORY_OPTIMIZED_DATA;
+EXEC('ALTER DATABASE [{db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' + @v_Path + '{db}_MOD'') TO FILEGROUP [MOD_fg]');";
+                masterCmd.ExecuteNonQuery();
+            }
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
+                new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(FixtureSetup.GetMainDbConnectionString()) { InitialCatalog = db }.ConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            var options = kind == "memory-optimized" ? "WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_AND_DATA)" : "WITH (LEDGER = ON (APPEND_ONLY = ON))";
+            var key = kind == "memory-optimized" ? "PRIMARY KEY NONCLUSTERED" : "PRIMARY KEY";
+            cmd.CommandText = $"CREATE TABLE dbo.T (Id INT NOT NULL {key}, ParentId INT NULL, V NVARCHAR(20) NULL) {options}; " +
+                              "INSERT dbo.T (Id, ParentId, V) VALUES (1, NULL, N'a');";
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = DeferredMergeBuilder.Build(new MergeScriptHelperAdapter(Platform.SqlServer), cmd, "SqlServer", "dbo", "T",
+                @"[{""Id"":1,""ParentId"":null,""V"":""a""},{""Id"":2,""ParentId"":1,""V"":""b""}]", "[Id]",
+                disableTriggers: false, deferredColumns: ["ParentId"]);
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = "SELECT STRING_AGG(CONCAT(Id, ':', COALESCE(CAST(ParentId AS NVARCHAR(10)), '-'), ':', V), ',') WITHIN GROUP (ORDER BY Id) FROM dbo.T";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("1:-:a,2:-:b"),
+                "the missing row arrives with its waiting key left NULL for the second pass; the existing row is untouched");
         }
         finally
         {

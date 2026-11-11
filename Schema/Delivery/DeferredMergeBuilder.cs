@@ -62,6 +62,10 @@ internal static class DeferredMergeBuilder
         var identityInsert = helper.NeedsIdentityInsert(cmd, schemaOrDb, tableName);
 
         var columns = helper.GetColumnMetadata(cmd, schemaOrDb, tableName);
+        // An insert-only pass, written as INSERT ... WHERE NOT EXISTS rather than MERGE: SQL Server refuses MERGE on a
+        // memory-optimized table and on an append-only ledger table, which the first pass delivers without one. A
+        // memory-optimized table needs the SNAPSHOT hint to be read inside an explicit transaction.
+        var hint = (MergeScriptHelper.SqlServerTargetFlags(cmd, schema, table) & 2) != 0 ? " WITH (SNAPSHOT)" : "";
 
         var sb = new StringBuilder();
         // XML data type methods (.nodes()/.value()) require QUOTED_IDENTIFIER ON; emit it so the script is
@@ -73,8 +77,12 @@ internal static class DeferredMergeBuilder
         sb.AppendLine();
         if (disableTriggers) sb.AppendLine($"ALTER TABLE {target} DISABLE TRIGGER ALL;");
         if (identityInsert) sb.AppendLine($"SET IDENTITY_INSERT {target} ON;");
-        sb.AppendLine($"MERGE INTO {target} AS Target");
-        sb.AppendLine("USING (");
+        sb.AppendLine($"INSERT INTO {target} (");
+        sb.AppendLine($" {insertColumns}");
+        sb.AppendLine(")");
+        sb.AppendLine("SELECT");
+        sb.AppendLine(string.Join(",\r\n", Identifier.SplitDelimitedList(insertColumns, Platform.SqlServer).Select(c => $"        Source.{c}")));
+        sb.AppendLine("  FROM (");
         if (isXml)
         {
             sb.AppendLine($"  SELECT {BuildDeferredXmlSelectColumnsSqlServer(columns, deferredSet)}");
@@ -89,15 +97,7 @@ internal static class DeferredMergeBuilder
             sb.AppendLine("    )");
         }
         sb.AppendLine(") AS Source");
-        sb.AppendLine($"ON {matchColumns}");
-        sb.AppendLine();
-        sb.AppendLine(" WHEN NOT MATCHED BY TARGET THEN");
-        sb.AppendLine("   INSERT (");
-        sb.AppendLine($" {insertColumns}");
-        sb.AppendLine("   ) VALUES (");
-        sb.AppendLine(string.Join(",\r\n", Identifier.SplitDelimitedList(insertColumns, Platform.SqlServer).Select(c => $"        Source.{c}")));
-        sb.AppendLine("   )");
-        sb.AppendLine(";");
+        sb.AppendLine($" WHERE NOT EXISTS (SELECT 1 FROM {target} AS Target{hint} WHERE {matchColumns});");
         if (identityInsert) sb.AppendLine($"SET IDENTITY_INSERT {target} OFF;");
         if (disableTriggers) sb.AppendLine($"ALTER TABLE {target} ENABLE TRIGGER ALL;");
 
