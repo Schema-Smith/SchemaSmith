@@ -2004,7 +2004,7 @@ Four object types accept two authoring forms, and choosing between them is the s
 **declared** object is a `.json` file: SchemaSmith compares it against the database on each deploy, converges
 it when it differs, and leaves it in place when it leaves the package (scheduled events are the exception: see
 the table below). A **scripted** object is a `.sql` file in
-the same folder: it runs on every deploy, is never compared, and is never removed by absence. Both forms are
+the same folder: it is never compared with a declaration and never removed by absence, and it runs on every deploy -- except a scripted event, which runs again only when its text or the event on the server has changed (see [Unchanged Object Scripts](schemaquench.md#unchanged-object-scripts)). Both forms are
 supported, both can live in one package, and existing scripted packages need no change.
 
 | Object type | Folder | Engine |
@@ -2239,7 +2239,7 @@ MySQL and MariaDB carry a table's partition definition in the table DDL itself �
 Scheduled events live in the `Events/` directory of each template. That folder accepts **both** forms:
 
 - **`.json`** — declared. The event is compared against the server, converges when it differs, and can be removed when it leaves the package.
-- **`.sql`** — scripted, exactly as before. Re-run on every deploy, never compared, never removed by absence.
+- **`.sql`** — scripted, exactly as before: never compared with a declaration, never removed by absence. It runs again whenever its text or the event on the server has changed since it last applied, and is skipped otherwise (see [Unchanged Object Scripts](schemaquench.md#unchanged-object-scripts)).
 
 Existing packages need no change. Declaring the same event both ways is reported as `SS-EVT-001`.
 

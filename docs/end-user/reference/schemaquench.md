@@ -549,7 +549,7 @@ The schema model itself parses on every supported version — a version-agnostic
 
 > **"No equivalent at any version" is not the same as "old".** Several rows above are not version gates at all — MySQL has no application-time periods or system versioning at *any* release, and MariaDB has no SRID restriction or functional index at any release. Those degrade on every target of that platform, current versions included, which is why they appear here rather than reading as legacy concerns.
 
-**One more routes through the same policy but is gated on the server's filesystem, not its version.** **Page compression** (`Compression`, MySQL only) needs a data directory on a filesystem that supports hole punching, and MySQL refuses it anywhere else with error 4029 — a Windows data directory, for one. Under `warn` the table is created without its `COMPRESSION` option and the downgrade is recorded; under `fail` the deploy stops. `Compression` is applied when a table is created, so only new tables are affected.
+**One more routes through the same policy but is gated on the server's filesystem, not its version.** **Page compression** (`Compression`, MySQL only) needs a data directory on a filesystem that supports hole punching, and MySQL refuses it anywhere else with error 4029 — a Windows data directory, for one. Under `warn` the table is created without its `COMPRESSION` option and the downgrade is recorded; under `fail` the deploy stops. A changed `Compression` on an existing table is applied with `ALTER TABLE`, which compresses the pages written from then on; the pages already there keep theirs until the table is rebuilt.
 
 The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7.22 or later on the 5.7 line or 8.0.23 through current, or to MariaDB 10.2.13 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
@@ -1035,7 +1035,7 @@ defaults already compared equal after the engine's own rewrite.
 
 ## Modular Quench Procedures
 
-The table quench is broken into modular stored procedures, each handling a specific aspect of the table schema. The procedures are deployed during the KindleTheForge step and called in sequence during the database quench. Every platform ships its own implementation; the core five are the same everywhere, and each engine adds the procedures its own features need.
+The table quench is broken into modular stored procedures, each handling a specific aspect of the table schema. The procedures are deployed during the KindleTheForge step and called in sequence during the database quench. Every platform ships its own implementation; the core procedures are the same everywhere, and each engine adds the procedures its own features need.
 
 **On every engine:**
 
