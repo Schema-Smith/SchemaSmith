@@ -202,6 +202,50 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             }
         }
 
+        // The XML tier's preview prints the statements as the JSON tier's does.
+        [Test]
+        public void XmlIndexedView_WhatIf_PrintsTheStatementsTheDeployWouldRun()
+        {
+            const string xv = "vIvWhatIfXml";
+            var xmlScript = (ResourceLoader.Load("SchemaSmith.IndexedViewXmlQuench.sql", Platform.SqlServer)
+                             ?? throw new System.Exception("IndexedViewXmlQuench.sql not found"))
+                            .Replace("[SchemaSmith].[IndexedViewQuench]", "[SchemaSmith].[IndexedViewQuenchXmlTest]");
+            var messages = new List<string>();
+            using var conn = (Microsoft.Data.SqlClient.SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+            conn.InfoMessage += (_, e) => { foreach (Microsoft.Data.SqlClient.SqlError err in e.Errors) messages.Add(err.Message); };
+            conn.Open();
+            conn.ChangeDatabase(_mainDb);
+
+            Cleanup(conn, "vIvWhatIfUnused", xv);
+            try
+            {
+                Exec(conn, "CREATE TABLE dbo.IvXmlSource (Id INT NOT NULL, Label VARCHAR(100) NOT NULL, Amount DECIMAL(10,2) NOT NULL); " +
+                           "CREATE UNIQUE CLUSTERED INDEX UDX_IvXmlSource ON dbo.IvXmlSource (Id);");
+                foreach (var b in SqlServerBatchSplitter.Split(xmlScript)) Exec(conn, b);
+                const string run = "EXEC SchemaSmith.IndexedViewQuenchXmlTest @ProductName = 'IvWhatIfXml', @IndexedViewSchema = @p, @WhatIf = {0}, @TemplateName = N'Main', @SchemaName = N''";
+
+                messages.Clear();
+                Exec(conn, string.Format(run, 1), ("@p", ModelXmlSerializer.ToIngestXml(PayloadJson(xv), "IndexedViews", "IndexedView")));
+                var created = new List<string>(messages);
+                Exec(conn, string.Format(run, 0), ("@p", ModelXmlSerializer.ToIngestXml(PayloadJson(xv), "IndexedViews", "IndexedView")));
+                messages.Clear();
+                Exec(conn, string.Format(run, 1), ("@p", ModelXmlSerializer.ToIngestXml("[]", "IndexedViews", "IndexedView")));
+                var removed = new List<string>(messages);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(created, Has.Some.StartsWith($"CREATE VIEW [dbo].[{xv}] WITH SCHEMABINDING AS SELECT"));
+                    Assert.That(removed, Has.Some.EqualTo($"DROP INDEX [IX_{xv}_Label] ON [dbo].[{xv}]"));
+                    Assert.That(removed, Has.Some.EqualTo($"DROP VIEW [dbo].[{xv}]"));
+                    Assert.That(ViewState(conn, xv), Is.Not.Empty, "a preview dropped the view");
+                });
+            }
+            finally
+            {
+                Cleanup(conn, "vIvWhatIfUnused", xv);
+            }
+        }
+
         private static void Cleanup(IDbConnection conn, string jv, string xv) =>
             Exec(conn, $"DROP VIEW IF EXISTS dbo.{jv}; DROP VIEW IF EXISTS dbo.{xv}; " +
                        "DROP TABLE IF EXISTS dbo.IvXmlSource; " +

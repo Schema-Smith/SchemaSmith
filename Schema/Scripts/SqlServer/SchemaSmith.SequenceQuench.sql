@@ -205,25 +205,23 @@ BEGIN
 
         IF EXISTS (SELECT 1 FROM #Sequences WHERE [_RowId] = @id AND Exists_ = 0)
         BEGIN
-            RAISERROR('  Create sequence %s', 10, 1, @label) WITH NOWAIT;
-            RAISERROR('%s', 10, 1, @sql) WITH NOWAIT;
-            IF @WhatIf = 0 EXEC(@sql);
+            RAISERROR('  Create sequence %s', 10, 100, @label) WITH NOWAIT;
+            IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @sql ELSE EXEC(@sql);
             INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
             VALUES (@@SPID, 'sequence', @label, CASE WHEN @WhatIf = 1 THEN 'wouldCreate' ELSE 'created' END);
         END
         ELSE IF @sql IS NOT NULL
         BEGIN
             SELECT @sql = 'ALTER SEQUENCE ' + QUOTENAME(SeqSchema) + '.' + QUOTENAME(SeqName) + @sql FROM #Sequences WHERE [_RowId] = @id;
-            RAISERROR('  Altering sequence %s', 10, 1, @label) WITH NOWAIT;
-            RAISERROR('%s', 10, 1, @sql) WITH NOWAIT;
-            IF @WhatIf = 0 EXEC(@sql);
+            RAISERROR('  Altering sequence %s', 10, 100, @label) WITH NOWAIT;
+            IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @sql ELSE EXEC(@sql);
             INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
             VALUES (@@SPID, 'sequence', @label, CASE WHEN @WhatIf = 1 THEN 'wouldModify' ELSE 'modified' END);
         END
 
         -- Start applies at creation only: SQL Server has no START WITH on ALTER. Said, not changed, and not audited.
         IF EXISTS (SELECT 1 FROM #Sequences WHERE [_RowId] = @id AND Exists_ = 1 AND StartValue IS NOT NULL AND StartValue <> LiveStart)
-            RAISERROR('  Sequence %s declares a different Start; Start applies only when the sequence is created, so it is left as it is.', 10, 1, @label) WITH NOWAIT;
+            RAISERROR('  Sequence %s declares a different Start; Start applies only when the sequence is created, so it is left as it is.', 10, 100, @label) WITH NOWAIT;
 
         -- The description: an omitted one leaves the live one alone, '' removes it.
         SELECT @description = Description FROM #Sequences WHERE [_RowId] = @id;
@@ -244,8 +242,8 @@ BEGIN
                                    ELSE 'EXEC sp_addextendedproperty @name = N''MS_Description'', @value = N''' + REPLACE(@description, '''', '''''') + ''', ' END
                               + '@level0type = N''SCHEMA'', @level0name = N''' + REPLACE(SeqSchema, '''', '''''') + ''', @level1type = N''SEQUENCE'', @level1name = N''' + REPLACE(SeqName, '''', '''''') + ''';'
                   FROM #Sequences WHERE [_RowId] = @id;
-                RAISERROR('  Setting the description of sequence %s', 10, 1, @label) WITH NOWAIT;
-                IF @WhatIf = 0 EXEC(@sql);
+                RAISERROR('  Setting the description of sequence %s', 10, 100, @label) WITH NOWAIT;
+                IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @sql ELSE EXEC(@sql);
                 INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
                 VALUES (@@SPID, 'sequence', @label, CASE WHEN @WhatIf = 1 THEN 'wouldModify' ELSE 'modified' END);
             END

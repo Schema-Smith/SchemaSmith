@@ -122,7 +122,7 @@ BEGIN
                CASE WHEN v_Key."WasTrusted" THEN '' ELSE ' NOT VALID' END || ';';
       RAISE NOTICE '  Restoring foreign key %.%.%', v_Key."ChildSchema", v_Key."ChildTable", v_Key."KeyName";
       IF p_WhatIf THEN
-        RAISE NOTICE '%', v_Sql;
+        CALL "SchemaSmith"."ExecuteOrDebug"(v_Sql, TRUE);
         INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
           VALUES (pg_backend_pid(), 'foreignKey', v_Key."ChildSchema" || '.' || v_Key."ChildTable" || '.' || v_Key."KeyName", 'wouldCreate');
       ELSE

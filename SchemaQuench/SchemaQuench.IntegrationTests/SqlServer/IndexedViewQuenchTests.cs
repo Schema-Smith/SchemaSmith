@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -535,6 +536,40 @@ WHERE s.name = '{_schema}' AND v.name = 'vTestSummary2'";
         conn.Close();
     }
 
+    // The preview prints what the deploy would run, not just the narration around it, and changes nothing.
+    [Test]
+    public void WhatIf_PrintsTheStatementsTheDeployWouldRun()
+    {
+        var messages = new System.Collections.Generic.List<string>();
+        using var conn = (Microsoft.Data.SqlClient.SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.InfoMessage += (_, e) => { foreach (Microsoft.Data.SqlClient.SqlError err in e.Errors) messages.Add(err.Message); };
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        var view = $"[{_schema}].[vTestSummary]";
+
+        EnsureViewExists(cmd);
+        messages.Clear();
+        RunIndexedViewQuench(cmd, ViewDefinitionWithWhereClause(), whatIf: true);
+        var redefined = messages.ToList();
+        messages.Clear();
+        RunIndexedViewQuench(cmd, "[]", whatIf: true);
+        var removed = messages.ToList();
+
+        cmd.CommandText = $"SELECT COUNT(*) FROM sys.indexes WHERE object_id = OBJECT_ID('{view}') AND name IN ('IX_vTestSummary_Id', 'IX_vTestSummary_Name')";
+        var indexesLeft = (int)cmd.ExecuteScalar()!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(redefined, Has.Some.EqualTo($"DROP INDEX [IX_vTestSummary_Name] ON {view}"));
+            Assert.That(redefined, Has.Some.EqualTo($"DROP INDEX [IX_vTestSummary_Id] ON {view}"));
+            Assert.That(redefined, Has.Some.EqualTo($"DROP VIEW {view}"));
+            Assert.That(redefined, Has.Some.StartsWith($"CREATE VIEW {view} WITH SCHEMABINDING AS SELECT").And.Contains("WHERE Amount > 0"));
+            Assert.That(removed, Has.Some.EqualTo($"DROP VIEW {view}"));
+            Assert.That(indexesLeft, Is.EqualTo(2), "a preview changed the view");
+        });
+        conn.Close();
+    }
+
     /// <summary>
     /// Ensures vTestSummary exists with the standard two-index definition.
     /// Idempotent — safe to call whether the view exists or not.
@@ -794,14 +829,14 @@ EXEC sp_addextendedproperty 'SchemaSmith_Product', N'{_productName}', 'SCHEMA', 
 
     // Definitions name their schema as the placeholder IvSchema: the database is shared, so it resolves to
     // this fixture's own schema here.
-    private void RunIndexedViewQuench(IDbCommand cmd, string indexedViewJson)
+    private void RunIndexedViewQuench(IDbCommand cmd, string indexedViewJson, bool whatIf = false)
     {
         indexedViewJson = indexedViewJson.Replace("[IvSchema]", $"[{_schema}]");
         cmd.CommandTimeout = 300;
         cmd.CommandText = $@"EXEC [SchemaSmith].[IndexedViewQuench]
     @ProductName = '{_productName}',
     @IndexedViewSchema = '{indexedViewJson.Replace("'", "''")}',
-    @WhatIf = 0,
+    @WhatIf = {(whatIf ? 1 : 0)},
     @UpdateFillFactor = 0,
     @TemplateName = N'Main',
     @SchemaName = N''";

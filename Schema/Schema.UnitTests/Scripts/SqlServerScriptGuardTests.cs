@@ -434,4 +434,47 @@ public class SqlServerScriptGuardTests
             .ToList();
         Assert.That(offences, Is.Empty, string.Join(Environment.NewLine, offences));
     }
+
+    /// <summary>
+    /// The console shows a server message at severity 10 only when its state is 100 (or under VerboseLogging), so
+    /// progress raised at any other state is silent: sequence creation printed nothing on an ordinary run.
+    /// </summary>
+    [Test]
+    public void EveryInformationalMessage_IsRaisedAtTheStateTheConsoleShows()
+    {
+        var raised = 0;
+        var offences = new List<string>();
+        foreach (var (name, sql) in SqlServerScripts())
+            // The first argument is only ever a literal, a variable or a message id; an open span over quoted text backtracks exponentially.
+            foreach (Match m in Regex.Matches(WithoutLineComments(sql), @"RAISERROR\s*\(\s*(?:N?'(?:[^']|'')*'|@\w+|\d+)\s*,\s*10\s*,\s*(\d+)\s*[,)]",
+                         RegexOptions.IgnoreCase, TimeSpan.FromSeconds(10)))
+            {
+                raised++;
+                if (m.Groups[1].Value != "100") offences.Add($"{name}: {m.Value}");
+            }
+        Assert.That(raised, Is.GreaterThan(20), "no informational RAISERROR was found; the pattern is stale");
+        Assert.That(offences, Is.Empty, string.Join(Environment.NewLine, offences));
+    }
+
+    /// <summary>
+    /// A statement the deploy runs is printed by the preview. Skipping it under WhatIf without printing it hid the
+    /// indexed-view DDL and the sequence DDL from --WhatIf, which showed only the narration around them.
+    /// </summary>
+    [Test]
+    public void NoStatementIsSkippedUnderWhatIfWithoutBeingPrinted()
+    {
+        var offences = new List<string>();
+        foreach (var (name, sql) in SqlServerScripts())
+        {
+            var lines = WithoutLineComments(sql).Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var m = Regex.Match(lines[i], @"@WhatIf\s*=\s*0\s+EXEC\s*(?:sp_executesql\s+|\(\s*)(@\w+)", RegexOptions.IgnoreCase);
+                if (!m.Success) continue;
+                var printedBefore = i > 0 && Regex.IsMatch(lines[i - 1], @"PrintWithNoWait\]?\s+" + m.Groups[1].Value + @"\b", RegexOptions.IgnoreCase);
+                if (!printedBefore) offences.Add($"{name}:{i + 1}: {lines[i].Trim()}");
+            }
+        }
+        Assert.That(offences, Is.Empty, string.Join(Environment.NewLine, offences));
+    }
 }

@@ -30,11 +30,18 @@ public class SequenceTests
         public readonly SqlConnection Conn;
         public readonly string Schema = $"sq_{Guid.NewGuid():N}"[..14];
         public readonly List<string> Messages = new();
+        // What the console shows without VerboseLogging: a severity-10 message at state 100 (ProductQuench, DatabaseQuench).
+        public readonly List<string> Shown = new();
 
         public Run()
         {
             Conn = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
-            Conn.InfoMessage += (_, e) => Messages.Add(e.Message);
+            Conn.InfoMessage += (_, e) =>
+            {
+                Messages.Add(e.Message);
+                foreach (SqlError err in e.Errors)
+                    if (err.Class <= 10 && err.State == 100) Shown.Add(err.Message);
+            };
             Conn.Open();
             Exec($"CREATE SCHEMA [{Schema}]");
         }
@@ -224,13 +231,13 @@ public class SequenceTests
         r.Quench("\"DataType\": \"int\", \"Start\": 1");
 
         r.ClearAudits();
-        r.Messages.Clear();
+        r.Shown.Clear();
         r.Quench("\"DataType\": \"int\", \"Start\": 500");
 
         Assert.Multiple(() =>
         {
             Assert.That(r.Attr("start_value"), Is.EqualTo("1"));
-            Assert.That(r.Messages, Has.Some.Contains("Start applies only when the sequence is created"));
+            Assert.That(r.Shown, Has.Some.Contains("Start applies only when the sequence is created"));
             Assert.That(r.Audits(), Is.Empty, "a change that will not happen is not reported as one");
         });
     }
@@ -253,6 +260,29 @@ public class SequenceTests
         {
             Assert.That(r.Attr("increment"), Is.EqualTo("1"));
             Assert.That(r.Audits(), Is.EqualTo("wouldModify"));
+        });
+    }
+
+    // The preview prints each statement the deploy would run, where the console shows it.
+    [Test]
+    public void WhatIf_PrintsTheStatementsTheDeployWouldRun()
+    {
+        using var r = new Run();
+        r.Quench("\"DataType\": \"int\", \"Description\": \"d\"", whatIf: true);
+        var created = new List<string>(r.Shown);
+
+        r.Quench("\"DataType\": \"int\"");
+        r.Shown.Clear();
+        r.Quench("\"DataType\": \"int\", \"Increment\": 7, \"Description\": \"d\"", whatIf: true);
+        var altered = new List<string>(r.Shown);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(created, Has.Some.EqualTo($"  Create sequence {r.Schema}.s"));
+            Assert.That(created, Has.Some.StartsWith($"CREATE SEQUENCE [{r.Schema}].[s] AS int"));
+            Assert.That(altered, Has.Some.EqualTo($"ALTER SEQUENCE [{r.Schema}].[s] INCREMENT BY 7"));
+            Assert.That(altered, Has.Some.StartsWith("EXEC sp_addextendedproperty @name = N'MS_Description', @value = N'd'"));
+            Assert.That(r.Attr("increment"), Is.EqualTo("1"), "a preview changed the sequence");
         });
     }
 
