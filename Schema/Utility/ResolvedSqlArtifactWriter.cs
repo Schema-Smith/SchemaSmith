@@ -54,9 +54,11 @@ public static class ResolvedSqlArtifactWriter
         {
             try
             {
-                var text = file.ReadAllText(path);
-                var end = text.IndexOf('\n');
-                var owner = ReadOwner(end < 0 ? text : text[..end]);
+                // Only the first line holds the owner, and these files run to megabytes.
+                string firstLine;
+                using (var reader = new StreamReader(file.OpenRead(path)))
+                    firstLine = reader.ReadLine() ?? "";
+                var owner = ReadOwner(firstLine);
                 if (owner != null && matches(owner)) file.Delete(path);
             }
             catch (IOException) { /* in use or gone: leave it */ }

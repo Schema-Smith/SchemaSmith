@@ -468,7 +468,7 @@ public partial class DatabaseQuench
         _updateTables = options.UpdateTables;
         _deliverData = options.DeliverData;
         // A preview never reads, writes or deletes a checkpoint (A16).
-        _checkpointing = _whatIfOnly ? NoCheckpointing.Instance : checkpointing;
+        _checkpointing = _whatIfOnly ? NoCheckpointing.Instance : checkpointing ?? NoCheckpointing.Instance;
         _trackRunOnceMigrations = options.TrackRunOnceMigrations;
         _pruneObsoleteMigrationTracking = options.PruneObsoleteMigrationTracking;
         _forceReKindle = options.ForceReKindle;
@@ -588,7 +588,7 @@ public partial class DatabaseQuench
             o.Product == _product.Name && o.Server == _server && o.Database == _databaseName
             && o.Schema == (_schemaName ?? "") && o.Run != ResolvedSqlArtifactWriter.RunId);
 
-        var checkpointSummary = _checkpointing?.GetDatabaseCheckpointSummary(DbScope) ?? DatabaseCheckpointSummary.Empty;
+        var checkpointSummary = _checkpointing.GetDatabaseCheckpointSummary(DbScope) ?? DatabaseCheckpointSummary.Empty;
         _resumedFromCheckpoint = checkpointSummary.HasAnyCompleted;
         if (checkpointSummary.HasAnyCompleted)
             SafeProgressLog($"  [{_databaseName}] Resuming from checkpoint (Completed Steps: {checkpointSummary.CompletedSteps}, Completed Scripts: {checkpointSummary.TotalCompletedScripts})");
@@ -3783,8 +3783,7 @@ SET NOCOUNT ON
             }
             else if (_product != null)
             {
-                var verboseLogging = FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.VerboseLogging]?.ToLower() == "true";
-                if (verboseLogging || err.State == 100)
+                if (VerboseLogging || err.State == 100)
                     LogServerMessage($"      {err.Message}");
             }
         }
@@ -3793,10 +3792,14 @@ SET NOCOUNT ON
     private void OnPostgreSqlNotice(object sender, NpgsqlNoticeEventArgs e)
     {
         if (_muteServerMessages) return;
-        var verboseLogging = FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.VerboseLogging]?.ToLower() == "true";
-        if (ShouldLogPostgreSqlNotice(e.Notice.MessageText, e.Notice.Where, verboseLogging))
+        if (ShouldLogPostgreSqlNotice(e.Notice.MessageText, e.Notice.Where, VerboseLogging))
             LogServerMessage($"      {e.Notice.MessageText}");
     }
+
+    // Read once per deploy, on the first server message, not once per message.
+    private bool? _verboseLogging;
+    private bool VerboseLogging => _verboseLogging ??=
+        FactoryContainer.ResolveOrCreate<IConfigurationRoot>()[SettingsKeys.VerboseLogging]?.ToLower() == "true";
 
     // SchemaSmith's own routines report progress through RAISE NOTICE, so those always log, as SQL Server's state-100
     // messages do. Most are raised from a block the routine builds and EXECUTEs, and the context names the innermost

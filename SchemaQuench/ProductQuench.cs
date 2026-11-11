@@ -34,7 +34,7 @@ public class ProductQuench
     private readonly ILog _progressLog = LogFactory.GetLogger("ProgressLog");
     private readonly Product _product = LoadPackage(() => Product.Load());
 
-    private readonly string _whatIfOnly;
+    private readonly bool _whatIfOnly;
     private readonly int _maxThreads;
     private readonly string _primaryServer;
     private readonly List<string> _secondaryServers = [];
@@ -159,7 +159,7 @@ public class ProductQuench
         // --WhatIf is the switch people reach for; it is the same dry run as the WhatIfONLY setting.
         var whatIfSwitch = CommandLineParser.ContainsSwitch("WhatIf")
                            && !string.Equals(CommandLineParser.ValueOfSwitch("WhatIf"), "false", StringComparison.OrdinalIgnoreCase);
-        _whatIfOnly = FormatWhatIfOnly(whatIfSwitch || _config[SettingsKeys.WhatIfOnly]?.ToLower() == "true");
+        _whatIfOnly = whatIfSwitch || _config[SettingsKeys.WhatIfOnly]?.ToLower() == "true";
         _drift = CommandLineParser.ContainsSwitch("Drift")
                  && !string.Equals(CommandLineParser.ValueOfSwitch("Drift"), "false", StringComparison.OrdinalIgnoreCase);
         if (_drift)
@@ -168,7 +168,7 @@ public class ProductQuench
                 throw new RunFailedException("--Drift and --WhatIf (or WhatIfONLY) ask different questions: --Drift answers whether each target "
                                              + "matches the package, --WhatIf lists what a deploy would do. Use one.");
             _driftFailOn = DriftFailOn.Parse(CommandLineParser.ValueOfSwitch("DriftFailOn"));
-            _whatIfOnly = FormatWhatIfOnly(true);
+            _whatIfOnly = true;
         }
         _runScriptsTwice = _config[SettingsKeys.RunScriptsTwice]?.ToLower() == "true";
         _primaryServer = PrimaryServer(_config);
@@ -402,16 +402,6 @@ public class ProductQuench
     };
 
     /// <summary>
-    /// Formats the WhatIfOnly value per platform convention.
-    /// SqlServer/MySQL use "1"/"0"; PostgreSQL uses "true"/"false".
-    /// </summary>
-    internal string FormatWhatIfOnly(bool isWhatIf) => _product.Platform switch
-    {
-        Platform.PostgreSQL => isWhatIf ? "true" : "false",
-        _ => isWhatIf ? "1" : "0"
-    };
-
-    /// <summary>
     /// Formats boolean flags per platform convention.
     /// SqlServer/MySQL use "1"/"0"; PostgreSQL uses "true"/"false".
     /// </summary>
@@ -577,9 +567,7 @@ public class ProductQuench
     /// <summary>
     /// Returns the active WhatIfOnly value (for testing visibility).
     /// </summary>
-    internal bool IsWhatIfOnly => _product.Platform == Platform.PostgreSQL
-        ? _whatIfOnly == "true"
-        : _whatIfOnly == "1";
+    internal bool IsWhatIfOnly => _whatIfOnly;
 
     // The engine is named because a package run with another engine's settings fails here, and "unable to connect"
     // alone reads as a server that is down.
@@ -1467,16 +1455,9 @@ public class ProductQuench
         _progressLog.Info("Testing connection to configured servers");
         var allServers = _secondaryServers.Union([_primaryServer]).ToList();
 
+        // Union has already merged an address listed twice; the same server under two addresses is caught below.
         foreach (var server in allServers)
         {
-            if (serverNames.ContainsKey(server))
-            {
-                _progressLog.Error($"  Duplicate server configured: {server}");
-                _errorLog.Error($"Duplicate server configured {server}");
-                shouldFail = true;
-                continue;
-            }
-
             try
             {
                 using var cmd = GetCommand(server);
@@ -1743,11 +1724,9 @@ public class ProductQuench
         var workUnits = new List<WorkUnit>();
         foreach (var server in serverList)
         {
+            // False only when the template's failure setting says to stop.
             if (!EnumerateAndProvisionWorkUnitsForServer(template, server, workUnits, previewOnly))
-            {
-                if (ShouldAbortOnFailure(template))
-                    break;
-            }
+                break;
         }
         return workUnits;
     }
@@ -2292,7 +2271,8 @@ public class ProductQuench
         // template would be created in it, which is the preview; the unit succeeds, as the real run would.
         if (IsWhatIfOnly && unit.WouldCreateDatabase)
         {
-            var scope = string.IsNullOrEmpty(unit.SchemaName) ? $"[{unit.Server}].[{unit.DatabaseName}]" : $"[{unit.Server}].[{unit.DatabaseName}].[{unit.SchemaName}]";
+            // The same scope a deploying unit reports (DatabaseQuench.LogPrefix), so a target has one name in the summary.
+            var scope = $"[{unit.Server}].[{unit.DatabaseName}]" + (string.IsNullOrEmpty(unit.SchemaName) ? "" : $" [Schema: {unit.SchemaName}]");
             _progressLog.Info($"{scope} [WhatIf] Would deploy template '{template.Name}' into the new, empty database '{unit.DatabaseName}': every object it declares would be created.");
             _targetResults.Add(new TargetResult(scope, unit.Server, unit.DatabaseName, unit.SchemaName ?? "", unit.TemplateName,
                 TargetOutcome.Success, 0, unit.DatabaseSource, unit.SchemaSource));

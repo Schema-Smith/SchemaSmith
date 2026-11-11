@@ -37,8 +37,6 @@ public class TaskQueueManager<T> : IDisposable
         _safetyNetMs = missedPulseSafetyNetMs < 1 ? 1 : missedPulseSafetyNetMs;
     }
 
-    ~TaskQueueManager() => Dispose();
-
     public void Dispose()
     {
         lock (_lockObject)
@@ -151,7 +149,8 @@ public class TaskQueueManager<T> : IDisposable
         public void StartTask()
         {
             if (_task != null) return;
-            _task = new Task(() => workProcedure(item));
+            // A worker blocks on a database for its whole life; the pool would add such threads one per ~500 ms.
+            _task = new Task(() => workProcedure(item), TaskCreationOptions.LongRunning);
             // The continuation runs however the work ends, so TaskComplete is unconditional -- otherwise a throw
             // would leave this WorkerTask in _workingTasks forever and hang WaitForAll -- and a failure is recorded
             // before the waiter can see the queue drain.

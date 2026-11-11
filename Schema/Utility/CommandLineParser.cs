@@ -12,28 +12,28 @@ namespace Schema.Utility;
 
 public static class CommandLineParser
 {
+    // Read on every step (DebugSql.Enabled), so the parse is kept per command line: the same string parses the same way,
+    // and a test that swaps the command line gets a fresh parse. Callers get copies.
+    private static readonly object ParseLock = new();
+    private static string _parsedCommandLine;
+    private static List<string> _parsedArguments;
+    private static Dictionary<string, string> _parsedSwitches;
+
     public static List<string> Arguments
     {
         get
         {
-            var commandLine = ForceLeadingSpace(EnvironmentWrapper.GetFromFactory().CommandLine);
-            var result = new List<string>();
-            var pos = 0;
-            while (pos < commandLine.Length - 1)
+            var commandLine = EnvironmentWrapper.GetFromFactory().CommandLine;
+            lock (ParseLock)
             {
-                var nextPos = FindNextUnquotedSpace(commandLine, pos);
-                if (nextPos == -1)
+                if (!string.Equals(commandLine, _parsedCommandLine, StringComparison.Ordinal) || _parsedArguments == null)
                 {
-                    result.Add(commandLine.Substring(pos).Trim().Unquote());
-                    break;
+                    _parsedArguments = Tokenize(commandLine);
+                    _parsedSwitches = null;
+                    _parsedCommandLine = commandLine;
                 }
-                var arg = commandLine.Substring(pos, nextPos - pos).Trim().Unquote();
-                if (arg != string.Empty)
-                    result.Add(arg);
-                pos = FindNextNonSpace(commandLine, nextPos);
+                return new List<string>(_parsedArguments);
             }
-
-            return result;
         }
     }
 
@@ -41,20 +41,52 @@ public static class CommandLineParser
     {
         get
         {
-            var result = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
-            foreach (var argument in Arguments.Where(x => x.StartsWith("/") || x.StartsWith("-")))
+            var arguments = Arguments;
+            lock (ParseLock)
             {
-                // split into max 2 parts to handle values with embedded colon or equals
-                var parts = argument.Split(new[] { ':', '=' }, 2);
-                result[TrimKeyName(parts[0])] = parts.Length switch
-                {
-                    1 => string.Empty,
-                    2 => parts[1],
-                    _ => result[TrimKeyName(parts[0])]
-                };
+                _parsedSwitches ??= ParseSwitches(arguments);
+                return new Dictionary<string, string>(_parsedSwitches, StringComparer.InvariantCultureIgnoreCase);
             }
-            return result;
         }
+    }
+
+    private static List<string> Tokenize(string rawCommandLine)
+    {
+        var commandLine = ForceLeadingSpace(rawCommandLine);
+        var result = new List<string>();
+        var pos = 0;
+        while (pos < commandLine.Length - 1)
+        {
+            var nextPos = FindNextUnquotedSpace(commandLine, pos);
+            if (nextPos == -1)
+            {
+                result.Add(commandLine.Substring(pos).Trim().Unquote());
+                break;
+            }
+            var arg = commandLine.Substring(pos, nextPos - pos).Trim().Unquote();
+            if (arg != string.Empty)
+                result.Add(arg);
+            pos = FindNextNonSpace(commandLine, nextPos);
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, string> ParseSwitches(List<string> arguments)
+    {
+        var result = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
+        foreach (var argument in arguments.Where(x => x.StartsWith("/") || x.StartsWith("-")))
+        {
+            // split into max 2 parts to handle values with embedded colon or equals
+            var parts = argument.Split(new[] { ':', '=' }, 2);
+            result[TrimKeyName(parts[0])] = parts.Length switch
+            {
+                1 => string.Empty,
+                2 => parts[1],
+                _ => result[TrimKeyName(parts[0])]
+            };
+        }
+        return result;
     }
 
     /// <summary>
