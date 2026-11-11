@@ -54,8 +54,8 @@ HTTP client and open no sockets of their own.
   is pinned to a specific commit SHA rather than a mutable tag.
 - **Release gate.** A release cannot be produced unless every check CI runs on a merge to
   `main` is green on the release commit: `Build & Unit Tests`; the integration legs for
-  SQL Server 2017, 2019, 2022 and 2025, PostgreSQL 12 through 18, MySQL 5.7.22, 5.7,
-  8.0.23, 8.0, 8.4, 9.7 and 26, MariaDB 10.2, 10.6, 11.4, 11.8, 12.3 and 13, plus the
+  SQL Server 2017, 2019, 2022 and 2025, PostgreSQL 12 through 18, MySQL 5.7.16, 5.7,
+  8.0.11, 8.0, 8.4, 9.7 and 26, MariaDB 10.2, 10.6, 11.4, 11.8, 12.3 and 13, plus the
   MySQL 8.0 and MariaDB 11.4 `lower_case_table_names=1` legs; `Genuine Sweep Record`;
   `Engine Ceiling Ratchet`; `Coverage Gate`; and `check-headers`. The list the release
   workflow enforces is the `REQUIRED_CHECKS` array in `.github/workflows/release.yml`.

@@ -100,7 +100,7 @@ Exit code: `2` on all four engines. The manifest names the server, the detected 
 <!-- walk[mysql]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"8.0"' -->
 <!-- walk[mariadb]: python -I "$WALK_TOOLS/jedit.py" "<engine>/Package/Product.json" set MinimumVersion '"10.6"' -->
 
-Those originals are values *this lab declares* — deliberately well above what it needs, so Scenario 2 has room to fail against. They are not SchemaSmith's floors, which are SQL Server 2008, PostgreSQL 12, MySQL 5.7.22 (8.0.23 on the 8.0 line), and MariaDB 10.2.13 — patch-level on the MySQL family, so a server below them is refused. A real product declares the floor *it* needs.
+Those originals are values *this lab declares* — deliberately well above what it needs, so Scenario 2 has room to fail against. They are not SchemaSmith's floors, which are SQL Server 2008, PostgreSQL 12, MySQL 5.7.16 (8.0.11 on the 8.0 line), and MariaDB 10.2.13 — patch-level on the MySQL family, so a server below them is refused. A real product declares the floor *it* needs.
 
 ## Scenario 3 — `--PreviewTargets` pass
 
@@ -215,7 +215,7 @@ Each engine reports its version in its own native form, so that row is what the 
 
 The declared floor is a separate, friendlier grammar — you never match the detected string's shape. This lab declares `2019` and passes against a server reporting `16.0.4260.1`.
 
-The last row is what each lab package declares in its own `Product.json`, chosen well above what the lab actually needs so Scenario 2 has something to fail against. It is **not** SchemaSmith's supported floor — those are SQL Server 2008, PostgreSQL 12, MySQL 5.7.22 (8.0.23 on the 8.0 line), and MariaDB 10.2.13.
+The last row is what each lab package declares in its own `Product.json`, chosen well above what the lab actually needs so Scenario 2 has something to fail against. It is **not** SchemaSmith's supported floor — those are SQL Server 2008, PostgreSQL 12, MySQL 5.7.16 (8.0.11 on the 8.0 line), and MariaDB 10.2.13.
 
 > *MariaDB is a fourth platform in the MySQL family — its own `Platform: MariaDb` selection and native package, not the MySQL package retargeted. Its dialect matches MySQL except for a few DDL specifics (invisible indexes, check-constraint drops, column-default reporting) that SchemaSmith handles for you.*
 
