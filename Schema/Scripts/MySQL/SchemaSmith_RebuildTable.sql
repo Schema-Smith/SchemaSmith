@@ -741,10 +741,11 @@ BEGIN
     -- an INFORMATION_SCHEMA column and a procedure variable do not share a collation, and combining them
     -- in one expression is an illegal-mix error rather than a wrong answer. Every statement below either
     -- reads I_S alone or reads the temp tables alone, so no expression ever spans the two.
+    -- MySQL below 8.0.14 gives a foreign key's referenced column in lowercase; its table's own column list keeps the declared spelling.
     INSERT INTO _SchemaSmith_RebuildInboundFks (ChildSchema, ChildTable, AlterTable, ConstraintName, ChildColumns, ReferencedColumns, DeleteRule, UpdateRule)
     SELECT kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.TABLE_NAME, kcu.CONSTRAINT_NAME,
            GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(kcu.COLUMN_NAME), '`') ORDER BY kcu.ORDINAL_POSITION SEPARATOR ','),
-           GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(kcu.REFERENCED_COLUMN_NAME), '`') ORDER BY kcu.ORDINAL_POSITION SEPARATOR ','),
+           GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(COALESCE(CASE WHEN SchemaSmith_ServerVersionPatchNum() BETWEEN 80000 AND 80013 THEN (SELECT c.COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS c WHERE c.TABLE_SCHEMA = kcu.REFERENCED_TABLE_SCHEMA AND c.TABLE_NAME = kcu.REFERENCED_TABLE_NAME AND c.COLUMN_NAME = kcu.REFERENCED_COLUMN_NAME LIMIT 1) END, kcu.REFERENCED_COLUMN_NAME)), '`') ORDER BY kcu.ORDINAL_POSITION SEPARATOR ','),
            MAX(rc.DELETE_RULE), MAX(rc.UPDATE_RULE)
       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
       JOIN INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS rc
@@ -754,7 +755,8 @@ BEGIN
      GROUP BY kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.CONSTRAINT_NAME;
 
     INSERT INTO _SchemaSmith_RebuildInboundFkColumns (ChildSchema, ChildTable, ConstraintName, ColumnName)
-    SELECT kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.CONSTRAINT_NAME, kcu.REFERENCED_COLUMN_NAME
+    SELECT kcu.TABLE_SCHEMA, kcu.TABLE_NAME, kcu.CONSTRAINT_NAME,
+           COALESCE(CASE WHEN SchemaSmith_ServerVersionPatchNum() BETWEEN 80000 AND 80013 THEN (SELECT c.COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS c WHERE c.TABLE_SCHEMA = kcu.REFERENCED_TABLE_SCHEMA AND c.TABLE_NAME = kcu.REFERENCED_TABLE_NAME AND c.COLUMN_NAME = kcu.REFERENCED_COLUMN_NAME LIMIT 1) END, kcu.REFERENCED_COLUMN_NAME)
       FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu
      WHERE kcu.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_SCHEMA) = v_DbKey
        AND SchemaSmith_IdentifierKey(kcu.REFERENCED_TABLE_NAME) = v_TableKey;

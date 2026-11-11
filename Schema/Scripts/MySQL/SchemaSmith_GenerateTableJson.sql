@@ -406,8 +406,9 @@ BEGIN
                 ELSE rc.UNIQUE_CONSTRAINT_SCHEMA
             END,
             'RelatedTable', SchemaSmith_QuoteIdentifier(rc.REFERENCED_TABLE_NAME),
+            -- MySQL below 8.0.14 gives a foreign key's referenced column in lowercase; its table's own column list keeps the declared spelling.
             'RelatedColumns', (
-                SELECT GROUP_CONCAT(SchemaSmith_QuoteIdentifier(kcu3.REFERENCED_COLUMN_NAME) ORDER BY kcu3.ORDINAL_POSITION SEPARATOR ',')
+                SELECT GROUP_CONCAT(SchemaSmith_QuoteIdentifier(COALESCE(CASE WHEN SchemaSmith_ServerVersionPatchNum() BETWEEN 80000 AND 80013 THEN (SELECT c.COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS c WHERE c.TABLE_SCHEMA = kcu3.REFERENCED_TABLE_SCHEMA AND c.TABLE_NAME = kcu3.REFERENCED_TABLE_NAME AND c.COLUMN_NAME = kcu3.REFERENCED_COLUMN_NAME LIMIT 1) END, kcu3.REFERENCED_COLUMN_NAME)) ORDER BY kcu3.ORDINAL_POSITION SEPARATOR ',')
                 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu3
                 WHERE kcu3.CONSTRAINT_SCHEMA = p_Schema
                   AND kcu3.CONSTRAINT_NAME = tc.CONSTRAINT_NAME

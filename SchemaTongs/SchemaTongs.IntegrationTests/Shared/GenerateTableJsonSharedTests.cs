@@ -31,6 +31,9 @@ public abstract class GenerateTableJsonSharedTests
 
     private int? _serverPatchNum;
 
+    /// <summary>The source's major/minor/patch comparable (80011 for 8.0.11); null when it could not be read.</summary>
+    protected int? ServerPatchNum => _serverPatchNum;
+
     /// <summary>Whether CHECK constraints are deployed and read on the source: MySQL 8.0.16 and MariaDB 10.2.22, where
     /// INFORMATION_SCHEMA.CHECK_CONSTRAINTS arrived.</summary>
     protected bool TargetSupportsCheckConstraints =>
