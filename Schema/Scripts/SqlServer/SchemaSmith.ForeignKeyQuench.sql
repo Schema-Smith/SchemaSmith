@@ -20,6 +20,9 @@ BEGIN TRY
                                   -- WITH NOCHECK leaves the existing rows unchecked (Validated false); NOT FOR REPLICATION
                                   -- is part of the definition. Enforced is converged afterwards by ConstraintStateQuench. A key a
                                   -- table rebuild set aside keeps the trust and the enabled state it had, where they are not declared.
+                                  -- A key a rebuild set aside can be restored by another deploy between this look and the ADD;
+                                  -- that key is the declared one, so an ADD that finds it already there skips its audit row.
+                                  CASE WHEN sa.[KeyName] IS NOT NULL AND @WhatIf = 0 THEN 'BEGIN TRY' + CHAR(13) + CHAR(10) ELSE '' END +
                                   'ALTER TABLE ' + f.[Schema] + '.' + f.[TableName] + CASE WHEN COALESCE(f.[Validated], sa.[WasTrusted], 1) = 0 THEN ' WITH NOCHECK' ELSE '' END + ' ADD CONSTRAINT ' + f.[KeyName] + ' FOREIGN KEY ' +
                                   '(' + f.[Columns] + ') REFERENCES ' + [RelatedTableSchema] + '.' + f.[RelatedTable] + ' (' + [RelatedColumns] + ')' +
                                   ' ON DELETE ' + [DeleteAction] +
@@ -28,7 +31,14 @@ BEGIN TRY
                                   CASE WHEN f.[Enforced] IS NULL AND sa.[WasEnabled] = 0
                                        THEN 'ALTER TABLE ' + f.[Schema] + '.' + f.[TableName] + ' NOCHECK CONSTRAINT ' + f.[KeyName] + ';' + CHAR(13) + CHAR(10) ELSE '' END +
                                   'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (@@SPID, ''foreignKey'', N''' + REPLACE((f.[Schema] + '.' + f.[TableName] + '.' + f.[KeyName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''created'', ' +
-                                  CASE WHEN EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) WHERE t.[Schema] = f.[Schema] AND t.[Name] = f.[TableName] AND t.[NewTable] = 0 AND COALESCE(t.[OnlineApply], @OnlineApply) <> 'OFF') THEN '''notCovered''' ELSE 'NULL' END + ');' AS NVARCHAR(MAX))
+                                  CASE WHEN EXISTS (SELECT 1 FROM #Tables t WITH (NOLOCK) WHERE t.[Schema] = f.[Schema] AND t.[Name] = f.[TableName] AND t.[NewTable] = 0 AND COALESCE(t.[OnlineApply], @OnlineApply) <> 'OFF') THEN '''notCovered''' ELSE 'NULL' END + ');' +
+                                  CASE WHEN sa.[KeyName] IS NOT NULL AND @WhatIf = 0
+                                       THEN CHAR(13) + CHAR(10) + 'END TRY' + CHAR(13) + CHAR(10) + 'BEGIN CATCH' + CHAR(13) + CHAR(10) +
+                                            'SET @v_ss_m = ERROR_MESSAGE();' + CHAR(13) + CHAR(10) +
+                                            'IF EXISTS (SELECT 1 FROM sys.foreign_keys sf WHERE sf.[parent_object_id] = OBJECT_ID(N''' + REPLACE(f.[Schema] + '.' + f.[TableName], '''', '''''') + ''') AND sf.[name] = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(f.[KeyName]), '''', '''''') + ''')' + CHAR(13) + CHAR(10) +
+                                            '  RAISERROR(''    Already in place: another deploy restored it first'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                                            'ELSE RAISERROR(''%s'', 16, 1, @v_ss_m);' + CHAR(13) + CHAR(10) + 'END CATCH;'
+                                       ELSE '' END AS NVARCHAR(MAX))
                            FROM #ForeignKeys f WITH (NOLOCK)
                            LEFT JOIN SchemaSmith.RebuildSetAsideForeignKeys sa ON sa.[ChildSchema] = SchemaSmith.fn_StripBracketWrapping(f.[Schema]) COLLATE DATABASE_DEFAULT
                                                                              AND sa.[ChildTable] = SchemaSmith.fn_StripBracketWrapping(f.[TableName]) COLLATE DATABASE_DEFAULT
@@ -38,6 +48,7 @@ BEGIN TRY
                                                WHERE sf.[parent_object_id] = OBJECT_ID(f.[Schema] + '.' + f.[TableName])
                                                  AND sf.[name] = SchemaSmith.fn_StripBracketWrapping(f.[KeyName]))
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
+  IF CHARINDEX('@v_ss_m', @v_SQL) > 0 SET @v_SQL = 'DECLARE @v_ss_m NVARCHAR(2048);' + CHAR(13) + CHAR(10) + @v_SQL
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
 
   -- #363: WhatIf twin of the embedded 'foreignKey'/'created' audit above; same predicate.

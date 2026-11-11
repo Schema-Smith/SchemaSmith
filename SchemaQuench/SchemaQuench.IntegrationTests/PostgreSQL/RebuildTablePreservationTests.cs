@@ -255,6 +255,54 @@ public class RebuildTablePreservationTests : BaseTableQuenchTests
         });
     }
 
+    // The same race on the declared add: a deploy that declares the key found it missing and added it in its one batch,
+    // and another deploy's restore put it back between the look and the ADD, so the batch failed on the name.
+    [Test]
+    public void ADeclaredKeyAnotherDeployRestoresFirst_DoesNotFailTheDeployThatDeclaresIt()
+    {
+        using var r = Seeded();
+        r.Exec($@"CREATE TABLE ""{r.Other}"".""C"" (""Id"" INT NOT NULL, ""ParentId"" INT NULL CONSTRAINT fk_other REFERENCES ""{r.Schema}"".""Parent"" (""Id""));");
+        var parse = ForgeKindler.GetParseTableJsonScript(Platform.PostgreSQL);
+        r.Exec("DO $t$\nDECLARE\n  table_json TEXT = '" + r.Json("VARCHAR(60)").Replace("'", "''") + "';\n  sql_script TEXT = '';\n  p_UpdateFillFactor BOOLEAN = FALSE;\nBEGIN\n" + parse + "\nEND $t$;");
+        r.Exec($@"CALL ""SchemaSmith"".""RebuildTable""('{r.Schema}', 'Parent', FALSE);");
+        Assert.That(r.Scalar($@"SELECT COUNT(*) FROM ""SchemaSmith"".""RebuildSetAsideForeignKeys"" WHERE ""ChildSchema"" = '{r.Other}'"), Is.EqualTo("1"), "setup: the key is set aside");
+
+        using var other = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        other.Open();
+        other.ChangeDatabase(_mainDb);
+        using (var begin = other.CreateCommand())
+        {
+            begin.CommandText = $@"BEGIN; ALTER TABLE ""{r.Schema}"".""Parent"" ADD CONSTRAINT pk_parent PRIMARY KEY (""Id"");
+                                  ALTER TABLE ""{r.Other}"".""C"" ADD CONSTRAINT fk_other FOREIGN KEY (""ParentId"") REFERENCES ""{r.Schema}"".""Parent"" (""Id"");";
+            begin.ExecuteNonQuery();
+        }
+        var deploy = System.Threading.Tasks.Task.Run(() => RunTableQuenchProc(r.Conn.CreateCommand(), $$"""
+[ { "Schema": "{{r.Other}}", "Name": "C",
+    "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "ParentId", "DataType": "INT", "Nullable": true } ],
+    "ForeignKeys": [ { "Name": "fk_other", "Columns": "ParentId", "RelatedTableSchema": "{{r.Schema}}", "RelatedTable": "Parent", "RelatedColumns": "Id" } ] } ]
+""", productName: $"Declares_{r.Schema}"));
+        // Commit only once the deploy's ADD is waiting on the open transaction's lock: it has looked, and found no key.
+        using var poll = other.CreateCommand();
+        poll.CommandText = $@"SELECT COUNT(*) FROM pg_locks WHERE NOT granted AND relation = '""{r.Other}"".""C""'::regclass";
+        var waiting = System.Diagnostics.Stopwatch.StartNew();
+        while (Convert.ToInt64(poll.ExecuteScalar()) == 0 && !deploy.IsCompleted && waiting.Elapsed < TimeSpan.FromSeconds(60))
+            System.Threading.Thread.Sleep(100);
+        Assert.That(deploy.IsCompleted, Is.False, "setup: the deploy should be waiting on the other transaction's lock" + (deploy.Exception == null ? "" : ": " + deploy.Exception.GetBaseException().Message));
+        using (var commit = other.CreateCommand())
+        {
+            commit.CommandText = "COMMIT";
+            commit.ExecuteNonQuery();
+        }
+
+        Assert.DoesNotThrow(() => deploy.Wait(TimeSpan.FromMinutes(2)), "the declared key is there, so there is nothing for this deploy to fail on");
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Key("fk_other"), Is.EqualTo("1|1"));
+            Assert.That(r.Scalar("SELECT COUNT(*) FROM pg_constraint WHERE contype = 'f' AND conname = 'fk_other'"), Is.EqualTo("1"), "once");
+            Assert.That(r.Scalar($@"SELECT COUNT(*) FROM ""SchemaSmith"".""RebuildSetAsideForeignKeys"" WHERE ""ChildSchema"" = '{r.Other}'"), Is.EqualTo("0"));
+        });
+    }
+
     [Test]
     public void AKeySetAsideByARunThatStoppedBeforeTheForeignKeyPass_IsRestoredByTheNextRun()
     {

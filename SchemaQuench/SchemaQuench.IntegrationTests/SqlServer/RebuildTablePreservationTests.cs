@@ -116,6 +116,56 @@ IF OBJECT_ID('SchemaSmith.RebuildSetAsideForeignKeys') IS NOT NULL DELETE FROM S
         return r;
     }
 
+    // A deploy that declares a key a rebuild set aside found it missing and added it in its batch; another deploy's restore
+    // put it back between the look and the ADD, and the batch failed on the name. The other session holds the child table
+    // with a data lock, which the catalog read does not wait on and the ADD does, then adds the key itself and commits.
+    [Test]
+    public void ADeclaredKeyAnotherDeployRestoresFirst_DoesNotFailTheDeployThatDeclaresIt()
+    {
+        using var r = Seeded();
+        var child = $"{r.Token}_C";
+        var key = $"{r.Token}_fk_decl";
+        r.Exec($"CREATE TABLE dbo.[{child}] (Id INT NOT NULL, ParentId INT NULL)");
+        r.Exec($@"INSERT INTO SchemaSmith.RebuildSetAsideForeignKeys ([ChildSchema], [ChildTable], [KeyName], [ParentSchema], [ParentTable], [Definition], [WasTrusted], [WasEnabled], [Declared])
+                  VALUES ('dbo', '{child}', '{key}', 'dbo', '{r.Parent}', 'FOREIGN KEY ([ParentId]) REFERENCES [dbo].[{r.Parent}] ([Id])', 1, 1, 1)");
+        r.Parse($$"""
+[ { "Schema": "[dbo]", "Name": "[{{child}}]",
+    "Columns": [ { "Name": "[Id]", "DataType": "INT", "Nullable": false }, { "Name": "[ParentId]", "DataType": "INT", "Nullable": true } ],
+    "ForeignKeys": [ { "Name": "[{{key}}]", "Columns": "[ParentId]", "RelatedTableSchema": "[dbo]", "RelatedTable": "[{{r.Parent}}]", "RelatedColumns": "[Id]" } ] } ]
+""");
+        var deploySpid = r.Scalar("SELECT @@SPID");
+
+        using var other = (SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        other.Open();
+        other.ChangeDatabase(_mainDb);
+        using var otherCmd = other.CreateCommand();
+        otherCmd.CommandText = $"BEGIN TRAN; SELECT TOP (0) * FROM dbo.[{child}] WITH (TABLOCKX, HOLDLOCK);";
+        otherCmd.ExecuteNonQuery();
+
+        var deploy = Task.Run(() => r.Exec($"EXEC SchemaSmith.ForeignKeyQuench @ProductName = 'Declares_{r.Token}', @WhatIf = 0"));
+        // Add the key only once the deploy's own ADD is waiting for the table: it has already looked, and found no key.
+        otherCmd.CommandText = $"SELECT COUNT(*) FROM sys.dm_exec_requests WHERE session_id = {deploySpid} AND wait_type LIKE 'LCK_M_SCH_M%'";
+        var waiting = System.Diagnostics.Stopwatch.StartNew();
+        while (Convert.ToInt32(otherCmd.ExecuteScalar()) == 0 && !deploy.IsCompleted && waiting.Elapsed < TimeSpan.FromSeconds(60))
+            Thread.Sleep(100);
+        Assert.That(deploy.IsCompleted, Is.False, "setup: the deploy should be waiting at its ADD" + (deploy.Exception == null ? "" : ": " + deploy.Exception.GetBaseException().Message));
+        otherCmd.CommandText = $"ALTER TABLE dbo.[{child}] ADD CONSTRAINT [{key}] FOREIGN KEY ([ParentId]) REFERENCES dbo.[{r.Parent}] ([Id]); COMMIT;";
+        otherCmd.ExecuteNonQuery();
+
+        // The deploy holds r.Conn until it finishes, so nothing reads through it before the wait.
+        Exception failure = null;
+        try { deploy.Wait(TimeSpan.FromMinutes(2)); }
+        catch (Exception ex) { failure = ex; }
+        Assert.That(failure, Is.Null, () => "the declared key is there, so there is nothing for this deploy to fail on: " + failure?.GetBaseException().Message);
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Key(key, "ParentId"), Is.EqualTo("1|0|0"), "the key is on its table, trusted and enabled");
+            Assert.That(r.Scalar($"SELECT COUNT(*) FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE [KeyName] = '{key}'"), Is.EqualTo("0"), "a key back on its table is done with");
+            Assert.That(r.Scalar($"SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND ObjectName LIKE '%{key}%' AND ActionType = 'created'"),
+                Is.EqualTo("0"), "this deploy did not create the key, so it does not report creating it");
+        });
+    }
+
     // Paul, 2026-11-10: a rebuild never loses an index the deploy keeps. One the package does not declare is refused by
     // name with DropUnknownIndexes off, before anything changes; with it on the deploy drops it anyway, and the rebuild runs.
     [Test]

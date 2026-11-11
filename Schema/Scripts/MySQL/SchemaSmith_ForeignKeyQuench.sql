@@ -332,6 +332,12 @@ BEGIN
             WHERE fe.TableKey = f.TableKey
               AND fe.ConstraintKey = f.KeyNameKey
         )
+          AND NOT EXISTS (
+            SELECT 1 FROM SchemaSmith_RebuildSetAsideForeignKeys sa
+            WHERE SchemaSmith_IdentifierKey(sa.ChildSchema) = v_DbKey
+              AND SchemaSmith_IdentifierKey(sa.ChildTable) = f.TableKey
+              AND SchemaSmith_NameKeyCI(sa.KeyName) = f.KeyNameKey
+        )
         GROUP BY f.TableName;
 
         SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKCreateStmts) INTO @v_fkcreate_id;
@@ -343,6 +349,74 @@ BEGIN
             SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKCreateStmts WHERE RowId > @v_fkcreate_id) INTO @v_fkcreate_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKCreateStmts;
+
+        -- A declared key a table rebuild set aside is added on its own: another deploy's STEP 2b can restore it between
+        -- the look above and this ADD, and a key already back is done with (as STEP 2b treats it), not a failure.
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKCreateOne;
+        CREATE TEMPORARY TABLE _SchemaSmith_FKCreateOne (
+            RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT,
+            TableKey VARCHAR(260) COLLATE utf8mb4_bin, KeyNameKey VARCHAR(260) COLLATE utf8mb4_bin, AuditName VARCHAR(300)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        INSERT INTO _SchemaSmith_FKCreateOne (Stmt, TableKey, KeyNameKey, AuditName)
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', f.TableName,
+                      ' ADD CONSTRAINT ', f.KeyName,
+                      ' FOREIGN KEY (', f.Columns, ')',
+                      ' REFERENCES ',
+                      CASE WHEN f.RelatedTableSchema IS NOT NULL AND f.RelatedTableSchema != ''
+                           THEN CONCAT('`', SchemaSmith_EscapeBackticks(f.RelatedTableSchema), '`.')
+                           ELSE CONCAT('`', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.')
+                      END,
+                      f.RelatedTable, ' (', f.RelatedColumns, ')',
+                      ' ON DELETE ', f.DeleteAction,
+                      ' ON UPDATE ', f.UpdateAction),
+               f.TableKey, f.KeyNameKey,
+               CONCAT(SchemaSmith_StripBacktickWrapping(f.TableName), '.', SchemaSmith_StripBacktickWrapping(f.KeyName))
+        FROM _SchemaSmith_ForeignKeys f
+        WHERE NOT EXISTS (
+            SELECT 1 FROM _SchemaSmith_FkExist fe
+            WHERE fe.TableKey = f.TableKey
+              AND fe.ConstraintKey = f.KeyNameKey
+        )
+          AND EXISTS (
+            SELECT 1 FROM SchemaSmith_RebuildSetAsideForeignKeys sa
+            WHERE SchemaSmith_IdentifierKey(sa.ChildSchema) = v_DbKey
+              AND SchemaSmith_IdentifierKey(sa.ChildTable) = f.TableKey
+              AND SchemaSmith_NameKeyCI(sa.KeyName) = f.KeyNameKey
+        );
+
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKCreateOne) INTO @v_fkone_id;
+        WHILE @v_fkone_id IS NOT NULL DO
+            SELECT Stmt, TableKey, KeyNameKey, AuditName INTO @exec_sql, @v_fkone_table, @v_fkone_key, @v_fkone_audit
+              FROM _SchemaSmith_FKCreateOne WHERE RowId = @v_fkone_id;
+            BEGIN
+                DECLARE v_OneErrno INT DEFAULT 0;
+                DECLARE v_OneError VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+                BEGIN
+                    DECLARE EXIT HANDLER FOR SQLEXCEPTION
+                        GET DIAGNOSTICS CONDITION 1 v_OneErrno = MYSQL_ERRNO, v_OneError = MESSAGE_TEXT;
+                    PREPARE stmt FROM @exec_sql;
+                    EXECUTE stmt;
+                    DEALLOCATE PREPARE stmt;
+                END;
+                IF v_OneErrno <> 0 THEN
+                    IF EXISTS (SELECT 1 FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
+                                WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
+                                  AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = @v_fkone_table
+                                  AND tc.CONSTRAINT_TYPE = 'FOREIGN KEY' AND SchemaSmith_NameKeyCI(tc.CONSTRAINT_NAME) = @v_fkone_key) THEN
+                        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                        VALUES (CONNECTION_ID(), CONCAT('  ', @v_fkone_audit, ': already in place, another deploy restored it first'));
+                        DELETE FROM SchemaSmith_ChangeAudit
+                         WHERE SessionId = CONNECTION_ID() AND ObjectType = 'foreignKey' AND ActionType = 'created'
+                           AND CONVERT(ObjectName USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(@v_fkone_audit USING utf8mb4) COLLATE utf8mb4_unicode_ci;
+                    ELSE
+                        SET @ss_msg = LEFT(v_OneError, 128);
+                        SIGNAL SQLSTATE 'HY000' SET MESSAGE_TEXT = @ss_msg, MYSQL_ERRNO = v_OneErrno;
+                    END IF;
+                END IF;
+            END;
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_FKCreateOne WHERE RowId > @v_fkone_id) INTO @v_fkone_id;
+        END WHILE;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_FKCreateOne;
     END IF;
 
     -- =========================================================================

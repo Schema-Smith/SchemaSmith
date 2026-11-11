@@ -41,6 +41,9 @@ BEGIN
                     CASE WHEN v."Online" THEN ' (online, validated after this pass)'
                          WHEN v."Form" = 'unavailable' THEN ' (online unavailable: ' || "SchemaSmith"."OnlineUnavailableReason"(fk."TableSchema", fk."TableName", 'foreignKey') || ')'
                          ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
+                    -- A key a rebuild set aside can be restored by another deploy between this look and the ADD; that key
+                    -- is the declared one, so an ADD that finds it already there skips the rest of its statements.
+                    CASE WHEN sa."KeyName" IS NOT NULL AND NOT p_WhatIf THEN 'BEGIN' || CHR(10) ELSE '' END ||
                     'ALTER TABLE  ' || "SchemaSmith"."QuoteName"(fk."TableSchema") || '.' || "SchemaSmith"."QuoteName"(fk."TableName") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(fk."Name") || ' FOREIGN KEY (' || "SchemaSmith"."QuoteColumnList"(fk."Columns") || ')' ||
                     ' REFERENCES ' || "SchemaSmith"."QuoteName"(fk."RelatedTableSchema") || '.' || "SchemaSmith"."QuoteName"(fk."RelatedTable") || ' (' || "SchemaSmith"."QuoteColumnList"(fk."RelatedColumns") || ')' ||
                     CASE WHEN NULLIF(fk."MatchType", '') IS NOT NULL THEN ' MATCH ' || fk."MatchType" ELSE '' END ||
@@ -61,7 +64,10 @@ BEGIN
                          ELSE '' END ||
                     CASE WHEN v."Form" IS NULL
                          THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''foreignKey'', ''' || REPLACE((fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name")::TEXT, '''', '''''') || ''', ''created'');'
-                         ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''foreignKey'', ''' || REPLACE((fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name")::TEXT, '''', '''''') || ''', ''created'', ''' || REPLACE((v."Form")::TEXT, '''', '''''') || ''');' END, CHR(10))
+                         ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''foreignKey'', ''' || REPLACE((fk."TableSchema" || '.' || fk."TableName" || '.' || fk."Name")::TEXT, '''', '''''') || ''', ''created'', ''' || REPLACE((v."Form")::TEXT, '''', '''''') || ''');' END ||
+                    CASE WHEN sa."KeyName" IS NOT NULL AND NOT p_WhatIf
+                         THEN CHR(10) || 'EXCEPTION WHEN duplicate_object THEN RAISE NOTICE ''    Already in place: another deploy restored it first'';' || CHR(10) || 'END;'
+                         ELSE '' END, CHR(10))
     INTO sql_script
     FROM temp_fks fk
     -- A key a table rebuild set aside (RebuildTable) keeps the trust it had, where the package does not declare Validated.

@@ -369,6 +369,60 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         });
     }
 
+    // A deploy that declares a key a rebuild set aside found it missing and added it in its batch; another deploy's
+    // restore put it back between the look and the ADD, and the batch failed on the name (1826 on the MySQL 8.0.15 band).
+    // The other session holds the tables locked so this deploy's ADD waits after it has looked, then adds the key itself.
+    [Test]
+    public void ADeclaredKeyAnotherDeployRestoresFirst_DoesNotFailTheDeployThatDeclaresIt()
+    {
+        using var r = Seeded();
+        var key = $"fk_decl_{r.Uid}";
+        r.Exec($"CREATE TABLE `{r.Other}` (`Id` INT NOT NULL PRIMARY KEY, `ParentId` INT NULL)");
+        r.Exec($@"INSERT INTO SchemaSmith_RebuildSetAsideForeignKeys (ChildSchema, ChildTable, KeyName, ParentSchema, ParentTable, ReferencedColumns, Definition, Declared)
+                  VALUES ('{r.Db}', '{r.Other}', '{key}', '{r.Db}', '{r.Parent}', '`Id`', 'FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`)', 1)");
+        var json = $$"""
+[ { "Name": "{{r.Other}}",
+    "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "ParentId", "DataType": "INT", "Nullable": true } ],
+    "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" } ],
+    "ForeignKeys": [ { "Name": "{{key}}", "Columns": "ParentId", "RelatedTable": "{{r.Parent}}", "RelatedColumns": "Id" } ] } ]
+""";
+        r.Exec($"CALL SchemaSmith_ParseTableJson('{r.Db}', '{json.Replace("'", "''")}')");
+        r.Exec("DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
+        r.Exec("DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()");
+        var deployId = r.Scalar("SELECT CONNECTION_ID()");
+
+        using var other = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        other.Open();
+        using var otherCmd = other.CreateCommand();
+        otherCmd.CommandText = $"USE `{r.Db}`; LOCK TABLES `{r.Other}` WRITE, `{r.Parent}` WRITE";
+        otherCmd.ExecuteNonQuery();
+
+        var deploy = System.Threading.Tasks.Task.Run(() =>
+            r.Exec($"CALL SchemaSmith_ForeignKeyQuench('Declares_{r.Uid}', '{r.Db}', 0, 0, 1)"));
+        // Add the key only once the deploy's own ADD is waiting: it has already looked, and found no key.
+        otherCmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST WHERE ID = {deployId} AND INFO LIKE '%ADD CONSTRAINT%' AND STATE LIKE '%metadata lock%'";
+        var waiting = System.Diagnostics.Stopwatch.StartNew();
+        while (Convert.ToInt64(otherCmd.ExecuteScalar()) == 0 && !deploy.IsCompleted && waiting.Elapsed < TimeSpan.FromSeconds(60))
+            System.Threading.Thread.Sleep(100);
+        Assert.That(deploy.IsCompleted, Is.False, "setup: the deploy should be waiting at its ADD" + (deploy.Exception == null ? "" : ": " + deploy.Exception.GetBaseException().Message));
+        otherCmd.CommandText = $"ALTER TABLE `{r.Other}` ADD CONSTRAINT `{key}` FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`); UNLOCK TABLES";
+        otherCmd.ExecuteNonQuery();
+
+        // The deploy holds r.Conn until it finishes, so nothing reads through it before the wait.
+        Exception? failure = null;
+        try { deploy.Wait(TimeSpan.FromMinutes(2)); }
+        catch (Exception ex) { failure = ex; }
+        Assert.That(failure, Is.Null, () => "the declared key is there, so there is nothing for this deploy to fail on: "
+                                             + failure?.GetBaseException().Message + r.Why());
+        Assert.Multiple(() =>
+        {
+            Assert.That(r.Key(r.Other, key), Is.Not.Null, r.Why());
+            Assert.That(r.SetAside(r.Other), Is.EqualTo("0"), "a key back on its table is done with");
+            Assert.That(r.Scalar($"SELECT COUNT(*) FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ObjectName LIKE '%{key}' AND ActionType = 'created'"),
+                Is.EqualTo("0"), "this deploy did not create the key, so it does not report creating it");
+        });
+    }
+
     // A pass that read the key as still on its table, and only then found the lock free, had seen it before the rebuild
     // dropped it and cleared the record: the key was gone for good (twice on the MySQL 5.7.22 band). The pass now takes
     // the lock before it looks, so a rebuild that finishes while the pass waits leaves it a key to put back.
