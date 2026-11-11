@@ -498,7 +498,7 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 | **Ledger tables** | SQL Server 2022 | creates an ordinary table + records a downgrade. The direction is deliberate: a ledger table cannot be converted or dropped afterwards, so not creating one is far easier to recover from than creating one by accident |
 | **XML compression** | SQL Server 2022 | creates the table, index or XML index without the compression clause + records a downgrade. Nothing an application can observe changes — only the storage saving is lost |
 
-> **Check the manifest before deploying to a pre-2016 target.** Under the default `warn`, a masked column is created unmasked and an Always Encrypted column is created unencrypted — the deploy succeeds and the downgrade is recorded, but the protection is not there. If a silently-unprotected column is worse for you than a failed deployment, set `Target:UnsupportedFeaturePolicy=fail`.
+> **Check the manifest before deploying to a pre-2016 target.** Under the default `warn`, a masked column is created unmasked and an Always Encrypted column is created unencrypted — the deploy completes and the downgrade is recorded (the run exits `1`, outcome `Incomplete`), but the protection is not there. If a silently-unprotected column is worse for you than a failed deployment, set `Target:UnsupportedFeaturePolicy=fail`.
 
 One further case is compatibility-level gated rather than version gated: a `Json`-encoded [data delivery](schema-packages.md#content-encoding) aimed at a below-130 SQL Server target is not degraded at all. SchemaQuench converts the content to the XML shape as it reads it and delivers it through the XML merge, which works at every compatibility level, so nothing is skipped and the package needs no change.
 
@@ -545,7 +545,7 @@ The schema model itself parses on every supported version — a version-agnostic
 | **Declared sequence** (`Sequences/*.json`) | MariaDB 10.3 (MySQL: no equivalent at any version) | skips the sequence + records a downgrade |
 | **Sequence data type** (`DataType` other than `bigint`) | MariaDB 11.5 | creates the sequence as a signed `bigint` + records a downgrade |
 
-> **A `DEFAULT` expression below MySQL 8.0.13 costs you the column, not the default.** Every other degrade in this table relaxes an aspect and keeps the object; this one skips the whole column, so under the default `warn` the deploy succeeds and a column your package declares is simply not there. If any table targets MySQL below 8.0.13 and uses an expression default, either give it a literal default or set `Target:UnsupportedFeaturePolicy=fail`.
+> **A `DEFAULT` expression below MySQL 8.0.13 costs you the column, not the default.** Every other degrade in this table relaxes an aspect and keeps the object; this one skips the whole column, so under the default `warn` the deploy completes (exit `1`, outcome `Incomplete`) and a column your package declares is simply not there. If any table targets MySQL below 8.0.13 and uses an expression default, either give it a literal default or set `Target:UnsupportedFeaturePolicy=fail`.
 
 > **"No equivalent at any version" is not the same as "old".** Several rows above are not version gates at all — MySQL has no application-time periods or system versioning at *any* release, and MariaDB has no SRID restriction or functional index at any release. Those degrade on every target of that platform, current versions included, which is why they appear here rather than reading as legacy concerns.
 
@@ -1697,7 +1697,7 @@ This is distinct from [DropUnknownIndexes](configuration.md#dropunknownindexes):
 
 ## RunScriptsTwice
 
-When `RunScriptsTwice` is `true`, the Objects-slot scripts are executed twice in succession during step 4 of the database quench sequence. On the second pass, all scripts are reset to unquenched and processed through the dependency retry loop again. Both runs must succeed -- if either fails, the deployment fails.
+When `RunScriptsTwice` is `true`, the Objects-slot scripts are executed twice in succession during step 7 of the database quench sequence. On the second pass, all scripts are reset to unquenched and processed through the dependency retry loop again. Both runs must succeed -- if either fails, the deployment fails.
 
 This is an **idempotency testing** tool, not a dependency resolution mechanism. Dependency resolution is already handled by the [retry loop](#dependency-retry-loop), which retries failed scripts as long as progress is being made. RunScriptsTwice answers a different question: "Can my `[ALWAYS]` scripts and object scripts run again safely?"
 
@@ -1986,7 +1986,7 @@ A 90-minute deployment to a large production database fails at minute 75 because
 SchemaQuench --ResumeQuench
 ```
 
-SchemaQuench reads the checkpoints, sees that KindleTheForge, ValidateBaseline, missing tables, modifications, indexes, constraints, and every `Objects`-slot script already succeeded, logs what it's skipping, and picks up at the first incomplete step. Minutes of work instead of starting from the top.
+SchemaQuench reads the checkpoints, repeats the kindling and the missing-table step (they are never checkpointed, and both are safe to repeat), sees that ValidateBaseline, the table modifications, indexes, constraints, and every `Objects`-slot script already succeeded, logs what it's skipping, and picks up at the first incomplete step. Minutes of work instead of starting from the top.
 
 ### When to leave resume off
 
