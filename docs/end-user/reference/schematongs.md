@@ -392,7 +392,7 @@ Databases change. Objects get dropped or renamed. The old script files linger in
 | Mode | Behavior |
 |---|---|
 | `Detect` | Orphaned files are logged as warnings. No files are modified or deleted. **Default.** |
-| `DetectWithCleanupScripts` | Orphaned files are logged. For each orphan in a script folder, a cleanup script containing a `DROP` statement is generated as `_OrphanCleanup_<FolderName>.sql` in the log directory. The orphaned files themselves are left in place. |
+| `DetectWithCleanupScripts` | Orphaned files are logged. For each orphan in a script folder, a cleanup script containing a `DROP` statement is generated as `_OrphanCleanup_<FolderName>.sql` in the log directory. An orphaned schema, operator or cast gets no `DROP` line -- a schema is never dropped this way, and an operator's or cast's file name cannot be read back into the signature a `DROP` needs -- but it is still reported. The orphaned files themselves are left in place. |
 | `DetectDeleteAndCleanup` | Orphaned files are deleted from the package. Cleanup `DROP` scripts are generated in the log directory. |
 
 ### When to use each mode
@@ -434,11 +434,13 @@ The preservation pass uses the component's `Name` (with quote/bracket characters
 | ForeignKey | `Name` | Yes |
 | CheckConstraint | `Name` | Yes |
 | ExcludeConstraint | `Name` | PostgreSQL only |
-| Statistic | `Name` | PostgreSQL only |
-| FullTextIndex | `Name` | SQL Server, MySQL |
+| Statistic | `Name` | SQL Server, PostgreSQL |
+| FullTextIndex | `Name` | SQL Server, MySQL, MariaDB |
 | MaterializedView | root object | PostgreSQL only |
 | IndexedView | root object | SQL Server only |
 | XmlIndex | `Name` | SQL Server only |
+| SpatialIndex | `Name` | SQL Server only |
+| JsonIndex | `Name` | SQL Server only |
 
 This is what makes [Custom Properties](custom-properties.md) trustworthy across the SchemaTongs / SchemaQuench round-trip: you attach metadata once, and it survives every re-extraction as long as the underlying object stays.
 
@@ -591,7 +593,7 @@ SchemaTongs maintains lightweight helper procedures in the source database under
 ## Column and object order
 
 Two settings decide the sequence of the lists inside an extracted table file — `Columns`, `Indexes`,
-`ForeignKeys`, `CheckConstraints` and, on SQL Server, `Statistics` and `XmlIndexes`. They answer different
+`ForeignKeys`, `CheckConstraints` and, on SQL Server, `Statistics`, `XmlIndexes`, `SpatialIndexes` and `JsonIndexes`. They answer different
 questions and compose without conflict.
 
 ### PreserveExistingOrder (default `true`)
