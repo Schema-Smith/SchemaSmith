@@ -169,7 +169,7 @@ ALTER TABLE [dbo].[Shippers] ENABLE TRIGGER ALL;       -- if DisableTriggers
 
 ### PostgreSQL
 
-PostgreSQL 15 and later support `MERGE` natively. DataTongs generates a `MERGE` against a `jsonb` literal source:
+From a PostgreSQL 15 or later source DataTongs generates a native `MERGE` against a `jsonb` literal source; from a 12-14 source it writes an `INSERT ... ON CONFLICT DO UPDATE` upsert instead, with a separate `DELETE` when delete sync is on. The form follows the source's version, so a script extracted from 15 or later needs a 15 or later target:
 
 ```sql
 MERGE INTO "public"."shippers" AS "Target"
@@ -357,7 +357,7 @@ When a column is excluded from extraction, DataTongs logs a warning naming the t
 
 ### MariaDB
 
-MariaDB uses the MySQL delivery path with the same behaviors as above. One operational difference: MariaDB's default `max_allowed_packet` is smaller than MySQL 8's 64&nbsp;MB. Because each table's data is delivered as a single JSON payload, delivering a large table can exceed that limit and fail with `Error submitting <N>MB packet; ensure 'max_allowed_packet' is greater than <N>MB`. Raise the server's `max_allowed_packet` (for example `--max-allowed-packet=64M`, or the equivalent in `my.cnf`) to accommodate your largest table's row set.
+MariaDB uses the MySQL delivery path with the same behaviors as above, except that DECIMAL / NUMERIC values are written as JSON numbers rather than strings. One operational difference: MariaDB's default `max_allowed_packet` is smaller than MySQL 8's 64&nbsp;MB. Because each table's data is delivered as a single JSON payload, delivering a large table can exceed that limit and fail with `Error submitting <N>MB packet; ensure 'max_allowed_packet' is greater than <N>MB`. Raise the server's `max_allowed_packet` (for example `--max-allowed-packet=64M`, or the equivalent in `my.cnf`) to accommodate your largest table's row set.
 
 ---
 
@@ -435,6 +435,8 @@ NOT (Target.[Column] = Source.[Column]
 This NULL-safe comparison treats two NULLs as equal (no update needed) and a NULL versus a non-NULL as different (update needed).
 
 For special types -- geography, XML, large text/binary types -- the comparison is wrapped with the appropriate cast or normalization function (e.g., `.ToString()` for geography on SQL Server, `CAST(... AS NVARCHAR(MAX))` for XML and NTEXT).
+
+On MySQL and MariaDB the `INSERT ... ON DUPLICATE KEY UPDATE` carries a changed-rows filter instead: a row already present exactly as delivered is left out of the upsert. The comparison is NULL-safe (`<=>`), and compares text byte for byte, JSON by value and a vector by its bytes.
 
 This approach means running DataTongs twice against unchanged data produces a script that matches every row but updates none -- the script becomes a no-op for existing data. Diffs are clean. Reviews are honest.
 
@@ -527,7 +529,7 @@ With `Xml`, DataTongs writes each `.tabledata` file in the [XML delivery shape](
 
 **Available on every source engine.** SQL Server extracts XML natively. PostgreSQL, MySQL, and MariaDB have no native XML producer, so DataTongs extracts the engine's normal JSON and converts it to the identical shape above -- one delivery XML dialect regardless of source engine, not a per-engine variant. That parity is useful even when the deployment target is never SQL Server: the `.tabledata` file is a standalone artifact, and `Xml` is a reasonable choice whenever a downstream consumer -- a third-party system, a hand-off package -- wants XML rather than JSON, independent of whether SchemaSmith ever reads the file back.
 
-**MySQL and MariaDB merge scripts cannot be tokenized with `Xml`.** A tokenized merge script reads its `.tabledata` file with `JSON_TABLE` when it is deployed, and that cannot read XML, so DataTongs refuses to write one: the table fails with a message naming both settings and the run exits `2`. The content file is still written. Delivering it through `DataDelivery` (`--ConfigureDataDelivery`) works -- SchemaQuench converts the XML before delivering it -- and so does a script with `ShouldCast:TokenizeScripts` set to `false`, which carries the data converted inside it.
+**MySQL and MariaDB merge scripts cannot be tokenized with `Xml`.** A tokenized merge script reads its `.tabledata` file with `JSON_TABLE` when it is deployed, and that cannot read XML, so DataTongs refuses to write one. When every table gets a script (`OutputScripts` on, `ConfigureDataDelivery` off), the run is refused before anything is extracted, with a message naming both settings, and exits `2`. With `--ConfigureDataDelivery` only the tables whose delivery could not be configured need a script: each of those fails with that message after its content file is written, and the run exits `2`. Delivering it through `DataDelivery` (`--ConfigureDataDelivery`) works -- SchemaQuench converts the XML before delivering it -- and so does a script with `ShouldCast:TokenizeScripts` set to `false`, which carries the data converted inside it.
 
 **Known limitation: geometry/geography SRID in data extraction.** Per-row SRID capture is a SQL-Server-only extraction capability — the JSON extraction query captures the SRID (`col.STSrid`) only on SQL Server. PostgreSQL and MySQL JSON extraction capture WKT (`ST_AsText()`) alone, with no per-row SRID companion. XML-encoded extracts inherit this same limitation, since XML is converted from the JSON result — a spatial column extracted as XML from PostgreSQL or MySQL carries WKT without the `.STSrid` companion. On **MySQL**, this no longer loses the reference system for a column whose schema declares a `Srid` restriction (`col POINT SRID 4326` -- see [MySQL column extras](schema-packages.md#mysql-column-extras)): every row in a SRID-restricted column is guaranteed to carry that one reference system, so a deploy target reconstructs it from the schema definition rather than needing the per-row companion. On **PostgreSQL** the same reasoning applies through the column *type* rather than a separate attribute: a typed column (`geometry(Point,4326)`) coerces an incoming SRID-less value to its declared reference system, so that round trip is lossless too. The gap is therefore narrower than it first looks — it remains open for an *unrestricted* MySQL spatial column and an *untyped* PostgreSQL `geometry` column. Those are the cases to watch, and they fail quietly: the WKT arrives intact and the value lands with SRID `0`, so the coordinates look right while the reference system is wrong. Extract spatial data from SQL Server, or type/restrict the destination column, when that matters. All other column types (binary, dates, NULLs, and non-spatial columns) are fully portable in both JSON and XML.
 
