@@ -69,8 +69,8 @@ namespace Schema.UnitTests.Capabilities
             var dd = CapabilityRegistry.For(Schema.Domain.Platform.MySQL).Single(c => c.Key == "data-delivery");
             Assert.That(dd.IntroducedInComparable, Is.EqualTo(800));
 
-            var method = typeof(MergeScriptHelper).GetMethod("BuildJsonRowSourceMySql",
-                BindingFlags.NonPublic | BindingFlags.Static);
+            var method = typeof(MergeScriptHelper).GetMethods(BindingFlags.NonPublic | BindingFlags.Static)
+                .SingleOrDefault(m => m.Name == "BuildJsonRowSourceMySql" && m.GetParameters().Length == 2);
             Assert.That(method, Is.Not.Null, "BuildJsonRowSourceMySql not found — registry data-delivery probe is stale");
 
             // An empty List<MySqlColumnInfo> via the method's own (nested-internal) parameter type.

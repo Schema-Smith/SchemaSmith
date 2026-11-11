@@ -367,7 +367,7 @@ internal static class DeferredMergeBuilder
         var columnList = string.Join(", ", columns.Select(c => $"{MergeScriptHelper.MyQuote(c.Name)}"));
         var selectExpressions = string.Join(", ", columns.Select(c =>
             deferredSet.Contains(c.Name) ? "NULL" : MergeScriptHelper.BuildSingleSelectExpressionMySql(c)));
-        var jsonSource = MergeScriptHelper.BuildJsonRowSourceMySql(columns, versionNum);
+        var jsonSource = MergeScriptHelper.BuildJsonRowSourceMySql(columns, versionNum, MergeScriptHelper.JsonTableMisreadsScalarsMySql(cmd, versionNum));
         tableData = MergeScriptHelper.DecodeSurrogateEscapesMySql(MergeScriptHelper.QuoteDecimalNumbersMySql(
             MergeScriptHelper.StringifyStructuredTextValuesMySql(tableData, columns), versionNum, columns), versionNum);
 

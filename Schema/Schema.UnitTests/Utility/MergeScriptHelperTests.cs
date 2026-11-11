@@ -2729,6 +2729,56 @@ public class MergeScriptHelperTests
     public void DecodeSurrogateEscapesMySql_OnlyOnMariaDb10_2(int versionNum, string payload, string expected)
         => Assert.That(MergeScriptHelper.DecodeSurrogateEscapesMySql(payload, versionNum), Is.EqualTo(expected));
 
+    [TestCase("8.0.11", true)]
+    [TestCase("8.0.11-log", true)]
+    [TestCase("8.0.12", true)]
+    [TestCase("8.0.20", true)]
+    [TestCase("8.0.21", false)]
+    [TestCase("8.0.36", false)]
+    [TestCase("10.6.5-MariaDB", false)]
+    [TestCase(null, false)]
+    public void JsonTableMisreadsScalarsMySql_ByServerVersion(string serverVersion, bool expected)
+    {
+        Assert.That(MergeScriptHelper.JsonTableMisreadsScalarsMySql(serverVersion), Is.EqualTo(expected));
+    }
+
+    // The server is asked only on 8.0, where a patch decides it.
+    [TestCase(507)]
+    [TestCase(804)]
+    [TestCase(1006)]
+    [TestCase(0)]
+    public void JsonTableMisreadsScalarsMySql_AsksNothingOffTheEightZeroLine(int versionNum)
+    {
+        var cmd = Substitute.For<System.Data.IDbCommand>();
+        Assert.That(MergeScriptHelper.JsonTableMisreadsScalarsMySql(cmd, versionNum), Is.False);
+        cmd.DidNotReceive().ExecuteScalar();
+    }
+
+    // Paired with the integration test that delivers nulls, 2^31 and 2^64-1: on the affected patches every column is read as
+    // JSON and a JSON null becomes SQL NULL; a JSON column stays a document.
+    [Test]
+    public void BuildJsonRowSourceMySql_ReadsScalarsAsJson_OnlyWhereJsonTableMisreadsThem()
+    {
+        var cols = new List<MergeScriptHelper.MySqlColumnInfo>
+        {
+            new() { Name = "u", DataType = "bigint", ColumnType = "bigint unsigned" },
+            new() { Name = "j", DataType = "json", ColumnType = "json", IsJson = true },
+            new() { Name = "t", DataType = "varchar", ColumnType = "varchar(10)", CharMaxLength = 10 },
+            new() { Name = "y", DataType = "year", ColumnType = "year" },
+        };
+        var misread = MergeScriptHelper.BuildJsonRowSourceMySql(cols, 800, jsonTableMisreadsScalars: true);
+        var plain = MergeScriptHelper.BuildJsonRowSourceMySql(cols, 800);
+        Assert.Multiple(() =>
+        {
+            Assert.That(misread, Does.Contain("`u` JSON PATH '$.u'").And.Contain("`j` JSON PATH '$.j'"));
+            Assert.That(misread, Does.Contain("IF(JSON_TYPE(_ss_jt.`t`) = 'NULL', NULL, JSON_UNQUOTE(_ss_jt.`t`)) AS `t`"));
+            Assert.That(misread, Does.Contain("IF(JSON_TYPE(_ss_jt.`u`) = 'NULL', NULL, IF(JSON_TYPE(_ss_jt.`u`) = 'BOOLEAN'"));
+            Assert.That(misread, Does.Contain("NULL, CAST(IF(JSON_TYPE(_ss_jt.`y`) = 'BOOLEAN'"));
+            Assert.That(misread, Does.Contain("_ss_jt.`j` AS `j`").And.EndWith(") AS jt"));
+            Assert.That(plain, Does.Contain("`u` BIGINT UNSIGNED PATH '$.u'").And.Not.Contain("_ss_jt"));
+        });
+    }
+
     // MySQL went 5.7, 8.x, 9.x, then calendar years from 26: 26.7 reads 2607. Only MariaDB 10.2-10.5 lacks JSON_TABLE.
     [TestCase(0, true)]
     [TestCase(507, false)]

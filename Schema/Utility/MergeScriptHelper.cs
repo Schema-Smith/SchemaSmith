@@ -1943,7 +1943,7 @@ ORDER BY rulename;";
         var insertColumns = string.Join(", ", columns.Select(c => MyQuote(c.Name)));
         var selectExpressions = BuildSelectExpressionsMySql(columns);
         mySqlServerVersionNum = RowSourceVersionNumMySql(cmd, mySqlServerVersionNum);
-        var jsonSource = BuildJsonRowSourceMySql(columns, mySqlServerVersionNum);
+        var jsonSource = BuildJsonRowSourceMySql(columns, mySqlServerVersionNum, JsonTableMisreadsScalarsMySql(cmd, mySqlServerVersionNum));
         tableData = DecodeSurrogateEscapesMySql(QuoteDecimalNumbersMySql(StringifyStructuredTextValuesMySql(tableData, columns),
             mySqlServerVersionNum, columns), mySqlServerVersionNum);
 
@@ -2611,10 +2611,56 @@ WHERE tc.CONSTRAINT_SCHEMA = @db
         return MariaDbJsonTableMisreadsStrings(cmd.ExecuteScalar()?.ToString()) ? 1005 : versionNum;
     }
 
+    // MySQL's JSON_TABLE misreads a scalar on early 8.0 patches (each probed on its image): a JSON null read into a number
+    // column fails the insert under strict mode before 8.0.20, into a text column it arrives as the text 'null' before
+    // 8.0.21, and an integer of 2^31 or more wraps with no warning before 8.0.13. Delivery there reads every column as
+    // JSON and turns a JSON null into SQL NULL itself, as the recursive-CTE shred does. Asks the server only on 8.0.
+    internal static bool JsonTableMisreadsScalarsMySql(IDbCommand cmd, int versionNum)
+    {
+        if (versionNum != 800) return false;
+        cmd.Parameters.Clear();
+        cmd.CommandText = "SELECT VERSION()";
+        return JsonTableMisreadsScalarsMySql(cmd.ExecuteScalar()?.ToString());
+    }
+
+    internal static bool JsonTableMisreadsScalarsMySql(string serverVersion) =>
+        serverVersion != null && !serverVersion.Contains("MariaDB", StringComparison.OrdinalIgnoreCase)
+        && VersionHelper.ParsePatchComparable(serverVersion, Platform.MySQL) is < 80021;
+
+    private static readonly HashSet<string> MySqlNumberTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "tinyint", "smallint", "mediumint", "int", "integer", "bigint", "decimal", "numeric", "float", "double", "bit", "year"
+    };
+
+    // One JSON-typed column turned back into the scalar a typed JSON_TABLE column gives: a JSON boolean is its number
+    // in a number column (as text, 'true' fails the insert), and a YEAR is a number, since the text '0' stores 2000.
+    private static string JsonReadScalarMySql(MySqlColumnInfo column, string name)
+    {
+        var value = $"_ss_jt.{MyQuote(name)}";
+        if (column?.IsJson == true) return $"{value} AS {MyQuote(name)}";
+        var scalar = $"JSON_UNQUOTE({value})";
+        if (column != null && MySqlNumberTypes.Contains(column.DataType))
+            scalar = $"IF(JSON_TYPE({value}) = 'BOOLEAN', IF({scalar} = 'true', '1', '0'), {scalar})";
+        if (column != null && column.DataType.Equals("year", StringComparison.OrdinalIgnoreCase))
+            scalar = $"CAST({scalar} AS SIGNED)";
+        return $"IF(JSON_TYPE({value}) = 'NULL', NULL, {scalar}) AS {MyQuote(name)}";
+    }
+
     internal static string BuildJsonRowSourceMySql(List<MySqlColumnInfo> columns, int versionNum)
+        => BuildJsonRowSourceMySql(columns, versionNum, jsonTableMisreadsScalars: false);
+
+    internal static string BuildJsonRowSourceMySql(List<MySqlColumnInfo> columns, int versionNum, bool jsonTableMisreadsScalars)
     {
         var isMariaDb = IsMariaDbVersionNum(versionNum);
         var hasJsonTable = MySqlFamilyHasJsonTable(versionNum);
+        if (hasJsonTable && jsonTableMisreadsScalars)
+        {
+            var names = columns.SelectMany(c => IsGeometryTypeMySql(c.DataType) ? new[] { c.Name, c.Name + ".STSrid" } : new[] { c.Name }).ToList();
+            var jsonColumns = string.Join(",\n        ", names.Select(n => $"{MyQuote(n)} JSON PATH '$.{MyJsonPathMember(n)}'"));
+            var values = string.Join(",\n      ", names.Select(n => JsonReadScalarMySql(columns.FirstOrDefault(c => c.Name == n), n)));
+            return "(\n    SELECT\n      " + values + "\n    FROM JSON_TABLE(\n      @json_data,\n      '$[*]' COLUMNS (\n        " +
+                   jsonColumns + "\n      )\n    ) AS _ss_jt\n  ) AS jt";
+        }
         if (hasJsonTable)
             return "JSON_TABLE(\n    @json_data,\n    '$[*]' COLUMNS (\n      " +
                    BuildJsonTableColumnsMySql(columns) + "\n    )\n  ) AS jt";

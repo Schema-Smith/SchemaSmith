@@ -4,6 +4,7 @@ using System.Data;
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Text.RegularExpressions;
 
 using NUnit.Framework;
 using Schema.DataAccess;
@@ -38,6 +39,13 @@ public abstract class MergeScriptHelperSharedTests
     private int _rowSourceVersionNum;
     private bool UsesJsonTable => MergeScriptHelper.MySqlFamilyHasJsonTable(_rowSourceVersionNum);
 
+    // MySQL patches whose JSON_TABLE misreads scalars read every column as JSON instead of its own type.
+    private bool _readsScalarsAsJson;
+
+    // The JSON_TABLE column a test expects, as the row source spells it on this server.
+    private string JsonTableColumn(string typed) =>
+        _readsScalarsAsJson ? Regex.Replace(typed, @"^(`[^`]+`) .*? PATH ", "$1 JSON PATH ") : typed;
+
     // JSON columns are distinguishable from longtext only on MySQL and MariaDB >= 10.4.3 (implicit json_valid
     // CHECK). On MariaDB 10.2-10.4.2 a JSON column is stored as plain longtext with no marker, so it is
     // delivered as text (data round-trips correctly) but the JSON-aware order-insensitive upsert comparison
@@ -54,6 +62,7 @@ public abstract class MergeScriptHelperSharedTests
         versionCmd.CommandText = "SELECT SchemaSmith_ServerVersionNum()";
         _serverVersionNum = Convert.ToInt32(versionCmd.ExecuteScalar());
         _rowSourceVersionNum = MergeScriptHelper.RowSourceVersionNumMySql(versionCmd, _serverVersionNum);
+        _readsScalarsAsJson = MergeScriptHelper.JsonTableMisreadsScalarsMySql(versionCmd, _serverVersionNum);
     }
 
     // Routes every test's merge build through the detected server version (major*100+minor). Below MySQL 8.0
@@ -371,6 +380,78 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         }
     }
 
+    // MySQL's JSON_TABLE, on the patches below the fixes: a JSON null into a number column fails the insert under strict mode
+    // (before 8.0.20), into a text column arrives as the text 'null' (before 8.0.21), and an integer of 2^31 or more wraps
+    // with no warning (before 8.0.13). Every engine must store each value as delivered.
+    [Test]
+    public void BuildMergeScript_NullsAndLargeIntegers_ArriveUnchanged()
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"zz_bigint_{Guid.NewGuid():N}";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, s BIGINT NULL, u BIGINT UNSIGNED NULL, n INT NULL, nu INT UNSIGNED NULL, d DECIMAL(10,2) NULL, t VARCHAR(10) NULL)";
+            command.ExecuteNonQuery();
+
+            var script = BuildMergeScript(command, _testDb, tableName,
+                "[{\"id\":1,\"s\":2147483648,\"u\":18446744073709551615,\"n\":2147483647,\"nu\":4294967295}," +
+                "{\"id\":2,\"s\":9223372036854775807,\"u\":9223372036854775808,\"n\":-2147483648,\"nu\":2147483648}," +
+                "{\"id\":3,\"s\":-2147483649,\"u\":4294967296,\"n\":0,\"nu\":0}," +
+                "{\"id\":4,\"s\":-9223372036854775808,\"u\":0,\"n\":null,\"nu\":null,\"d\":null,\"t\":null}," +
+                "{\"id\":5,\"s\":null,\"u\":null,\"n\":7,\"nu\":7,\"d\":1.50,\"t\":\"x\"}]",
+                "`id`", true, false, false, false, null!);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT GROUP_CONCAT(id, ':', COALESCE(s, '<NULL>'), ':', COALESCE(u, '<NULL>'), ':', COALESCE(n, '<NULL>'), ':', COALESCE(nu, '<NULL>'), ':', COALESCE(d, '<NULL>'), ':', COALESCE(t, '<NULL>') ORDER BY id SEPARATOR ' ') FROM `{_testDb}`.`{tableName}`";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo(
+                "1:2147483648:18446744073709551615:2147483647:4294967295:<NULL>:<NULL> " +
+                "2:9223372036854775807:9223372036854775808:-2147483648:2147483648:<NULL>:<NULL> " +
+                "3:-2147483649:4294967296:0:0:<NULL>:<NULL> " +
+                "4:-9223372036854775808:0:<NULL>:<NULL>:<NULL>:<NULL> " +
+                "5:<NULL>:<NULL>:7:7:1.50:x"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    [Test]
+    public void BuildMergeScript_JsonBooleans_ArriveAsNumbersInNumberColumns()
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"zz_bool_{Guid.NewGuid():N}";
+        try
+        {
+            command.CommandText = $"CREATE TABLE `{_testDb}`.`{tableName}` (id INT PRIMARY KEY, ti TINYINT NULL, i INT NULL, d DECIMAL(5,2) NULL, t VARCHAR(10) NULL)";
+            command.ExecuteNonQuery();
+
+            var script = BuildMergeScript(command, _testDb, tableName,
+                "[{\"id\":1,\"ti\":true,\"i\":false,\"d\":true,\"t\":true},{\"id\":2,\"ti\":false,\"i\":true,\"d\":false,\"t\":false}]",
+                "`id`", true, false, false, false, null!);
+            foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
+                         .Where(b => !string.IsNullOrWhiteSpace(b)))
+            {
+                command.CommandText = batch;
+                command.ExecuteNonQuery();
+            }
+
+            command.CommandText = $"SELECT GROUP_CONCAT(id, ':', ti, ':', i, ':', d, ':', t ORDER BY id SEPARATOR ' ') FROM `{_testDb}`.`{tableName}`";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("1:1:0:1.00:true 2:0:1:0.00:false"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{_testDb}`.`{tableName}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     // Without JSON_TABLE (MariaDB 10.2-10.5) the shred hands every value over as text, and text into a BIT column is
     // stored as its character codes: 165 arrived as 0x31.
     [Test]
@@ -473,7 +554,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
 
             // TEXT must be read as TEXT in JSON_TABLE, not an oversized CHAR that MariaDB rejects.
             // (MariaDB 10.2-10.5 uses the recursive-CTE shred instead of JSON_TABLE.)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`Notes` LONGTEXT CHARACTER SET utf8mb4 PATH '$.Notes'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain(JsonTableColumn("`Notes` LONGTEXT CHARACTER SET utf8mb4 PATH '$.Notes'")));
 
             foreach (var batch in script.Split(new[] { ";\r\n", ";\n" }, StringSplitOptions.RemoveEmptyEntries)
                          .Where(b => !string.IsNullOrWhiteSpace(b)))
@@ -549,8 +630,8 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         if (UsesJsonTable)
         {
             Assert.That(script, Does.Contain("JSON_TABLE("));
-            Assert.That(script, Does.Contain("`first_name` VARCHAR(45) CHARACTER SET utf8mb4 PATH '$.first_name'"));
-            Assert.That(script, Does.Contain("`last_name` VARCHAR(45) CHARACTER SET utf8mb4 PATH '$.last_name'"));
+            Assert.That(script, Does.Contain(JsonTableColumn("`first_name` VARCHAR(45) CHARACTER SET utf8mb4 PATH '$.first_name'")));
+            Assert.That(script, Does.Contain(JsonTableColumn("`last_name` VARCHAR(45) CHARACTER SET utf8mb4 PATH '$.last_name'")));
         }
         else
         {
@@ -575,7 +656,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
 
         // Assert
         Assert.That(script, Does.Contain($"INSERT IGNORE INTO `{_testDb}`.`country`"));
-        if (UsesJsonTable) Assert.That(script, Does.Contain("`country` VARCHAR(50) CHARACTER SET utf8mb4 PATH '$.country'"));
+        if (UsesJsonTable) Assert.That(script, Does.Contain(JsonTableColumn("`country` VARCHAR(50) CHARACTER SET utf8mb4 PATH '$.country'")));
         // AUTO_INCREMENT columns are included to preserve original IDs
         Assert.That(script, Does.Contain("`country_id`"));
     }
@@ -671,11 +752,11 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
                 tableData, "`id`", true, false, false, false, null!);
 
             // JSON_TABLE should read geometry as TEXT (WKT string)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`location` LONGTEXT CHARACTER SET utf8mb4 PATH '$.location'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain(JsonTableColumn("`location` LONGTEXT CHARACTER SET utf8mb4 PATH '$.location'")));
 
             // JSON_TABLE must also read the "<col>.STSrid" companion the extractors emit beside the WKT
             if (UsesJsonTable)
-                Assert.That(script, Does.Contain("`location.STSrid` INT PATH '$.\"location.STSrid\"'"),
+                Assert.That(script, Does.Contain(JsonTableColumn("`location.STSrid` INT PATH '$.\"location.STSrid\"'")),
                     "the SRID companion must be shredded so the geometry keeps its reference system");
 
             // SELECT should convert WKT back to geometry, in its own SRID rather than 0. COALESCE keeps
@@ -760,7 +841,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
                 tableData, "`id`", true, false, false, false, null!);
 
             // JSON_TABLE should read blob as TEXT (Base64 string)
-            if (UsesJsonTable) Assert.That(script, Does.Contain("`picture` LONGTEXT CHARACTER SET utf8mb4 PATH '$.picture'"));
+            if (UsesJsonTable) Assert.That(script, Does.Contain(JsonTableColumn("`picture` LONGTEXT CHARACTER SET utf8mb4 PATH '$.picture'")));
 
             // SELECT should convert Base64 back to binary
             Assert.That(script, Does.Contain("FROM_BASE64(`picture`)"));
@@ -831,7 +912,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         var script = BuildMergeScript(command, _testDb, "payment",
             tableData, "`payment_id`", false, false, false, false, null!);
 
-        if (UsesJsonTable) Assert.That(script, Does.Contain("DECIMAL(5,2)"));
+        if (UsesJsonTable) Assert.That(script, Does.Contain(JsonTableColumn("`amount` DECIMAL(5,2) PATH '$.amount'")));
     }
 
     [Test]
@@ -843,7 +924,7 @@ CREATE TABLE `{_testDb}`.`{tableName}` (
         var script = BuildMergeScript(command, _testDb, "actor",
             tableData, "", false, false, false, false, null!);
 
-        if (UsesJsonTable) Assert.That(script, Does.Contain("TIMESTAMP")); // last_update is TIMESTAMP (JSON_TABLE column type)
+        if (UsesJsonTable) Assert.That(script, Does.Contain(JsonTableColumn("`last_update` TIMESTAMP PATH '$.last_update'")));
     }
 
     [Test]
