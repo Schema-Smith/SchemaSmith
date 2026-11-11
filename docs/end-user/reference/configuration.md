@@ -85,7 +85,7 @@ Each tool adds its own switches on top of the common set. They are listed here s
 |---|---|
 | `--ConfigureDataDelivery` | Write data delivery configuration into the table JSON files after extraction. Also `ShouldCast:ConfigureDataDelivery`. See [--ConfigureDataDelivery](datatongs.md#--configuredatadelivery). |
 | `--TemplatePath:<path>` | The template root (containing `Tables/`) that `--ConfigureDataDelivery` writes into. Also the `TemplatePath` setting. |
-| `--DeliveryEncoding:<encoding>` | Content-file encoding for extracted data: `Json` (default) or `Xml`. Also `ShouldCast:DeliveryEncoding`. See [Delivery encoding](datatongs.md#delivery-encoding-xml-for-legacy-sql-server). |
+| `--DeliveryEncoding:<encoding>` | Content-file encoding for extracted data: `Json` or `Xml`. Unset, it is `Json`, or `Xml` from a SQL Server source older than 2017, where `Json` is refused. Also `ShouldCast:DeliveryEncoding`. See [Delivery encoding](datatongs.md#delivery-encoding-xml-for-legacy-sql-server). |
 
 **SchemaShears** ([reference](schemashears.md#cli-switches))
 
