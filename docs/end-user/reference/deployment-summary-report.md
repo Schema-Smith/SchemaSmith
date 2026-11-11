@@ -63,8 +63,8 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     "finishedUtc": "2026-07-09T14:03:47.881Z",
     "durationMs": 36677,            // run wall-clock
     "mode": "Quench",               // Quench | WhatIf
-    "outcome": "Success",           // Success | Incomplete | PartialFailure | Aborted
-    "exitCode": 0,
+    "outcome": "Incomplete",        // Success | Incomplete | PartialFailure | Aborted
+    "exitCode": 1,                  // 1 because unsupportedDowngrade below is populated
     "resumedFromCheckpoint": false
   },
   "targets": [
@@ -210,7 +210,7 @@ Empty on a clean run. Each entry mirrors the failure triage roll-up exactly — 
 
 ### `whatIf`
 
-`null` for a real quench. On a `WhatIf`-mode run it holds the plan, split three ways — and every entry carries a script *path*, never a SQL body. This block is the *script-level* plan; the engine-generated structural changes a WhatIf run would make (tables, columns, indexes, constraints, foreign keys) preview in [`objectChanges`](#objectchanges--what-actually-changed) with `would*` actions.
+`null` for a real quench. On a `WhatIf`-mode run it holds the plan, split three ways — and no entry carries a SQL body: a script entry carries its *path*, a `DataDelivery` entry the table's name. This block is the *script-level* plan; the engine-generated structural changes a WhatIf run would make (tables, columns, indexes, constraints, foreign keys) preview in [`objectChanges`](#objectchanges--what-actually-changed) with `would*` actions.
 
 | Key | Meaning |
 | --- | --- |
@@ -320,7 +320,7 @@ The whole field is `null` when nothing was degraded. In `Summary.md` the same in
 
 ## Cross-platform
 
-The report shape is identical on SQL Server, PostgreSQL, MySQL, and MariaDB — same keys, same nesting, same enum values. The `platform` field tells you which engine produced it, and a few `details[]` object types are engine-specific (statistics on SQL Server and PostgreSQL, XML indexes on SQL Server, full-text indexes on SQL Server / MySQL / MariaDB, exclude constraints on PostgreSQL), but the contract is one shape across all four. A dashboard that parses a SQL Server report parses a MySQL or MariaDB one unchanged.
+The report shape is identical on SQL Server, PostgreSQL, MySQL, and MariaDB — same keys, same nesting, same enum values. The `platform` field tells you which engine produced it, and a few `details[]` object types are engine-specific (statistics on SQL Server and PostgreSQL, XML indexes on SQL Server, full-text indexes on SQL Server / MySQL / MariaDB, exclude constraints and the sequence, domain and enum types on PostgreSQL, the CDC, change-tracking and temporal types on SQL Server), but the contract is one shape across all four. A dashboard that parses a SQL Server report parses a MySQL or MariaDB one unchanged.
 
 ## What's next
 
