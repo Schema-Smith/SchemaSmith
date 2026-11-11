@@ -1490,7 +1490,7 @@ SELECT name, CAST(value AS NVARCHAR(MAX)) AS value
                     properties.Add((name, reader.GetString(1)));
             }
         }
-        catch (Exception)
+        catch (System.Data.Common.DbException)
         {
             // fn_listextendedproperty raises an error when the referenced object doesn't exist
         }
@@ -1950,119 +1950,57 @@ SELECT s.name AS SchemaName, sy.name AS SynonymName, sy.base_object_name
     private void ScriptSqlServerFunctions(IDbCommand command)
     {
         _progressLog.Info("Casting Function Scripts");
-        var castPath = GetCastPath(ScriptObjectType.Functions, "Functions");
         // #323: a SCHEMABINDING module goes to its own folder on the AfterTablesObjects slot,
         // so a column change it blocks can drop it and this pass can put it back afterwards.
-        var sbCastPath = GetCastPath(ScriptObjectType.SchemaBoundFunctions, "SchemaBound Functions");
-        DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
-
-        command.CommandText = @"
-SELECT s.name AS SchemaName, o.name AS ObjectName, CONVERT(BIT, ISNULL(sm.is_schema_bound, 0)) AS IsSchemaBound
-  FROM sys.objects o
-  JOIN sys.schemas s ON o.schema_id = s.schema_id
-  LEFT JOIN sys.sql_modules sm ON o.object_id = sm.object_id
- WHERE o.type IN ('FN', 'IF', 'TF')
-   AND o.is_ms_shipped = 0
-   AND s.name <> 'SchemaSmith'
- ORDER BY s.name, o.name";
-
-        var functions = new List<(string Schema, string Name, bool SchemaBound)>();
-        using (var reader = command.ExecuteReader())
-        {
-            while (reader.Read())
-            {
-                var schema = reader.GetString(0);
-                var name = reader.GetString(1);
-                if (!ShouldExtractFromSchema(schema)) continue;
-                if (NotListedToCast(name, schema)) continue;
-                functions.Add((schema, name, reader.GetBoolean(2)));
-            }
-        }
-
-        foreach (var (schema, name, schemaBound) in functions)
-        {
-            var sql = ScriptSqlServerProgrammableObject(command, schema, name, "FUNCTION");
-            if (sql == null) continue;
-
-            if (schemaBound) DirectoryWrapper.GetFromFactory().CreateDirectory(sbCastPath);
-            var fileName = ResolveOutputPath(schemaBound ? sbCastPath : castPath, EncodeObjectFileName(schema, name, ".sql"));
-            if (ShouldSkipKnownBadScript(fileName)) { _stats.Functions++; continue; }
-            sql = RewriteSqlBodyForSchemaTemplate(sql, fileName);
-            _progressLog.Info($"  Casting {fileName}");
-            FileWrapper.GetFromFactory().WriteAllText(fileName, sql);
-            ValidateAndHandleScript(command.Connection, fileName, sql, schemaBound ? ScriptObjectType.SchemaBoundFunctions : ScriptObjectType.Functions);
-            _stats.Functions++;
-        }
+        ScriptSqlServerModules(command, "FUNCTION", "o.type IN ('FN', 'IF', 'TF')",
+            (GetCastPath(ScriptObjectType.Functions, "Functions"), ScriptObjectType.Functions),
+            (GetCastPath(ScriptObjectType.SchemaBoundFunctions, "SchemaBound Functions"), ScriptObjectType.SchemaBoundFunctions),
+            () => _stats.Functions++);
     }
 
     private void ScriptSqlServerViews(IDbCommand command)
     {
         _progressLog.Info("Casting View Scripts");
-        var castPath = GetCastPath(ScriptObjectType.Views, "Views");
-        // #323: a SCHEMABINDING module goes to its own folder on the AfterTablesObjects slot,
-        // so a column change it blocks can drop it and this pass can put it back afterwards.
-        var sbCastPath = GetCastPath(ScriptObjectType.SchemaBoundViews, "SchemaBound Views");
-        DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
-
-        command.CommandText = @"
-SELECT s.name AS SchemaName, o.name AS ObjectName, CONVERT(BIT, ISNULL(sm.is_schema_bound, 0)) AS IsSchemaBound
-  FROM sys.objects o
-  JOIN sys.schemas s ON o.schema_id = s.schema_id
-  LEFT JOIN sys.sql_modules sm ON o.object_id = sm.object_id
- WHERE o.type = 'V'
-   AND o.is_ms_shipped = 0
-   AND s.name <> 'SchemaSmith'
+        var filter = "o.type = 'V'" + @"
    AND o.name NOT LIKE 'MSSQL[_]DroppedLedgerView[_]%'" + LedgerViewFilter() +
             // An indexed view is extracted as Indexed Views JSON; scripting it here as well created it twice.
             (_includeIndexedViews ? @"
-   AND ISNULL(OBJECTPROPERTY(o.object_id, 'IsIndexed'), 0) = 0" : "") + @"
- ORDER BY s.name, o.name";
-
-        var views = new List<(string Schema, string Name, bool SchemaBound)>();
-        using (var reader = command.ExecuteReader())
-        {
-            while (reader.Read())
-            {
-                var schema = reader.GetString(0);
-                var name = reader.GetString(1);
-                if (!ShouldExtractFromSchema(schema)) continue;
-                if (NotListedToCast(name, schema)) continue;
-                views.Add((schema, name, reader.GetBoolean(2)));
-            }
-        }
-
-        foreach (var (schema, name, schemaBound) in views)
-        {
-            var sql = ScriptSqlServerProgrammableObject(command, schema, name, "VIEW");
-            if (sql == null) continue;
-
-            if (schemaBound) DirectoryWrapper.GetFromFactory().CreateDirectory(sbCastPath);
-            var fileName = ResolveOutputPath(schemaBound ? sbCastPath : castPath, EncodeObjectFileName(schema, name, ".sql"));
-            if (ShouldSkipKnownBadScript(fileName)) { _stats.Views++; continue; }
-            sql = RewriteSqlBodyForSchemaTemplate(sql, fileName);
-            _progressLog.Info($"  Casting {fileName}");
-            FileWrapper.GetFromFactory().WriteAllText(fileName, sql);
-            ValidateAndHandleScript(command.Connection, fileName, sql, schemaBound ? ScriptObjectType.SchemaBoundViews : ScriptObjectType.Views);
-            _stats.Views++;
-        }
+   AND ISNULL(OBJECTPROPERTY(o.object_id, 'IsIndexed'), 0) = 0" : "");
+        ScriptSqlServerModules(command, "VIEW", filter,
+            (GetCastPath(ScriptObjectType.Views, "Views"), ScriptObjectType.Views),
+            (GetCastPath(ScriptObjectType.SchemaBoundViews, "SchemaBound Views"), ScriptObjectType.SchemaBoundViews),
+            () => _stats.Views++);
     }
 
     private void ScriptSqlServerProcedures(IDbCommand command)
     {
         _progressLog.Info("Casting Stored Procedure Scripts");
-        var castPath = GetCastPath(ScriptObjectType.Procedures, "Procedures");
-        DirectoryWrapper.GetFromFactory().CreateDirectory(castPath);
+        // No schema-bound folder: a natively compiled procedure is schema-bound, and it stays with the other procedures.
+        var procedures = ScriptSqlServerModules(command, "PROCEDURE", "o.type = 'P'",
+            (GetCastPath(ScriptObjectType.Procedures, "Procedures"), ScriptObjectType.Procedures), null,
+            () => _stats.Procedures++);
 
-        command.CommandText = @"
-SELECT s.name AS SchemaName, o.name AS ObjectName
+        WarnNumberedProcedures(command, procedures);
+    }
+
+    // Functions, views and procedures are listed, filtered and written the same way; only the catalog filter, the
+    // folders and the counter differ. Returns the objects selected for extraction.
+    private List<(string Schema, string Name)> ScriptSqlServerModules(IDbCommand command, string objectKind, string filter,
+        (string Path, ScriptObjectType Type) folder, (string Path, ScriptObjectType Type)? schemaBoundFolder, Action counted)
+    {
+        DirectoryWrapper.GetFromFactory().CreateDirectory(folder.Path);
+
+        command.CommandText = $@"
+SELECT s.name AS SchemaName, o.name AS ObjectName, CONVERT(BIT, ISNULL(sm.is_schema_bound, 0)) AS IsSchemaBound
   FROM sys.objects o
   JOIN sys.schemas s ON o.schema_id = s.schema_id
- WHERE o.type = 'P'
+  LEFT JOIN sys.sql_modules sm ON o.object_id = sm.object_id
+ WHERE {filter}
    AND o.is_ms_shipped = 0
    AND s.name <> 'SchemaSmith'
  ORDER BY s.name, o.name";
 
-        var procedures = new List<(string Schema, string Name)>();
+        var modules = new List<(string Schema, string Name, bool SchemaBound)>();
         using (var reader = command.ExecuteReader())
         {
             while (reader.Read())
@@ -2071,25 +2009,27 @@ SELECT s.name AS SchemaName, o.name AS ObjectName
                 var name = reader.GetString(1);
                 if (!ShouldExtractFromSchema(schema)) continue;
                 if (NotListedToCast(name, schema)) continue;
-                procedures.Add((schema, name));
+                modules.Add((schema, name, schemaBoundFolder != null && reader.GetBoolean(2)));
             }
         }
 
-        foreach (var (schema, name) in procedures)
+        foreach (var (schema, name, schemaBound) in modules)
         {
-            var sql = ScriptSqlServerProgrammableObject(command, schema, name, "PROCEDURE");
+            var sql = ScriptSqlServerProgrammableObject(command, schema, name, objectKind);
             if (sql == null) continue;
 
-            var fileName = ResolveOutputPath(castPath, EncodeObjectFileName(schema, name, ".sql"));
-            if (ShouldSkipKnownBadScript(fileName)) { _stats.Procedures++; continue; }
+            var (path, type) = schemaBound ? schemaBoundFolder!.Value : folder;
+            if (schemaBound) DirectoryWrapper.GetFromFactory().CreateDirectory(path);
+            var fileName = ResolveOutputPath(path, EncodeObjectFileName(schema, name, ".sql"));
+            if (ShouldSkipKnownBadScript(fileName)) { counted(); continue; }
             sql = RewriteSqlBodyForSchemaTemplate(sql, fileName);
             _progressLog.Info($"  Casting {fileName}");
             FileWrapper.GetFromFactory().WriteAllText(fileName, sql);
-            ValidateAndHandleScript(command.Connection, fileName, sql, ScriptObjectType.Procedures);
-            _stats.Procedures++;
+            ValidateAndHandleScript(command.Connection, fileName, sql, type);
+            counted();
         }
 
-        WarnNumberedProcedures(command, procedures);
+        return modules.Select(m => (m.Schema, m.Name)).ToList();
     }
 
     // A numbered procedure (dbo.p;2 and on, deprecated since 2008) shares its name with dbo.p, whose definition is the
@@ -4027,7 +3967,7 @@ SELECT mv.schemaname, mv.matviewname
                 var folderName = reader["Folder"].ToString();
                 RetireUnsuffixedRoutineFile(reader, castPath, fullName, fileName);
                 if (ShouldSkipKnownBadScript(fileName)) { IncrementStatForFolder(folderName); continue; }
-                var script = string.Join("\r\n", reader["Code"].ToString());
+                var script = reader["Code"].ToString();
                 records.Add((castPath, fullName, fileName, script, folderName, false));
             }
         }

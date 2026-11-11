@@ -121,51 +121,120 @@ public class DataTongs
         };
     }
 
+    // What a run decides once, before its first table, and every table then reads.
+    private sealed record CastRun
+    {
+        public bool DisableTriggers { get; init; }
+        public bool TokenizeScripts { get; init; }
+        public bool MergeUpdate { get; init; }
+        public bool MergeDelete { get; init; }
+        public bool DisableRules { get; init; }
+        public bool UpdateDescendents { get; init; }
+        public bool OutputContents { get; init; }
+        public bool OutputScripts { get; init; }
+        public string ContentsPath { get; init; }
+        public string ScriptPath { get; init; }
+        public bool ConfigureDataDelivery { get; init; }
+        public string DeliveryEncoding { get; init; }
+        public string TemplatePath { get; init; }
+        public string SourceSchema { get; init; }
+        public bool SchemaTemplateMode { get; init; }
+        public string SourceDb { get; init; }
+        public bool ExtractAsXml { get; init; }
+        public int PgServerVersionNum { get; init; }
+        public int MySqlServerVersionNum { get; init; }
+        public bool SourceIsMariaDb { get; init; }
+        public string ExtractionTimeZone { get; init; }
+    }
+
     public void CastData()
     {
         var config = FactoryContainer.ResolveOrCreate<IConfigurationRoot>();
+        var run = ReadCastSettings(config);
+        var tables = ReadTablesToExtract(config, run.SchemaTemplateMode);
 
-        var disableTriggers = config[SettingsKeys.ShouldCast.DisableTriggers]?.ToLower() == "true";
-        var tokenizeScripts = config[SettingsKeys.ShouldCast.TokenizeScripts]?.ToLower() != "false";
-        var mergeUpdate = config[SettingsKeys.ShouldCast.MergeUpdate]?.ToLower() != "false";
-        // OPT-IN, unlike its siblings above, because this is the one flag in the family whose "on" state
-        // DESTROYS DATA: it emits the delete branch, which removes target rows the extracted source does
-        // not contain. Every other ShouldCast flag here defaults on harmlessly, and `!= "false"` was
-        // copied across all of them -- so an ABSENT MergeDelete derived Insert/Update/Delete, and
-        // deleting the key was not the same as setting it false. The shipped settings file sets it
-        // false explicitly, which is why no test and no sample ever exercised the real default.
+        _progressLog.Info("Starting DataTongs...");
+        _progressLog.Info($"  Platform: {_platform}");
+        _progressLog.Info($"  Source Database: {run.SourceDb}");
+        if (run.SchemaTemplateMode)
+            _progressLog.Info($"  Schema-template extraction mode: source schema = '{run.SourceSchema}', destination refs use {{{{SchemaName}}}}.");
+
+        if (tables.Count == 0)
+        {
+            _progressLog.Warn("No tables configured for data extraction.");
+            _progressLog.Info("DataTongs completed (no tables to process).");
+            return;
+        }
+
+        IDbConnection sourceConnection;
+        try
+        {
+            sourceConnection = GetConnection(run.SourceDb);
+        }
+        catch (DbException e)
+        {
+            throw new RunFailedException($"Unable to connect to the source database {run.SourceDb}: {e.Message}", e);
+        }
+        using var sourceConnectionScope = sourceConnection;
+        var cmd = sourceConnection.CreateCommand();
+
+        run = DetectSource(cmd, run);
+
+        // A MySQL or MariaDB TIMESTAMP is rendered in the session's time zone. Extract at +00:00 and record it, so the
+        // delivery reads the values back in the same zone wherever it runs.
+        using var timeZone = run.ExtractionTimeZone != null ? MySqlSessionSettings.UseTimeZone(cmd, run.ExtractionTimeZone) : null;
+        // The values are read as the default sql_mode reads them: PAD_CHAR_TO_FULL_LENGTH would extract CHAR values padded.
+        using var sqlMode = _platform.GetBasePlatform() == Platform.MySQL ? MySqlSessionSettings.UseParseNeutralSqlMode(cmd) : null;
+
+        var tablesProcessed = 0;
+        var errors = 0;
+
+        foreach (var table in tables)
+        {
+            try
+            {
+                if (CastTable(cmd, table, run)) tablesProcessed++;
+            }
+            // prepush-allow: generic-catch -- one table's failure of any kind is recorded and the run moves to the next table
+            catch (Exception ex)
+            {
+                errors++;
+                Failed = true;
+                _progressLog.Error($"  Error processing table {table.TableName}: {ex.Message}");
+                _errorLog.Error($"Error processing table {table.TableName}", ex);
+            }
+        }
+
+        sourceConnection.Close();
+        LogSummary(tablesProcessed, errors);
+    }
+
+    private CastRun ReadCastSettings(IConfigurationRoot config)
+    {
+        // OPT-IN, unlike its siblings, because this is the one flag in the family whose "on" state DESTROYS DATA: it
+        // emits the delete branch, which removes target rows the extracted source does not contain. An absent key must
+        // not mean Insert/Update/Delete.
         var mergeDelete = config[SettingsKeys.ShouldCast.MergeDelete]?.ToLower() == "true";
 
-        // PostgreSQL-specific options
-        var disableRules = config[SettingsKeys.ShouldCast.DisableRules]?.ToLower() == "true";
-        var updateDescendents = config[SettingsKeys.ShouldCast.UpdateDescendents]?.ToLower() != "false";
-
-        var outputContents = config[SettingsKeys.ShouldCast.OutputContentFiles]?.ToLower() != "false";
         var outputScriptsSetting = config[SettingsKeys.ShouldCast.OutputScripts];
         var outputScripts = outputScriptsSetting?.ToLower() != "false";
+        var outputContents = config[SettingsKeys.ShouldCast.OutputContentFiles]?.ToLower() != "false";
         var contentsPath = config[SettingsKeys.ContentPath] ?? ".";
         var scriptPath = ConfigHelper.PathSetting(config, SettingsKeys.ScriptPath);
         var configureDataDelivery = CommandLineParser.ContainsSwitch("ConfigureDataDelivery")
             || config[SettingsKeys.ShouldCast.ConfigureDataDelivery]?.ToLower() == "true";
 
-        // B1 slice 3 / B4b: a global switch to extract delivery content in the XML encoding (default
-        // Json) — most commonly so a package can be authored to deploy on a legacy-compatibility SQL
-        // Server (below the OPENJSON cliff), but the .tabledata file is also a standalone artifact useful
-        // to any downstream consumer that wants XML rather than JSON. SQL Server extracts XML natively;
-        // every other engine extracts its normal JSON and converts it to the identical delivery XML shape
-        // in C# (MergeScriptHelper.JsonPayloadToXml), so the file is the same dialect on every engine.
-        // Resolved once the source is open (ChooseXmlDeliveryEncoding): unset, a SQL Server source that cannot produce
-        // the Json extraction gets Xml automatically.
+        // Delivery content can be extracted as Xml (default Json), so a package can deploy on a SQL Server below the
+        // OPENJSON cliff, or a consumer can read the file as XML. Resolved once the source is open
+        // (ChooseXmlDeliveryEncoding): unset, a SQL Server source that cannot produce the Json extraction gets Xml.
         var deliveryEncoding = CommandLineParser.ValueOfSwitch("DeliveryEncoding", null)
             ?? config[SettingsKeys.ShouldCast.DeliveryEncoding];
         var templatePath = CommandLineParser.ValueOfSwitch("TemplatePath", null)
             ?? config[SettingsKeys.TemplatePath];
         var sourceSchemaSetting = config[SettingsKeys.Source.Schema] ?? "";
 
-        // Always resolve template root — schema-template mode detection (§8.1) must run even
-        // when Source.Schema is unset, so we can error out cleanly if the user pointed at a
-        // schema template without setting Source.Schema. Walking up is a single Exists check
-        // per ancestor and runs once.
+        // Always resolve the template root: schema-template detection must run even when Source.Schema is unset, so a
+        // schema template without Source.Schema is refused cleanly.
         if (string.IsNullOrWhiteSpace(templatePath))
         {
             templatePath = FindTemplateRootPath(contentsPath);
@@ -176,12 +245,9 @@ public class DataTongs
             }
         }
 
-        // Delivery takes precedence over merge scripts, per table (Paul, 2026-08-20): a table whose
-        // data delivery got configured this run does not also get a merge script — the two are two
-        // delivery paths for the same rows. One statement here, not a line per table; the per-table
-        // "Updated data delivery config" log already covers the detail. Distinguish a defaulted
-        // OutputScripts (quiet Info) from an explicit OutputScripts=true alongside ConfigureDataDelivery
-        // (Warn — contradictory config that is still overridden, just loudly).
+        // Delivery takes precedence over merge scripts, per table: a table whose data delivery got configured this run
+        // does not also get a merge script. A defaulted OutputScripts is a quiet Info; an explicit true is contradictory
+        // config that is still overridden, so it warns.
         if (configureDataDelivery && outputScripts)
         {
             if (outputScriptsSetting == null)
@@ -190,13 +256,11 @@ public class DataTongs
                 _progressLog.Warn("  ConfigureDataDelivery is enabled and OutputScripts is explicitly true — merge scripts will still be suppressed for tables where data delivery is configured. Delivery takes precedence.");
         }
 
-        // Two-signal schema-template mode detection (design §8.1):
-        //   signal 1 = target Template.json has SchemaIdentificationScript
-        //   signal 2 = Source.Schema set in DataTongs.settings.json
+        // Schema-template mode takes two signals: the target Template.json has a SchemaIdentificationScript, and
+        // Source.Schema is set.
         var targetTemplateIsSchemaTemplate = !string.IsNullOrWhiteSpace(templatePath)
             && TargetTemplateHasSchemaIdentificationScript(templatePath);
         var sourceSchemaSet = !string.IsNullOrWhiteSpace(sourceSchemaSetting);
-        var schemaTemplateMode = targetTemplateIsSchemaTemplate && sourceSchemaSet;
 
         if (targetTemplateIsSchemaTemplate && !sourceSchemaSet)
         {
@@ -219,6 +283,29 @@ public class DataTongs
         var sourceDb = config[SettingsKeys.Source.Database];
         if (string.IsNullOrEmpty(sourceDb)) throw new RunFailedException("Source database is required. Set Source:Database in DataTongs.settings.json.");
 
+        return new CastRun
+        {
+            DisableTriggers = config[SettingsKeys.ShouldCast.DisableTriggers]?.ToLower() == "true",
+            TokenizeScripts = config[SettingsKeys.ShouldCast.TokenizeScripts]?.ToLower() != "false",
+            MergeUpdate = config[SettingsKeys.ShouldCast.MergeUpdate]?.ToLower() != "false",
+            MergeDelete = mergeDelete,
+            DisableRules = config[SettingsKeys.ShouldCast.DisableRules]?.ToLower() == "true",
+            UpdateDescendents = config[SettingsKeys.ShouldCast.UpdateDescendents]?.ToLower() != "false",
+            OutputContents = outputContents,
+            OutputScripts = outputScripts,
+            ContentsPath = contentsPath,
+            ScriptPath = scriptPath,
+            ConfigureDataDelivery = configureDataDelivery,
+            DeliveryEncoding = deliveryEncoding,
+            TemplatePath = templatePath,
+            SourceSchema = sourceSchemaSetting,
+            SchemaTemplateMode = targetTemplateIsSchemaTemplate && sourceSchemaSet,
+            SourceDb = sourceDb,
+        };
+    }
+
+    private static List<TableConfig> ReadTablesToExtract(IConfigurationRoot config, bool schemaTemplateMode)
+    {
         var tables = config.GetSection(SettingsKeys.TablesToExtract)
             .GetChildren()
             .Select(t => new TableConfig
@@ -233,9 +320,7 @@ public class DataTongs
             .Where(t => !string.IsNullOrWhiteSpace(t.TableName))
             .ToList();
 
-        // Schema-template mode: Tables[N].Name must be unqualified — Source.Schema is the
-        // single source schema for every entry. Reject qualified names with a directive
-        // error per §8.3.
+        // In schema-template mode Source.Schema is the one source schema for every entry, so a qualified name is refused.
         if (schemaTemplateMode)
         {
             for (var i = 0; i < tables.Count; i++)
@@ -251,290 +336,244 @@ public class DataTongs
             }
         }
 
-        _progressLog.Info("Starting DataTongs...");
-        _progressLog.Info($"  Platform: {_platform}");
-        _progressLog.Info($"  Source Database: {sourceDb}");
-        if (schemaTemplateMode)
-            _progressLog.Info($"  Schema-template extraction mode: source schema = '{sourceSchemaSetting}', destination refs use {{{{SchemaName}}}}.");
+        return tables;
+    }
 
-        if (tables.Count == 0)
-        {
-            _progressLog.Warn("No tables configured for data extraction.");
-            _progressLog.Info("DataTongs completed (no tables to process).");
-            return;
-        }
-
-        IDbConnection sourceConnection;
-        try
-        {
-            sourceConnection = GetConnection(sourceDb);
-        }
-        catch (DbException e)
-        {
-            throw new RunFailedException($"Unable to connect to the source database {sourceDb}: {e.Message}", e);
-        }
-        using var sourceConnectionScope = sourceConnection;
-        var cmd = sourceConnection.CreateCommand();
-
+    // The source's version is read once: the floor check, the encoding choice, and the merge builders' version gates.
+    private CastRun DetectSource(IDbCommand cmd, CastRun run)
+    {
+        var basePlatform = _platform.GetBasePlatform();
+        // SQL Server proceeds without a version (the Json encoding is the default); PostgreSQL and MySQL generate
+        // version-specific scripts, so an undetectable or mismatched engine stops the run.
+        var sourceVersion = basePlatform == Platform.SqlServer
+            ? TargetVersionDetector.TryDetect(cmd, _platform, run.SourceDb)
+            : TargetVersionDetector.Detect(cmd, _platform, run.SourceDb);
         // The engine floor SchemaQuench checks before a deploy: below it the extraction queries do not run.
-        if (TargetVersionDetector.TryDetect(cmd, _platform, sourceDb) is { } sourceVersion)
-            PreFlightVersionGuard.CheckOrThrow(sourceVersion, $"Source {sourceDb}", sourceDb);
+        if (sourceVersion != null)
+            PreFlightVersionGuard.CheckOrThrow(sourceVersion, $"Source {run.SourceDb}", run.SourceDb);
 
-        var sqlServerSource = _platform.GetBasePlatform() == Platform.SqlServer
-            ? TargetVersionDetector.TryDetect(cmd, _platform, sourceDb)
-            : null;
-        var extractAsXml = ChooseXmlDeliveryEncoding(deliveryEncoding, _platform, sqlServerSource);
-        if (extractAsXml && string.IsNullOrWhiteSpace(deliveryEncoding) && sqlServerSource != null)
+        var sqlServerSource = basePlatform == Platform.SqlServer ? sourceVersion : null;
+        var extractAsXml = ChooseXmlDeliveryEncoding(run.DeliveryEncoding, _platform, sqlServerSource);
+        if (extractAsXml && string.IsNullOrWhiteSpace(run.DeliveryEncoding) && sqlServerSource != null)
             _progressLog.Info($"  Delivery data is extracted as Xml: the source is SQL Server {sqlServerSource.RawVersion}, " +
                               "and the Json extraction needs SQL Server 2017. Set DeliveryEncoding to choose.");
 
-        // PostgreSQL MERGE is a v15 feature; below 15 the generated merge script must use INSERT ... ON
-        // CONFLICT. DataTongs generates against the source it is extracting from, so the source version
-        // is the proxy for the target the Populate script will run on (the same-version case). A
-        // cross-version extract-then-deploy is not detected here — document if that surfaces.
-        var pgServerVersionNum = _platform.GetBasePlatform() == Platform.PostgreSQL
-            ? TargetVersionDetector.Detect(cmd, Platform.PostgreSQL).ServerComparable
-            : 0;
-
-        // MySQL/MariaDB data delivery is version-adaptive the same way: JSON_TABLE at MySQL 8.0 / MariaDB 10.6,
-        // a recursive-CTE shred on MariaDB 10.2-10.5, and unsupported below MySQL 8.0 (5.7 has neither). Detect
-        // the source version (the proxy for the target) so the generated Populate script matches; below the MySQL
-        // floor the merge builder throws, and delivery is skipped per table with a clear warning.
-        var mySqlServerVersionNum = _platform.GetBasePlatform() == Platform.MySQL
-            ? TargetVersionDetector.Detect(cmd, _platform).ServerComparable
-            : 0;
+        // The source version stands in for the target's: PostgreSQL below 15 has no MERGE, and MySQL/MariaDB delivery
+        // differs by version (JSON_TABLE, the recursive-CTE shred, none on 5.7).
+        var mySqlServerVersionNum = basePlatform == Platform.MySQL ? sourceVersion!.ServerComparable : 0;
 
         // When every table gets a script the settings alone decide this, so it is refused before anything is extracted.
-        // With ConfigureDataDelivery only the tables delivery could not be configured for get one; those are checked below.
-        if (outputScripts && !configureDataDelivery && mySqlServerVersionNum is not (> 0 and < 800))
-            RefuseUndeliverableScripts(extractAsXml, _platform, tokenizeScripts);
+        // With ConfigureDataDelivery only the tables delivery could not be configured for get one; those are checked per table.
+        if (run.OutputScripts && !run.ConfigureDataDelivery && mySqlServerVersionNum is not (> 0 and < 800))
+            RefuseUndeliverableScripts(extractAsXml, _platform, run.TokenizeScripts);
 
-        // A MySQL or MariaDB TIMESTAMP is rendered in the session's time zone. Extract at +00:00 and record it, so the
-        // delivery reads the values back in the same zone wherever it runs.
-        var extractionTimeZone = _platform.GetBasePlatform() == Platform.MySQL ? "+00:00" : null;
-        using var timeZone = extractionTimeZone != null ? MySqlSessionSettings.UseTimeZone(cmd, extractionTimeZone) : null;
-        // The values are read as the default sql_mode reads them: PAD_CHAR_TO_FULL_LENGTH would extract CHAR values padded.
-        using var sqlMode = _platform.GetBasePlatform() == Platform.MySQL ? MySqlSessionSettings.UseParseNeutralSqlMode(cmd) : null;
-
-        var tablesProcessed = 0;
-        var errors = 0;
-
-        foreach (var table in tables)
+        return run with
         {
-            try
+            ExtractAsXml = extractAsXml,
+            PgServerVersionNum = basePlatform == Platform.PostgreSQL ? sourceVersion!.ServerComparable : 0,
+            MySqlServerVersionNum = mySqlServerVersionNum,
+            SourceIsMariaDb = basePlatform == Platform.MySQL && sourceVersion!.RawVersion.Contains("MariaDB", StringComparison.OrdinalIgnoreCase),
+            ExtractionTimeZone = basePlatform == Platform.MySQL ? "+00:00" : null,
+        };
+    }
+
+    // True when the table counts as processed; false when it was skipped.
+    private bool CastTable(IDbCommand cmd, TableConfig table, CastRun run)
+    {
+        _progressLog.Info($"  Casting data for: {table.TableName}");
+
+        var parts = ParseTableName(table.TableName, run.SourceDb);
+        // In schema-template mode the names are unqualified and Source.Schema names the source schema.
+        var tableSchema = run.SchemaTemplateMode ? run.SourceSchema : parts.Schema;
+        var tableName = parts.Name;
+
+        // MySQL uses the database name for INFORMATION_SCHEMA queries, not a schema prefix
+        var querySchema = _platform.GetBasePlatform() == Platform.MySQL ? run.SourceDb : tableSchema;
+        var displayName = FormatTableName(tableSchema, tableName);
+        // #390: EncodeTableDisplayName is the one place the file name stem is derived, and the merge script embeds this
+        // token verbatim, so the file name and the script's {{key}} can never disagree.
+        var encodedDisplayName = MergeScriptHelper.EncodeTableDisplayName(tableSchema, tableName, run.SchemaTemplateMode);
+        var contentFileToken = $"{encodedDisplayName}.tabledata";
+
+        var (exists, isGraphEdge) = SourceTableState(cmd, querySchema, tableName);
+        if (!exists)
+        {
+            SkipTable($"  Table {displayName} does not exist in source database. Skipping table.");
+            return false;
+        }
+
+        if (isGraphEdge)
+        {
+            MarkIncomplete(TablesSkipped);
+            _progressLog.Warn($"  Table {displayName} is a graph edge table. Its $from_id and $to_id name rows of other node " +
+                              "tables by internal id, which delivery cannot translate, so it is not extracted. Skipping table.");
+            return false;
+        }
+
+        var keyColumns = string.IsNullOrWhiteSpace(table.KeyColumns)
+            ? MergeScriptHelper.GetKeyColumns(_platform, cmd, querySchema, tableName)
+            : table.KeyColumns;
+
+        if (string.IsNullOrWhiteSpace(keyColumns))
+        {
+            SkipTable($"  No match columns found for {displayName}. Skipping table.");
+            return false;
+        }
+
+        if (!IsValidKeyColumns(keyColumns))
+        {
+            SkipTable($"  Invalid KeyColumns '{keyColumns}' for {displayName}. Expected comma-separated column names (e.g., 'Col1,Col2'). Skipping table.");
+            return false;
+        }
+
+        var orderColumns = FormatOrderColumns(keyColumns);
+
+        LogUnsupportedColumns(cmd, _platform, querySchema, tableName);
+
+        var (tableData, selectColumns) = ExtractTableData(cmd, table, run, tableSchema, querySchema, tableName, orderColumns);
+
+        // SQL Server's FOR JSON and FOR XML leave out a column that is NULL in every row, and delivery takes its
+        // columns from the data, so the extracted column list is recorded beside it. Only for the list DataTongs
+        // builds itself: a hand-written SelectColumns can hold any expression.
+        var extractedColumns = _platform.GetBasePlatform() == Platform.SqlServer && string.IsNullOrWhiteSpace(table.SelectColumns)
+            ? SelectListNames(selectColumns ?? GetSelectColumns(cmd, querySchema, tableName), _platform)
+            : null;
+
+        if (string.IsNullOrEmpty(tableData) || tableData == "null" || tableData == "[]" || tableData == "<rows></rows>" || tableData == "<rows/>")
+        {
+            _progressLog.Info($"    No rows found for {table.TableName}. Skipping merge script.");
+
+            if (run.OutputContents)
             {
-                _progressLog.Info($"  Casting data for: {table.TableName}");
-
-                var parts = ParseTableName(table.TableName, sourceDb);
-                // In schema-template mode the user supplies unqualified Tables[N].Name and
-                // Source.Schema names the source schema. Override the parsed schema with the
-                // settings value so catalog queries hit the right source rows.
-                var tableSchema = schemaTemplateMode ? sourceSchemaSetting : parts.Schema;
-                var tableName = parts.Name;
-
-                // MySQL uses the database name for INFORMATION_SCHEMA queries, not a schema prefix
-                var querySchema = _platform.GetBasePlatform() == Platform.MySQL ? sourceDb : tableSchema;
-                var displayName = FormatTableName(tableSchema, tableName);
-                // Schema-template mode emits unqualified filenames: Customers.tabledata,
-                // Populate Customers.sql. The merge script's content-file token must match.
-                // #390: MergeScriptHelper.EncodeTableDisplayName is the ONE place this is derived —
-                // its own per-engine fallback (when contentFileToken isn't supplied) calls the same
-                // function, so filename and token can never disagree, here or in any other caller.
-                var encodedDisplayName = MergeScriptHelper.EncodeTableDisplayName(tableSchema, tableName, schemaTemplateMode);
-
-                // Single source of truth for both the .tabledata filename stem and the {{key}} token
-                // embedded in the merge script: MergeScriptHelper embeds this value verbatim instead
-                // of re-deriving it, so filename and token can never disagree.
-                var contentFileToken = $"{encodedDisplayName}.tabledata";
-
-                var (exists, isGraphEdge) = SourceTableState(cmd, querySchema, tableName);
-                if (!exists)
-                {
-                    SkipTable($"  Table {displayName} does not exist in source database. Skipping table.");
-                    continue;
-                }
-
-                if (isGraphEdge)
-                {
-                    MarkIncomplete(TablesSkipped);
-                    _progressLog.Warn($"  Table {displayName} is a graph edge table. Its $from_id and $to_id name rows of other node " +
-                                      "tables by internal id, which delivery cannot translate, so it is not extracted. Skipping table.");
-                    continue;
-                }
-
-                var keyColumns = string.IsNullOrWhiteSpace(table.KeyColumns)
-                    ? MergeScriptHelper.GetKeyColumns(_platform, cmd, querySchema, tableName)
-                    : table.KeyColumns;
-
-                if (string.IsNullOrWhiteSpace(keyColumns))
-                {
-                    SkipTable($"  No match columns found for {displayName}. Skipping table.");
-                    continue;
-                }
-
-                if (!IsValidKeyColumns(keyColumns))
-                {
-                    SkipTable($"  Invalid KeyColumns '{keyColumns}' for {displayName}. Expected comma-separated column names (e.g., 'Col1,Col2'). Skipping table.");
-                    continue;
-                }
-
-                var orderColumns = FormatOrderColumns(keyColumns);
-
-                LogUnsupportedColumns(cmd, _platform, querySchema, tableName);
-
-                string tableData;
-                string selectColumns = null;
-                if (extractAsXml && _platform.GetBasePlatform() == Platform.SqlServer)
-                {
-                    // Native producer — emits the delivery XML shape the legacy-tier shred consumes directly.
-                    tableData = GetTableDataXmlSqlServer(cmd, tableSchema, tableName, orderColumns, table.Filter);
-                }
-                else if (_platform.GetBasePlatform() == Platform.MySQL)
-                {
-                    tableData = GetTableDataJsonMySql(cmd, querySchema, tableName, orderColumns, table.Filter, table.SelectColumns);
-                    // B4b: no native XML producer on this engine — convert the same JSON the Json path would
-                    // have extracted into the delivery XML shape, so the file deploys through the SQL Server shred.
-                    if (extractAsXml) tableData = MergeScriptHelper.JsonPayloadToXml(tableData);
-                }
-                else
-                {
-                    selectColumns = string.IsNullOrWhiteSpace(table.SelectColumns)
-                        ? GetSelectColumns(cmd, querySchema, tableName)
-                        : table.SelectColumns;
-                    tableData = GetTableDataJson(cmd, selectColumns, tableSchema, tableName, orderColumns, table.Filter);
-                    if (extractAsXml) tableData = MergeScriptHelper.JsonPayloadToXml(tableData);
-                }
-
-                // SQL Server's FOR JSON and FOR XML leave out a column that is NULL in every row, and delivery takes its
-                // columns from the data, so the extracted column list is recorded beside it. Only for the list DataTongs
-                // builds itself: a hand-written SelectColumns can hold any expression.
-                var extractedColumns = _platform.GetBasePlatform() == Platform.SqlServer && string.IsNullOrWhiteSpace(table.SelectColumns)
-                    ? SelectListNames(selectColumns ?? GetSelectColumns(cmd, querySchema, tableName), _platform)
-                    : null;
-
                 // Empty markers differ by encoding: XML delivery shreds <rows></rows>, JSON shreds [].
-                var emptyContent = extractAsXml ? "<rows></rows>" : "[]";
-                if (string.IsNullOrEmpty(tableData) || tableData == "null" || tableData == "[]" || tableData == "<rows></rows>" || tableData == "<rows/>")
-                {
-                    _progressLog.Info($"    No rows found for {table.TableName}. Skipping merge script.");
-
-                    if (outputContents)
-                    {
-                        var emptyContentFilePath = Path.Join(contentsPath, contentFileToken);
-                        _progressLog.Info($"    Writing contents to : {emptyContentFilePath}");
-                        FileWrapper.GetFromFactory().WriteAllText(emptyContentFilePath, emptyContent);
-                    }
-
-                    tablesProcessed++;
-                    continue;
-                }
-                else
-                {
-                    var rowCount = extractAsXml ? CountXmlRows(tableData) : CountRows(tableData);
-                    _progressLog.Info($"    Extracted {rowCount} row(s) from {table.TableName}.");
-                }
-
-                string contentFilePath = null;
-                if (outputContents)
-                {
-                    contentFilePath = Path.Join(contentsPath, contentFileToken);
-                    _progressLog.Info($"    Writing contents to : {contentFilePath}");
-                    FileWrapper.GetFromFactory().WriteAllText(contentFilePath, tableData);
-                }
-
-                var deliveryConfigured = false;
-                if (configureDataDelivery && !string.IsNullOrWhiteSpace(templatePath) && !string.IsNullOrEmpty(contentFilePath))
-                {
-                    deliveryConfigured = DataDeliveryConfiguratorImpl.GetFromFactory().Configure(new DataDeliveryConfiguratorContext
-                    {
-                        TemplateRootPath = templatePath,
-                        Platform = _platform.ToString(),
-                        TableSchema = tableSchema,
-                        TableName = tableName,
-                        ContentFilePath = contentFilePath,
-                        KeyColumns = keyColumns,
-                        Columns = extractedColumns,
-                        DefaultMergeType = mergeDelete ? "Insert/Update/Delete" : mergeUpdate ? "Insert/Update" : "Insert",
-                        ContentEncoding = extractAsXml ? "Xml" : "Json",
-                        TimeZone = extractionTimeZone,
-                        DisableTriggers = disableTriggers,
-                        DisableRules = disableRules,
-                        UpdateDescendents = updateDescendents,
-                        MergeTypeOverride = table.MergeType,
-                        KeyColumnsOverride = table.KeyColumns,
-                        MergeFilterOverride = table.Filter,
-                        VariantName = table.VariantName,
-                        ProgressLog = _progressLog.Info,
-                        WarningLog = _progressLog.Warn
-                    });
-                }
-
-                // Delivery takes precedence, per table: a table whose delivery was actually configured
-                // this run does not also get a merge script (§ "Delivery takes precedence" above).
-                if (!outputScripts || deliveryConfigured) { tablesProcessed++; continue; }
-
-                if (mySqlServerVersionNum is > 0 and < 800)
-                {
-                    _progressLog.Warn($"    Skipping data delivery script for {tableName}: automatic data delivery requires MySQL 8.0 " +
-                                      $"(detected {mySqlServerVersionNum / 100}.{mySqlServerVersionNum % 100}); use manual data scripts.");
-                    MarkIncomplete(ScriptsNotWritten);
-                    tablesProcessed++;
-                    continue;
-                }
-
-                RefuseUndeliverableScripts(extractAsXml, _platform, tokenizeScripts);
-
-                // #390: wire the ScriptTokens entry the merge script's {{key}} placeholder needs to
-                // resolve, using the exact key already embedded in the filename (contentFileToken) —
-                // never re-derived. Requires both a written content file and a known template root;
-                // without either, the token cannot be wired and the script will fail to deploy.
-                if (tokenizeScripts)
-                {
-                    if (!string.IsNullOrEmpty(contentFilePath) && !string.IsNullOrWhiteSpace(templatePath))
-                    {
-                        MergeScriptTokenConfiguratorImpl.GetFromFactory().Configure(new MergeScriptTokenConfiguratorContext
-                        {
-                            TemplateRootPath = templatePath,
-                            TokenKey = contentFileToken,
-                            ContentFilePath = contentFilePath,
-                            ProgressLog = _progressLog.Info,
-                            WarningLog = _progressLog.Warn
-                        });
-                    }
-                    else
-                    {
-                        _progressLog.Warn($"    Cannot wire the '{{{{{contentFileToken}}}}}' token for {tableName}: " +
-                                          $"{(string.IsNullOrWhiteSpace(templatePath) ? $"ContentPath '{contentsPath}' is not within a template" : "OutputContentFiles is disabled, so no .tabledata file was written")}. " +
-                                          "The generated script will not deploy without manual ScriptTokens configuration.");
-                        MarkIncomplete(ScriptsNeedingTokens);
-                    }
-                }
-
-                // A MySQL/MariaDB script names the table alone, so it writes into the database it is deployed to.
-                var destSchemaOverride = schemaTemplateMode ? "{{SchemaName}}" : _platform.GetBasePlatform() == Platform.MySQL ? "" : null;
-                var mergeSQL = MergeScriptHelper.BuildMergeScript(_platform, cmd, querySchema, tableName, tableData,
-                    keyColumns, mergeUpdate, mergeDelete, disableTriggers, tokenizeScripts, table.Filter,
-                    disableRules, updateDescendents, destSchemaOverride, pgServerVersionNum, mySqlServerVersionNum,
-                    extractAsXml ? "Xml" : "Json", contentFileToken, declaredColumns: extractedColumns);
-
-                if (extractionTimeZone != null)
-                    mergeSQL = MySqlSessionSettings.WithTimeZone(mergeSQL, extractionTimeZone);
-
-                var scriptFilePath = Path.Join(scriptPath, $"Populate {encodedDisplayName}.sql");
-                _progressLog.Info($"    Writing merge script to : {scriptFilePath}");
-                FileWrapper.GetFromFactory().WriteAllText(scriptFilePath, mergeSQL);
-                tablesProcessed++;
+                var emptyContentFilePath = Path.Join(run.ContentsPath, contentFileToken);
+                _progressLog.Info($"    Writing contents to : {emptyContentFilePath}");
+                FileWrapper.GetFromFactory().WriteAllText(emptyContentFilePath, run.ExtractAsXml ? "<rows></rows>" : "[]");
             }
-            catch (Exception ex)
+
+            return true;
+        }
+
+        var rowCount = run.ExtractAsXml ? CountXmlRows(tableData) : CountRows(tableData);
+        _progressLog.Info($"    Extracted {rowCount} row(s) from {table.TableName}.");
+
+        string contentFilePath = null;
+        if (run.OutputContents)
+        {
+            contentFilePath = Path.Join(run.ContentsPath, contentFileToken);
+            _progressLog.Info($"    Writing contents to : {contentFilePath}");
+            FileWrapper.GetFromFactory().WriteAllText(contentFilePath, tableData);
+        }
+
+        var deliveryConfigured = run.ConfigureDataDelivery && !string.IsNullOrWhiteSpace(run.TemplatePath) && !string.IsNullOrEmpty(contentFilePath)
+            && DataDeliveryConfiguratorImpl.GetFromFactory().Configure(new DataDeliveryConfiguratorContext
             {
-                errors++;
-                Failed = true;
-                _progressLog.Error($"  Error processing table {table.TableName}: {ex.Message}");
-                _errorLog.Error($"Error processing table {table.TableName}", ex);
+                TemplateRootPath = run.TemplatePath,
+                Platform = _platform.ToString(),
+                TableSchema = tableSchema,
+                TableName = tableName,
+                ContentFilePath = contentFilePath,
+                KeyColumns = keyColumns,
+                Columns = extractedColumns,
+                DefaultMergeType = run.MergeDelete ? "Insert/Update/Delete" : run.MergeUpdate ? "Insert/Update" : "Insert",
+                ContentEncoding = run.ExtractAsXml ? "Xml" : "Json",
+                TimeZone = run.ExtractionTimeZone,
+                DisableTriggers = run.DisableTriggers,
+                DisableRules = run.DisableRules,
+                UpdateDescendents = run.UpdateDescendents,
+                MergeTypeOverride = table.MergeType,
+                KeyColumnsOverride = table.KeyColumns,
+                MergeFilterOverride = table.Filter,
+                VariantName = table.VariantName,
+                ProgressLog = _progressLog.Info,
+                WarningLog = _progressLog.Warn
+            });
+
+        // Delivery takes precedence, per table: a table whose delivery was configured this run gets no merge script.
+        if (!run.OutputScripts || deliveryConfigured) return true;
+
+        WriteMergeScript(cmd, table, run, querySchema, tableName, tableData, keyColumns, extractedColumns,
+            encodedDisplayName, contentFileToken, contentFilePath);
+        return true;
+    }
+
+    private (string TableData, string SelectColumns) ExtractTableData(IDbCommand cmd, TableConfig table, CastRun run,
+        string tableSchema, string querySchema, string tableName, string orderColumns)
+    {
+        // Native producer on SQL Server: the delivery XML shape the legacy-tier shred consumes directly.
+        if (run.ExtractAsXml && _platform.GetBasePlatform() == Platform.SqlServer)
+            return (GetTableDataXmlSqlServer(cmd, tableSchema, tableName, orderColumns, table.Filter), null);
+
+        // Every other engine has no native XML producer: the Json extraction is converted into the delivery XML shape,
+        // so the file deploys through the SQL Server shred.
+        if (_platform.GetBasePlatform() == Platform.MySQL)
+        {
+            var json = GetTableDataJsonMySql(cmd, querySchema, tableName, orderColumns, table.Filter, table.SelectColumns, run.SourceIsMariaDb);
+            return (run.ExtractAsXml ? MergeScriptHelper.JsonPayloadToXml(json) : json, null);
+        }
+
+        var selectColumns = string.IsNullOrWhiteSpace(table.SelectColumns)
+            ? GetSelectColumns(cmd, querySchema, tableName)
+            : table.SelectColumns;
+        var tableData = GetTableDataJson(cmd, selectColumns, tableSchema, tableName, orderColumns, table.Filter);
+        return (run.ExtractAsXml ? MergeScriptHelper.JsonPayloadToXml(tableData) : tableData, selectColumns);
+    }
+
+    private void WriteMergeScript(IDbCommand cmd, TableConfig table, CastRun run, string querySchema, string tableName,
+        string tableData, string keyColumns, string extractedColumns, string encodedDisplayName, string contentFileToken,
+        string contentFilePath)
+    {
+        if (run.MySqlServerVersionNum is > 0 and < 800)
+        {
+            _progressLog.Warn($"    Skipping data delivery script for {tableName}: automatic data delivery requires MySQL 8.0 " +
+                              $"(detected {run.MySqlServerVersionNum / 100}.{run.MySqlServerVersionNum % 100}); use manual data scripts.");
+            MarkIncomplete(ScriptsNotWritten);
+            return;
+        }
+
+        RefuseUndeliverableScripts(run.ExtractAsXml, _platform, run.TokenizeScripts);
+
+        // #390: wire the ScriptTokens entry the script's {{key}} placeholder needs, with the key already in the file
+        // name. It takes a written content file and a known template root; without either the script cannot deploy.
+        if (run.TokenizeScripts)
+        {
+            if (!string.IsNullOrEmpty(contentFilePath) && !string.IsNullOrWhiteSpace(run.TemplatePath))
+            {
+                MergeScriptTokenConfiguratorImpl.GetFromFactory().Configure(new MergeScriptTokenConfiguratorContext
+                {
+                    TemplateRootPath = run.TemplatePath,
+                    TokenKey = contentFileToken,
+                    ContentFilePath = contentFilePath,
+                    ProgressLog = _progressLog.Info,
+                    WarningLog = _progressLog.Warn
+                });
+            }
+            else
+            {
+                _progressLog.Warn($"    Cannot wire the '{{{{{contentFileToken}}}}}' token for {tableName}: " +
+                                  $"{(string.IsNullOrWhiteSpace(run.TemplatePath) ? $"ContentPath '{run.ContentsPath}' is not within a template" : "OutputContentFiles is disabled, so no .tabledata file was written")}. " +
+                                  "The generated script will not deploy without manual ScriptTokens configuration.");
+                MarkIncomplete(ScriptsNeedingTokens);
             }
         }
 
-        sourceConnection.Close();
+        // A MySQL/MariaDB script names the table alone, so it writes into the database it is deployed to.
+        var destSchemaOverride = run.SchemaTemplateMode ? "{{SchemaName}}" : _platform.GetBasePlatform() == Platform.MySQL ? "" : null;
+        var mergeSQL = MergeScriptHelper.BuildMergeScript(_platform, cmd, querySchema, tableName, tableData,
+            keyColumns, run.MergeUpdate, run.MergeDelete, run.DisableTriggers, run.TokenizeScripts, table.Filter,
+            run.DisableRules, run.UpdateDescendents, destSchemaOverride, run.PgServerVersionNum, run.MySqlServerVersionNum,
+            run.ExtractAsXml ? "Xml" : "Json", contentFileToken, declaredColumns: extractedColumns);
+
+        if (run.ExtractionTimeZone != null)
+            mergeSQL = MySqlSessionSettings.WithTimeZone(mergeSQL, run.ExtractionTimeZone);
+
+        var scriptFilePath = Path.Join(run.ScriptPath, $"Populate {encodedDisplayName}.sql");
+        _progressLog.Info($"    Writing merge script to : {scriptFilePath}");
+        FileWrapper.GetFromFactory().WriteAllText(scriptFilePath, mergeSQL);
+    }
+
+    private void LogSummary(int tablesProcessed, int errors)
+    {
         _progressLog.Info("=== DataTongs Summary ===");
         _progressLog.Info($"  Tables processed: {tablesProcessed}");
         if (_incomplete.TryGetValue(TablesSkipped, out var skipped)) _progressLog.Info($"  Skipped: {skipped}");
@@ -919,7 +958,7 @@ SELECT JSON_AGG(ROW_TO_JSON(tbl))
     }
 
     internal string GetTableDataJsonMySql(IDbCommand cmd, string databaseName,
-        string tableName, string orderColumns, string filter, string configSelectColumns)
+        string tableName, string orderColumns, string filter, string configSelectColumns, bool? isMariaDb = null)
     {
         databaseName = databaseName.Trim().Trim('`');
         tableName = tableName.Trim().Trim('`');
@@ -937,8 +976,8 @@ SELECT JSON_AGG(ROW_TO_JSON(tbl))
             columns = columns.Where(c => selected.Contains(c.Name)).ToList();
         }
 
-        var isMariaDb = IsMariaDb(cmd);
-        var jsonObjectArgs = columns.Select(c => FormatColumnForJsonObject(c, quoteDecimals: !isMariaDb)).ToList();
+        var mariaDb = isMariaDb ?? IsMariaDb(cmd);
+        var jsonObjectArgs = columns.Select(c => FormatColumnForJsonObject(c, quoteDecimals: !mariaDb)).ToList();
         var jsonObjectClause = string.Join(",\n            ", jsonObjectArgs);
         var whereClause = string.IsNullOrWhiteSpace(filter) ? "" : $"WHERE {filter}";
 
@@ -954,7 +993,7 @@ SELECT JSON_OBJECT(
 FROM {qualifiedTable}
 {whereClause}
 ORDER BY {orderColumns};";
-        var separator = isMariaDb ? "," : ", ";
+        var separator = mariaDb ? "," : ", ";
         var json = new StringBuilder("[");
         using (var reader = cmd.ExecuteReader())
         {
