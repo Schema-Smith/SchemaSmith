@@ -747,7 +747,7 @@ The gaps a dry run has are each explained where the feature is; this is the one 
 - **Nothing is created.** A database `CreateIfMissing` would create is reported, not created, and its work units do not run: each logs one line saying every object the template declares would be created. See [CreateIfMissing](#createifmissing).
 - **Ownership not stamped.** Ownership rows and markers are a real write, so the preview skips them; on SQL Server the extended-property statements are printed instead. See [Table Ownership](#table-ownership).
 - **No map is recorded.** Nothing is recorded, and anything the scratch-copy check verified is put back after the index step, before foreign keys are previewed.
-- **Steps are checkpointed.** The table steps are recorded under the same step names as a real run, and a clean preview deletes them at the end. A preview that fails leaves them behind, and a later `--ResumeQuench` reads them as completed work -- so do not resume a real run from a failed preview's checkpoints. Run without `--ResumeQuench`, a preview also deletes the checkpoint a failed real run left in the same directory for each database it reaches. See [WhatIf and checkpoints](#whatif-and-checkpoints).
+- **Steps are checkpointed.** The table steps are recorded under the same step names as a real run, and a clean preview deletes them at the end. A preview that fails leaves them behind, and a later `--ResumeQuench` reads them as completed work -- so do not resume a real run from a failed preview's checkpoints. See [WhatIf and checkpoints](#whatif-and-checkpoints).
 
 ### Debug SQL output
 
@@ -1978,7 +1978,7 @@ Resume is for finishing the run that failed, with the fix confined to what faile
 
 ### WhatIf and checkpoints
 
-A `--WhatIf` run checkpoints the same way a real run does: the baseline validation, the PostgreSQL type steps, the sequence step (PostgreSQL and MariaDB) and the three table steps (`ModifiedTables`, `IndexesAndConstraints`, `TableFeatures`) are recorded under the same names as they are previewed, and the scripts it lists are not. A preview that completes deletes its own checkpoints, as any clean run does. A preview that fails leaves them, and a later real run with `--ResumeQuench` reads them as completed work and skips those steps. Do not resume a real run from a failed preview's checkpoints: delete the files, or run without `--ResumeQuench`. The reverse costs you too: a preview run without `--ResumeQuench`, like any such run, deletes the checkpoint it finds for each database as it reaches it, so a `--WhatIf` between a failed real run and its resume removes the resume point of every database the preview reaches. To preview before resuming, give the preview its own `--CheckpointDirectory`.
+A `--WhatIf` run checkpoints the same way a real run does: the baseline validation, the PostgreSQL type steps, the sequence step (PostgreSQL and MariaDB) and the three table steps (`ModifiedTables`, `IndexesAndConstraints`, `TableFeatures`) are recorded under the same names as they are previewed, and the scripts it lists are not. A preview that completes deletes its own checkpoints, as any clean run does. A preview that fails leaves them, and a later real run with `--ResumeQuench` reads them as completed work and skips those steps. Do not resume a real run from a failed preview's checkpoints: delete the files, or run without `--ResumeQuench`.
 
 ### Automatic cleanup after success
 
