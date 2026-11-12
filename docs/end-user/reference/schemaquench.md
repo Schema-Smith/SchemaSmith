@@ -1566,7 +1566,7 @@ Because the marker is sticky, clearing it is a deliberate, reviewed step -- you 
 
 Per-table `PreventDrop` protects tables you name one at a time. Sometimes you want the opposite default: an entire environment where the deployment tool is simply not allowed to remove anything by omission -- production, a shared staging fleet, any target where an accidental drop is unacceptable. The **environment-level `PreventDrop`** setting is that blanket guardrail.
 
-Set `PreventDrop: true` in `SchemaQuench.settings.json` (or the `SmithySettings_PreventDrop` environment variable) and, for the whole run, SchemaQuench suppresses *every* drop-by-absence pass -- tables, columns, foreign keys, check and exclude constraints, statistics, product-owned indexes, and unknown out-of-band indexes. Nothing is dropped for being absent from the product, regardless of what any package, template, or table declares. It is off by default.
+Set `PreventDrop: true` in `SchemaQuench.settings.json` (or the `SmithySettings_PreventDrop` environment variable) and, for the whole run, SchemaQuench suppresses *every* drop-by-absence pass -- tables, columns, foreign keys, check and exclude constraints, statistics, product-owned indexes, unknown out-of-band indexes and scheduled events -- and none of those passes drops anything for being absent from the product, regardless of what any package, template, or table declares. It is off by default.
 
 ```json
 {
