@@ -4,7 +4,7 @@ Applies to: SchemaQuench, SchemaTongs — SQL Server, PostgreSQL, MySQL, and Mar
 
 ---
 
-Custom properties are how you attach your own metadata to the things in a schema package -- data classification tags, ownership, retention policies, environment markers, anything you want your team to see, track, and act on. Define a property once and it flows through the pipeline: it rides alongside the standard table definition in source control, survives SchemaTongs re-extraction, and becomes a `{{TokenName}}` substitution inside any expression field SchemaQuench evaluates.
+Custom properties are how you attach your own metadata to the things in a schema package -- data classification tags, ownership, retention policies, anything you want your team to see, track, and act on. Define a property once and it flows through the pipeline: it rides alongside the standard table definition in source control, survives SchemaTongs re-extraction, and becomes a `{{TokenName}}` substitution in the expression fields of the file that declares it.
 
 Think of them as sidecar data. SchemaSmith doesn't care what they mean. *You* do -- and that's exactly the point. Custom properties turn the schema package into a governance surface your team owns.
 
@@ -133,7 +133,7 @@ Custom properties at any level are completely independent -- a `DataClassificati
 
 ## Token Integration
 
-Here's where custom properties stop being passive metadata and start driving behavior. When SchemaQuench processes a table, it walks `Extensions` on every component and produces `{{TokenName}}` substitutions you can reference in any expression field.
+Here's where custom properties stop being passive metadata and start driving behavior. When SchemaQuench processes a table, it walks `Extensions` on every component and produces `{{TokenName}}` substitutions you can reference in that file's expression fields -- listed under [Where tokens are substituted](#where-tokens-are-substituted) below.
 
 ### Scope rules
 
@@ -325,7 +325,7 @@ To add column-level governance (constraining `Classification` on individual colu
 
 **SchemaTongs** -- Re-extraction preserves `Extensions` on every supported component as described above. Anything you add manually survives subsequent schema refreshes so long as the component name is unchanged (or `OldName` is set for renames).
 
-**SchemaQuench** -- Reads `Extensions` at quench time and resolves the contents as script tokens in expression fields. `Extensions` has no direct effect on DDL generation; its influence is entirely through the token substitution mechanism. The full table metadata -- including `Extensions` -- is available at runtime through the `{{TableSchema}}` automatic token if you need to emit it into a migration script or audit row.
+**SchemaQuench** -- Reads `Extensions` at quench time and resolves the contents as tokens in the expression fields of the table, indexed-view or materialized-view file that declares them. `Extensions` has no direct effect on DDL generation; its influence is entirely through the token substitution mechanism. The full table metadata -- including `Extensions` -- is available at runtime through the `{{TableSchema}}` automatic token if you need to emit it into a migration script or audit row.
 
 **DataTongs** -- Table files are round-tripped transparently; `Extensions` is neither inspected nor modified.
 
@@ -333,7 +333,7 @@ To add column-level governance (constraining `Classification` on individual colu
 
 ## Naming Guidance
 
-Because everything lives inside the `Extensions` bag, there are no reserved names to worry about -- you cannot collide with a standard property. That said, keep your names stable and descriptive. The names become script tokens across your entire deployment, and renaming a property is a search-and-replace across every expression field that uses it.
+Because everything lives inside the `Extensions` bag, there are no reserved names to worry about -- you cannot collide with a standard property. That said, keep your names stable and descriptive. The names become tokens in the expression fields of the file that declares them, and renaming a property is a search-and-replace across every expression field that uses it. A script token with the same name wins over a custom property (see *First definition wins* above), so pick names your script tokens do not use.
 
 A few practices that hold up well:
 
