@@ -204,6 +204,7 @@ namespace Schema.Domain
             product.InstanceLoad();
             product.ServerSettings = SettingsFile.LoadIfPresent(Path.Join(schemaPackagePath, SettingsFile.ServerFileName), product.Platform,
                 SettingScope.Server, missingMemberHandling, tolerateDeclarationErrors: tolerateFileTokenErrors);
+            product.ServerSettings?.ResolveTokens(product.ScriptTokens.ToList(), product.Platform);
 
             return product;
         }

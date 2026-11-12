@@ -593,6 +593,7 @@ namespace Schema.Domain
                 .ToDictionary(k => k.Key, v => v.Value);
 
             template.InstanceLoad(scriptTokens, product.Platform, tolerateComponentLoadErrors);
+            template.DatabaseSettings?.ResolveTokens(scriptTokens.ToList(), product.Platform);
 
             // Resolve the per-token TokenScope map so the SchemaQuench dispatcher can decide which
             // <*Query*> tokens need re-running per schema iteration vs. once per DB. Idempotent on

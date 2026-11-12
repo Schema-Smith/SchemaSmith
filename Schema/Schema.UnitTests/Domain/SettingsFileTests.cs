@@ -184,6 +184,33 @@ public class SettingsFileTests
         Assert.That(template.DatabaseSettings?.Settings.Single().Display, Is.EqualTo("Option 'RECOVERY'"));
     }
 
+    // A variant gated on a pipeline token: the token is resolved before the gate reaches the server, as a folder's is.
+    [Test]
+    public void Product_ResolvesScriptTokensInAServerSettingsGate()
+    {
+        Given(ServerFile, """
+            { "Settings": [ { "Kind": "Configuration", "Name": "max degree of parallelism", "Value": "8", "Fix": true, "OnDrift": "Warn",
+              "ShouldApplyExpression": "SELECT CASE WHEN '{{ServerClass}}' = 'OLTP' THEN 1 ELSE 0 END" } ] }
+            """);
+        var product = LoadProduct("""{ "Name": "TestProduct", "Platform": "SqlServer", "ScriptTokens": { "ServerClass": "OLTP" } }""");
+
+        Assert.That(product.ServerSettings.Settings.Single().ShouldApplyExpression, Is.EqualTo("SELECT CASE WHEN 'OLTP' = 'OLTP' THEN 1 ELSE 0 END"));
+    }
+
+    [Test]
+    public void Template_ResolvesScriptTokensInADatabaseSettingsGate()
+    {
+        Given(DatabaseFile, """
+            { "Settings": [ { "Kind": "Option", "Name": "RECOVERY", "Value": "SIMPLE", "Fix": true, "OnDrift": "Warn",
+              "ShouldApplyExpression": "SELECT CASE WHEN '{{Tier}}' = 'dev' THEN 1 ELSE 0 END" } ] }
+            """);
+        Given(TemplateFile, """{ "Name": "Main", "DatabaseIdentificationScript": "SELECT 'db'", "ScriptTokens": { "Tier": "dev" } }""");
+
+        var template = Template.Load("Main", Product());
+
+        Assert.That(template.DatabaseSettings.Settings.Single().ShouldApplyExpression, Is.EqualTo("SELECT CASE WHEN 'dev' = 'dev' THEN 1 ELSE 0 END"));
+    }
+
     [Test]
     public void SchemaTemplate_WithDatabaseSettings_Refuses()
     {
@@ -202,14 +229,14 @@ public class SettingsFileTests
         FilePath = Path.Join(Root, "Product.json")
     };
 
-    private Product LoadProduct()
+    private Product LoadProduct(string productJson = """{ "Name": "TestProduct", "Platform": "SqlServer" }""")
     {
         var config = Substitute.For<Microsoft.Extensions.Configuration.IConfigurationRoot>();
         config[Schema.Configuration.SettingsKeys.SchemaPackagePath].Returns(Root);
         config.GetSection(Arg.Any<string>()).Returns(Substitute.For<Microsoft.Extensions.Configuration.IConfigurationSection>());
         FactoryContainer.Register(config);
         _directory.Exists(Root).Returns(true);
-        Given(Path.Join(Root, "Product.json"), """{ "Name": "TestProduct", "Platform": "SqlServer" }""");
+        Given(Path.Join(Root, "Product.json"), productJson);
         return Schema.Domain.Product.Load();
     }
 }

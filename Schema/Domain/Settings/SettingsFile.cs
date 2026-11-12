@@ -41,6 +41,13 @@ public sealed class SettingsFile
         return file;
     }
 
+    /// <summary>A setting's gate takes the script-token pass a folder's gate does, so a pipeline token can pick a variant.</summary>
+    public void ResolveTokens(List<KeyValuePair<string, string>> scriptTokens, Platform platform)
+    {
+        foreach (var setting in Settings.Where(s => !string.IsNullOrWhiteSpace(s.ShouldApplyExpression)))
+            setting.ShouldApplyExpression = SqlScript.TokenReplace(setting.ShouldApplyExpression, scriptTokens, platform);
+    }
+
     private void RefuseInvalidDeclarations(Platform platform)
     {
         var kinds = SettingKinds.For(platform, Scope);
