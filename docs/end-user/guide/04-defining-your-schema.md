@@ -73,7 +73,7 @@ The same table on PostgreSQL:
 }
 ```
 
-The MySQL and MariaDB variants use `INT AUTO_INCREMENT`, `VARCHAR(100)`, `DECIMAL(5,2)`, and `TINYINT(1)` or `BOOLEAN` -- they're separate packages (each declares its own `Platform`), even where the DDL shape lines up. The file structure is identical; only the data types and quoting change. Your team can manage all four platforms with the same mental model.
+The MySQL and MariaDB variants use `INT` with `"AutoIncrement": true`, `VARCHAR(100)`, `DECIMAL(5,2)`, and `TINYINT(1)` or `BOOLEAN` -- they're separate packages (each declares its own `Platform`), even where the DDL shape lines up. The file structure is identical; only the data types and quoting change. Your team can manage all four platforms with the same mental model.
 
 ## Modifying a table
 
