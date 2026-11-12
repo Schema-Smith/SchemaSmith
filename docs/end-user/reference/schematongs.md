@@ -608,8 +608,10 @@ that arrangement every time it is refreshed.
 
 > **This does not change your database.** It preserves the order *in the file*. It does **not** make a
 > deployed table's physical column order match the package — reordering the columns of an existing table
-> is a table rebuild, not a formatting preference, and is a separate opt-in. If you have never re-extracted
-> over an existing file, this setting has no effect on anything.
+> is a change to the table, not a formatting preference, and is a separate opt-in
+> ([`RebuildPolicy`](configuration.md#rebuildpolicy) `OnOrderMismatch`), carried out by a table rebuild or, on
+> MySQL and MariaDB under `OnlineApply` `Prefer` or `Require`, by moving the columns in place. If you have never
+> re-extracted over an existing file, this setting has no effect on anything.
 
 Set it to `false` to have every extraction re-sequence the whole file from scratch using `ObjectOrder`.
 
