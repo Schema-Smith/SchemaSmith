@@ -1867,7 +1867,7 @@ Every gate is evaluated against a live connection, but not at the same moment or
 | A `DataDelivery` block | Once per database and schema, at the delivery step, before any content file is read. | The target database. See [Gated deliveries and variants](#gated-deliveries-and-variants). |
 | An indexed view, materialized view, domain type, enum type or sequence | Inside the procedure that deploys it, per target. | The target database. |
 
-A folder gate is run as a scalar query: write it as a `SELECT` that returns a boolean or `1`/`0`, or as a bare predicate, which SchemaQuench wraps in `SELECT CASE WHEN (…) THEN 1 ELSE 0 END`. No folder gate can use a query token: query tokens are kept out of the load-time pass and are only ever applied to scripts. A component gate is a bare predicate (a leading `SELECT` is stripped). The same test, on each engine:
+A folder gate is run as a scalar query: write it as a `SELECT` that returns a number or boolean, or as a bare predicate, which SchemaQuench wraps in `SELECT CASE WHEN (…) THEN 1 ELSE 0 END`. No folder gate can use a query token: query tokens are kept out of the load-time pass and are only ever applied to scripts. A component gate is a bare predicate (a leading `SELECT` is stripped). The same test, on each engine:
 
 ```jsonc
 // SQL Server
@@ -1990,7 +1990,7 @@ A circular dependency among NOT NULL foreign keys fails the dependency sort -- S
 
 `MergeType` has no default: a delivery that omits it, or sets `None`, is not run.
 
-The chosen idiom varies per platform -- `MERGE` on SQL Server and PostgreSQL, `INSERT ... ON DUPLICATE KEY UPDATE` plus conditional delete on MySQL -- but the `MergeType` you declare is the same contract everywhere.
+The chosen idiom varies per platform -- `MERGE` on SQL Server and on PostgreSQL 15 and later (an `UPDATE` plus an `INSERT ... WHERE NOT EXISTS` on an older PostgreSQL target), `INSERT ... ON DUPLICATE KEY UPDATE` plus a separate delete on MySQL and MariaDB -- but the `MergeType` you declare is the same contract everywhere.
 
 ### DataDelivery vs hand-written Table Data scripts
 

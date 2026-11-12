@@ -1273,7 +1273,7 @@ Tables without a `DataDelivery` block are left alone. Tables that declare one ar
 | `MergeType` | string | | One of `Insert`, `Insert/Update`, `Insert/Update/Delete`. Required to deliver: a delivery without it, or with `None`, is not run. See [MergeType](#mergetype) below. |
 | `MatchColumns` | string | | Comma-separated column names that identify a row. Prefix a column with `*` for NULL-safe comparison on nullable keys. Matches the `KeyColumns` concept in DataTongs. |
 | `MergeFilter` | string | `""` | Optional SQL `WHERE` clause (without the `WHERE` keyword). Scopes both the rows considered for matching and, when delete is enabled, the rows eligible for deletion. |
-| `MergeDisableTriggers` | bool | `false` | Wrap the merge with platform-appropriate trigger disable/enable. |
+| `MergeDisableTriggers` | bool | `false` | **SQL Server, PostgreSQL.** Wrap the merge in `ALTER TABLE ... DISABLE TRIGGER ALL` / `ENABLE TRIGGER ALL`. On PostgreSQL that needs superuser when the table has foreign-key or deferrable-constraint triggers. MySQL and MariaDB cannot disable a trigger, so there it has no effect. |
 | `MergeDisableRules` | bool | `false` | **PostgreSQL.** Disable rewrite rules on the table during the merge. |
 | `MergeUpdateDescendents` | bool | `false` | **PostgreSQL.** When `true`, the merge targets descendant partitions as well as the specified table. When `false` (the default), the merge uses `ONLY` so descendant tables are left untouched. |
 | `TimeZone` | string | | **MySQL, MariaDB.** The session time zone, as an offset such as `+00:00`, that the `ContentFile`'s `TIMESTAMP` values were extracted in. Delivery runs in the same zone, so the values arrive unchanged wherever the target server's zone is. DataTongs sets it to `+00:00`. Without it, delivery reads the values in the target session's zone, which is right for data written in that zone. |
@@ -1290,7 +1290,7 @@ A row value that is a JSON object or array, delivered into a text column, arrive
 | `Insert/Update` | Missing rows inserted, changed rows updated. Extra rows left alone. Good for reference tables where environments can append local rows. The demo products use this. |
 | `Insert/Update/Delete` | Full sync. Missing rows inserted, changed rows updated, and target rows that don't exist in the source data are deleted. When `MergeFilter` is set, deletes are scoped by the filter so rows outside it are never removed. |
 
-The chosen idiom is platform-specific -- `MERGE` on SQL Server and PostgreSQL, `INSERT ... ON DUPLICATE KEY UPDATE` with a conditional delete step on MySQL -- but the declarative contract is the same on every platform.
+The chosen idiom is platform-specific -- `MERGE` on SQL Server and on PostgreSQL 15 and later (an `UPDATE` plus an `INSERT ... WHERE NOT EXISTS` on an older PostgreSQL target), `INSERT ... ON DUPLICATE KEY UPDATE` with a separate delete step on MySQL and MariaDB -- but the declarative contract is the same on every platform.
 
 ### Content Encoding
 
