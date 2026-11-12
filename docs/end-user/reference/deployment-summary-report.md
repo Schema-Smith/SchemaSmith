@@ -55,7 +55,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 {
   "schemaVersion": "1.4",           // contract version of this report shape
   "tool": "SchemaQuench",
-  "toolVersion": "2.2.0.0",
+  "toolVersion": "2.8.0.0",
   "run": {
     "product": "Northwind",
     "platform": "SqlServer",        // SqlServer | PostgreSQL | MySQL | MariaDb
@@ -63,8 +63,8 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     "finishedUtc": "2026-07-09T14:03:47.881Z",
     "durationMs": 36677,            // run wall-clock
     "mode": "Quench",               // Quench | WhatIf | Drift
-    "outcome": "Success",           // Success | Incomplete | PartialFailure | Aborted
-    "exitCode": 0,
+    "outcome": "Incomplete",        // Success | Incomplete | PartialFailure | Aborted
+    "exitCode": 1,                  // 1 because unsupportedDowngrade below is populated
     "resumedFromCheckpoint": false,
     "settings": { "commandTimeoutSeconds": 0, "lockTimeoutSeconds": 10, "contentionRetryAttempts": 20 },
     "id": "5d2c1a0e-7f3b-4a55-9a0c-1c2f6f0e8b11",   // this run; the progress log's "Run <id>" line too
@@ -318,7 +318,7 @@ scripts.
 
 ### `whatIf`
 
-`null` for a real quench. On a `WhatIf`-mode run it holds the plan, split three ways — and every entry carries a script *path*, never a SQL body. This block is the *script-level* plan; the engine-generated structural changes a WhatIf run would make (tables, columns, indexes, constraints, foreign keys) preview in [`objectChanges`](#objectchanges--what-actually-changed) with `would*` actions.
+`null` for a real quench. On a `WhatIf`-mode run it holds the plan, split three ways — and no entry carries a SQL body: a script entry carries its *path*, a `DataDelivery` entry the table's name. This block is the *script-level* plan; the engine-generated structural changes a WhatIf run would make (tables, columns, indexes, constraints, foreign keys) preview in [`objectChanges`](#objectchanges--what-actually-changed) with `would*` actions.
 
 | Key | Meaning |
 | --- | --- |
@@ -351,13 +351,13 @@ In `Summary.md` the same block renders under a **PreventDrop (no-drop protection
 
 Timing tells you where the run spent its seconds; `objectChanges` tells you what it *did to your schema*. This is the section a DBA reads after a release: how many tables were created, which columns were modified, what got dropped. But it draws a hard, honest line between changes SchemaSmith *verified* and scripts it merely *ran* — and understanding that line is the whole point of the section.
 
-**Verified counts.** As the four table-quench procedures run DDL, they record each real change to a session-scoped audit that SchemaSmith drains back in-process. Those captured rows are the `created`, `modified`, and `dropped` counts — genuine, observed structural changes to tables, columns, indexes, constraints, and foreign keys. If the count says one table created and three columns modified, that is what happened, read back from the engine.
+**Verified counts.** As SchemaSmith's quench procedures run DDL, they record each real change to a session-scoped audit that SchemaSmith drains back in-process. Those captured rows are the `created`, `modified`, and `dropped` counts — genuine, observed structural changes to tables, columns, indexes, constraints, and foreign keys. If the count says one table created and three columns modified, that is what happened, read back from the engine.
 
 **Under WhatIf.** A `WhatIf` run records what it *would* change with the parallel actions `wouldCreate` / `wouldModify` / `wouldDrop`, which roll into the same `created` / `modified` / `dropped` buckets — so a dry run's `objectChanges` previews the structural changes it would make rather than reporting an empty section. The counts read the same as a real run; the report's `mode` field (`WhatIf` vs `Quench`) is how you tell a preview from an applied change.
 
-**Scripts that ran.** Object scripts — your stored procedures, views, and functions — are a different story. SchemaSmith re-applies them idempotently on *every* run, so a procedure script executes whether or not its body changed anything. SchemaSmith refuses to guess. It will not tell you a procedure was "created" or "modified" when all it honestly knows is that the script *ran*. So object scripts never touch the created/modified counts. Instead they contribute to `scriptsRan` (a count) and to `details[]` rows carrying `"action": "ran"`. An object script that was *not* re-run because [nothing changed since its last apply](schemaquench.md#unchanged-object-scripts) counts under `scriptsUnchanged` instead, with a `details[]` row carrying `"action": "unchanged"` — the report says which scripts it left alone as plainly as which it ran.
+**Scripts that ran.** Object scripts — your stored procedures, views, and functions — are a different story. A script SchemaSmith runs is re-applied idempotently, so it executes whether or not its body changes anything. SchemaSmith refuses to guess. It will not tell you a procedure was "created" or "modified" when all it honestly knows is that the script *ran*. So object scripts never touch the created/modified counts. Instead they contribute to `scriptsRan` (a count) and to `details[]` rows carrying `"action": "ran"`. An object script that was *not* re-run because [nothing changed since its last apply](schemaquench.md#unchanged-object-scripts) counts under `scriptsUnchanged` instead, with a `details[]` row carrying `"action": "unchanged"` — the report says which scripts it left alone as plainly as which it ran.
 
-> **Why "ran", not "changed".** Reporting a re-applied procedure as "modified" every single run would be a lie that made every report look busy. An honest report says exactly what it knows: verified structural changes as counts, idempotent re-applies as "ran". When you see `scriptsRan: 12`, twelve object scripts executed — the report is not claiming twelve objects changed.
+> **Why "ran", not "changed".** Reporting a re-applied procedure as "modified" every time it runs would be a lie that made every report look busy. An honest report says exactly what it knows: verified structural changes as counts, idempotent re-applies as "ran". When you see `scriptsRan: 12`, twelve object scripts executed — the report is not claiming twelve objects changed.
 
 ### The count buckets
 
@@ -430,7 +430,7 @@ The whole field is `null` when nothing was degraded. In `Summary.md` the same in
 
 ## Cross-platform
 
-The report shape is identical on SQL Server, PostgreSQL, MySQL, and MariaDB — same keys, same nesting, same enum values. The `platform` field tells you which engine produced it, and a few `details[]` object types are engine-specific (statistics on SQL Server and PostgreSQL, XML indexes on SQL Server, full-text indexes on SQL Server / MySQL / MariaDB, exclude constraints on PostgreSQL), but the contract is one shape across all four. A dashboard that parses a SQL Server report parses a MySQL or MariaDB one unchanged.
+The report shape is identical on SQL Server, PostgreSQL, MySQL, and MariaDB — same keys, same nesting, same enum values. The `platform` field tells you which engine produced it, and a few `details[]` object types are engine-specific (statistics on SQL Server and PostgreSQL, XML indexes on SQL Server, full-text indexes on SQL Server / MySQL / MariaDB, exclude constraints and the sequence, domain and enum types on PostgreSQL, the CDC, change-tracking and temporal types on SQL Server), but the contract is one shape across all four. A dashboard that parses a SQL Server report parses a MySQL or MariaDB one unchanged.
 
 ## What's next
 

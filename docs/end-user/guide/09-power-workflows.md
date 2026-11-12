@@ -336,7 +336,7 @@ Each template has its own complete folder structure -- `Tables/`, `Procedures/`,
 
 Every SchemaQuench run has a pre-flight window before a single table is touched. That window exists to answer one question: is this the right server, in the right state, for this package? Two properties -- `ValidationScript` and `BaselineValidationScript` -- give you precise control over those gates, and they work together as a versioned handshake between your package and its deployment targets.
 
-**Right server.** `ValidationScript` is a required Product-level property. It runs first, against the server's admin connection (the platform's init database: `master`, `postgres`, or `information_schema`). If it returns a falsy value, the deployment aborts before any quench begins. This is your identity check: am I on the database server I think I am? Common patterns:
+**Right server.** `ValidationScript` is a recommended Product-level property; omitted or blank, the check is skipped. When set, it runs first, against the server's admin connection (the platform's init database: `master`, `postgres`, or `information_schema`). If it returns a falsy value, the deployment aborts before any quench begins. This is your identity check: am I on the database server I think I am? Common patterns:
 
 - Verify an expected database exists on the server
 - Confirm a linked server or infrastructure dependency is in place

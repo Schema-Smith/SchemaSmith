@@ -52,8 +52,8 @@ Both `amd64` and `arm64` builds are published with every release. Use `schemasmi
 Same idea on RPM-based distros:
 
 ```bash
-wget https://github.com/Schema-Smith/SchemaSmith/releases/download/v2.8.0/schemasmith-2.8.0.x86_64.rpm
-sudo rpm -i schemasmith-2.8.0.x86_64.rpm
+wget https://github.com/Schema-Smith/SchemaSmith/releases/download/v2.8.0/schemasmith-2.8.0-1.x86_64.rpm
+sudo rpm -i schemasmith-2.8.0-1.x86_64.rpm
 ```
 
 Layout matches the `.deb` package -- binaries under `/usr/lib/schemasmith/`, symlinks in `/usr/bin/`, no system dependencies. Both `x86_64` and `aarch64` builds are published per release. Works on Fedora, RHEL/CentOS Stream, Amazon Linux 2023, and any other distro that supports `rpm -i`.
@@ -202,14 +202,14 @@ Useful for procurement review and dependency auditing.
 | winget | `winget upgrade SchemaSmith.SchemaSmith` |
 | Chocolatey | `choco upgrade schemasmith` |
 | `install.sh` | Run it again -- it resolves the latest release (or the `INSTALL_VERSION` you pin) and replaces the four binaries in place |
-| `.deb` / `.rpm` | Install the newer package: `sudo dpkg -i schemasmith_<version>_amd64.deb` / `sudo rpm -U schemasmith-<version>.x86_64.rpm` |
+| `.deb` / `.rpm` | Install the newer package: `sudo dpkg -i schemasmith_<version>_amd64.deb` / `sudo rpm -U schemasmith-<version>-1.x86_64.rpm` |
 | AUR | Upgrade `schemasmith-bin` with your AUR helper |
 | Manual `.tar.gz` / `.zip` | Extract the new bundle over the old one |
 | Docker | Pull the newer tag |
 
 **Your databases follow.** SchemaQuench keeps a small set of helper procedures, functions and tracking tables in each database it deploys to, and stamps each database with a hash of the helper content it installed (`SchemaSmith.KindleStamp` on SQL Server and PostgreSQL, `SchemaSmith_KindleStamp` on MySQL and MariaDB). At the start of every deploy it compares that stamp with the helpers the running CLI would install; when a newer CLI ships different helpers, the first deploy from it re-kindles them before touching your objects. There is nothing to run by hand -- and `--ForceReKindle` re-installs them unconditionally if you ever need to. Deploying with an *older* CLI against a database a newer one kindled re-installs the older helpers the same way, so keep your runners on one version.
 
-**Uninstalling the CLI** removes the executables and nothing else: `winget uninstall SchemaSmith.SchemaSmith`, `choco uninstall schemasmith`, `sudo apt remove schemasmith` / `sudo dnf remove schemasmith`, or delete the four binaries `install.sh` or a manual extract put in place. The helper objects in each database stay where they are, inert; what they are and how to remove them from a database you are decommissioning is in [What SchemaSmith Installs In Your Database](../reference/schemaquench.md#what-schemasmith-installs-in-your-database).
+**Uninstalling the CLI** removes the CLI's files and nothing else: `winget uninstall SchemaSmith.SchemaSmith`, `choco uninstall schemasmith`, or `sudo apt remove schemasmith` / `sudo dnf remove schemasmith`. For `install.sh`, delete what it put in its install directory -- the four binaries and, on Linux, the three bundled `libicu*.so.*` libraries beside them; the installer prints the exact `rm -f` line when it finishes. For a manual extract, delete the files you extracted. The helper objects in each database stay where they are, inert; what they are and how to remove them from a database you are decommissioning is in [What SchemaSmith Installs In Your Database](../reference/schemaquench.md#what-schemasmith-installs-in-your-database).
 
 ## What's Next
 
