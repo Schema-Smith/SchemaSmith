@@ -263,7 +263,7 @@ public static class DeploymentSummaryText
                 "tableDrop" => "table dropped", "columnDrop" => "column dropped", "typeChange" => "type change", "columnReplaced" => "column replaced",
                 _ => change.Kind,
             };
-            var rows = change.EstimatedRows is { } n ? $", about {n.ToString("N0", System.Globalization.CultureInfo.InvariantCulture)} rows" : "";
+            var rows = change.EstimatedRows is { } n ? $", about {DestructiveLog.Rows(n)}" : "";
             var accepted = change.Accepted ? ", accepted" : "";
             lines.Add($"  - {change.ObjectName}: {what}{rows} -- {change.Outcome}{accepted} ({FormatScope(change.Server, change.Database, null)})");
         }

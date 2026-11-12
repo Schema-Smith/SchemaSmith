@@ -21,8 +21,11 @@ internal static class DestructiveLog
             "type change" => $"column {row.ObjectName} changed {row.Detail}, which changes its values without an error",
             _ => $"{row.ObjectType} {row.ObjectName}{(string.IsNullOrEmpty(row.Detail) ? "" : " " + row.Detail)}",
         };
-        return row.EstimatedRows is { } rows ? $"{what} (about {rows.ToString("N0", CultureInfo.InvariantCulture)} rows)" : what;
+        return row.EstimatedRows is { } rows ? $"{what} (about {Rows(rows)})" : what;
     }
+
+    /// <summary>"1 row", "1,200 rows".</summary>
+    public static string Rows(long rows) => $"{rows.ToString("N0", CultureInfo.InvariantCulture)} {(rows == 1 ? "row" : "rows")}";
 
     /// <summary>Warnings for the changes made under warn, information lines for the rest; refusals are the step's failure.</summary>
     public static IEnumerable<(bool Warn, string Line)> Lines(string scope, IEnumerable<ChangeAuditRow> rows) =>
