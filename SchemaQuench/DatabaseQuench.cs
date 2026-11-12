@@ -815,9 +815,10 @@ public partial class DatabaseQuench
             var timeoutKind = DeadlockClassifier.IsLockTimeout(e) ? "lockTimeout" : DeadlockClassifier.IsCommandTimeout(e) ? "commandTimeout" : null;
             if (timeoutKind != null)
             {
-                var stopped = TimeoutFailureMessage(timeoutKind);
+                var reason = TimeoutFailureMessage(timeoutKind);
+                var stopped = $"{LogPrefix} {reason}";
                 _errorLog.Error(stopped, e);
-                SafeProgressLogError(stopped);
+                SafeProgressLogError(reason);
                 SafeProgressLogError($"  {e.Message}");
                 LastFailure = FailureCtx.ToRecord(stopped, string.IsNullOrWhiteSpace(_debugFileLocation) ? null : _debugFileLocation, timeoutKind);
                 SafeProgressLogError($"*** FAILED [Template:{_template?.Name}] ***");
@@ -885,10 +886,10 @@ public partial class DatabaseQuench
     {
         var step = string.IsNullOrEmpty(_currentStep) ? "" : $" in step {_currentStep}";
         if (kind == "commandTimeout")
-            return $"{LogPrefix} stopped a command that ran longer than {Timeouts.CommandTimeoutSeconds} s (Target:CommandTimeoutSeconds){step}. "
+            return $"stopped a command that ran longer than {Timeouts.CommandTimeoutSeconds} s (Target:CommandTimeoutSeconds){step}. "
                    + "Raise the setting (0 = no limit) and re-run with --ResumeQuench.";
         var after = Timeouts.LockTimeoutSeconds is { } seconds ? $" after {seconds} s (Target:LockTimeoutSeconds)" : "";
-        return $"{LogPrefix} gave up waiting for a lock{after}{step}, after {_lastAttempts} {(_lastAttempts == 1 ? "attempt" : "attempts")}. "
+        return $"gave up waiting for a lock{after}{step}, after {_lastAttempts} {(_lastAttempts == 1 ? "attempt" : "attempts")}. "
                + "Another session holds a lock on the object being changed; re-run with --ResumeQuench when it is free.";
     }
 
@@ -2453,6 +2454,16 @@ SET NOCOUNT ON
     /// </summary>
     internal void RetryOnContention(Action work)
     {
+        var outer = _retryingContention;
+        _retryingContention = true;
+        try { RetryOnContentionCore(work); }
+        finally { _retryingContention = outer; }
+    }
+
+    private bool _retryingContention;
+
+    private void RetryOnContentionCore(Action work)
+    {
         var attempt = 0;
         var waited = Stopwatch.StartNew();
         while (true)
@@ -3768,6 +3779,9 @@ SET NOCOUNT ON
                 // retries exhaust, the propagated exception is logged by the caller's per-iteration
                 // failure handling; the retry loop logs an Info note on each recoverable attempt.
                 if (err.Number == 1205) continue;
+                // Likewise a lock timeout while a contention retry is running: the retry loop logs the wait, and the
+                // timeout that ends the step is logged by the failure handling.
+                if (_retryingContention && DeadlockClassifier.IsLockTimeout(_infoMessageException)) continue;
 
                 SafeProgressLogError(err.Message);
                 if (!string.IsNullOrWhiteSpace(_debugFileLocation))

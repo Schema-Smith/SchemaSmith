@@ -114,6 +114,9 @@ public abstract class LockTimeoutDeploySharedTests : ObjectScriptDeployFixture
             Assert.That(result.Failure?.Kind, Is.EqualTo("lockTimeout"), result.Failure?.Error);
             Assert.That(result.Failure?.Error, Does.Contain("Target:LockTimeoutSeconds").And.Contain("--ResumeQuench"));
             Assert.That(result.LockWaits.Any(w => w.Attempts == 2 && w.Outcome == "failed"), Is.True, "the wait is reported, with its attempts");
+            var gaveUp = result.Log.Where(l => l != null && l.Contains("ave up waiting for a lock")).ToList();
+            Assert.That(gaveUp, Is.Not.Empty, "the give-up line is logged");
+            Assert.That(gaveUp.Where(l => l.Split($"].[{MainDb}]").Length != 2), Is.Empty, "each give-up line names the target once");
             Assert.That(ColumnType(), Is.EqualTo(SmallType).IgnoreCase, "the change did not land");
         });
     }
@@ -154,6 +157,7 @@ public abstract class LockTimeoutDeploySharedTests : ObjectScriptDeployFixture
             Assert.That(ColumnType(), Is.EqualTo(BigType).IgnoreCase, "the change landed once the lock was free");
             Assert.That(result.LockWaits.Any(w => w.Attempts >= 2 && w.Outcome == "succeeded"), Is.True,
                 "the retried statement is reported: " + string.Join(", ", result.LockWaits.Select(w => $"{w.Step}:{w.Attempts}:{w.Outcome}")));
+            Assert.That(result.Log.Where(l => l != null && l.StartsWith("ERROR ")), Is.Empty, "a wait that was retried and got through is not an error");
         });
     }
 }
