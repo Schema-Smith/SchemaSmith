@@ -2527,7 +2527,7 @@ Set `CreateSchemaIfMissing: true` when you're running a fully automated onboardi
 |---|---|---|---|
 | `AllowParallel` | bool | `true` | When `false`, iterations of this schema template run serially regardless of the global `MaxThreads` setting. |
 
-When `true` (the default), schema iterations can run in parallel up to the `MaxThreads` limit alongside iterations from other templates and databases. Parallel execution is safe: each iteration touches its own schema namespace and converges independently.
+When `true` (the default), schema iterations can run in parallel up to the `MaxThreads` limit, across schemas and databases. Templates run one at a time, so they never share the pool with another template. Parallel execution is safe: each iteration touches its own schema namespace and converges independently.
 
 > **Tip:** Set `AllowParallel: false` to force this template's iterations to run one at a time -- useful to cap concurrent load on a resource-constrained target, or when the template's own migration scripts perform DDL that can't run concurrently. Parallel iteration is otherwise the production-realistic default; both TenantCRM demos ship `AllowParallel: true`.
 

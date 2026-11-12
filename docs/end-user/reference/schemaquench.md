@@ -318,7 +318,7 @@ For a worked end-to-end example -- single canonical package, per-region settings
 
 ## MaxThreads
 
-The `MaxThreads` setting controls how many work units run concurrently across the entire product deployment. A work unit is one database iteration for a regular template, or one `(database, schema)` iteration for a schema template. All work unit types share the same pool -- there is no separate budget per template type.
+The `MaxThreads` setting controls how many of a template's work units run concurrently. A work unit is one database iteration for a regular template, or one `(database, schema)` iteration for a schema template. Templates themselves run one at a time, in `TemplateOrder`, so the limit applies within each template and two templates never run at once.
 
 Default: `10`. Range: `1`--`20`. A value outside that range, or one that does not parse as a whole number, is replaced by the default without a message, so `MaxThreads: 32` runs ten at a time, not twenty.
 
