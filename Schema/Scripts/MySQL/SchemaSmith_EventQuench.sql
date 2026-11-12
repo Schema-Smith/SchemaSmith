@@ -95,6 +95,16 @@ BEGIN
                         SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Comment')))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].TimeZone'))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].SqlMode')));
+        -- An event whose ShouldApplyExpression is false is left out of this deploy, as every other declared type is.
+        SET @ss_ev_apply_expr = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].ShouldApplyExpression')));
+        IF @ss_ev_apply_expr IS NOT NULL AND TRIM(@ss_ev_apply_expr) <> '' THEN
+            SET @ss_ev_apply = 1;
+            SET @ss_ev_apply_sql = CONCAT('SELECT CASE WHEN (', @ss_ev_apply_expr, ') THEN 1 ELSE 0 END INTO @ss_ev_apply');
+            PREPARE ss_ev_apply FROM @ss_ev_apply_sql;
+            EXECUTE ss_ev_apply;
+            DEALLOCATE PREPARE ss_ev_apply;
+            UPDATE _SchemaSmith_Events SET ShouldApply = @ss_ev_apply WHERE Id = LAST_INSERT_ID();
+        END IF;
         SET v_idx = v_idx + 1;
     END WHILE;
 
