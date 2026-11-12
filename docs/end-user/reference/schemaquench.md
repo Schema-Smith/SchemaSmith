@@ -463,7 +463,7 @@ Two independent adaptations, both automatic. Below **compatibility level** 130 (
 | `Target:CompatEncoding` | SchemaQuench (deployment) | `auto` (default), `legacy` (XML), `modern` (JSON) |
 | `Source:CompatEncoding` | SchemaTongs (extraction) | same three |
 
-For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `Source:CompatEncoding` too, for the queries it builds a delivery script from.
+For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `Source:CompatEncoding` too, for the queries it builds a delivery script from. Any other value forces nothing: the encoding is chosen as for `auto`, and SchemaQuench warns that the value is ignored.
 
 > **Don't confuse this with `DeliveryEncoding`.** Two settings, both with "encoding" in the name, and they control unrelated things. **`CompatEncoding`** (this one) is how SchemaSmith talks to SQL Server about *its own schema model* — invisible in your package and in the resulting database. **[`ShouldCast:DeliveryEncoding`](datatongs.md#delivery-encoding-xml-for-legacy-sql-server)** is a DataTongs feature that decides the format of the *data content files it writes* — `Json` or `Xml` — which is what you want when porting data to another platform or handing it to an external vendor. Changing one tells you nothing about the other.
 

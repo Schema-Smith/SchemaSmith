@@ -53,7 +53,8 @@ public sealed class LogHygieneOptions
             }
             else if (ListKeys.Contains(child.Key, StringComparer.OrdinalIgnoreCase))
             {
-                if (child.Value != null)
+                // An empty JSON array binds as an empty value with no children: an empty list, not a single value.
+                if (!string.IsNullOrEmpty(child.Value))
                     yield return $"LogHygiene:{child.Key} is a single value, not a list, and is ignored. Write it as [ \"{child.Value}\" ].";
             }
             else

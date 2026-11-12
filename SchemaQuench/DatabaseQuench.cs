@@ -733,10 +733,10 @@ public partial class DatabaseQuench
                             // names the encoding per object as it extracts; the deploy side resolved it
                             // silently, so an operator who set Target:CompatEncoding had no confirmation it
                             // took effect -- and the encoding determines which helper set gets kindled.
+                            if (CompatEncoding.IsUnrecognized(compatEncodingOverride))
+                                SafeProgressLogWarn($"  [{_databaseName}] {SettingsKeys.CompatEncoding} is '{compatEncodingOverride}', not auto, legacy or modern, and is ignored.");
                             SafeProgressLog($"  [{_databaseName}] model ingest encoding: {_ingestEncoding}" +
-                                            (string.IsNullOrWhiteSpace(compatEncodingOverride)
-                                                ? " (auto)"
-                                                : $" (forced by Target:CompatEncoding={compatEncodingOverride})"));
+                                            CompatEncoding.HowChosen(SettingsKeys.CompatEncoding, compatEncodingOverride));
                             break;
                     }
 

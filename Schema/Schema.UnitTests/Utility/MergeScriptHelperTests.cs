@@ -459,6 +459,20 @@ public class MergeScriptHelperTests
             "with no override the cliff must still be detected from the server");
     }
 
+    // auto, or a value that is not legacy or modern, forces nothing: the server still decides.
+    [TestCase("auto")]
+    [TestCase("Json")]
+    public void MergeScriptCliff_AValueThatForcesNothing_StillProbesTheServer(string value)
+    {
+        RegisterCompatEncoding(value);
+        var (cmd, statements) = RecordingSqlServerCommand("[Id]");
+
+        MergeScriptHelper.GetKeyColumns(Platform.SqlServer, cmd, "dbo", "TestTable");
+
+        Assert.That(statements.Any(t => t.Contains("compatibility_level")), Is.True,
+            $"'{value}' must not stand in for the server's answer");
+    }
+
     [Test]
     public void MergeScriptCliff_ForcedLegacy_SkipsTheProbeAndAvoidsStringAgg()
     {

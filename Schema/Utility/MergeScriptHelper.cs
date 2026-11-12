@@ -313,7 +313,7 @@ public static class MergeScriptHelper
         // so they must be forceable together. This picks how the script is BUILT, not what it contains --
         // the consumer-facing shred form is ShouldCast:DeliveryEncoding.
         var forced = CompatEncodingOverride();
-        if (!string.IsNullOrWhiteSpace(forced))
+        if (CompatEncoding.IsForced(forced))
             return CompatEncoding.Select(forced, null, int.MaxValue) == IngestEncoding.Xml;
 
         cmd.Parameters.Clear();

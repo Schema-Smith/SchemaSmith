@@ -30,6 +30,22 @@ namespace Schema.Utility
         // says no. Selecting JSON there fails in kindling on SchemaSmith.BootstrapTableQuench.
         private const int JsonServerMajorFloor = 14;
 
+        /// <summary>True for the two values that force the encoding, "legacy" and "modern" (case-insensitive).</summary>
+        public static bool IsForced(string overrideValue) =>
+            string.Equals(overrideValue, "legacy", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(overrideValue, "modern", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>
+        /// A value that is none of auto, legacy or modern: it forces nothing, and the encoding is chosen automatically.
+        /// </summary>
+        public static bool IsUnrecognized(string overrideValue) =>
+            !string.IsNullOrWhiteSpace(overrideValue) && !IsForced(overrideValue)
+            && !string.Equals(overrideValue.Trim(), "auto", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>How the deploy log says the encoding was chosen: " (auto)", or " (forced by &lt;key&gt;=&lt;value&gt;)".</summary>
+        public static string HowChosen(string key, string overrideValue) =>
+            IsForced(overrideValue) ? $" (forced by {key}={overrideValue})" : " (auto)";
+
         /// <summary>
         /// Resolves the encoding. An explicit override ("legacy"/"modern", case-insensitive) wins; otherwise
         /// ("auto", the default) XML is chosen when the detected compatibility level is below 130 or the server

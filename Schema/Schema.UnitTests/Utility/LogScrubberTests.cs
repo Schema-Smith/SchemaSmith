@@ -1,6 +1,9 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
 using Microsoft.Extensions.Configuration;
 using NUnit.Framework;
 using Schema.Utility;
@@ -209,6 +212,26 @@ public class LogScrubberTests
     public void ScrubTokenValue_NullOptions_FallsBackToDefaults()
     {
         Assert.That(LogScrubber.ScrubTokenValue("ApiKey", "abc", null), Is.EqualTo("***"));
+    }
+
+    // ---- LogHygieneOptions.Problems ----
+
+    private static IConfiguration Json(string json) =>
+        new ConfigurationBuilder().AddJsonStream(new MemoryStream(Encoding.UTF8.GetBytes(json))).Build();
+
+    [Test]
+    public void Problems_AnEmptyList_IsNotReportedAsASingleValue()
+    {
+        var config = Json("""{ "LogHygiene": { "ScrubTokens": [], "ScrubPatterns": [], "AllowTokens": [] } }""");
+        Assert.That(LogHygieneOptions.Problems(config).ToList(), Is.Empty);
+    }
+
+    [Test]
+    public void Problems_ASingleValue_IsReported()
+    {
+        var config = Json("""{ "LogHygiene": { "ScrubTokens": "DeployKey" } }""");
+        Assert.That(LogHygieneOptions.Problems(config).ToList(),
+            Is.EqualTo(new[] { "LogHygiene:ScrubTokens is a single value, not a list, and is ignored. Write it as [ \"DeployKey\" ]." }));
     }
 
     // ---- LogHygieneOptions.FromConfiguration ----

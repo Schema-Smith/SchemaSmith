@@ -58,8 +58,10 @@
     "ScriptTokens": {},
 
     // ---------------------------------------------------------------------------------------------
-    // ADVANCED — everything else SchemaQuench accepts. Commented entries show the default; uncomment
-    // to change it. Grouped rather than hidden: the power is discoverable without burying the basics.
+    // ADVANCED — everything else SchemaQuench accepts. A commented entry shows a value you might set, not
+    // necessarily the default; its comment says what the default is. Grouped rather than hidden: the power
+    // is discoverable without burying the basics. Leave a drop entry commented to inherit the product,
+    // template or table value: uncommented as false, it turns that drop off whatever they say.
     // ---------------------------------------------------------------------------------------------
 
     // --- Drop control -----------------------------------------------------------------------------
@@ -136,7 +138,7 @@
     "BottleneckThresholdMs": 30000, // Slot operations slower than this (ms) are highlighted as bottlenecks in the deployment summary report
     // "WriteDebugSql": false, // Write the resolved SQL of each step to ArtifactPath, to reproduce a failure. Holds real values: local debugging only, never to share. Also the --WriteDebugSql switch.
     // "ArtifactPath": "", // Where WriteDebugSql writes those files. Blank = the working folder.
-    // "ScrubArtifacts": false // Deprecated and ignored: debug SQL is never scrubbed.
+    // "ScrubArtifacts": false // Deprecated and ignored (setting it draws a warning): debug SQL is never scrubbed.
     // "LogHygiene": { "LogTokens": true, "ScrubTokens": [ "ApiKey" ] }, // LogTokens false keeps script token values out of the log; ScrubTokens masks the values of extra setting and token names, beyond the built-in sensitive-name list.
     // "ExitNonZeroOnWarning": false // Exit 1 instead of 0 when the run logged a warning, for pipelines that treat warnings as failures. Also the --ExitNonZeroOnWarning switch.
     // "ExitZeroOnDowngrade": false // Exit 0 instead of 1 when the run finished but downgraded a feature the target lacks; the summary still lists each one. Also --ExitZeroOnDowngrade.

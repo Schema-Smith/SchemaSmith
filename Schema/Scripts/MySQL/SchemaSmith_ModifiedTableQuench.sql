@@ -971,8 +971,8 @@ BEGIN
     -- ================================================================================================
     -- COLUMN-ORDER DRIFT, the input to the OnOrderMismatch trigger.
     --
-    -- Reordering existing columns is impossible in place on every engine SchemaSmith supports, so a
-    -- rebuild is the only mechanism that can converge a table whose columns are in the wrong order.
+    -- A table whose columns are in the wrong order converges by a rebuild, except under OnlineApply, where
+    -- STEP 4.5 moves the columns in place (MA-057).
     --
     -- DECLARED ORDER IS (OrdinalPosition, RowId) -- exactly what SchemaSmith_RebuildTable orders the
     -- shadow's CREATE by. Detection and repair MUST read the declared order off the same key: if this
