@@ -409,6 +409,9 @@ BEGIN
                          WHERE SessionId = CONNECTION_ID() AND ObjectType = 'foreignKey' AND ActionType = 'created'
                            AND CONVERT(ObjectName USING utf8mb4) COLLATE utf8mb4_unicode_ci = CONVERT(@v_fkone_audit USING utf8mb4) COLLATE utf8mb4_unicode_ci;
                     ELSE
+                        -- SIGNAL carries 128 characters; the deploy log keeps the whole error.
+                        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                        VALUES (CONNECTION_ID(), CONCAT('  ', @v_fkone_audit, ' failed: ', v_OneError));
                         SET @ss_msg = LEFT(v_OneError, 128);
                         SIGNAL SQLSTATE 'HY000' SET MESSAGE_TEXT = @ss_msg, MYSQL_ERRNO = v_OneErrno;
                     END IF;
