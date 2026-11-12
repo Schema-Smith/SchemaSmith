@@ -810,7 +810,8 @@ A table the package dropped, under `DropTablesRemovedFromProduct: false`, is not
   yet; an object script never stamped, so whether it changed cannot be said (`unverifiable`); and a drop
   [`PreventDrop`](#preventdrop) kept (`extra`). An `unverifiable` target is logged as a warning, since nothing counted is not the same as matching: it exits `0`, or `1` under [`--ExitNonZeroOnWarning`](configuration.md#exit-codes).
 - **Left out:** Setup scripts, data delivery and the version stamp, which act on every deploy by design, and scripts
-  that run every deploy (`[ALWAYS]` and product Before/After scripts).
+  that run every deploy (`[ALWAYS]` and product Before/After scripts, and an object script that can never be
+  [stamped](#unchanged-object-scripts), such as one in a folder declared without an `ObjectType`).
 
 **Narrowing it -- `--DriftFailOn:<list>`.** A comma list of actions (`create`, `modify`, `drop`) and object types
 (`table`, `column`, `index`, `constraint`, `foreignKey`, `statistic`, `xmlIndex`, `fullTextIndex`, `sequence`,

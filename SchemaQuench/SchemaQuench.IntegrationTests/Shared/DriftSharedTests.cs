@@ -241,6 +241,25 @@ public abstract class DriftSharedTests : ObjectScriptDeployFixture
         });
     }
 
+    // A script no deploy can stamp (here one in an object folder that names no module) runs on every deploy, so a drift
+    // check leaves it out as it does [ALWAYS] scripts: it does not make a matching target unverifiable on every run.
+    [Test]
+    public void AScriptNoDeployCanStamp_IsLeftOut_AndAMatchingTargetStaysClean()
+    {
+        WritePackage("""{ "FolderPath": "Misc", "QuenchSlot": "Objects" }""", "Misc");
+        WriteFile("Tables", TableFileName(Table), TableJson(Table, "a", "b"));
+        WriteFile("Misc", "every-deploy.sql", "SELECT 1");
+        Deploy();
+
+        var run = RunDrift(settings: NoKindle);
+        Assert.Multiple(() =>
+        {
+            Assert.That(run.ExitCode, Is.EqualTo(0), run.Describe());
+            Assert.That(run.Report?.Unverifiable, Is.Empty, run.Describe());
+            Assert.That(run.Report?.Targets.Single().Status, Is.EqualTo("clean"), run.Describe());
+        });
+    }
+
     // A run-once script not yet run means this release is not deployed yet: reported, and counted only when asked.
     [Test]
     public void APendingMigration_IsReported_AndCountsOnlyWhenFailOnNamesIt()

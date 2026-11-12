@@ -3287,14 +3287,18 @@ SET NOCOUNT ON
 
     private static readonly Regex AlwaysRunSentinel = new(@"--\s*SchemaSmith:\s*AlwaysRun\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+    // A script no deploy can stamp, because it runs every time or creates no single module the stamp can name.
+    private bool NeverStamped(SqlScript script, DatabaseScriptSlot slot) =>
+        ShouldAlwaysRun(script.Name) || HasAlwaysRunSentinel(script)
+        || slot is not (DatabaseScriptSlot.Object or DatabaseScriptSlot.AfterTablesObject) || script.ObjectType == ScriptObjectType.None
+        || ModuleScriptIdentity.Parse(script.Batches, _product.Platform) == null;
+
     internal static bool HasAlwaysRunSentinel(SqlScript script) => script.Batches.Any(b => AlwaysRunSentinel.IsMatch(b));
 
     private ScriptStampProbe ProbeScriptStamp(IDbCommand destCmd, SqlScript script, DatabaseScriptSlot slot)
     {
-        if (destCmd == null || !_skipUnchangedObjects || _runScriptsTwice || ShouldAlwaysRun(script.Name) || HasAlwaysRunSentinel(script)) return null;
-        if (slot is not (DatabaseScriptSlot.Object or DatabaseScriptSlot.AfterTablesObject) || script.ObjectType == ScriptObjectType.None) return null;
+        if (destCmd == null || !_skipUnchangedObjects || _runScriptsTwice || NeverStamped(script, slot)) return null;
         var identity = ModuleScriptIdentity.Parse(script.Batches, _product.Platform);
-        if (identity == null) return null;
 
         var scriptPath = GetRelativeScriptPath(script.LogPath);
         var pathHash = StampPathHash(scriptPath, _schemaName);
@@ -3867,7 +3871,7 @@ SET NOCOUNT ON
         {
             script.HasBeenQuenched = true;
             var probe = ProbeScriptStamp(destCmd, script, slot);
-            if (IsDrift) RecordDriftModule(destCmd, script, probe);
+            if (IsDrift) RecordDriftModule(destCmd, script, slot, probe);
             if (probe is { Unchanged: true })
             {
                 script.Outcome = ScriptOutcome.Unchanged;
@@ -3937,11 +3941,13 @@ SET NOCOUNT ON
 
     /// <summary>
     /// H1: whether a module script is drift. Its stamp answers when there is one; with none, a module the server does not have
-    /// is missing, and one it has cannot be compared -- it always "would apply" -- so it is unverifiable, never counted.
+    /// is missing, and one it has cannot be compared -- it always "would apply" -- so it is unverifiable, never counted. A
+    /// script no deploy can stamp runs every deploy, and is left out as those are.
     /// </summary>
-    private void RecordDriftModule(IDbCommand destCmd, SqlScript script, ScriptStampProbe probe)
+    private void RecordDriftModule(IDbCommand destCmd, SqlScript script, DatabaseScriptSlot slot, ScriptStampProbe probe)
     {
         if (DriftCapture == null || probe is { Unchanged: true }) return;
+        if (probe == null && NeverStamped(script, slot)) return;
         var state = probe == null ? DriftModuleState.Unverifiable
             : probe.Stamped ? DriftModuleState.WouldApply
             : ModuleDefinitionReader.Read(destCmd, _product.Platform, probe.Identity) == null ? DriftModuleState.Missing
