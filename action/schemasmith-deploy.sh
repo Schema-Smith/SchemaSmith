@@ -79,16 +79,20 @@ workspace_relative() {
       printf '%s' "$path"; return 0 ;;
   esac
   local p="$path" w="$workspace"
-  case "$w" in [A-Za-z]:*) p="${p,,}"; w="${w,,}" ;; esac
+  # tr, not ${p,,}: a macOS runner's bash is 3.2.
+  case "$w" in [A-Za-z]:*) p="$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')"; w="$(printf '%s' "$w" | tr '[:upper:]' '[:lower:]')" ;; esac
   case "$p" in "$w"/*) printf '%s' "${path:${#workspace}+1}" ;; esac
 }
+
+# Runs jq rather than asking `command -v`, which bash 3.2 answers from its remembered paths after PATH has changed.
+have_jq() { jq --version >/dev/null 2>&1; }
 
 # At most ten of a kind: GitHub shows ten errors and ten warnings per step.
 ANNOTATION_LIMIT=10
 
 annotations_from_summary() {
   local summary="$1" workspace="$2" total scope message path file props
-  if ! command -v jq >/dev/null 2>&1; then
+  if ! have_jq; then
     echo "::notice::jq is not installed on this runner, so the run's failures are not shown as annotations; they are in the deployment summary."
     return 0
   fi
@@ -166,7 +170,7 @@ post_pr_comment() {
     pull_request|pull_request_target) ;;
     *) echo "::notice::pr-comment is on, but this run is not for a pull request, so no comment was posted."; return 0 ;;
   esac
-  command -v jq >/dev/null 2>&1 || { echo "::notice::jq is not installed on this runner, so the summary was not posted as a comment."; return 0; }
+  have_jq || { echo "::notice::jq is not installed on this runner, so the summary was not posted as a comment."; return 0; }
   pr="$(jq -r '.pull_request.number // empty' "${GITHUB_EVENT_PATH:-/dev/null}" 2>/dev/null)"
   [ -n "$pr" ] && [ -n "${GH_TOKEN:-}" ] || return 0
   repo="$GITHUB_REPOSITORY"; api="${GITHUB_API_URL:-https://api.github.com}"
