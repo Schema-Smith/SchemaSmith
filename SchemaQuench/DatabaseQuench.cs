@@ -3827,7 +3827,7 @@ SET NOCOUNT ON
         }
         lock (_lockObject)
         {
-            _progressLog.Warn($"{LogPrefix} {msg}");
+            _progressLog.Warn($"{LogPrefix} {LevelPrefixConverter.WithoutWarningPrefix(msg)}");
             FailureCtx.Log(msg);
         }
     }

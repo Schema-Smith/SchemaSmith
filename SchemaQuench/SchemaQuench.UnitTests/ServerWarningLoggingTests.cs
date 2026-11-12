@@ -37,6 +37,8 @@ public class ServerWarningLoggingTests
 
             quench.LogServerMessage("      WARNING: Kept dbo.T.IX as it is: foreign key dbo.C.FK references it");
             Assert.That(WarningCounter.Count, Is.EqualTo(1), "a WARNING: line from the server must be logged as a warning");
+            // The layout puts WARNING: in front of the line, so the message's own would print it twice.
+            Assert.That(WarningCounter.Kept, Is.EqualTo(new[] { "WARNING: [server].[db]       Kept dbo.T.IX as it is: foreign key dbo.C.FK references it" }));
         }
         finally
         {

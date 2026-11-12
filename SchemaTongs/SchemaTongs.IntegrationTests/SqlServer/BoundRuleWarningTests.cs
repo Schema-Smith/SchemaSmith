@@ -52,10 +52,11 @@ public class BoundRuleWarningTests
     [Test]
     public void TheLog_CarriesTheEnginesWarning_ForEachBoundObject()
     {
-        Assert.That(_warnings.Where(w => w.Contains("WARNING: Column [dbo].[Bnd].[Qty] has the bound ")).Select(w => w.Trim()).OrderBy(w => w).ToList(), Is.EqualTo(new[]
+        // Logged at warning level without the engine's own WARNING:, which the log layout puts in front of the line.
+        Assert.That(_warnings.Where(w => w.Contains("Column [dbo].[Bnd].[Qty] has the bound ")).Select(w => w.Trim()).OrderBy(w => w).ToList(), Is.EqualTo(new[]
         {
-            "WARNING: Column [dbo].[Bnd].[Qty] has the bound default [dbo].[ZeroDefault] (sp_bindefault), which is not modelled: the column is written without it.",
-            "WARNING: Column [dbo].[Bnd].[Qty] has the bound rule [dbo].[PositiveRule] (sp_bindrule), which is not modelled: the column is written without it.",
+            "Column [dbo].[Bnd].[Qty] has the bound default [dbo].[ZeroDefault] (sp_bindefault), which is not modelled: the column is written without it.",
+            "Column [dbo].[Bnd].[Qty] has the bound rule [dbo].[PositiveRule] (sp_bindrule), which is not modelled: the column is written without it.",
         }), "warnings: " + string.Join(" | ", _warnings));
     }
 

@@ -155,7 +155,7 @@ public class FolderGateIntegrationTests
                 Assert.Multiple(() =>
                 {
                     Assert.That(progress, Has.Some.EndsWith("product script says hello"), string.Join(Environment.NewLine, progress));
-                    Assert.That(progress, Has.Some.Matches<string>(l => l.StartsWith("WARN ") && l.EndsWith("WARNING: product script warns")), "a WARNING: line is a warning");
+                    Assert.That(progress, Has.Some.Matches<string>(l => l.StartsWith("WARN ") && l.EndsWith("]      product script warns")), "a WARNING: line is a warning, logged without its own WARNING: (the layout adds one)");
                     Assert.That(progress, Has.None.Contains("product script mutters"), "a message without state 100 stays out unless VerboseLogging is on");
                 });
             }

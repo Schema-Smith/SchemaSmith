@@ -265,14 +265,14 @@ public class SchemaTongs
             npgsql.Notice += (_, e) =>
             {
                 if (string.Equals(e.Notice.Severity, "WARNING", StringComparison.OrdinalIgnoreCase))
-                    _progressLog.Warn($"    WARNING: {e.Notice.MessageText}");
+                    _progressLog.Warn($"    {e.Notice.MessageText}");
             };
         if (connection is SqlConnection sqlServer)
             sqlServer.InfoMessage += (_, e) =>
             {
                 foreach (SqlError error in e.Errors)
                     if (error.Class <= 10 && error.Message.StartsWith("WARNING: ", StringComparison.Ordinal))
-                        _progressLog.Warn($"    {error.Message}");
+                        _progressLog.Warn($"    {LevelPrefixConverter.WithoutWarningPrefix(error.Message)}");
             };
         // A catalog query that joins pg_proc to itself several times is estimated past the JIT thresholds, and
         // compiling it costs seconds for a query that runs in milliseconds.
@@ -583,7 +583,7 @@ SELECT STRING_AGG(c.oid::regclass::text, ', ' ORDER BY c.relname)
         var unexpressible = command.ExecuteScalar() as string;
         if (unexpressible != null)
         {
-            _progressLog.Warn($"    WARNING: {schema}.{table} is partitioned with partitions a package cannot declare (in another schema, or foreign tables): {unexpressible}; skipped.");
+            _progressLog.Warn($"    {schema}.{table} is partitioned with partitions a package cannot declare (in another schema, or foreign tables): {unexpressible}; skipped.");
             _stats.SkippedObjects++;
             command.Parameters.Clear();
             return false;
@@ -595,7 +595,7 @@ SELECT STRING_AGG(i.indexrelid::regclass::text, ', ' ORDER BY 1)
         var local = command.ExecuteScalar() as string;
         command.Parameters.Clear();
         if (local != null)
-            _progressLog.Warn($"    WARNING: {schema}.{table} has partitions with indexes of their own, which a package does not declare: {local}. The table is extracted without them.");
+            _progressLog.Warn($"    {schema}.{table} has partitions with indexes of their own, which a package does not declare: {local}. The table is extracted without them.");
         return true;
     }
 
@@ -2048,7 +2048,7 @@ SELECT OBJECT_SCHEMA_NAME(np.[object_id]), OBJECT_NAME(np.[object_id]), np.proce
                     numbered.Add($"{reader.GetString(0)}.{reader.GetString(1)};{reader.GetInt16(2)}");
         foreach (var procedure in numbered)
         {
-            _progressLog.Warn($"  WARNING: {procedure} is a numbered procedure, which a package cannot declare; only its ;1 is extracted");
+            _progressLog.Warn($"  {procedure} is a numbered procedure, which a package cannot declare; only its ;1 is extracted");
             _stats.SkippedObjects++;
         }
     }
@@ -2067,7 +2067,7 @@ SELECT OBJECT_SCHEMA_NAME(np.[object_id]), OBJECT_NAME(np.[object_id]), np.proce
         {
             var (schema, name, kind) = (reader.GetString(0), reader.GetString(1), reader.GetString(2));
             if (!ShouldExtractFromSchema(schema)) continue;
-            _progressLog.Warn($"  WARNING: {schema}.{name} is {kind}, which a package cannot declare; not extracted");
+            _progressLog.Warn($"  {schema}.{name} is {kind}, which a package cannot declare; not extracted");
             _stats.SkippedObjects++;
         }
     }
@@ -2477,7 +2477,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier, tr.is_disab
                 {
                     if (reader.IsDBNull(0))
                     {
-                        _progressLog.Warn($"  WARNING: {triggerName} is encrypted, skipping");
+                        _progressLog.Warn($"  {triggerName} is encrypted, skipping");
                         _stats.SkippedObjects++;
                         continue;
                     }
@@ -2721,7 +2721,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
             {
                 if (reader.IsDBNull(0))
                 {
-                    _progressLog.Warn($"  WARNING: {schemaName}.{objectName} is encrypted, skipping");
+                    _progressLog.Warn($"  {schemaName}.{objectName} is encrypted, skipping");
                     _stats.SkippedObjects++;
                     return null;
                 }
@@ -2741,7 +2741,7 @@ SELECT sm.definition, sm.uses_ansi_nulls, sm.uses_quoted_identifier
         var definedName = DefinedObjectName(definition);
         if (definedName != null && !definedName.Equals(objectName, StringComparison.OrdinalIgnoreCase))
         {
-            _progressLog.Warn($"  WARNING: {schemaName}.{objectName} was renamed with sp_rename; its stored definition still creates {definedName}. The script is written under the current name; check the body for the old one.");
+            _progressLog.Warn($"  {schemaName}.{objectName} was renamed with sp_rename; its stored definition still creates {definedName}. The script is written under the current name; check the body for the old one.");
             definition = ReplaceDefinedName(definition, schemaName, objectName);
         }
 
@@ -3067,7 +3067,7 @@ SELECT t.schemaname, t.tablename, c.relkind, c.relispartition,
             // A warning and a skip, not an error: the rest of the database extracts, and the run exits 1 as for any skip.
             if (refusal != null)
             {
-                _progressLog.Warn($"    WARNING: {schema}.{table} {refusal}");
+                _progressLog.Warn($"    {schema}.{table} {refusal}");
                 _stats.SkippedObjects++;
                 continue;
             }
@@ -4944,7 +4944,7 @@ SELECT [name], type_desc AS kind FROM sys.indexes
         using var reader = command.ExecuteReader();
         while (reader.Read())
         {
-            _progressLog.Warn($"    WARNING: {tableSchema}.{tableName}.{reader["name"]} is a {reader["kind"]} index, which a package cannot declare yet; not extracted");
+            _progressLog.Warn($"    {tableSchema}.{tableName}.{reader["name"]} is a {reader["kind"]} index, which a package cannot declare yet; not extracted");
             _stats.SkippedObjects++;
         }
     }

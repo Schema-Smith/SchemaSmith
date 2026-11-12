@@ -113,6 +113,7 @@ public class ToolLogFormatTests
             var log = LogManager.GetLogger(repository.Name, "ProgressLog");
             log.Info("[db]      Quenching x.sql");
             log.Warn("[db]      Unresolved token: {{name}}");
+            log.Warn("[db]      " + LevelPrefixConverter.WithoutWarningPrefix("  WARNING: Kept dbo.T.IX as it is"));
             log.Error("FAILED: the run stopped");
         }
         finally
@@ -128,8 +129,23 @@ public class ToolLogFormatTests
             {
                 "[db]      Quenching x.sql",
                 "WARNING: [db]      Unresolved token: {{name}}",
+                "WARNING: [db]        Kept dbo.T.IX as it is",
                 "ERROR: FAILED: the run stopped",
             }), $"{tool}'s {name}");
+    }
+
+    // The layout already puts WARNING: in front of a warning line, so a message that says it too prints it twice.
+    [Test]
+    public void NoToolLogsAWarningThatCarriesItsOwnWarningPrefix()
+    {
+        var doubled = new[] { "SchemaQuench", "SchemaTongs", "DataTongs", "SchemaShears", "Schema" }
+            .SelectMany(tool => Directory.GetFiles(Path.Join(RepoRoot(), tool), "*.cs", SearchOption.AllDirectories)
+                .Where(f => !f.Contains($"Tests{Path.DirectorySeparatorChar}") && !f.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}"))
+                .SelectMany(f => File.ReadLines(f).Select((line, i) => (File: Path.GetRelativePath(RepoRoot(), f), Line: i + 1, Text: line))))
+            .Where(l => System.Text.RegularExpressions.Regex.IsMatch(l.Text, @"\.Warn(Format)?\(\$?""\s*WARNING: "))
+            .Select(l => $"{l.File}:{l.Line}").ToList();
+
+        Assert.That(doubled, Is.Empty);
     }
 
     [Test]

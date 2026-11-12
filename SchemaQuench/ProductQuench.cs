@@ -646,9 +646,9 @@ public class ProductQuench
 
     private void LogServerMessage(string server, string database, string message)
     {
-        var line = $"[{server}].[{database}]      {message}";
-        if (DatabaseQuench.IsServerWarning(message)) _progressLog.Warn(line);
-        else _progressLog.Info(line);
+        var line = $"[{server}].[{database}]      ";
+        if (DatabaseQuench.IsServerWarning(message)) _progressLog.Warn(line + LevelPrefixConverter.WithoutWarningPrefix(message));
+        else _progressLog.Info(line + message);
     }
 
     private bool VerboseLogging => _config[SettingsKeys.VerboseLogging]?.ToLower() == "true";
