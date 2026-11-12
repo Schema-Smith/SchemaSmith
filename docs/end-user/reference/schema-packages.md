@@ -20,7 +20,7 @@ The `Product.json` file sits at the root of the schema package and is the top-le
 | `TemplateOrder` | string[] | `[]` | No | Ordered list of template directory names. Templates are quenched in this order. Each entry is the name of a folder directly under `Templates/`, matched without regard to case on every OS -- not a path: an entry with a path separator, `.` or `..`, a leading or trailing space, a trailing dot, or any of `< > : " \| ? *` is refused, as is one that matches no folder, by the deploy and by `--Validate`. |
 | `ScriptTokens` | object | `{}` | No | Key-value pairs for `{{TokenName}}` replacement in scripts and SQL properties. See the [Script Tokens Reference](script-tokens.md). |
 | `BaselineValidationScript` | string | | No | SQL expression evaluated after server validation but before template processing. |
-| `VersionStampScript` | string | | No | SQL executed once after all templates complete successfully. Typically records the release version on the server. |
+| `VersionStampScript` | string | | No | SQL executed once after all templates complete successfully. Typically records the release version on the server. It runs on the server's admin connection (`master` / `postgres` / `information_schema`), so name each table with its database. PostgreSQL has no cross-database statements: stamp from a template-level `VersionStampScript` there, or with a server-scoped statement such as `COMMENT ON DATABASE`, which needs the database's owner or a superuser. |
 | `DropUnknownIndexes` | bool | `false` | No | When `true`, the table quench drops indexes on managed tables that aren't defined in the table JSON. |
 | `MinimumVersion` | string | | No | Minimum target server version floor. Optional; omit to deploy against any version. If any resolved target is below the floor, SchemaQuench aborts before touching anything. See [Settings intent](#settings-intent) below. |
 | `CheckConstraintStyle` | string | `"ColumnLevel"` | No | Controls how SchemaTongs writes check constraints during extraction: `"ColumnLevel"` (inline `CheckExpression` on the column) or `"TableLevel"` (named constraints in the `CheckConstraints` array). SQL Server and PostgreSQL only -- MySQL always extracts table-level, and on MariaDB a check named after its column is extracted as that column's `CheckExpression` whatever this says (see [Check Constraints](#check-constraints)). |
@@ -140,7 +140,7 @@ Each template directory under `Templates/` must contain a `Template.json` file. 
 | `ScriptTokens` | object | `{}` | No | Key-value pairs that override matching product-level tokens for this template. Template tokens take precedence over product tokens with the same key. |
 | `SchemaIdentificationScript` | string | | No | **SQL Server / PostgreSQL:** query returning one column, N rows; each row is a schema name to iterate over — presence activates schema-template mode (see [Schema Templates](#schema-templates)). **MySQL:** has no in-database schema axis (a schema *is* a database), so schema templates don't apply; the field is instead accepted as a **deprecated backward-compat alias** for `DatabaseIdentificationScript` — on load its value migrates into `DatabaseIdentificationScript` (only when that is empty) and a deprecation warning advises renaming (`--Validate` reports it as [`SS-DEP-001`](validate.md#deprecated-aliases)). Use `DatabaseIdentificationScript` directly on MySQL. |
 | `CreateSchemaIfMissing` | bool | `false` | No | Schema templates only. When `true`, the engine creates any discovered schema that doesn't yet exist before running that iteration. See [Schema Templates](#schema-templates). |
-| `AllowParallel` | bool | `true` | No | Schema templates only. When `false`, iterations of this template run serially even when the global thread pool has capacity. See [Schema Templates](#schema-templates). |
+| `AllowParallel` | bool | `true` | No | Schema templates only. When `false`, iterations of this template run serially even when `MaxThreads` would allow more. See [Schema Templates](#schema-templates). |
 | `ContinueOnSchemaFailure` | bool | `true` | No | Schema templates only. When `false`, the first failing iteration aborts all subsequent iterations for this template. See [Schema Templates](#schema-templates). |
 | `ContinueOnDatabaseFailure` | bool | `true` | No | Regular templates only. When `false`, the first failing database iteration aborts all subsequent database iterations for this template. Ignored on schema templates -- failure isolation there is governed by `ContinueOnSchemaFailure`. See [Schema Templates](#schema-templates) for the schema-iteration analog and [SchemaQuench &mdash; ContinueOnDatabaseFailure](schemaquench.md#continueondatabasefailure) for the runtime behavior detail. |
 | `ServerToQuench` | string | `"Primary"` | No | **SQL Server only.** `Primary`, `Secondary` or `Both`: which of the configured servers this template's databases are enumerated and deployed on when `Target:SecondaryServers` is set. PostgreSQL, MySQL and MariaDB templates always run on the primary. See [Secondary Servers](#secondary-servers). |
@@ -270,7 +270,7 @@ The array is an explicit replacement, not a merge. The moment you provide `Scrip
 }
 ```
 
-In this example, the team kept the standard folders but added two extra slots (`BetweenTablesAndKeys`, `AfterTablesScripts`) that aren't part of the default set. They can write migration scripts that run after the table structure exists but before foreign keys, or after the table structure but before triggers, without writing any extra glue.
+In this example, the team kept the standard folders but added two extra slots (`BetweenTablesAndKeys`, `AfterTablesScripts`) that aren't part of the default set. They can write migration scripts that run after the table structure exists but before its indexes and foreign keys, or once the tables, indexes and triggers are in place but before table data and foreign keys, without writing any extra glue.
 
 ### Why this matters
 
@@ -421,8 +421,8 @@ Tables are always loaded from `Tables/` regardless of platform. SQL Server adds 
 | `Before` | One-time migration scripts that run after initial object creation and new table creation, but before table modifications. Use for data preparation that must happen before columns are altered or dropped. Sequential, tracked. |
 | `Objects` | Database objects that may have cross-dependencies (schemas, types, catalogs, functions, views, procedures). The retry loop resolves creation order automatically. |
 | `BetweenTablesAndKeys` | Migration scripts that need the table structure to exist but must run before foreign key constraints are enforced. Typical use: populating a new NOT NULL column before FKs block the data load. Sequential, tracked. |
-| `AfterTablesScripts` | Migration scripts that depend on the final table and key structure but must run before triggers are deployed. Sequential, tracked. |
-| `AfterTablesObjects` | Triggers, DDL triggers, rules, and views that depend on the completed table structure. Dependency retry loop. |
+| `AfterTablesScripts` | Migration scripts that run once the tables and their indexes and constraints are in place and the `AfterTablesObjects` have had their first pass, but before table data and foreign keys. Sequential, tracked. |
+| `AfterTablesObjects` | Triggers, DDL triggers, rules, and views that depend on the completed table structure. Deployed right after the tables, before `BetweenTablesAndKeys` scripts; an object that fails there is retried after `AfterTablesScripts`. Dependency retry loop. |
 | `TableData` | Data population scripts (MERGE statements, INSERT/UPDATE seeds). Run after triggers are deployed but before foreign key constraints are applied. Dependency retry loop. |
 | `After` | Final migration scripts. Run after all database objects and data are deployed. Sequential, tracked. |
 | `None` | Parked. The folder is declared and its scripts are loaded and token-resolved, but no execution pass selects this slot, so nothing in it runs and nothing is tracked. A way to keep a folder in the package without deploying it. |
@@ -581,8 +581,8 @@ MyProduct/
     domaintypes.postgresql.schema             PostgreSQL packages
     events.mysql.schema                       MySQL packages
     events.mariadb.schema                     MariaDB packages
-  Before Product/                   SQL scripts run before all templates
-  After Product/                    SQL scripts run after all templates
+  Before Product/                   SQL scripts run before all templates (when Product.json ScriptFolders declares it)
+  After Product/                    SQL scripts run after all templates (when Product.json ScriptFolders declares it)
   Templates/
     TemplateName/
       Template.json                 Template configuration (required)
@@ -631,7 +631,7 @@ Every table definition file declares exactly one table. The shared properties be
 | `Indexes` | array | `[]` | No | Index and constraint definitions. See [Indexes](#indexes). |
 | `ForeignKeys` | array | `[]` | No | Foreign key definitions. See [Foreign Keys](#foreign-keys). |
 | `CheckConstraints` | array | `[]` | No | Table-level check constraint definitions. See [Check Constraints](#check-constraints). |
-| `ShouldApplyExpression` | string | | No | SQL expression evaluated at quench time. If it returns false (or `0`), the entire table is skipped on this database. Tokens are resolved before evaluation. See [Conditional Application](#conditional-application). |
+| `ShouldApplyExpression` | string | | No | SQL predicate evaluated at quench time, after its tokens are resolved. When it is false, the table is not declared on this database: it is not created, and an existing table the product owns is dropped under `DropTablesRemovedFromProduct`. See [Conditional Application](#conditional-application) and [A gate that turns off an existing object](schemaquench.md#a-gate-that-turns-off-an-existing-object). |
 | `VariantName` | string | | No | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `OldName` | string | | No | Previous table name. When set and a table of that name exists where the declared one does not, it is renamed before anything else is changed. Clear after the rename has been deployed everywhere. See [Renames with OldName](#renames-with-oldname). |
 | `DataDelivery` | object | `null` | No | Declarative data delivery configuration for this table. See [DataDelivery](#datadelivery). |
@@ -646,7 +646,7 @@ Every table definition file declares exactly one table. The shared properties be
 | `OnlineApply` | string | omitted = inherit | No | `Off`, `Prefer` or `Require` (any casing), overriding the environment's `OnlineApply` for this table: `Off` runs the plain statements, `Prefer` uses the engine's online or instant form where the version and edition allow it and the plain form otherwise, `Require` uses the online form or refuses the deploy, naming the statement. Carried forward from the existing file on re-extraction. See [OnlineApply](configuration.md#onlineapply). |
 | `Extensions` | object | `null` | No | Open metadata bag. See [Custom Properties](custom-properties.md). |
 
-The `ShouldApplyExpression` field appears on **tables, columns, indexes, foreign keys, check constraints, indexed views, materialized views, data deliveries**, and several platform-specific components. Wherever it appears, it works the same way: the engine resolves tokens, runs the expression against the target database, and skips the component if the result is falsy.
+The `ShouldApplyExpression` field appears on **tables, columns, indexes, foreign keys, check constraints, indexed views, materialized views, data deliveries**, and several platform-specific components. Wherever it appears, it works the same way: the engine resolves tokens, runs the expression against the target database, and when the result is false leaves the component out of this deploy. A component left out is not declared on that database, so one that does not exist is not created, and one that already exists is removed as if it had been deleted from the package -- a table, column or index the product owns is dropped under its `Drop…RemovedFromProduct` flag. A gated-off data delivery is simply not run. See [A gate that turns off an existing object](schemaquench.md#a-gate-that-turns-off-an-existing-object).
 
 ### Renames with OldName
 
@@ -1106,7 +1106,7 @@ reports that combination as `SS-XTP-001` before you deploy.
 
 Always Encrypted lets SQL Server store sensitive column data in encrypted form that the server itself cannot read — only authorized clients holding the Column Master Key can decrypt. SchemaTongs extracts encrypted columns and captures all three encryption properties; SchemaQuench declares them with the exact `ENCRYPTED WITH (…)` syntax SQL Server requires. Extract once, deploy everywhere the CMK is distributed — no hand-written DDL.
 
-> **SQL Server only:** Always Encrypted is a SQL Server feature with no equivalent on PostgreSQL, MySQL, or MariaDB. No parity gap — there is no cross-platform AE analogue to implement.
+> **SQL Server only:** Always Encrypted is a SQL Server feature with no equivalent on PostgreSQL, MySQL, or MariaDB. No parity gap — there is no cross-platform AE analogue to implement. A package for another engine that carries `EncryptionType`, `EncryptionKey` or `EncryptionAlgorithm` on a column fails to load, naming the property and the file: every package property must belong to its engine.
 
 ### Column properties
 
@@ -1355,10 +1355,10 @@ Tables without a `DataDelivery` block are left alone. Tables that declare one ar
 | `ContentFile` | string | | Path to the row data, relative to the template root. Typically produced by DataTongs as a `.tabledata` file (raw JSON array). |
 | `ContentEncoding` | string | `Json` | Encoding of `ContentFile`: `Json` (default) or `Xml`. Accepted on every platform. See [Content Encoding](#content-encoding) below. |
 | `Columns` | string | | Optional. The comma-separated columns the `ContentFile` was extracted with; a name that holds a comma is written in the platform's delimiters (`[Last, First]`). A listed column is delivered even when no row carries it, written NULL, so a column that was NULL in every extracted row still updates the target. DataTongs writes it on SQL Server, whose extraction leaves such a column out. Omitted, the delivered columns are the ones present in the data. |
-| `MergeType` | string | | One of `Insert`, `Insert/Update`, `Insert/Update/Delete`. See [MergeType](#mergetype) below. |
+| `MergeType` | string | | One of `Insert`, `Insert/Update`, `Insert/Update/Delete`. Required to deliver: a delivery without it, or with `None`, is not run. See [MergeType](#mergetype) below. |
 | `MatchColumns` | string | | Comma-separated column names that identify a row. Prefix a column with `*` for NULL-safe comparison on nullable keys. Matches the `KeyColumns` concept in DataTongs. |
 | `MergeFilter` | string | `""` | Optional SQL `WHERE` clause (without the `WHERE` keyword). Scopes both the rows considered for matching and, when delete is enabled, the rows eligible for deletion. |
-| `MergeDisableTriggers` | bool | `false` | Wrap the merge with platform-appropriate trigger disable/enable. |
+| `MergeDisableTriggers` | bool | `false` | **SQL Server, PostgreSQL.** Wrap the merge in `ALTER TABLE ... DISABLE TRIGGER ALL` / `ENABLE TRIGGER ALL`. On PostgreSQL that needs superuser when the table has foreign-key or deferrable-constraint triggers. MySQL and MariaDB cannot disable a trigger, so there it has no effect. |
 | `MergeDisableRules` | bool | `false` | **PostgreSQL.** Disable rewrite rules on the table during the merge. |
 | `MergeUpdateDescendents` | bool | `false` | **PostgreSQL.** When `true`, the merge targets descendant partitions as well as the specified table. When `false` (the default), the merge uses `ONLY` so descendant tables are left untouched. |
 | `TimeZone` | string | | **MySQL, MariaDB.** The session time zone, as an offset such as `+00:00`, that the `ContentFile`'s `TIMESTAMP` values were extracted in. Delivery runs in the same zone, so the values arrive unchanged wherever the target server's zone is. DataTongs sets it to `+00:00`. Without it, delivery reads the values in the target session's zone, which is right for data written in that zone. |
@@ -1372,10 +1372,10 @@ A row value that is a JSON object or array, delivered into a text column, arrive
 | Value | Behavior |
 |---|---|
 | `Insert` | Missing rows inserted. Existing rows and extra rows left alone. The seed-data pattern. |
-| `Insert/Update` | Missing rows inserted, changed rows updated. Extra rows left alone. Good for reference tables where environments can append local rows. |
-| `Insert/Update/Delete` | Full sync. Missing rows inserted, changed rows updated, and target rows that don't exist in the source data are deleted. The demo products use this. When `MergeFilter` is set, deletes are scoped by the filter so rows outside it are never removed. |
+| `Insert/Update` | Missing rows inserted, changed rows updated. Extra rows left alone. Good for reference tables where environments can append local rows. The demo products use this. |
+| `Insert/Update/Delete` | Full sync. Missing rows inserted, changed rows updated, and target rows that don't exist in the source data are deleted. When `MergeFilter` is set, deletes are scoped by the filter so rows outside it are never removed. |
 
-The chosen idiom is platform-specific -- `MERGE` on SQL Server and PostgreSQL, `INSERT ... ON DUPLICATE KEY UPDATE` with a conditional delete step on MySQL -- but the declarative contract is the same on every platform.
+The chosen idiom is platform-specific -- `MERGE` on SQL Server and on PostgreSQL 15 and later (an `UPDATE` plus an `INSERT ... WHERE NOT EXISTS` on an older PostgreSQL target), `INSERT ... ON DUPLICATE KEY UPDATE` with a separate delete step on MySQL and MariaDB -- but the declarative contract is the same on every platform.
 
 ### Content Encoding
 
@@ -1399,9 +1399,9 @@ The XML row shape is a documented, stable contract -- one `<c>` element per colu
 ```
 
 - An **absent `<c>`** is `NULL` (row `B002` above has no `price`).
-- **Binary** columns are base64; **geometry/geography** is WKT with a companion `<c n="Column.STSrid">` carrying the SRID (produced on SQL Server; see the [extraction note](datatongs.md#delivery-encoding-xml-for-legacy-sql-server) for when the other engines omit it); **dates** are ISO-8601.
+- **Binary** columns are base64; **geometry/geography** is WKT with a companion `<c n="Column.STSrid">` carrying the SRID, which every engine's extraction produces; **dates** are ISO-8601.
 
-You don't have to hand-author this shape: `DataTongs --DeliveryEncoding=Xml` extracts a table's data directly in it and stamps `"ContentEncoding": "Xml"` on the delivery for you, on every source engine (see [DataTongs](datatongs.md#delivery-encoding-xml-for-legacy-sql-server)) -- SQL Server extracts XML natively, and PostgreSQL/MySQL/MariaDB convert their normal JSON extraction into the identical shape. One caveat: the `.STSrid` SRID element -- a per-row companion carried alongside each extracted value -- is captured only in SQL Server's extraction; PostgreSQL and MySQL JSON (and therefore their XML derivatives) carry WKT alone for spatial columns, the same as their JSON output. On **MySQL**, a [SRID-restricted column](#mysql-column-extras) (`Srid` in the schema package) doesn't need that per-row companion: every row in the column is guaranteed to carry the declared reference system, so a deploy target reconstructs it from the schema instead. An *unrestricted* MySQL spatial column, and every PostgreSQL spatial column, still lose the reference system in data extraction.
+You don't have to hand-author this shape: `DataTongs --DeliveryEncoding=Xml` extracts a table's data directly in it and stamps `"ContentEncoding": "Xml"` on the delivery for you, on every source engine (see [DataTongs](datatongs.md#delivery-encoding-xml-for-legacy-sql-server)) -- SQL Server extracts XML natively, and PostgreSQL/MySQL/MariaDB convert their normal JSON extraction into the identical shape.
 
 ### Multiple Deliveries
 
@@ -1744,23 +1744,26 @@ SQL Server's answer is to allow **two capture instances per table** so a new one
 | A column dropped | No. It stays in the change table and captures NULL from then on. |
 | A computed column added, or its expression changed | No. A captured computed column is always NULL, persisted or not, so an instance without it loses nothing. |
 | A column option toggled: `NOT FOR REPLICATION`, `ROWGUIDCOL`, a `DataMaskFunction` | No. None of them is captured. |
+| A regular column turned into a computed one | No. A captured computed column is always NULL. |
 | A column added (other than a computed one) | Yes. Only a new instance captures it. |
-| A column replaced rather than altered: an identity added or removed, a column-set change, an `AnsiPadding` change | Yes. The replacement has a new position, which the old instance does not record, so it would capture NULL. |
+| A column replaced rather than altered: an identity added or removed, a column-set change, an `AnsiPadding` change, a computed column turned into a regular one | Yes. The replacement has a new position, which the old instance does not record, so it would capture NULL. |
 | `CdcFilegroup`, `CdcSupportsNetChanges` or `CdcIndexName` changed | Yes. Each is fixed per instance. |
 
 When a deploy rotates a tracked table it:
 
 1. Leaves CDC running throughout -- the column work does not interrupt capture.
-2. Creates a second capture instance covering the new column set, named `<schema>_<table>_2` (or the base `<schema>_<table>` if the surviving instance already carries the `_2` suffix).
+2. Creates a second capture instance covering the new column set, named `<schema>_<table>_2` when the instance it replaces has the base name `<schema>_<table>`, and the base name otherwise.
 3. Leaves the original instance and everything it has captured untouched, and names it in the deploy log along with the command to remove it.
 
-The same rotation happens whenever a tracked table's newest capture instance does not capture one of the table's stored columns, even when the deploy changed none. That catches a column a previous deploy added but never got to capture -- because it stopped partway, say -- or one another tool added. A computed column the instance lacks is left alone, for the reason above.
+Rotation, and the two-instance checks below, apply only to a table that declares `"EnableCDC": true`. A tracked table that leaves `EnableCDC` out is neither rotated nor checked against the two-instance limit, so a column added to it is not captured; the type-change check below still covers it.
 
-> **Warning: a type change the change table cannot take.** SQL Server applies a column's type change to *every* change table that captures it -- a retired instance you have not yet dropped included -- inside the capture job, after the deploy. When a change table holds values the new type cannot take (a `VARCHAR(50)` narrowed to `VARCHAR(10)` over history with longer values), that fails there, and the capture job stops for the **whole database** until the instance is dropped. A rotation does not avoid it. SchemaSmith tries each in-place type change against the change tables first and refuses the deploy before anything changes, naming the column, the instance and the error. Drain that instance, drop it, and re-run.
+On a deploy (not a `--WhatIf` preview), the same rotation happens whenever a tracked table's newest capture instance does not capture one of the table's stored columns, even when the deploy changed none. A column the instance still captures but the table no longer has is not a reason to rotate. That catches a column a previous deploy added but never got to capture -- because it stopped partway, say -- or one another tool added. A computed column the instance lacks is left alone, for the reason above.
+
+> **Warning: a type change the change table cannot take.** SQL Server applies a column's type change to *every* change table that captures it -- a retired instance you have not yet dropped included -- inside the capture job, after the deploy. When a change table holds values the new type cannot take (a `VARCHAR(50)` narrowed to `VARCHAR(10)` over history with longer values), that fails there, and the capture job stops for the **whole database** until the instance is dropped. A rotation does not avoid it. SchemaSmith tries each in-place type change against the change tables first and refuses the deploy before any existing column is altered (apart from a ledger table's generated columns, which converge earlier), naming the column, the instance and the error. Drain that instance, drop it, and re-run.
 
 > **Action required:** Retiring the old instance is your call, not SchemaSmith's -- only you know when your readers have drained it. Drop it with `EXEC sys.sp_cdc_disable_table @source_schema = N'<schema>', @source_name = N'<table>', @capture_instance = N'<name>'`.
 
-> **Warning:** Because the old instance occupies one of the two slots, a **second** column change before you drop it has nowhere to rotate to. SchemaSmith refuses that deploy **before changing or dropping anything**, on that table or any other in the deploy, naming the tables at the limit and the command to clear them, so nothing is left half-applied. Drop the drained instance and re-run. If a table's newest instance is missing columns while both slots are in use, the deploy warns instead, naming the table.
+> **Warning:** Because the old instance occupies one of the two slots, a **second** change that rotates (see the table above) has nowhere to go until you drop it. SchemaSmith refuses that deploy, naming the tables at the limit and printing the `sp_cdc_disable_table` command to clear them, with placeholders for the schema, table and instance. A new column, or a changed `CdcFilegroup`, `CdcSupportsNetChanges` or `CdcIndexName`, is refused before any table is created or changed. A replaced column is refused later: before any other existing column is altered or any index or key over a changing column is dropped, but after new tables and columns are created, renames are applied, object scripts without query tokens and `Before` scripts run, temporal versioning is turned off on tables no longer declared temporal, tables removed from the product are dropped, and an existing ledger table's generated-column names, `HIDDEN` flags and view name converge (SQL Server 2022 and later). A change that does not rotate goes ahead at the limit. Drop the drained instance and re-run. If a table's newest instance is missing columns while both slots are in use, the deploy warns instead, naming the table.
 
 Setting `EnableCDC` to `false` disables capture on the table outright, which drops its capture instances and their history. That is a deliberate opt-out rather than a side effect of a schema change, so it takes an explicit `false`: a table that leaves `EnableCDC` out keeps whatever CDC it has, and SchemaTongs writes `EnableCDC` only for a tracked table.
 
@@ -1777,7 +1780,7 @@ By default SQL Server puts a change table (`cdc.<schema>_<table>_CT`) on the dat
 ```
 
 - **The filegroup must already exist.** Like `sp_cdc_enable_db`, creating one is a database-level decision, so SchemaSmith does not do it. A `CdcFilegroup` naming a filegroup the database does not have fails the deploy up front, naming the table and the filegroup, before any table is changed.
-- **Changing it rotates, it never moves.** A table whose newest capture instance is on a different filegroup than the one declared gets a new capture instance on the declared filegroup -- the same rotation a column change performs, with the same rules: the old instance and its history are left for you to drain and drop, and if both slots are already in use the deploy is refused before touching anything. A second deploy of the same declaration changes nothing.
+- **Changing it rotates, it never moves.** A table whose newest capture instance is on a different filegroup than the one declared gets a new capture instance on the declared filegroup -- the same rotation a column change performs, with the same rules: the old instance and its history are left for you to drain and drop, and if both slots are already in use the deploy is refused before any table is created or changed. A second deploy of the same declaration changes nothing.
 - **Unset means unmanaged.** With no `CdcFilegroup` on the table or the template, SchemaSmith leaves an existing change table wherever it is, including one a DBA placed by hand. Removing a declaration is therefore a no-op, not a move back to the default.
 - **A rotation keeps its filegroup.** When a column change rotates a table that declares no `CdcFilegroup`, the new instance goes on the same filegroup as the one it replaces.
 
@@ -2516,17 +2519,21 @@ A declared property is added, a changed value is updated in place, and `""` or `
 
 Dev uses synthetic data and a lean index set. Staging mirrors production's footprint. Production carries the full reporting stack and the regulated columns. Without a declarative answer, those differences turn into per-environment file copies, branching pipelines, or hand-maintained deploy scripts -- the kind of drift that's fine until a column gets forgotten. `ShouldApplyExpression` is that declarative answer: a SQL fragment attached to a component that decides, at deployment time, whether the component should apply to the current target.
 
-`ShouldApplyExpression` is the universal opt-in/opt-out switch on every component that supports it. The expression is a SQL fragment that returns a single scalar value. When SchemaQuench evaluates it before deploying that component, it considers the result false if it's `0`, the literal string `false`, or empty/null. Anything else means apply the component normally.
+`ShouldApplyExpression` is the universal opt-in/opt-out switch on every component that supports it. How the result is read depends on where the gate sits:
+
+- **On a table or one of its components** it is a SQL predicate, evaluated on the server: true declares the component, false leaves it out of this deploy -- and a component left out that already exists is dropped (see [A gate that turns off an existing object](schemaquench.md#a-gate-that-turns-off-an-existing-object)). A predicate that evaluates to NULL counts as true, so the component deploys. A leading `SELECT` is stripped, so write the predicate itself, not `SELECT CASE … THEN 1 ELSE 0 END`.
+- **On a script folder or a data delivery** it runs as a query. A bare predicate is wrapped for you; a `SELECT` must return a number or boolean: `0`, NULL or no row is false, any other number is true, and a string such as `'false'` fails the deploy.
+
+On a table, a component or a script folder, vary by environment by comparing against a script token each environment overrides -- here `DeployEnvironment`, declared in `Product.json` `ScriptTokens` and set per environment with `SmithySettings_ScriptTokens__DeployEnvironment`. A [custom property](custom-properties.md) is part of the package, so it reads the same everywhere and cannot tell environments apart. A data-delivery gate is the exception: it resolves only `{{SchemaName}}`, `{{ServerMajorVersion}}` and `{{CompatibilityLevel}}`, so a script token reaches the server as literal text -- gate a delivery by environment with a server-side check such as `DB_NAME() LIKE '%_dev'`.
 
 ```json
 {
   "Name": "[Orders]",
-  "Extensions": { "Environment": "Production" },
   "Indexes": [
     {
       "Name": "[IX_Orders_Reporting]",
       "IndexColumns": "[ReportingDate]",
-      "ShouldApplyExpression": "'{{Table.Environment}}' = 'Production'"
+      "ShouldApplyExpression": "'{{DeployEnvironment}}' = 'Production'"
     }
   ]
 }
@@ -2685,7 +2692,7 @@ Set `CreateSchemaIfMissing: true` when you're running a fully automated onboardi
 |---|---|---|---|
 | `AllowParallel` | bool | `true` | When `false`, iterations of this schema template run serially regardless of the global `MaxThreads` setting. |
 
-When `true` (the default), schema iterations can run in parallel up to the `MaxThreads` limit alongside iterations from other templates and databases. Parallel execution is safe: each iteration touches its own schema namespace and converges independently.
+When `true` (the default), schema iterations can run in parallel up to the `MaxThreads` limit, across schemas and databases. Templates run one at a time, so they never share the pool with another template. Parallel execution is safe: each iteration touches its own schema namespace and converges independently.
 
 > **Tip:** Set `AllowParallel: false` to force this template's iterations to run one at a time -- useful to cap concurrent load on a resource-constrained target, or when the template's own migration scripts perform DDL that can't run concurrently. Parallel iteration is otherwise the production-realistic default; both TenantCRM demos ship `AllowParallel: true`.
 

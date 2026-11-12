@@ -95,7 +95,7 @@ For the full token reference -- scopes, custom-property tokens from `Extensions`
 
 Tokens aren't just for deployment parameters. Custom metadata you attach to your tables via the `Extensions` carrier becomes available as tokens in every expression field on that table and its components. This is where SchemaSmith starts to feel like a governance platform instead of just a deployment tool.
 
-The `Extensions` property is an open JSON bag that lives on every entity in the schema package -- tables, columns, indexes, foreign keys, check constraints, all of them. Attach whatever your team cares about: environment markers, data classification tags, team ownership, replication configuration, sensitivity flags. One declaration rides through source control, survives SchemaTongs re-extraction, and flows into every `ShouldApplyExpression` on that component.
+The `Extensions` property is an open JSON bag that lives on every entity in the schema package -- tables, columns, indexes, foreign keys, check constraints, all of them. Attach whatever your team cares about: data classification tags, team ownership, replication configuration, sensitivity flags. (Not the environment: a custom property is part of the package, so it reads the same everywhere. The environment comes from a script token each environment overrides.) One declaration rides through source control, survives SchemaTongs re-extraction, and flows into every `ShouldApplyExpression` on that component.
 
 **Declare once:**
 
@@ -103,7 +103,6 @@ The `Extensions` property is an open JSON bag that lives on every entity in the 
 {
   "Name": "[Orders]",
   "Extensions": {
-    "Environment": "Production",
     "DataClassification": "PII",
     "OwningTeam": "Identity"
   },
@@ -111,13 +110,13 @@ The `Extensions` property is an open JSON bag that lives on every entity in the 
     {
       "Name": "[IX_Orders_AuditCreatedAt]",
       "IndexColumns": "[CreatedAt]",
-      "ShouldApplyExpression": "'{{Table.Environment}}' = 'Production'"
+      "ShouldApplyExpression": "'{{Table.DataClassification}}' = 'PII' AND '{{DeployEnvironment}}' = 'Production'"
     }
   ]
 }
 ```
 
-**Consume everywhere:** `{{Table.Environment}}` drives whether the audit index is created. `{{Table.DataClassification}}` could drive a script token that generates masking policies. `{{Table.OwningTeam}}` could drive ownership tags. A component's own `Extensions` keys flatten to `{{KeyName}}`; the parent table's `Extensions` keys are available as `{{Table.KeyName}}` anywhere inside that table.
+**Consume everywhere:** `{{Table.DataClassification}}`, together with a `DeployEnvironment` script token each environment overrides, decides whether the audit index is created. `{{Table.DataClassification}}` could drive a script token that generates masking policies. `{{Table.OwningTeam}}` could drive ownership tags. A component's own `Extensions` keys flatten to `{{KeyName}}`; the parent table's `Extensions` keys are available as `{{Table.KeyName}}` anywhere inside that table.
 
 **Full table graph as JSON.** At the template level, the automatic `{{TableSchema}}` token carries the entire current template's table graph serialized as JSON -- every table, every column, every index, all your `Extensions` metadata included. A migration script can consume this token, parse it in-engine (via `JSON_VALUE`, `json_each`, or `JSON_TABLE` depending on platform), and drive behavior entirely from your declared metadata. Write a single script that reads column-level sensitivity flags and generates dynamic masking policies. Write a procedure that reads team-ownership tags and builds an audit trail. The metadata lives in your schema package, travels through source control, and gets acted on at deployment time -- without any external tooling.
 
@@ -150,7 +149,7 @@ For the token that makes it work, see [Script Tokens](../reference/script-tokens
 
 ## Conditional deployment with ShouldApplyExpression
 
-`ShouldApplyExpression` is how you declare "this thing only exists in certain places." It lives on tables, columns, indexes, foreign keys, check constraints, indexed views, materialized views, full-text indexes -- every structural component. Before deploying any component with a `ShouldApplyExpression`, SchemaQuench resolves the tokens, runs the expression against the target database, and skips the component if the result is falsy.
+`ShouldApplyExpression` is how you declare "this thing only exists in certain places." It lives on tables, columns, indexes, foreign keys, check constraints, indexed views, materialized views, full-text indexes -- every structural component. Before deploying any component with a `ShouldApplyExpression`, SchemaQuench resolves the tokens, runs the expression against the target database, and when the result is false leaves the component out of this deploy. Out means not declared: a component that does not exist yet is not created, and one that already exists is dropped, exactly as if it had been deleted from the package. A gate is a declaration about the target, not a pause -- see [A gate that turns off an existing object](../reference/schemaquench.md#a-gate-that-turns-off-an-existing-object).
 
 ```json
 {
@@ -186,13 +185,13 @@ When a component carries several same-named variants gated by mutually exclusive
     "VariantName": "Modern engines",
     "IndexColumns": "[Region]",
     "FilterExpression": "[Region] IS NOT NULL",
-    "ShouldApplyExpression": "SERVERPROPERTY('ProductMajorVersion') >= 16"
+    "ShouldApplyExpression": "{{ServerMajorVersion}} >= 16"
   },
   {
     "Name": "[IX_Orders_Region]",
     "VariantName": "Legacy engines",
     "IndexColumns": "[Region]",
-    "ShouldApplyExpression": "SERVERPROPERTY('ProductMajorVersion') < 16"
+    "ShouldApplyExpression": "{{ServerMajorVersion}} < 16"
   }
 ]
 ```
@@ -214,7 +213,7 @@ For deploying a partial package of migration scripts to fix a specific productio
 - **Within a table.** Columns, indexes, foreign keys, check constraints, statistics, and the other components inside a table file can each declare conditional variants -- same name, mutually exclusive expressions -- and the matching one is chosen per target. These variant sets are fully preserved when SchemaTongs re-extracts the table.
 - **A table's data.** A table's `DataDelivery` block works differently from the components above: it can be an array of gated deliveries, but *every* delivery whose gate passes applies -- not just one match. That's what makes additive patch slices possible alongside mutually-exclusive environment variants. See [Gating deliveries by environment](#gating-deliveries-by-environment) below.
 - **The whole table.** A table-level `ShouldApplyExpression` gates the entire table present-or-absent on a given target, and that gating round-trips through extraction too.
-- **A whole folder.** A product- or template-level script folder can carry a `ShouldApplyExpression`, so an entire folder of scripts deploys or is skipped per target -- a `MariaDB/` variant gated on `@@version`, a `Jobs/` folder skipped on Azure SQL, or `TableData/TestData/` kept out of production. Its tokens are resolved before evaluation, like every other gate. See [Conditional Deployment](../reference/schemaquench.md#shouldapplyexpression-and-conditional-deployment).
+- **A whole folder.** A product- or template-level script folder can carry a `ShouldApplyExpression`, so an entire folder of scripts deploys or is skipped per target -- a folder gated on `SELECT {{ServerMajorVersion}} >= 800` that deploys only to the MySQL 8.0 and later targets of a package that also serves the 5.7 line, a `Jobs/` folder skipped on Azure SQL, or `TableData/TestData/` kept out of production. Its tokens are resolved before evaluation, like every other gate. See [Conditional Deployment](../reference/schemaquench.md#shouldapplyexpression-and-conditional-deployment).
 
 **Recommendation:** to vary a table's *structure* by target, prefer component-level variants inside a single table file (or give the structurally different tables distinct names). Two separate same-named whole-table variant files will deploy correctly, but SchemaTongs normalizes a table to one file per name on extraction, so a multi-file same-named-table layout isn't reproduced when you re-extract.
 
@@ -361,7 +360,7 @@ Token replacement applies -- `{{MainDB}}`, `{{ReleaseVersion}}`, any token you d
 
 The canonical use is anti-rollback protection. Pair `BaselineValidationScript` with `VersionStampScript`: the stamp records a version identifier after a successful deployment; the baseline checks for that identifier before the next deployment. If someone accidentally runs an older package against an already-upgraded environment, the baseline check aborts before any harm is done.
 
-There is no built-in "previous version" token -- the package declares both versions itself, as ordinary `ScriptTokens`, and bumps them together on each release:
+There is no built-in "previous version" token -- the package declares both versions itself, as ordinary `ScriptTokens`, and bumps them together on each release. In a `Template.json`, where both scripts run in the template's own database:
 
 ```json
 {
@@ -518,10 +517,10 @@ You have a production incident. Two stored procedures need to go out now -- not 
 Generate your manifest from the commit range that holds the fix:
 
 ```bash
-git diff --name-only <before-sha> <after-sha> -- MyProduct/ > patch.manifest
+git diff --name-only --diff-filter=d --relative=MyProduct/ <before-sha> <after-sha> > patch.manifest
 ```
 
-This produces a list of every file changed between those two commits inside the product folder -- exactly what belongs in the patch. No hand-editing a file list; the VCS tells you what changed.
+This produces a list of every file changed or added between those two commits inside the product folder, each relative to the product root the manifest is read against -- exactly what belongs in the patch. `--diff-filter=d` leaves out deleted files, which a manifest cannot name. No hand-editing a file list; the VCS tells you what changed.
 
 ### Build the patch
 

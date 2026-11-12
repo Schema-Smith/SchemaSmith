@@ -223,11 +223,13 @@ Three pieces work together. Here's how the Northwind demo product sets it up on 
 ```json
 {
   "Name": "Initialize",
-  "DatabaseIdentificationScript": "SELECT [Name] FROM master.sys.databases WHERE [Name] = 'master' AND NOT EXISTS (SELECT 1 FROM master.sys.databases WHERE [Name] = '{{NorthwindDb}}')"
+  "DatabaseIdentificationScript": "SELECT name FROM master.sys.databases WHERE name = 'TestMain' AND NOT EXISTS (SELECT 1 FROM master.sys.databases WHERE name = '{{NorthwindDb}}')",
+  "ScriptFolders": [{ "FolderPath": "Before Scripts", "QuenchSlot": "Before" }],
+  "RequireAtLeastOneTarget": false
 }
 ```
 
-The `DatabaseIdentificationScript` is the key. It returns a result only when the target database doesn't yet exist -- it matches `master` (a database that always exists on the server) but only when `NorthwindDb` is missing. On the first run, this template activates and creates the database. On every subsequent run, the script returns no rows, SchemaQuench skips the template entirely, and deployment proceeds straight to the main template.
+The `DatabaseIdentificationScript` is the key. It returns a result only when the target database doesn't yet exist -- it matches `TestMain`, a small control database the demo creates for this, but only while `NorthwindDb` is missing. (Not `master`: SchemaQuench installs its helpers in every database a template identifies.) On the first run, this template activates and creates the database. On every later run the script returns no rows, and `RequireAtLeastOneTarget: false` lets the template find nothing without failing the run -- the default, `true`, treats an empty target list as an error -- so deployment proceeds straight to the main template.
 
 **2. A migration script creates the database idempotently.** In `Templates/Initialize/Before Scripts/Create Northwind [ALWAYS].sql`:
 

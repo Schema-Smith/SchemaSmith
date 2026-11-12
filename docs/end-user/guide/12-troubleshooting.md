@@ -183,15 +183,17 @@ If using SQL Server Windows authentication, omit `User` and `Password` entirely.
 
 ### ShouldApplyExpression not skipping a component
 
-**Symptom:** You added `ShouldApplyExpression` to an index, column, or constraint, expecting it to be skipped on the current database, but SchemaQuench deployed it anyway.
+**Symptom:** You added `ShouldApplyExpression` to an index, column, or constraint, expecting it to be left out on the current database, but SchemaQuench deployed it anyway.
 
-**Cause:** The expression returned something truthy. An empty result, `NULL`, or missing value is treated as "apply normally" rather than "skip" -- only an explicit `0`, `false`, or falsy scalar tells SchemaQuench to skip the component.
+**Cause:** On a table component the expression is a predicate, and a predicate that evaluates to `NULL` counts as true, so the component deploys. The usual source of the `NULL` is a nullable input compared with `=`, or a token that did not resolve and reached the server as literal text.
 
 **Fix:**
 
-1. Run the expression directly against the target database and check its return value.
-2. If you're using custom-property tokens from `Extensions`, verify the token actually resolves. Unresolved `{{Table.SomeName}}` tokens are left in place literally and usually cause the SQL to error out rather than return a clean `0` or `1`.
-3. Wrap the expression in `SELECT CASE WHEN ... THEN 1 ELSE 0 END` to make the output shape unambiguous.
+1. Run the predicate directly against the target database and check whether it is true, false or `NULL`.
+2. If you're using custom-property tokens from `Extensions`, verify the token actually resolves -- they resolve only in the expression fields of the file that declares them. Unresolved `{{Table.SomeName}}` tokens are left in place literally and usually cause the SQL to error out. A data-delivery gate resolves only `{{SchemaName}}`, `{{ServerMajorVersion}}` and `{{CompatibilityLevel}}`.
+3. Make the predicate true or false, never `NULL` -- guard a nullable input with `COALESCE`. Do not wrap a component gate in `SELECT CASE WHEN ... THEN 1 ELSE 0 END`: the leading `SELECT` is stripped and the rest is not a predicate, which fails on SQL Server and PostgreSQL.
+
+Remember that a component left out of a deploy is not declared there: one that already exists is dropped, not skipped (see [A gate that turns off an existing object](../reference/schemaquench.md#a-gate-that-turns-off-an-existing-object)).
 
 ### Custom property tokens show up literally in generated SQL
 
@@ -228,7 +230,7 @@ These entries apply to schema-template products (one iteration per tenant schema
 **Fix:**
 
 - Filter the progress log to one schema name to isolate that tenant's sequence end-to-end. Every schema-template log line carries a `[Schema: <name>]` prefix; for a many-database fan-out, the prefix is `[server].[database]`. Both formats are greppable without extra tooling.
-- Set `AllowParallel: false` on the template in `Template.json` to serialize execution. When set, at most one iteration of that template runs at a time. Other templates' parallel-eligible work units continue to fill the thread pool, so the overall deployment isn't fully serialized -- only that template's iterations are. This is the right trade-off when you need a clean per-tenant log for debugging, or when your schema template creates cross-schema foreign keys where DDL parallelism causes lock contention.
+- Set `AllowParallel: false` on the template in `Template.json` to serialize execution. When set, at most one iteration of that template runs at a time. Templates already run one at a time, so this serializes that template's own iterations and nothing else. This is the right trade-off when you need a clean per-tenant log for debugging, or when your schema template creates cross-schema foreign keys where DDL parallelism causes lock contention.
 
 `AllowParallel` is a schema-template property only. For many-database regular templates, use `MaxThreads: 1` in `SchemaQuench.settings.json` to cap global concurrency for that run. See [MaxThreads](../reference/schemaquench.md#maxthreads) and [AllowParallel](../reference/schema-packages.md#allowparallel) for the full interaction.
 

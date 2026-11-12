@@ -23,7 +23,7 @@ SchemaQuench --LogPath:path/to/logs
 # Pre-flight diagnostics (no deployment)
 SchemaQuench --TestConnection     # validate connections + MinimumVersion, then exit
 SchemaQuench --PreviewTargets     # validate connections + MinimumVersion + show target report, then exit
-SchemaQuench --WhatIf             # dry run: log the SQL a deployment would run, change nothing
+SchemaQuench --WhatIf             # dry run: log the SQL a deployment would run, change none of your objects
 
 # The JSON Schema of this version's deployment summary (Summary.json); needs no settings file
 SchemaQuench --WriteSummarySchema:deployment-summary.schema.json
@@ -51,11 +51,21 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `Target:Server` | string | _(required)_ | Database server hostname or IP. |
-| `Target:Port` | string | platform default | TCP port. SQL Server `1433`, PostgreSQL `5432`, MySQL `3306`. |
+| `Target:Port` | string | platform default | TCP port. SQL Server `1433`, PostgreSQL `5432`, MySQL `3306`, MariaDB `3306`. |
 | `Target:User` | string | _(empty)_ | Login username. SQL Server allows blank for Windows auth. |
 | `Target:Password` | string | _(empty)_ | Login password. |
+| `Target:IntegratedSecurity` | bool | `false` | **SQL Server only.** Set to `true` to force Windows Authentication, superseding any configured `User`/`Password`. See [Individual connection settings](configuration.md#individual-connection-settings). |
 | `Target:SecondaryServers` | string or array | _(empty)_ | **SQL Server only.** Additional servers (Availability Group secondaries) to quench in parallel with the primary: a JSON array, one server per item (`["replica-1,14330", "replica-2"]`), or a comma-separated string, where an all-digit item is the port of the server before it. See [Secondary Servers](#secondary-servers). |
 | `Target:ConnectionProperties` | object | `{}` | Arbitrary key-value pairs appended to the connection string. Platform-specific keys -- see the [Configuration Reference](configuration.md#connection-configuration). |
+
+### Target Scope Settings
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `Target:Templates` | string array | `[]` | Run only these templates. Empty array means no filter -- all templates run. See [Target](#target). |
+| `Target:Databases` | string array | `[]` | Run only against these databases. Empty array means no filter -- all discovered databases run. See [Target](#target). |
+| `Target:Schemas` | string array | `[]` | **SQL Server and PostgreSQL**, where schema templates apply. Run only against these schema names. Empty array means no filter -- all discovered schemas run. Applies only to schema-template iterations. See [Target](#target). |
+| `Target:TemplateTargets` | object | `{}` | Per-template target override, keyed by template name: supplies that template's databases (and schemas) for this environment in place of its `DatabaseIdentificationScript` / `SchemaIdentificationScript`. See [TemplateTargets](#templatetargets). |
 
 ### Behavior Settings
 
@@ -64,13 +74,19 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | `SchemaPackagePath` | string | _(required)_ | Path to the schema package directory or ZIP file. |
 | `WhatIfONLY` | bool | `false` | Dry-run mode. Generates SQL without executing. The `--WhatIf` switch turns it on for one run. |
 | `KindleTheForge` | bool | `true` | Deploy SchemaSmith helper procedures and the migration tracking table to each target database before quenching. |
+| `ForceReKindle` | bool | `false` | Re-deploy SchemaSmith's helper procedures even when the in-database kindle stamp is current. The `--ForceReKindle` switch turns it on for one run. See [ForceReKindle](#forcerekindle). |
 | `UpdateTables` | bool | `true` | Apply table structure changes (columns, indexes, constraints, foreign keys) from the schema package. |
-| `DropTablesRemovedFromProduct` | bool | `true` | Drop tables that exist in the database but aren't defined in the schema package. Also settable as a `Product.json` property — see [DropTablesRemovedFromProduct](#droptablesremovedfromproduct). |
-| `PreventDrop` | bool | `false` | Environment-wide no-drop protection: when `true`, the drop-by-absence passes listed under [PreventDrop](#preventdrop) are suppressed for the run, and it completes normally, itemizing the withheld table, column, foreign-key, constraint, statistic, index and (MariaDB) application-time period drops in the deployment summary's `preventDrop` manifest. Transient drop-then-recreate for a declared change is unaffected. See [PreventDrop](#preventdrop). |
-| `DropColumnsRemovedFromProduct` | bool | `true` | Drop columns that exist in the database but aren't defined in the schema package. Resolves across a four-tier cascade (env → product → template → table) with explicit-false-sticky semantics. See [DropColumnsRemovedFromProduct](#dropcolumnsremovedfromproduct). |
+| `OnlineApply` | string | `Off` | `Off`, `Prefer` or `Require`: whether a deploy uses the engine's lower-lock forms of index and column changes. A table's own `OnlineApply` overrides it. See [OnlineApply](configuration.md#onlineapply). |
+| `OnlineApplyMaxDuration` | int | _(unset)_ | **SQL Server only.** Whole minutes, 1 to 10080. From SQL Server 2019, makes each new index a resumable build. Unset, nothing is resumable. See [OnlineApplyMaxDuration](configuration.md#onlineapplymaxduration). |
+| `RebuildPolicyMode` | string | _(unset)_ | The environment tier of the rebuild policy: `NEVER`, `ALWAYS` or `THRESHOLD`, deciding when SchemaQuench rebuilds a table instead of altering it in place. A product, template or table that declares its own policy replaces it whole. With no policy declared anywhere, tables are altered in place. See [RebuildPolicy](configuration.md#rebuildpolicy). |
+| `RebuildPolicyThreshold` | int | _(unset)_ | With `THRESHOLD`, the number of pending column modifications that triggers a rebuild. |
+| `RebuildPolicyOnOrderMismatch` | bool | _(unset)_ | `true` also rebuilds a table whose deployed column order has drifted from the package. Composes with any mode. On MySQL and MariaDB under `OnlineApply` `Prefer` or `Require`, a table rebuilt only for its column order has its columns moved into order in place instead. See [OnlineApply](configuration.md#onlineapply). |
+| `SystemVersioningAlterHistory` | string | _(unset)_ | **MariaDB only.** `KEEP` lets a column change on a system-versioned table proceed, and rewrites the stored history to match. Unset, MariaDB refuses the change. See [SystemVersioningAlterHistory](configuration.md#systemversioningalterhistory). |
 | `DeliverData` | bool | `true` | Run the per-table `DataDelivery` step and the `TableData`-slot scripts. Set to `false` to ship a structure-only deployment that leaves reference data untouched -- pairs naturally with `UpdateTables: true` for "deploy schema, skip data" pipelines. |
 | `RunScriptsTwice` | bool | `false` | Run object scripts twice to verify idempotency. A CI/testing tool. |
 | `Target:SkipUnchangedObjects` | bool | `true` | Do not re-run an object script whose text is unchanged since it last applied and whose object the server still renders as it was left. A hand change on the server, an edited script, an `[ALWAYS]` name or a `-- SchemaSmith: AlwaysRun` comment runs it again. The key lives under `Target`; a top-level `SkipUnchangedObjects` is not read. See [Unchanged Object Scripts](#unchanged-object-scripts). |
+| `Target:UnsupportedFeaturePolicy` | string | `warn` | What to do when the package declares a feature the detected target version cannot support. `warn` emits the object without the unsupported aspect and records it in the deployment summary; `fail` aborts the run with a message naming the feature and the version it requires. See [Version-adaptive code generation](#version-adaptive-code-generation). |
+| `Target:CompatEncoding` | string | `auto` | **SQL Server only.** `auto`, `legacy` (XML) or `modern` (JSON): how SchemaSmith hands its own parsed schema model to SQL Server. `auto` picks from the detected compatibility level and server version; the override is a diagnostic escape hatch, not a tuning knob. See [Forcing the encoding](#forcing-the-encoding). |
 | `Target:DestructiveChangePolicy` | string | `warn` | What a deploy does about dropping a table or column the package no longer declares: `allow`, `warn` (log and summary), or `fail` (refuse the step before anything in it is dropped). An unknown value stops the run. See [DestructiveChangePolicy](configuration.md#destructivechangepolicy). |
 | `Target:AcceptDestructive` | string | `""` | The destructive changes that are intended, as `schema.table` or `schema.table.column`, separated by `;`; they go ahead under `fail`. Set per run, not in the package. |
 | `Target:LockTimeoutSeconds` | int | _(engine default)_ | How long one statement waits for a lock another session holds (1--86400). Set on every connection the deploy opens. Unset, a deploy waits as the engine does: on SQL Server and PostgreSQL, forever. See [Timeouts and contention](configuration.md#timeouts-and-contention). |
@@ -80,10 +96,42 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | `PruneObsoleteMigrationTracking` | bool | `true` | Remove tracking entries for scripts no longer in the package. When `Target` filters are active, prune is restricted to the targeted scope. See [PruneObsoleteMigrationTracking](#pruneobsoletemigrationtracking). |
 | `CheckpointDirectory` | string | `""` | Directory for checkpoint files used by `--ResumeQuench`. When blank, defaults to a per-platform temp location. See [Checkpoint and Resume](#checkpoint-and-resume). |
 | `MaxThreads` | int | `10` | Maximum parallel work units. Covers both database-level and schema-level iterations. Range 1--20; a value outside it, or one that is not a whole number, falls back to `10`. See [MaxThreads](#maxthreads). |
-| `VerboseLogging` | bool | `false` | Include informational output from user scripts in the progress log: `PRINT` and low-severity messages on SQL Server, `RAISE NOTICE` on PostgreSQL. SchemaSmith's own progress messages always appear. SchemaQuench does not log informational messages from MySQL or MariaDB scripts, so the setting has no effect there. |
 | `ScriptTokens` | object | `{}` | Config-level overrides for product script tokens. |
 
+### Drop Control Settings
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `PreventDrop` | bool | `false` | Environment-wide no-drop protection: when `true`, the drop-by-absence passes listed under [PreventDrop](#preventdrop) are suppressed for the run, and it completes normally, itemizing the withheld table, column, foreign-key, constraint, statistic, index and (MariaDB) application-time period drops in the deployment summary's `preventDrop` manifest. Transient drop-then-recreate for a declared change is unaffected. See [PreventDrop](#preventdrop). |
+| `DropTablesRemovedFromProduct` | bool | `true` | Drop tables that exist in the database but aren't defined in the schema package. Also settable as a `Product.json` property — see [DropTablesRemovedFromProduct](#droptablesremovedfromproduct). |
+| `DropColumnsRemovedFromProduct` | bool | `true` | Drop columns that exist in the database but aren't defined in the schema package. Resolves across a four-tier cascade (env → product → template → table) with explicit-false-sticky semantics. See [DropColumnsRemovedFromProduct](#dropcolumnsremovedfromproduct). |
+| `DropForeignKeysRemovedFromProduct` | bool | `true` | Drop foreign keys that exist in the database but no longer appear in the table JSON. Four-tier cascade, explicit-false-sticky. See [DropForeignKeysRemovedFromProduct](#dropforeignkeysremovedfromproduct). |
+| `DropCheckConstraintsRemovedFromProduct` | bool | `true` | Drop table-level CHECK constraints that exist in the database but no longer appear in the table JSON. Four-tier cascade, explicit-false-sticky. See [DropCheckConstraintsRemovedFromProduct](#dropcheckconstraintsremovedfromproduct). |
+| `DropExcludeConstraintsRemovedFromProduct` | bool | `true` | **PostgreSQL only.** Drop EXCLUDE constraints that exist in the database but no longer appear in the table JSON. Four-tier cascade, explicit-false-sticky. See [DropExcludeConstraintsRemovedFromProduct](#dropexcludeconstraintsremovedfromproduct). |
+| `DropStatisticsRemovedFromProduct` | bool | `true` | **SQL Server and PostgreSQL.** Drop user-created statistics objects that exist in the database but no longer appear in the table JSON. Four-tier cascade, explicit-false-sticky. See [DropStatisticsRemovedFromProduct](#dropstatisticsremovedfromproduct). |
+| `DropIndexesRemovedFromProduct` | bool | `true` | Drop a product-owned index (one SchemaSmith created and tracks) that no longer appears in the table JSON. Four-tier cascade, explicit-false-sticky. See [DropIndexesRemovedFromProduct](#dropindexesremovedfromproduct). |
+| `DropUnknownIndexes` | bool | `false` | Drop indexes on managed tables that aren't defined in the schema package -- out-of-band indexes SchemaSmith never created. Three-tier cascade (env → product → template), explicit-false-sticky. See [DropUnknownIndexes](configuration.md#dropunknownindexes). |
+| `DropSchemaBoundDependents` | bool | `false` | **SQL Server only.** Drop a `SCHEMABINDING` view or function that is blocking a column change, so the change can be applied and the module recreated afterwards. Three-tier cascade (env → product → template), explicit-false-sticky. See [DropSchemaBoundDependents](configuration.md#dropschemabounddependents). |
+| `DropPeriodsRemovedFromProduct` | bool | _(unset)_ | **MariaDB only.** `true` drops an application-time period that the package no longer declares. Unset, the period stays: this flag defaults off, unlike most of the family. A table's own `DropPeriodsRemovedFromProduct` overrides it. See [DropPeriodsRemovedFromProduct](configuration.md#dropperiodsremovedfromproduct). |
+| `DropEventsRemovedFromProduct` | bool | `false` | **MySQL and MariaDB.** Drop a scheduled event that exists on the server but no longer appears in the package. Environment-level only: an event has no product, template or table tier. See [DropEventsRemovedFromProduct](configuration.md#dropeventsremovedfromproduct). |
+
+### Logging and Diagnostics Settings
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `VerboseLogging` | bool | `false` | Include informational output from user scripts in the progress log: `PRINT` and low-severity messages on SQL Server, `RAISE NOTICE` on PostgreSQL. SchemaSmith's own progress messages always appear. SchemaQuench does not log informational messages from MySQL or MariaDB scripts, so the setting has no effect there. |
+| `WriteDebugSql` | bool | `false` | Write the SQL of each step SchemaQuench runs to `.sql` files in `ArtifactPath`. The files hold real values, for local debugging only. The `--WriteDebugSql` switch turns it on for one run. See [Debug SQL output](#debug-sql-output). |
+| `ArtifactPath` | string | _(unset)_ | Directory where `WriteDebugSql` writes the files. Unset, the current working directory; a relative path is resolved from it. The directory is created if it does not exist. See [ArtifactPath](configuration.md#artifactpath). |
+| `FailureContextLines` | int | `25` | How many lines of lead-up context each failure captures in `SchemaQuench - Failures.log`. `0` disables context capture; the roll-up still lists the failed scopes and their errors. See [Failure triage roll-up](configuration.md#failure-triage-roll-up). |
+| `BottleneckThresholdMs` | int | `30000` | The milliseconds an individual slot measurement must exceed to be listed as a bottleneck in the deployment summary. See [Tuning bottleneck detection](deployment-summary-report.md#tuning-bottleneck-detection). |
+| `ExitNonZeroOnWarning` | bool | `false` | Exit `1` instead of `0` when the run finished but logged a warning, for pipelines that treat warnings as failures. Never lowers or replaces a failure code. The `--ExitNonZeroOnWarning` switch turns it on for one run. See [Exit Codes](#exit-codes). |
+| `LogHygiene` | object | _(unset)_ | Tunes how sensitive values are kept out of the logs, with the `LogTokens`, `ScrubTokens`, `ScrubPatterns` and `AllowTokens` keys. Unset, the default scrubbing applies. See [Tuning the scrubbing](configuration.md#tuning-the-scrubbing). |
+
+`ScrubArtifacts` is deprecated and does nothing; a settings file that still carries it gets a warning. See [ScrubArtifacts](configuration.md#scrubartifacts).
+
 ### Full settings file example
+
+Every setting SchemaQuench reads. Apart from `Server`, `ConnectionProperties` and `SchemaPackagePath`, each is shown at its default, and a setting shown as `""` is not set, so SchemaQuench applies its default behavior.
 
 ```json
 {
@@ -92,6 +140,7 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
     "Port": "",
     "User": "",
     "Password": "",
+    "IntegratedSecurity": false,
     "SecondaryServers": "",
     "ConnectionProperties": {
       "TrustServerCertificate": "True"
@@ -99,24 +148,56 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
     "Templates": [],
     "Databases": [],
     "Schemas": [],
-    "SkipUnchangedObjects": true
+    "TemplateTargets": {},
+    "SkipUnchangedObjects": true,
+    "UnsupportedFeaturePolicy": "warn",
+    "CompatEncoding": ""
   },
-  "WhatIfONLY": false,
   "SchemaPackagePath": "./MyProduct",
+  "WhatIfONLY": false,
   "KindleTheForge": true,
+  "ForceReKindle": false,
   "UpdateTables": true,
-  "DropTablesRemovedFromProduct": true,
-  "DropColumnsRemovedFromProduct": true,
+  "OnlineApply": "Off",
+  "OnlineApplyMaxDuration": "",
+  "RebuildPolicyMode": "",
+  "RebuildPolicyThreshold": "",
+  "RebuildPolicyOnOrderMismatch": "",
+  "SystemVersioningAlterHistory": "",
   "DeliverData": true,
   "RunScriptsTwice": false,
   "TrackRunOnceMigrations": true,
   "PruneObsoleteMigrationTracking": true,
   "CheckpointDirectory": "",
   "MaxThreads": 10,
+  "ScriptTokens": {},
+  "PreventDrop": false,
+  "DropTablesRemovedFromProduct": true,
+  "DropColumnsRemovedFromProduct": true,
+  "DropForeignKeysRemovedFromProduct": true,
+  "DropCheckConstraintsRemovedFromProduct": true,
+  "DropExcludeConstraintsRemovedFromProduct": true,
+  "DropStatisticsRemovedFromProduct": true,
+  "DropIndexesRemovedFromProduct": true,
+  "DropUnknownIndexes": "",
+  "DropSchemaBoundDependents": "",
+  "DropPeriodsRemovedFromProduct": "",
+  "DropEventsRemovedFromProduct": false,
   "VerboseLogging": false,
-  "ScriptTokens": {}
+  "WriteDebugSql": false,
+  "ArtifactPath": "",
+  "FailureContextLines": 25,
+  "BottleneckThresholdMs": 30000,
+  "ExitNonZeroOnWarning": false,
+  "LogHygiene": {
+    "LogTokens": true
+  }
 }
 ```
+
+`DropUnknownIndexes` and `DropSchemaBoundDependents` default to `false` but are shown as `""` on purpose. An explicit `false` at the environment tier is sticky: it locks the flag off for every product and template, so a product that turns it on is overruled. Leaving it unset lets them decide.
+
+Settings that apply to one engine or a subset: `Target:IntegratedSecurity`, `Target:SecondaryServers`, `Target:CompatEncoding`, `OnlineApplyMaxDuration` and `DropSchemaBoundDependents` are SQL Server only; `Target:Schemas` and `DropStatisticsRemovedFromProduct` apply on SQL Server and PostgreSQL; `DropExcludeConstraintsRemovedFromProduct` is PostgreSQL only; `DropEventsRemovedFromProduct` applies on MySQL and MariaDB; `DropPeriodsRemovedFromProduct` and `SystemVersioningAlterHistory` are MariaDB only. `VerboseLogging` has no effect on MySQL or MariaDB.
 
 For environment variable mapping, see [Configuration Reference -- Environment Variables](configuration.md#environment-variables).
 
@@ -245,13 +326,13 @@ For a worked end-to-end example -- single canonical package, per-region settings
 
 ## MaxThreads
 
-The `MaxThreads` setting controls how many work units run concurrently across the entire product deployment. A work unit is one database iteration for a regular template, or one `(database, schema)` iteration for a schema template. All work unit types share the same pool -- there is no separate budget per template type.
+The `MaxThreads` setting controls how many of a template's work units run concurrently. A work unit is one database iteration for a regular template, or one `(database, schema)` iteration for a schema template. Templates themselves run one at a time, in `TemplateOrder`, so the limit applies within each template and two templates never run at once.
 
 Default: `10`. Range: `1`--`20`. A value outside that range, or one that does not parse as a whole number, is replaced by the default without a message, so `MaxThreads: 32` runs ten at a time, not twenty.
 
-With schema templates, a single database can contribute many work units -- one per discovered schema. A product with a single `TenantWorkspace` template applied to one database hosting 100 tenant schemas produces 100 work units. At `MaxThreads: 8`, the dispatcher runs up to 8 schema iterations concurrently regardless of how many templates or databases are in scope. If you also have regular-template work units queued alongside schema-template units, they all draw from the same pool.
+With schema templates, a single database can contribute many work units -- one per discovered schema. A product with a single `TenantWorkspace` template applied to one database hosting 100 tenant schemas produces 100 work units. At `MaxThreads: 8`, the dispatcher runs up to 8 of that template's schema iterations concurrently, across however many databases are in scope.
 
-> **Note:** Templates with `AllowParallel: false` get their own serial queue. At most one of that template's iterations runs at a time, but other templates' parallel-eligible units continue to run concurrently alongside them. See [AllowParallel](schema-packages.md#allowparallel) for the per-template parallel-disable case.
+> **Note:** A template with `AllowParallel: false` runs its iterations one at a time. Templates never run concurrently, so the setting governs only that template's own iterations. See [AllowParallel](schema-packages.md#allowparallel) for the per-template parallel-disable case.
 
 > **PostgreSQL `max_connections` sizing:** Each active work unit holds roughly four PG connections at peak (one main quench connection plus per-iteration sub-operations). At default `MaxThreads: 10`, plan for around 45 concurrent connections from SchemaQuench. At the cap `MaxThreads: 20`, plan for around 85. Size `max_connections` on the target as `MaxThreads × 4 + headroom for other apps, admin, and monitoring`. PostgreSQL's default `max_connections=100` covers default `MaxThreads` comfortably; tune the database ceiling proportionally if you raise `MaxThreads` or share the server with heavy workloads.
 
@@ -1383,7 +1464,7 @@ SchemaQuench remembers what it has already run, so you never have to worry about
 | `ScriptPath` | The relative path of the script within the template. |
 | `template_name` | The template the script ran under. |
 | `schema_name` | The per-iteration schema for a schema template. Empty for a regular template, and always empty on MySQL and MariaDB, where schema templates do not apply. |
-| `QuenchDate` | Timestamp when the script was executed. Named `CompletedAt` on MySQL and MariaDB. |
+| `QuenchDate` | Timestamp when the script was executed. Before 2.5 it was named `CompletedAt` on MySQL and MariaDB; the next deploy renames it, keeping its values. |
 
 Those five identity columns -- `ProductName`, `QuenchSlot`, `ScriptPath`, `template_name`, and `schema_name` -- are what make a tracking row unique, so the same script is recorded separately per template and per tenant schema. SQL Server and PostgreSQL enforce them as the primary key. MySQL and MariaDB carry an auto-increment `Id` primary key instead and enforce the same five columns as a unique index, with prefix lengths on the three longest.
 
@@ -1548,7 +1629,7 @@ A column change under a schema-bound view, function or security policy is govern
 | Generated column added, removed or switched between `VIRTUAL` and `STORED` | Drop and re-add the column | The column comes back last in column order. A column that stops being generated comes back without its values. |
 | Renamed (`OldName`) | `RENAME COLUMN` on MySQL 8.0 and MariaDB 10.5.2 and later, `CHANGE COLUMN` below them, before any other change | On MySQL a declared functional index (8.0.13 and later) that reads the column is dropped ahead of the rename and rebuilt over the new name, and a declared generated column that reads it is re-stated in the same statement. MariaDB carries both across a rename itself. |
 | Removed from the package | Dropped under `DropColumnsRemovedFromProduct` | Foreign keys that reference it first. |
-| Column order | A [rebuild](configuration.md#rebuildpolicy); or, when `OnOrderMismatch` asks for one and [OnlineApply](configuration.md#mysql-and-mariadb) is on, `MODIFY COLUMN … AFTER` in place instead -- except for a table with a generated column, a system-versioned table (MariaDB), or one with an expression default below MySQL 8.0.13, which is still rebuilt | A rebuild is refused for a partitioned table and one whose table or column rename has not landed yet, on both engines; on MariaDB for a system-versioned table or one with an application-time period (seen from MariaDB 11.4, where the catalog first reports periods); and on MySQL below 8.0.13 for a table with an expression default. |
+| Column order | A [rebuild](configuration.md#rebuildpolicy); or, when `OnOrderMismatch` asks for one and [OnlineApply](configuration.md#mysql-and-mariadb) is on, `MODIFY COLUMN … AFTER` in place instead -- except a table with a generated column, which is still rebuilt, and a system-versioned table (MariaDB) or one with an expression default below MySQL 8.0.13, which is not moved in place either and whose rebuild is refused (next column), so the deploy stops | A rebuild is refused for a partitioned table and one whose table or column rename has not landed yet, on both engines; on MariaDB for a system-versioned table or one with an application-time period (seen from MariaDB 11.4, where the catalog first reports periods); and on MySQL below 8.0.13 for a table with an expression default. |
 
 On a system-versioned MariaDB table, MariaDB itself refuses a column change (error 4119) unless [`SystemVersioningAlterHistory`](configuration.md#systemversioningalterhistory) is `KEEP`, which lets the change through and rewrites the stored history to match.
 
@@ -1901,17 +1982,17 @@ When `Target.Templates`, `Target.Databases`, or `Target.Schemas` is set, prune i
 
 ## ShouldApplyExpression and Conditional Deployment
 
-`ShouldApplyExpression` is a SchemaQuench feature that lives on the schema package side. Whenever SchemaQuench evaluates a table component that has a `ShouldApplyExpression` set, it resolves any tokens in the expression, runs the expression against the target database, and skips the component if the result is falsy. This means a single table file can declare components that only apply on certain databases, certain environments, or certain server versions -- no per-environment file copies, no branching logic in your deployment pipeline.
+`ShouldApplyExpression` is a SchemaQuench feature that lives on the schema package side. Whenever SchemaQuench evaluates a table component that has a `ShouldApplyExpression` set, it resolves any tokens in the expression, runs the expression against the target database, and when the result is false leaves the component out of this deploy: one that does not exist is not created, and one that already exists is dropped (see [A gate that turns off an existing object](#a-gate-that-turns-off-an-existing-object) below). A predicate that evaluates to NULL counts as true, so the component deploys. This means a single table file can declare components that only apply on certain databases, certain environments, or certain server versions -- no per-environment file copies, no branching logic in your deployment pipeline.
 
 See [Schema Packages -- Conditional Application](schema-packages.md#conditional-application) for the JSON shape and worked examples, and [Custom Properties](custom-properties.md) for how to drive `ShouldApplyExpression` values from team-defined metadata.
 
-The same primitive works one level up: a **script folder** can carry a `ShouldApplyExpression` too. Put it on any product- or template-level folder definition (alongside `ServerToQuench` / `QuenchSlot`). Blank deploys the folder as always; a non-blank expression is evaluated against the target and the folder's scripts deploy only when it returns true -- false skips the entire folder (and its sub-folders), logged so you can see why. A folder expression is run as a scalar query against the target, so write it as a `SELECT` that returns a boolean (or `1`/`0`) -- for example `SELECT CASE WHEN @@version LIKE '%MariaDB%' THEN 1 ELSE 0 END`. It can read `SERVERPROPERTY` / `@@version`, call an environment-type function your team already has, query a control table, or reference resolved tokens -- **template**-folder gates get the script tokens, `{{ServerMajorVersion}}`, `{{CompatibilityLevel}}` and, on schema templates, `{{SchemaName}}`; **product**-folder gates get a narrower set, below. No folder gate gets a query token. Product folders are evaluated per server; template folders are evaluated per database -- and per schema for schema templates -- so the same folder can deploy to one target and be skipped on another in a single run.
+The same primitive works one level up: a **script folder** can carry a `ShouldApplyExpression` too. Put it on any product- or template-level folder definition (alongside `ServerToQuench` / `QuenchSlot`). Blank deploys the folder as always; a non-blank expression is evaluated against the target and the folder's scripts deploy only when it returns true -- false skips the entire folder (and its sub-folders), logged so you can see why. A folder expression runs as a query against the target: write a bare predicate and SchemaQuench wraps it, or a `SELECT` that returns a number or boolean -- `0`, NULL or no row is false, any other number is true, and a string such as `'false'` fails the deploy. For example, `SELECT CASE WHEN SERVERPROPERTY('EngineEdition') <> 5 THEN 1 ELSE 0 END` keeps a folder off Azure SQL Database. It can read `SERVERPROPERTY` / `@@version`, call an environment-type function your team already has, query a control table, or reference resolved tokens -- **template**-folder gates get the script tokens, `{{ServerMajorVersion}}`, `{{CompatibilityLevel}}` and, on schema templates, `{{SchemaName}}`; **product**-folder gates get a narrower set, below. No folder gate gets a query token. Product folders are evaluated per server; template folders are evaluated per database -- and per schema for schema templates -- so the same folder can deploy to one target and be skipped on another in a single run.
 
 > **Note:** A **product**-folder expression runs against the server's admin connection (the platform's init database -- `master` / `postgres` / `information_schema`), because product-level scripts are server-scoped -- no database is selected yet. Use server-scoped predicates there (server properties, version, edition). Of the resolved tokens, only `{{ServerMajorVersion}}` is available at this scope (the server connection already exists); `{{CompatibilityLevel}}` (a property of a database) and `{{SchemaName}}` (a template-iteration concept) are not, and referencing either reaches the server as literal, unresolved text and fails the deployment rather than silently evaluating to the wrong thing. A **template**-folder expression runs against the actual target database (and schema for schema templates), so it can also query target-database state and use `{{CompatibilityLevel}}` and, on schema templates, `{{SchemaName}}` -- though, like every folder gate, not a query token.
 
 This turns "different folders for different flavors of a target" into a declarative property instead of pipeline branching: a folder gated on `SELECT {{ServerMajorVersion}} >= 800` that deploys only to the MySQL 8.0 and later targets of a package that also serves the 5.7 line, a `Jobs/` folder skipped on Azure SQL (`SELECT CASE WHEN SERVERPROPERTY('EngineEdition') <> 5 THEN 1 ELSE 0 END`), or a `TableData/TestData/` folder kept out of production by your environment predicate.
 
-> **Note:** A folder's `ShouldApplyExpression` must return a boolean. If it errors -- a SQL mistake, a missing function -- the deployment fails with a clear message naming the folder, rather than silently skipping it. A gate that quietly dropped schema folders would be the dangerous failure mode, so the engine fails closed.
+> **Note:** A folder's `ShouldApplyExpression` must return a number or boolean (or be a bare predicate). If it errors -- a SQL mistake, a missing function -- the deployment fails with a clear message naming the folder, rather than silently skipping it. A gate that quietly dropped schema folders would be the dangerous failure mode, so the engine fails closed.
 
 ### Gating on the target version
 
@@ -1943,7 +2024,7 @@ Every gate is evaluated against a live connection, but not at the same moment or
 | A `DataDelivery` block | Once per database and schema, at the delivery step, before any content file is read. | The target database. See [Gated deliveries and variants](#gated-deliveries-and-variants). |
 | An indexed view, materialized view, event, domain type, enum type or sequence | Inside the procedure that deploys it, per target. | The target database. |
 
-A folder gate is run as a scalar query: write it as a `SELECT` that returns a boolean or `1`/`0`, or as a bare predicate, which SchemaQuench wraps in `SELECT CASE WHEN (…) THEN 1 ELSE 0 END`. No folder gate can use a query token: query tokens are kept out of the load-time pass and are only ever applied to scripts. A component gate is a bare predicate (a leading `SELECT` is stripped). The same test, on each engine:
+A folder gate is run as a scalar query: write it as a `SELECT` that returns a number or boolean, or as a bare predicate, which SchemaQuench wraps in `SELECT CASE WHEN (…) THEN 1 ELSE 0 END`. No folder gate can use a query token: query tokens are kept out of the load-time pass and are only ever applied to scripts. A component gate is a bare predicate (a leading `SELECT` is stripped). The same test, on each engine:
 
 ```jsonc
 // SQL Server
@@ -2036,7 +2117,7 @@ See [Schema Packages -- DataDelivery](schema-packages.md#datadelivery) for the f
 
 A table's `DataDelivery` block can also be an array of independently-gated deliveries, each with its own `ShouldApplyExpression`. SchemaQuench evaluates every delivery's gate against each database and schema it delivers to, before any content file is read, and every delivery whose gate passes applies -- not just the first match. A delivery whose gate evaluates false is logged as skipped and never touches the table; a delivery whose gate expression itself errors aborts the deployment (fail-closed), the same way a folder-level gate does.
 
-A delivery's gate resolves the same token vocabulary a folder gate resolves: [`{{ServerMajorVersion}}` and `{{CompatibilityLevel}}`](script-tokens.md#servermajorversion-and-compatibilitylevel) for version gating (see [Gating on the target version](#gating-on-the-target-version) above), plus `{{SchemaName}}` inside a schema-template iteration. A dev/test-only delivery can therefore combine both in one gate -- `"{{CompatibilityLevel}} >= 130 AND DB_NAME() LIKE '%_dev'"` -- without hand-writing the version predicate.
+A delivery's gate resolves only [`{{ServerMajorVersion}}` and `{{CompatibilityLevel}}`](script-tokens.md#servermajorversion-and-compatibilitylevel) for version gating (see [Gating on the target version](#gating-on-the-target-version) above), plus `{{SchemaName}}` inside a schema-template iteration -- not the product's script tokens, which a folder gate also receives. A dev/test-only delivery can therefore combine both in one gate -- `"{{CompatibilityLevel}} >= 130 AND DB_NAME() LIKE '%_dev'"` -- without hand-writing the version predicate.
 
 Gate evaluation also runs under `WhatIfONLY`, so a dry run reports the same deliver-vs-skip decisions a real quench would make. The `Insert/Update/Delete` CASCADE-FK check (above) only considers deliveries whose gate is currently passing -- a `Delete` variant that's gated off this run can't abort the deployment over a CASCADE FK it will never execute.
 
@@ -2061,10 +2142,12 @@ A circular dependency among NOT NULL foreign keys fails the dependency sort -- S
 ### MergeType options
 
 - `Insert` -- Missing rows inserted. Existing rows and extra rows left alone. The seed-data pattern.
-- `Insert/Update` -- Missing rows inserted, changed rows updated. Extra rows left alone. Good for reference tables that environments may append to.
-- `Insert/Update/Delete` -- Full sync. Missing rows inserted, changed rows updated, and target rows not present in the source are deleted. Default, and what the demo products use.
+- `Insert/Update` -- Missing rows inserted, changed rows updated. Extra rows left alone. Good for reference tables that environments may append to. What the demo products use.
+- `Insert/Update/Delete` -- Full sync. Missing rows inserted, changed rows updated, and target rows not present in the source are deleted.
 
-The chosen idiom varies per platform -- `MERGE` on SQL Server and PostgreSQL, `INSERT ... ON DUPLICATE KEY UPDATE` plus conditional delete on MySQL -- but the `MergeType` you declare is the same contract everywhere.
+`MergeType` has no default: a delivery that omits it, or sets `None`, is not run.
+
+The chosen idiom varies per platform -- `MERGE` on SQL Server and on PostgreSQL 15 and later (an `UPDATE` plus an `INSERT ... WHERE NOT EXISTS` on an older PostgreSQL target), `INSERT ... ON DUPLICATE KEY UPDATE` plus a separate delete on MySQL and MariaDB -- but the `MergeType` you declare is the same contract everywhere.
 
 ### DataDelivery vs hand-written Table Data scripts
 

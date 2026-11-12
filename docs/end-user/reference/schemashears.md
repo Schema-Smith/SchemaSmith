@@ -1,8 +1,8 @@
 # SchemaShears Reference
 
-Surgical deployments demand surgical packages. SchemaShears carves an object-level patch -- a subset of a full product -- from an existing schema package, using a **manifest** that names exactly which files belong in the patch. The result is a stand-alone package you can deploy against any target that already has the full product installed, updating only the objects in scope and leaving everything else undisturbed.
+Surgical deployments demand surgical packages. SchemaShears carves an object-level patch -- a subset of a full product -- from an existing schema package, using a **manifest** that names exactly which files belong in the patch. The result is a stand-alone package you can deploy against any target that already has the full product installed, updating only the objects in scope and leaving every other object in place.
 
-The natural producer of a manifest is your VCS: `git diff --name-only <before> <after>` scoped to the product path is all it takes to turn a commit range into a patch definition. SchemaShears reads that list, resolves the full include set, and hands back a ready-to-quench package.
+The natural producer of a manifest is your VCS: `git diff --name-only --diff-filter=d --relative=<product path> <before> <after>` is all it takes to turn a commit range into a patch definition. SchemaShears reads that list, resolves the full include set, and hands back a ready-to-quench package.
 
 ---
 
@@ -69,11 +69,11 @@ The manifest is a plain-text file, one path per line, where each path is relativ
 
 ```
 # Emergency patch for the Orders hotfix
-Tables/dbo.Orders.json
-Procedures/dbo.ProcessOrder.sql
-Procedures/dbo.ValidateOrder.sql
+Templates/Main/Tables/dbo.Orders.json
+Templates/Main/Procedures/dbo.ProcessOrder.sql
+Templates/Main/Procedures/dbo.ValidateOrder.sql
 # include the audit function it calls
-Functions/dbo.AuditChange.sql
+Templates/Main/Functions/dbo.AuditChange.sql
 ```
 
 - Lines beginning with `#` are treated as comments and ignored.
@@ -87,15 +87,15 @@ Functions/dbo.AuditChange.sql
 ### Generating a manifest from a commit range
 
 ```bash
-git diff --name-only <before-sha> <after-sha> -- path/to/MyProduct/
+git diff --name-only --diff-filter=d --relative=path/to/MyProduct/ <before-sha> <after-sha>
 ```
 
-Replace `path/to/MyProduct/` with the path from your repository root to the product folder. Each line of output is already relative to that root, so you can feed it directly to `--Manifest`.
+Replace `path/to/MyProduct/` with the path from your repository root to the product folder. `--relative` prints each path relative to that folder, the product root the manifest is read against, and leaves out changes outside it; `--diff-filter=d` leaves out files the range deleted, which a manifest cannot name. Without `--relative`, each line starts with the product folder's own path, and the build stops at the first entry.
 
 For example, to build a patch from all changes between the last release tag and HEAD:
 
 ```bash
-git diff --name-only v2.3.0 HEAD -- MyProduct/ > patch.manifest
+git diff --name-only --diff-filter=d --relative=MyProduct/ v2.3.0 HEAD > patch.manifest
 SchemaShears --Source:./MyProduct --Manifest:./patch.manifest --Output:./patch
 ```
 
@@ -107,8 +107,8 @@ The always-include file lists paths -- files or directories -- relative to the p
 
 ```
 # These helpers are referenced by every patch procedure
-Functions/dbo.CommonHelpers.sql
-Schemas/
+Templates/Main/Functions/dbo.CommonHelpers.sql
+Templates/Main/Schemas/
 ```
 
 - Directory entries include all files under that directory recursively.
@@ -167,7 +167,7 @@ That is the PostgreSQL form. `DropExcludeConstraintsRemovedFromProduct` is writt
 
 `PruneObsoleteMigrationTracking: false` is written into every patch, whatever `--AllowDrops` says: a patch carries only some of the product's migration scripts, and pruning the run-once record of every script it leaves out would make the next full deploy run them all again.
 
-This is the correct posture for a patch: deploy what's in scope, leave everything else alone.
+This is the correct posture for a patch: deploy what's in scope, leave every other object in place.
 
 ### Enforcement
 
@@ -203,7 +203,7 @@ Two drop settings are not part of `Product.json`, so a patch cannot carry them: 
 
 ## Testing Your Patch
 
-> **Warning:** Always test a patch deployment against a non-production target before deploying to production. Patches are surgical -- they update exactly what's in scope -- but the scope is defined by your manifest, and an incomplete manifest can leave a target in a partially-updated state. Verify the patch in a representative non-prod environment that matches the production schema.
+> **Warning:** Always test a patch deployment against a non-production target before deploying to production. Patches are surgical -- they update exactly the objects in scope -- but the scope is defined by your manifest, and an incomplete manifest can leave a target in a partially-updated state. Verify the patch in a representative non-prod environment that matches the production schema.
 
 The same SchemaQuench workflow you use for full-product deployments applies to patches -- the patch output is a valid schema package:
 

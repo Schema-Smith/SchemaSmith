@@ -4,7 +4,7 @@ Applies to: SchemaQuench, SchemaTongs — SQL Server, PostgreSQL, MySQL, and Mar
 
 ---
 
-Custom properties are how you attach your own metadata to the things in a schema package -- data classification tags, ownership, retention policies, environment markers, anything you want your team to see, track, and act on. Define a property once and it flows through the pipeline: it rides alongside the standard table definition in source control, survives SchemaTongs re-extraction, and becomes a `{{TokenName}}` substitution inside any expression field SchemaQuench evaluates.
+Custom properties are how you attach your own metadata to the things in a schema package -- data classification tags, ownership, retention policies, anything you want your team to see, track, and act on. Define a property once and it flows through the pipeline: it rides alongside the standard table definition in source control, survives SchemaTongs re-extraction, and becomes a `{{TokenName}}` substitution in the expression fields of the file that declares it.
 
 Think of them as sidecar data. SchemaSmith doesn't care what they mean. *You* do -- and that's exactly the point. Custom properties turn the schema package into a governance surface your team owns.
 
@@ -22,7 +22,7 @@ Every custom value lives inside a single property on its containing object calle
   "Name": "[Orders]",
   "Columns": [],
   "Extensions": {
-    "Environment": "Production",
+    "Workload": "Reporting",
     "DataClassification": "PII",
     "OwningTeam": "Identity"
   }
@@ -133,12 +133,12 @@ Custom properties at any level are completely independent -- a `DataClassificati
 
 ## Token Integration
 
-Here's where custom properties stop being passive metadata and start driving behavior. When SchemaQuench processes a table, it walks `Extensions` on every component and produces `{{TokenName}}` substitutions you can reference in any expression field.
+Here's where custom properties stop being passive metadata and start driving behavior. When SchemaQuench processes a table, it walks `Extensions` on every component and produces `{{TokenName}}` substitutions you can reference in that file's expression fields -- listed under [Where tokens are substituted](#where-tokens-are-substituted) below.
 
 ### Scope rules
 
-- **Table-level `Extensions`** are available inside the table's own `ShouldApplyExpression` using **bare names** (`{{Environment}}`).
-- **Table-level `Extensions`** are also available in every *child* component's expression fields using the **`Table.` prefix** (`{{Table.Environment}}`).
+- **Table-level `Extensions`** are available inside the table's own `ShouldApplyExpression` using **bare names** (`{{Workload}}`).
+- **Table-level `Extensions`** are also available in every *child* component's expression fields using the **`Table.` prefix** (`{{Table.Workload}}`).
 - **Component-level `Extensions`** are available in that component's own expression fields using bare names (`{{MaskInNonProd}}`).
 - Within a component's expression, the script tokens, the parent table's `Table.`-prefixed tokens and the component's own bare-name tokens are all available. The prefix keeps table and component names apart, so those two never collide.
 - **First definition wins.** The token list is built in the order *script tokens* (`Product.json` and `Template.json` `ScriptTokens`, plus the automatic `ProductName` and `TemplateName`), then the table's `Table.`-prefixed values, then the component's bare values -- and a name is replaced by the first entry that matches it. So a bare custom property that happens to share a name with a `ScriptTokens` entry resolves to the **script token**, not the custom property; the same holds for a table's own bare names in its own `ShouldApplyExpression`. Pick names that do not shadow your script tokens.
@@ -166,26 +166,28 @@ Custom property tokens are narrower than script tokens. They are substituted whi
 
 They do **not** reach `.sql` script files, the `Product.json` and `Template.json` script properties, a `DataDelivery` gate, a MySQL or MariaDB `FullTextIndexes` entry, `Partitioning`, or the declared-object files (events, enum types, domain types, sequences) -- in those places `Extensions` is metadata only. To hand a custom property to a script, read it out of the [`{{TableSchema}}`](script-tokens.md#automatic-tokens) payload, which carries every component's `Extensions` as written.
 
-### Example — environment-conditional index
+### Example — a table property combined with the environment
+
+A custom property is part of the package, so it reads the same in every environment: on its own it cannot tell production from development. Pair it with a script token each environment sets -- here `DeployEnvironment`, declared in `Product.json` `ScriptTokens` and overridden per environment with `SmithySettings_ScriptTokens__DeployEnvironment`:
 
 ```json
 {
   "Schema": "[dbo]",
   "Name": "[Orders]",
   "Extensions": {
-    "Environment": "Production"
+    "Workload": "Reporting"
   },
   "Indexes": [
     {
       "Name": "[IX_Orders_CreatedDate]",
       "IndexColumns": "[CreatedDate]",
-      "ShouldApplyExpression": "'{{Table.Environment}}' = 'Production'"
+      "ShouldApplyExpression": "'{{Table.Workload}}' = 'Reporting' AND '{{DeployEnvironment}}' = 'Production'"
     }
   ]
 }
 ```
 
-At quench time, the index applies only on the database whose deployment is flagged Production. No per-environment file copies. No branching. One declaration, one behavior, switched by a sidecar value your team controls.
+At quench time, the index is declared only where the deploy's `DeployEnvironment` is `Production`. Everywhere else it is not declared, so it is not created there -- and an existing copy the product owns is dropped (see [A gate that turns off an existing object](schemaquench.md#a-gate-that-turns-off-an-existing-object)). The table says what it is; the environment says where the deploy runs. No per-environment file copies, no branching.
 
 ### Example — nested retention value driving a default
 
@@ -219,11 +221,11 @@ At quench time, the index applies only on the database whose deployment is flagg
   "Extensions": {
     "PII": "true"
   },
-  "ShouldApplyExpression": "NOT ('{{PII}}' = 'true' AND '{{Table.Environment}}' = 'NonProd')"
+  "ShouldApplyExpression": "NOT ('{{PII}}' = 'true' AND '{{DeployEnvironment}}' = 'NonProd')"
 }
 ```
 
-Bare names pull from the column's own `Extensions`; `Table.`-prefixed names climb to the parent table.
+Bare names pull from the column's own `Extensions`; `Table.`-prefixed names climb to the parent table, and script tokens such as `DeployEnvironment` resolve here too. Where the gate is false -- a PII column in a non-production deploy -- the column is not declared, so an existing copy is dropped with its data. That is the point of this gate: the column never lives outside production.
 
 ---
 
@@ -323,7 +325,7 @@ To add column-level governance (constraining `Classification` on individual colu
 
 **SchemaTongs** -- Re-extraction preserves `Extensions` on every supported component as described above. Anything you add manually survives subsequent schema refreshes so long as the component name is unchanged (or `OldName` is set for renames).
 
-**SchemaQuench** -- Reads `Extensions` at quench time and resolves the contents as script tokens in expression fields. `Extensions` has no direct effect on DDL generation; its influence is entirely through the token substitution mechanism. The full table metadata -- including `Extensions` -- is available at runtime through the `{{TableSchema}}` automatic token if you need to emit it into a migration script or audit row.
+**SchemaQuench** -- Reads `Extensions` at quench time and resolves the contents as tokens in the expression fields of the table, indexed-view or materialized-view file that declares them. `Extensions` has no direct effect on DDL generation; its influence is entirely through the token substitution mechanism. The full table metadata -- including `Extensions` -- is available at runtime through the `{{TableSchema}}` automatic token if you need to emit it into a migration script or audit row.
 
 **DataTongs** -- Table files are round-tripped transparently; `Extensions` is neither inspected nor modified.
 
@@ -331,7 +333,7 @@ To add column-level governance (constraining `Classification` on individual colu
 
 ## Naming Guidance
 
-Because everything lives inside the `Extensions` bag, there are no reserved names to worry about -- you cannot collide with a standard property. That said, keep your names stable and descriptive. The names become script tokens across your entire deployment, and renaming a property is a search-and-replace across every expression field that uses it.
+Because everything lives inside the `Extensions` bag, there are no reserved names to worry about -- you cannot collide with a standard property. That said, keep your names stable and descriptive. The names become tokens in the expression fields of the file that declares them, and renaming a property is a search-and-replace across every expression field that uses it. A script token with the same name wins over a custom property (see *First definition wins* above), so pick names your script tokens do not use.
 
 A few practices that hold up well:
 

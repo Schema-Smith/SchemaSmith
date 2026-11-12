@@ -28,7 +28,7 @@ The helper uses your engine's command-line client to create, stamp, and drop the
 
 > **MySQL — `mysql`.** macOS: `brew install mysql-client`. Linux: `apt-get install mysql-client` / `dnf install mysql`. Windows: the [ZIP archive](https://dev.mysql.com/downloads/mysql/) gives you `bin\mysql.exe` with no server; `winget install Oracle.MySQL` also works but installs the full server. Verify with `mysql --version`.
 
-> **MariaDB — `mariadb`.** macOS: `brew install mariadb`. Linux: `apt-get install mariadb-client` / `dnf install MariaDB-client`. Windows: take the [ZIP package](https://mariadb.org/download/) and use its `bin\mariadb.exe`; `winget install MariaDB.Server` is server-and-all. Verify with `mariadb --version`. (`mysql` is a legacy symlink being phased out — the helper calls `mariadb`.)
+> **MariaDB — `mariadb`.** macOS: `brew install mariadb`. Linux: `apt-get install mariadb-client` / `dnf install MariaDB-client`. Windows: take the [ZIP package](https://mariadb.org/download/) and use its `bin\mariadb.exe`; `winget install MariaDB.Server` is server-and-all. Verify with `mariadb --version`. (The helper calls `mariadb`, or `mysql` where that is the only client, as on MariaDB 10.2–10.4.)
 
 > **A client is not a server.** On Windows the vendors mostly ship the client inside the server package, so a `winget install` will put a database service on your machine — bound to a default port, which is exactly where your existing server or containers already live. The ZIP archives above hold the same executables with nothing to install and nothing to collide with. The MariaDB package also drops a `mysql.exe` alias; it is *not* a MySQL client and cannot authenticate to MySQL 8.
 

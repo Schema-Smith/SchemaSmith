@@ -207,7 +207,7 @@ lab_add_stamp() {
 # before this helper carry no stamp) but REFUSED on your own server, where it is far
 # more likely to be a real database of yours that a deploy would damage.
 lab_confirm_db() {
-  local engine="$1" db="$2" admin exists_sql create_sql stamped_sql
+  local engine="$1" db="$2" admin exists_sql create_sql stamped_sql count
   admin="$(lab_admin_db "$engine")"
 
   case "$engine" in
@@ -215,7 +215,10 @@ lab_confirm_db() {
     postgres)  exists_sql="SELECT COUNT(*) FROM pg_database WHERE datname = '$db'" ;;
     *)         exists_sql="SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name = '$db'" ;;
   esac
-  if [ "$(lab_sql "$engine" "$admin" "$exists_sql")" = "0" ]; then
+  # A query that fails prints nothing, and nothing is not "0": check the exit status, or a
+  # stopped engine reads as an existing, stamped database.
+  count="$(lab_sql "$engine" "$admin" "$exists_sql")" || return 1
+  if [ "$count" = "0" ]; then
     # Take the server's default character set and collation. Forcing one here (the demo
     # helper pins utf8mb4_unicode_ci) leaves lab databases collated differently from
     # everything else on the server -- MySQL 8 defaults to utf8mb4_0900_ai_ci and MariaDB
@@ -237,7 +240,8 @@ lab_confirm_db() {
     postgres)  stamped_sql="SELECT COUNT(*) FROM pg_database WHERE datname = current_database() AND COALESCE(shobj_description(oid, 'pg_database'), '') = '$LAB_STAMP'" ;;
     *)         stamped_sql="SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = '$db' AND table_name = '$LAB_STAMP'" ;;
   esac
-  if [ "$(lab_sql "$engine" "$db" "$stamped_sql")" != "0" ]; then printf 'reused'; return 0; fi
+  count="$(lab_sql "$engine" "$db" "$stamped_sql")" || return 1
+  if [ "$count" != "0" ]; then printf 'reused'; return 0; fi
 
   if lab_own_server; then
     echo "LAB-SQL: a database named '$db' already exists on $(lab_endpoint_label "$engine") but was NOT created by the labs." >&2

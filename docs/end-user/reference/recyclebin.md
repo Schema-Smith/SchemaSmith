@@ -63,11 +63,11 @@ The hooks honor `WhatIfONLY`. In WhatIf mode, the `EXEC` / `CALL` line for each 
 
 The drop hook carries out a structured soft-drop sequence that strips constraints from the table, moves it intact to the recyclebin, and records the move in the registry.
 
-1. **Validate existence.** Confirms the table is still present before acting. A table that has already been removed (for example, by a prior migration script) produces a no-op.
+1. **Validate existence.** Confirms the table is still present before acting. A table that is already gone (for example, removed by a prior migration script) raises an error naming it rather than doing nothing.
 2. **Compute a recycled name.** The recycled name encodes the table's original location:
    - SQL Server / PostgreSQL: `<schema>_<table>` — for example, `dbo_Promotion` or `public_Promotion`.
    - MySQL: `recyclebin_<table>`.
-   If a recycled table with that name already exists, a numeric suffix is appended (`_2`, `_3`, and so on) until the name is unique.
+   If a recycled table with that name already exists, a numeric suffix is appended (`_1`, `_2`, and so on) until the name is unique.
 3. **Strip constraints.** Removes inbound foreign keys (other tables referencing this one), the table's own foreign keys, and check constraints. On SQL Server, also drops indexes, primary key, and unique constraints — these are recreated as part of the index structure and would block the schema transfer.
 4. **Move the table.** Transfers the bare table to the recyclebin:
    - SQL Server: `ALTER SCHEMA recyclebin TRANSFER` then `sp_rename` to the recycled name.
@@ -98,7 +98,7 @@ The registry tracks every soft-dropped table and drives the cleanup job.
 | Engine | Registry table |
 |---|---|
 | SQL Server | `recyclebin.Registry` |
-| PostgreSQL | `recyclebin.Registry` |
+| PostgreSQL | `recyclebin.registry`, with snake_case columns (`original_schema`, `recycled_name`, ...) |
 | MySQL | `recyclebin_Registry` |
 
 **Registry columns:**

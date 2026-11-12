@@ -185,9 +185,9 @@ SchemaQuench --Target__Server=staging-db --Target__ConnectionProperties__TrustSe
 
 A `--Key=value` override sits at the top of the [configuration hierarchy](#configuration-hierarchy) -- it wins over the settings file, user secrets, and environment variables.
 
-Two things to keep in mind:
+Three things to keep in mind:
 
-- The `=` is required for an override. The named switches (`--LogPath`, `--ConfigFile`, `--ConnectionString`) accept a `:` separator, but nesting into arbitrary settings needs the `__`/`=` form so a value containing a colon (a Windows path, a `host:port`) is never mistaken for a key boundary.
+- The `=` is required for an override. Nest with `__` or with `:` -- `--Target__Server=prod-db` and `--Target:Server=prod-db` both set `Target:Server` -- but always end the key with `=`. `--Target:Server:prod-db` sets nothing: everything after the first `:` becomes the value of a top-level `Target` key, which no tool reads and none warns about. The named switches (`--LogPath`, `--ConfigFile`, `--ConnectionString`) accept either separator.
 - `--ConnectionString` still bypasses the individual connection settings. If you pass both `--ConnectionString` and a `--Source__Server=` / `--Target__Server=` override, the full connection string wins for connecting.
 - Few overrides are range-checked for you. `MaxThreads`, for one, accepts `1` to `20`: a value outside that range, or one that is not a whole number, falls back to the default of `10`, with a warning in the progress log naming the value.
 
@@ -223,7 +223,7 @@ The path can be absolute or relative to the current working directory. A file na
 
 A mistyped setting is otherwise invisible. `Target:Sever` binds nothing, so the run proceeds exactly as though you had never set it -- and a deployment that silently ignores half your configuration is worse than one that refuses to start.
 
-Each tool therefore checks the settings it was given against the settings it actually reads, and warns about anything it does not recognize:
+Each tool therefore checks the settings it was given against the settings it actually reads, and warns about any key it does not recognize inside a section it reads (`Target:`, `Source:`, `ShouldCast:` and the like):
 
 ```
 WARN  Configuration key 'Target:Sever' is not read by SchemaQuench and will have no effect. Check for a typo.
@@ -231,9 +231,10 @@ WARN  Configuration key 'Target:Sever' is not read by SchemaQuench and will have
 
 It covers every configuration source -- settings file, `SmithySettings_` environment variables, and `--Key=value` overrides on the command line all land in the same configuration and are all checked. A bare switch the tool does not recognize, such as `--NoSuchSwitch`, is stricter: it stops the run before anything happens (`Not recognized: … Nothing was run.`, exit code `2`).
 
-Three things are deliberately **not** reported:
+Four things are **not** reported:
 
-- **Sections the tool does not own.** SchemaQuench says nothing about a `Source:` section, and neither Tongs tool comments on `Target:`. A file may serve more than one tool, or carry settings for a version you have not installed yet.
+- **Top-level keys.** A key outside any section, such as `MaxThreads` or `WhatIfONLY`, is not checked, so a misspelling of one (`MaxThread`) is silently ignored. Every SchemaShears setting is top-level, so none of them is checked. Spell these carefully.
+- **Sections the tool does not own.** SchemaQuench says nothing about a `Source:` section. Both Tongs tools read `Target:` too (each connection key falls back to its `Target:` twin), so they do report a mistyped `Target:` key. A file may serve more than one tool, or carry settings for a version you have not installed yet.
 - **Open sections**, where you choose the names: `ScriptTokens`, `Target:ConnectionProperties`, `Source:ConnectionProperties`, `Target:TemplateTargets`, `FolderMapping`, and `LogHygiene`. Anything beneath these is your value, not a setting name (`LogHygiene` checks its own four keys itself -- see [Tuning the scrubbing](#tuning-the-scrubbing)).
 - **Array elements** such as `Target:Databases:0`.
 
@@ -370,9 +371,10 @@ An optional `LogHygiene` block in any tool's `*.settings.json` tunes the behavio
 
 ```jsonc
 "LogHygiene": {
-  // Suppress the token-logging section entirely -- one notice line, no token
-  // names and no values -- and mask the ScriptTokens values in the
-  // configuration echo. For products with hundreds of tokens. Default: true.
+  // Set false to suppress the token-logging section entirely -- one notice
+  // line, no token names and no values -- and mask the ScriptTokens values in
+  // the configuration echo. For products with hundreds of tokens. Default: true
+  // (tokens are logged, with sensitive values scrubbed).
   "LogTokens": true,
 
   // Scrub these exact token names too, beyond the default patterns.
@@ -1086,7 +1088,7 @@ statement, naming it.
 | A column the package no longer declares | dropped `INSTANT`, then `INPLACE, LOCK=NONE` |
 | A column whose definition changes | `INSTANT`, then `INPLACE, LOCK=NONE` (a `VARCHAR` widened within its length class is instant on MariaDB; a type change needs the MariaDB 11.2 copy) |
 | A new index, or one built again because it changed, and an index dropped | `INPLACE, LOCK=NONE` |
-| A table whose `RebuildPolicy` sets `OnOrderMismatch`, rebuilt only because its columns are out of order | its columns are moved into order in one statement (`MODIFY COLUMN … AFTER`), instant on MariaDB 10.4 and later, instead of the rebuild. A table with a generated column, and a system-versioned table, is still rebuilt |
+| A table whose `RebuildPolicy` sets `OnOrderMismatch`, rebuilt only because its columns are out of order | its columns are moved into order in one statement (`MODIFY COLUMN … AFTER`), instant on MariaDB 10.4 and later, instead of the rebuild. A table with a generated column is still rebuilt; a system-versioned table (MariaDB), and one with an expression default below MySQL 8.0.13, is not moved in place either, and the rebuild it would need is [refused](#when-schemaquench-refuses), so the deploy stops |
 
 The [Deployment Summary](deployment-summary-report.md#details) records `instant`, `online` (`INPLACE, LOCK=NONE`) or
 `unavailable`. Under `WhatIf` the preview shows each statement with its position and the forms it would ask for, and

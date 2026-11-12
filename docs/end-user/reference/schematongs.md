@@ -225,8 +225,8 @@ The platform-specific `ShouldCast` flags are simply ignored when they don't appl
 
 | Key | Type | Default | Description |
 |---|---|---|---|
-| `Source:Platform` | string | _(required)_ | One of `"SqlServer"`, `"PostgreSQL"`, `"MySQL"`, or `"MariaDb"`. Determines which extraction adapter runs. |
-| `Source:Server` | string | _(required)_ | Database server hostname or IP. |
+| `Source:Platform` | string | _(required, or its `Target:Platform` twin)_ | One of `"SqlServer"`, `"PostgreSQL"`, `"MySQL"`, or `"MariaDb"`. Determines which extraction adapter runs. |
+| `Source:Server` | string | _(required, or its `Target:Server` twin)_ | Database server hostname or IP. |
 | `Source:Port` | string | platform default | TCP port. SQL Server `1433`, PostgreSQL `5432`, MySQL `3306`. |
 | `Source:User` | string | _(empty)_ | Login username. SQL Server allows blank for Windows authentication. |
 | `Source:Password` | string | _(empty)_ | Login password. |
@@ -235,7 +235,7 @@ The platform-specific `ShouldCast` flags are simply ignored when they don't appl
 
 Each connection key falls back to its `Target:` twin when the `Source:` key is absent -- `Platform`, `Server`, `Port`, `User`, `Password`, `IntegratedSecurity`, and `ConnectionProperties` -- so one settings file can point SchemaQuench and SchemaTongs at the same server.
 
-The `--ConnectionString` switch bypasses all `Source` settings entirely. When provided, `Server`, `Port`, `User`, `Password`, `Database`, and `ConnectionProperties` are all ignored. `Source:Platform` is still required so the right adapter can claim the connection.
+The `--ConnectionString` switch bypasses all `Source` settings entirely. When provided, `Server`, `Port`, `User`, `Password`, `Database`, and `ConnectionProperties` are all ignored. `Source:Platform` (or its `Target:Platform` twin) is still required so the right adapter can claim the connection.
 
 ### Product output
 
@@ -671,8 +671,10 @@ that arrangement every time it is refreshed.
 
 > **This does not change your database.** It preserves the order *in the file*. It does **not** make a
 > deployed table's physical column order match the package — reordering the columns of an existing table
-> is a table rebuild, not a formatting preference, and is a separate opt-in. If you have never re-extracted
-> over an existing file, this setting has no effect on anything.
+> is a change to the table, not a formatting preference, and is a separate opt-in
+> ([`RebuildPolicy`](configuration.md#rebuildpolicy) `OnOrderMismatch`), carried out by a table rebuild or, on
+> MySQL and MariaDB under `OnlineApply` `Prefer` or `Require`, by moving the columns in place. If you have never
+> re-extracted over an existing file, this setting has no effect on anything.
 
 Set it to `false` to have every extraction re-sequence the whole file from scratch using `ObjectOrder`.
 

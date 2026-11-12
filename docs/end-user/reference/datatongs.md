@@ -2,7 +2,7 @@
 
 Lookup tables, configuration rows, seed data -- every database has reference data that needs to travel with the schema. DataTongs grips that data from a live database and produces synchronization scripts that bring it into any target. Point it at a source, list the tables you care about, and it produces one SQL file per table -- ready to drop into a schema package's `Table Data` folder. By default each script reads its rows through a `{{<table>.tabledata}}` content token that SchemaQuench resolves from the template at deploy; with `ShouldCast:TokenizeScripts` set to `false` the rows are embedded instead, and the script runs directly against any compatible instance.
 
-DataTongs supports **SQL Server**, **PostgreSQL**, **MySQL**, and **MariaDB**. The script syntax adapts per platform: SQL Server and PostgreSQL use `MERGE`, while MySQL and MariaDB use `INSERT ... ON DUPLICATE KEY UPDATE` (paired with a conditional `DELETE WHERE NOT EXISTS` step when full delete sync is enabled). The configuration shape and the workflow are identical across all four.
+DataTongs supports **SQL Server**, **PostgreSQL**, **MySQL**, and **MariaDB**. The script syntax adapts per platform: SQL Server uses `MERGE`, and so does PostgreSQL from 15 (an `UPDATE` plus an `INSERT ... WHERE NOT EXISTS` below it), while MySQL and MariaDB, which have no `MERGE`, use an `INSERT ... ON DUPLICATE KEY UPDATE` (paired with a separate `DELETE ... WHERE NOT EXISTS` step when delete sync is enabled). See [Generated Script Anatomy](#generated-script-anatomy). The configuration shape and the workflow are identical across all four.
 
 ---
 
@@ -66,8 +66,8 @@ A complete `DataTongs.settings.json`:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `Source:Platform` | string | _(required)_ | One of `"SqlServer"`, `"PostgreSQL"`, `"MySQL"`, or `"MariaDb"`. Selects the script generator. |
-| `Source:Server` | string | _(required)_ | Database server hostname or IP. |
+| `Source:Platform` | string | _(required, or its `Target:Platform` twin)_ | One of `"SqlServer"`, `"PostgreSQL"`, `"MySQL"`, or `"MariaDb"`. Selects the script generator. |
+| `Source:Server` | string | _(required, or its `Target:Server` twin)_ | Database server hostname or IP. |
 | `Source:Port` | string | platform default | TCP port. SQL Server `1433`, PostgreSQL `5432`, MySQL `3306`. |
 | `Source:User` | string | _(empty)_ | Login username. SQL Server allows blank for Windows authentication. |
 | `Source:Password` | string | _(empty)_ | Login password. |
@@ -76,7 +76,7 @@ A complete `DataTongs.settings.json`:
 
 Each connection key falls back to its `Target:` twin when the `Source:` key is absent -- `Platform`, `Server`, `Port`, `User`, `Password`, `IntegratedSecurity`, and `ConnectionProperties` -- so one settings file can point SchemaQuench and DataTongs at the same server. `Source:CompatEncoding` falls back to `Target:CompatEncoding` the same way.
 
-The `--ConnectionString` switch bypasses all `Source` settings and passes the provided value directly to the platform-appropriate driver. `Source:Platform` is still required so the right script generator is used.
+The `--ConnectionString` switch bypasses all `Source` settings and passes the provided value directly to the platform-appropriate driver. `Source:Platform` (or its `Target:Platform` twin) is still required so the right script generator is used.
 
 A source below the [supported engine floor](schemaquench.md#engine-version-compatibility) is refused before anything is extracted, naming the detected version.
 
@@ -94,7 +94,7 @@ The typical placement inside a schema package is `ScriptPath` pointing at `Templ
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
-| `Name` | string | _(required)_ | Table name in `schema.table` format. If no schema prefix is given, the platform default is assumed (`dbo` on SQL Server, `public` on PostgreSQL, the connection database on MySQL). |
+| `Name` | string | _(required)_ | Table name in `schema.table` format. If no schema prefix is given, the platform default is assumed (`dbo` on SQL Server, `public` on PostgreSQL, the connection database on MySQL). On MySQL and MariaDB a prefix is ignored: every table is read from the connection's database. |
 | `KeyColumns` | string | _(auto-detected)_ | Comma-separated column names for the row-matching key. When blank, auto-detected from the table's primary key or, on SQL Server and PostgreSQL, a unique index that covers the whole table: a filtered or partial unique index, or one with an expression key, is not used, and `INCLUDE` columns are not part of the key. On MySQL and MariaDB only the primary key is detected. Prefix a column with `*` for NULL-safe comparison on nullable keys. |
 | `SelectColumns` | string | _(all columns)_ | Comma-separated column names to extract. When blank, every non-excluded column is extracted. Use to narrow extraction to a specific subset. |
 | `Filter` | string | _(empty)_ | SQL `WHERE` clause (without the `WHERE` keyword) to filter which rows are extracted. Also applied to the delete clause when `MergeDelete` is enabled. |
@@ -106,9 +106,9 @@ The typical placement inside a schema package is `ScriptPath` pointing at `Templ
 |-----|------|---------|-------------|
 | `ShouldCast:OutputScripts` | bool | `true` | Generate merge scripts. When `false`, only `.tabledata` files are written. Also skipped, per table, when `--ConfigureDataDelivery` actually configured delivery for that table -- see [Delivery takes precedence over merge scripts](#delivery-takes-precedence-over-merge-scripts). |
 | `ShouldCast:OutputContentFiles` | bool | `true` | Write raw data to sibling `.tabledata` content files. Set to `false` to skip writing content files (and, transitively, to skip `ConfigureDataDelivery` since the configurator needs a content file path to record). |
-| `ShouldCast:DisableTriggers` | bool | `false` | Wraps the generated script with platform-appropriate trigger disable/enable. |
+| `ShouldCast:DisableTriggers` | bool | `false` | **SQL Server and PostgreSQL.** Wraps the generated script in `ALTER TABLE ... DISABLE TRIGGER ALL` / `ENABLE TRIGGER ALL`. On PostgreSQL that needs superuser when the table has foreign-key or deferrable-constraint triggers. MySQL and MariaDB cannot disable a trigger, so there it has no effect. See [DisableTriggers](#disabletriggers). |
 | `ShouldCast:MergeUpdate` | bool | `true` | Includes the update branch (matched rows whose data has changed). |
-| `ShouldCast:MergeDelete` | bool | `false` | **Opt-in, because this branch deletes data.** Includes the delete branch (target rows missing from the source). On all four platforms: SQL Server / PostgreSQL emit `WHEN NOT MATCHED BY SOURCE THEN DELETE` inside the `MERGE`; MySQL and MariaDB emit an `INSERT ... ON DUPLICATE KEY UPDATE` followed by a separate `DELETE WHERE NOT EXISTS` step (because they have no `MERGE`). |
+| `ShouldCast:MergeDelete` | bool | `false` | **Opt-in, because this branch deletes data.** Includes the delete branch (target rows missing from the source). SQL Server emits `WHEN NOT MATCHED BY SOURCE THEN DELETE` inside the `MERGE`, and so does PostgreSQL from a 17 or later source; from an older PostgreSQL source, and always on MySQL and MariaDB, the delete is a separate `DELETE ... WHERE NOT EXISTS` statement after the insert. See [MergeDelete](#mergedelete). |
 | `ShouldCast:ConfigureDataDelivery` | bool | `false` | After extraction, write a `DataDelivery` block into each matching table's JSON file. See [--ConfigureDataDelivery](#--configuredatadelivery). |
 | `ShouldCast:TokenizeScripts` | bool | `true` | **All source engines.** Embeds each table's extracted row data in the merge script as a `{{<table>.tabledata}}` content token instead of inline JSON/XML text, matching SchemaTongs' tokenization behavior. DataTongs wires the matching `ScriptTokens` entry automatically -- see [Content-file tokenization](#tokenizescripts). Set to `false` to inline the literal row data in generated scripts instead. |
 | `ShouldCast:DeliveryEncoding` | string | `Json` (`Xml` from a SQL Server source older than 2017) | `Xml` extracts each table's content in the XML delivery encoding (the shape a SQL Server database below compatibility level 130 shreds natively; SchemaQuench also converts a `Json` delivery there at deploy time), on any source engine, and stamps `"ContentEncoding": "Xml"` on the configured `DataDelivery`. Also settable per run with `--DeliveryEncoding=Xml`. See [Delivery encoding](#delivery-encoding-xml-for-legacy-sql-server). **Not the same setting as `Source:CompatEncoding`** — see the next row. |
@@ -156,7 +156,7 @@ WHEN MATCHED AND (<change detection>) THEN             -- if MergeUpdate
     [CompanyName] = Source.[CompanyName],
     [Phone] = Source.[Phone]
 
-WHEN NOT MATCHED THEN
+WHEN NOT MATCHED BY TARGET THEN
   INSERT ([CompanyName], [Phone], [ShipperID])
   VALUES (Source.[CompanyName], Source.[Phone], Source.[ShipperID])
 
@@ -170,53 +170,85 @@ ALTER TABLE [dbo].[Shippers] ENABLE TRIGGER ALL;       -- if DisableTriggers
 
 ### PostgreSQL
 
-From a PostgreSQL 15 or later source DataTongs generates a native `MERGE` against a `jsonb` literal source; from a 12-14 source it writes an `INSERT ... ON CONFLICT DO UPDATE` upsert instead, with a separate `DELETE` when delete sync is on. The form follows the source's version, so a script extracted from 15 or later needs a 15 or later target:
+PostgreSQL scripts are a `DO` block. The rows sit in a `JSON` variable and are read with `JSON_ARRAY_ELEMENTS`, each value cast to its column's type (XML-encoded content is read with `xmltable()` instead). The form follows the source's version, because DataTongs takes the server it extracts from as the stand-in for the one the script will run on:
+
+- **From a 15 or later source:** a `MERGE`, shown below. A script extracted from 15 or later needs a 15 or later target.
+- **From a 12-14 source:** an `UPDATE ... FROM` of the changed rows, then an `INSERT ... SELECT ... WHERE NOT EXISTS` for the new ones. It matches rows on the same NULL-safe key the `MERGE` uses and needs no unique constraint on the key columns.
+- **Delete sync:** the `WHEN NOT MATCHED BY SOURCE THEN DELETE` clause is PostgreSQL 17 syntax, so it appears only in a script from a 17 or later source. From an older source the delete is a separate `DELETE ... WHERE NOT EXISTS` after the block.
 
 ```sql
+DO $SchemaSmithData$
+DECLARE
+  v_json JSON = '[
+{"company_name":"Speedy Express","phone":"(503) 555-9831","shipper_id":1},
+{"company_name":"United Package","phone":"(503) 555-3199","shipper_id":2}
+]';
+  nextval BIGINT;
+BEGIN
+ALTER TABLE "public"."shippers" DISABLE TRIGGER ALL;   -- if DisableTriggers
 MERGE INTO "public"."shippers" AS "Target"
 USING (
-  SELECT "company_name", "phone", "shipper_id"
-    FROM jsonb_to_recordset('[
-      {"company_name":"Speedy Express","phone":"(503) 555-9831","shipper_id":1},
-      {"company_name":"United Package","phone":"(503) 555-3199","shipper_id":2}
-    ]') AS x("company_name" varchar(40), "phone" varchar(24), "shipper_id" integer)
+    WITH my_tables(arr) AS (VALUES(v_json::JSON))
+    SELECT (elem ->> 'company_name')::character varying(40) AS "company_name",
+           (elem ->> 'phone')::character varying(24) AS "phone",
+           (elem ->> 'shipper_id')::smallint AS "shipper_id"
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
 ) AS "Source"
 ON "Source"."shipper_id" = "Target"."shipper_id"
 
-WHEN MATCHED AND (...change detection...) THEN
-  UPDATE SET "company_name" = "Source"."company_name",
-             "phone"        = "Source"."phone"
+WHEN MATCHED AND (<change detection>) THEN          -- if MergeUpdate
+  UPDATE SET
+        "company_name" = "Source"."company_name",
+        "phone" = "Source"."phone"
 
-WHEN NOT MATCHED THEN
-  INSERT ("company_name", "phone", "shipper_id")
-  VALUES ("Source"."company_name", "Source"."phone", "Source"."shipper_id")
+ WHEN NOT MATCHED BY TARGET THEN                    -- BY TARGET only alongside the BY SOURCE clause
+   INSERT ("company_name", "phone", "shipper_id")
+   VALUES ("Source"."company_name", "Source"."phone", "Source"."shipper_id")
 
-WHEN NOT MATCHED BY SOURCE THEN
-  DELETE
+ WHEN NOT MATCHED BY SOURCE THEN                    -- if MergeDelete, from a 17 or later source
+   DELETE
 ;
+ALTER TABLE "public"."shippers" ENABLE TRIGGER ALL;    -- if DisableTriggers
+END $SchemaSmithData$ LANGUAGE plpgsql;
 ```
 
-The `MERGE INTO ... ONLY` clause, used when `UpdateDescendents` is `false`, writes the table's own rows and not an inheritance child's; on a partitioned table, which holds none of its own, leave `UpdateDescendents` at `true`.
+The block's dollar-quote tag is `$SchemaSmithData$`, numbered if a row's value contains it. An identity column adds `OVERRIDING ... VALUE` to the insert and resets its sequence with `SETVAL` at the end of the block. The `MERGE INTO ... ONLY` clause, used when `UpdateDescendents` is `false`, writes the table's own rows and not an inheritance child's; on a partitioned table, which holds none of its own, leave `UpdateDescendents` at `true`.
 
 ### MySQL
 
-MySQL doesn't have a `MERGE` statement. DataTongs generates the appropriate idiom based on the configured behavior:
+MySQL and MariaDB have no `MERGE` statement. The rows go into a `@json_data` session variable, and an `INSERT ... SELECT` reads them back with `JSON_TABLE`. The statement follows `MergeUpdate` and `MergeDelete`:
 
-- **Insert + Update (no delete)** -- `INSERT ... ON DUPLICATE KEY UPDATE`
-- **Insert only (seed)** -- `INSERT IGNORE`
-- **Insert + Update + Delete** -- `INSERT ... ON DUPLICATE KEY UPDATE` followed by `DELETE WHERE NOT EXISTS` to remove rows not present in the source data
+- **Insert + Update (no delete)** -- `INSERT ... SELECT ... ON DUPLICATE KEY UPDATE`, with a changed-rows filter that leaves out a row already present exactly as delivered (see [MergeUpdate](#mergeupdate))
+- **Insert only (seed)** -- `INSERT IGNORE ... SELECT`
+- **Delete sync** -- either of the above, followed by a `DELETE ... WHERE NOT EXISTS` that removes rows not present in the source data
 
 ```sql
-INSERT INTO `shippers` (`company_name`, `phone`, `shipper_id`) VALUES
-  ('Speedy Express',   '(503) 555-9831', 1),
-  ('United Package',   '(503) 555-3199', 2),
-  ('Federal Shipping', '(503) 555-9931', 3)
+SET @ss_saved_time_zone = @@SESSION.time_zone;
+SET SESSION time_zone = '+00:00';
+SET @json_data = '[{"shipper_id":1,"company_name":"Speedy Express","phone":"(503) 555-9831"},
+{"shipper_id":2,"company_name":"United Package","phone":"(503) 555-3199"}]';
+
+INSERT INTO `shippers` (`shipper_id`, `company_name`, `phone`)
+SELECT `shipper_id`, `company_name`, `phone`
+FROM JSON_TABLE(
+    @json_data,
+    '$[*]' COLUMNS (
+      `shipper_id` INT PATH '$.shipper_id',
+      `company_name` VARCHAR(40) CHARACTER SET utf8mb4 PATH '$.company_name',
+      `phone` VARCHAR(24) CHARACTER SET utf8mb4 PATH '$.phone'
+    )
+  ) AS jt
+WHERE NOT EXISTS (SELECT 1 FROM `shippers` _ss_live
+                  WHERE <every column of _ss_live equals jt>)
 ON DUPLICATE KEY UPDATE
   `company_name` = VALUES(`company_name`),
-  `phone`        = VALUES(`phone`);
+  `phone` = VALUES(`phone`);
+SET SESSION time_zone = @ss_saved_time_zone;
 ```
 
-The MySQL generator infers the right idiom from `MergeUpdate` and `MergeDelete`. Tables are named without their database, so a script writes into the database it is deployed to, not the one the data came from.
+The script runs in the `+00:00` time zone it was extracted in, so `TIMESTAMP` values arrive unchanged, and puts the session's zone back afterwards. Tables are named without their database, so a script writes into the database it is deployed to, not the one the data came from.
+
+The row source depends on the source's version. MariaDB 10.2-10.5 has no `JSON_TABLE`, so a script from one reads the rows with a recursive CTE instead, and when the rows are inlined a large table is delivered in chunks. MariaDB patches whose `JSON_TABLE` misreads strings get the same CTE. MySQL 5.7 has neither, so DataTongs writes no script for a 5.7 source and logs why; deliver data there with manual data scripts. See [Engine Version Compatibility](schemaquench.md#engine-version-compatibility).
 
 ---
 
@@ -283,11 +315,16 @@ This extracts only active flags and, if `MergeDelete` is on, only deletes active
 
 ### DisableTriggers
 
-When enabled, DataTongs wraps each generated script with platform-appropriate trigger control. Use this when the target table has audit or notification triggers whose side effects are undesirable during a bulk data refresh. The generated scripts are plain SQL files -- you can edit them to disable specific triggers rather than all of them when fine-grained control is needed.
+When enabled on SQL Server or PostgreSQL, DataTongs wraps each generated script in `ALTER TABLE ... DISABLE TRIGGER ALL` and `ENABLE TRIGGER ALL`. Use this when the target table has audit or notification triggers whose side effects are undesirable during a bulk data refresh.
+
+- **PostgreSQL:** `ALL` includes the internal triggers that enforce foreign keys and deferrable unique or exclusion constraints, on the table that declares a foreign key and on the table it references. Disabling those needs superuser, so on such a table a deploy that runs as an ordinary role fails, and while they are off the rows being written are not checked against those constraints. To disable only your own triggers, edit the generated script to `DISABLE TRIGGER USER` / `ENABLE TRIGGER USER`; a delivery configured with `--ConfigureDataDelivery` writes no script to edit.
+- **MySQL and MariaDB:** neither engine can disable a trigger, so the setting has no effect and the table's triggers fire during the delivery.
+
+The generated scripts are plain SQL files -- you can edit them to disable specific triggers rather than all of them when fine-grained control is needed.
 
 ### MergeUpdate
 
-When enabled, the script updates existing rows whose data has changed. When disabled, the script only inserts new rows and (on MERGE platforms, if `MergeDelete` is on) deletes missing rows -- existing rows are left untouched regardless of whether their data differs.
+When enabled, the script updates existing rows whose data has changed. When disabled, the script only inserts new rows and (if `MergeDelete` is on) deletes missing rows -- existing rows are left untouched regardless of whether their data differs.
 
 On MySQL and MariaDB a row already present exactly as delivered is left out of the upsert altogether. That matters for triggers: `INSERT ... ON DUPLICATE KEY UPDATE` fires a row's `AFTER UPDATE` trigger even when it changes nothing (always on MySQL; on MariaDB from 10.11.17 and 11.4.11), so without this every redeploy of unchanged data would fire it for every row. Text is compared byte for byte, so a change that only a case-insensitive collation would call equal is still applied. One exception: a table in a foreign-key cycle with another table is delivered in two passes, which really do update each row twice, so its triggers fire on every delivery. A table that only references itself is not affected.
 
@@ -297,8 +334,9 @@ When enabled, the script deletes rows from the target that don't exist in the so
 
 **Per-platform implementation:**
 
-- **SQL Server / PostgreSQL:** The delete is a `WHEN NOT MATCHED BY SOURCE THEN DELETE` clause inside the same `MERGE` statement.
-- **MySQL:** Because MySQL has no `MERGE`, the generated script is two statements -- an `INSERT ... ON DUPLICATE KEY UPDATE` for the upsert plus a separate `DELETE WHERE NOT EXISTS` that removes target rows missing from the source. (The retired `REPLACE INTO` idiom isn't used: it deletes and re-inserts every matched row, which breaks `ON DELETE RESTRICT` foreign keys.)
+- **SQL Server:** The delete is a `WHEN NOT MATCHED BY SOURCE THEN DELETE` clause inside the same `MERGE` statement.
+- **PostgreSQL:** The same clause, in a script from a 17 or later source. From an older source the delete is a separate `DELETE ... WHERE NOT EXISTS` after the `DO` block, matching rows on the same key and honoring the same filter.
+- **MySQL and MariaDB:** Because they have no `MERGE`, the generated script is two statements -- the `INSERT` (an `INSERT ... ON DUPLICATE KEY UPDATE`, or an `INSERT IGNORE` when `MergeUpdate` is off) plus a separate `DELETE ... WHERE NOT EXISTS` that removes target rows missing from the source. (The retired `REPLACE INTO` idiom isn't used: it deletes and re-inserts every matched row, which breaks `ON DELETE RESTRICT` foreign keys.)
 
 ### Delivery scenarios
 
@@ -323,7 +361,7 @@ DataTongs detects column types and applies the correct extraction and restoratio
 - **Identity columns** -- detected automatically. The script wraps the merge with `SET IDENTITY_INSERT ON`/`OFF` and includes the identity in the `INSERT` clause but excludes it from `UPDATE SET`.
 - **Computed columns** -- auto-excluded from extraction and all script sections.
 - **Geography** -- full round-trip via WKT (`.ToString()`) plus the SRID captured separately.
-- **Geometry** -- extracted as WKT (basic support; restoration may need manual adjustment for complex cases).
+- **Geometry** -- the same round-trip as geography: WKT plus the SRID captured separately.
 - **HierarchyID** -- canonical string round-trip.
 - **Vector** (SQL Server 2025) -- carried as its text form (`[0.1,0.2]`), which SQL Server writes exactly, so every float32 arrives with the bits it left with.
 - **XML / NTEXT / TEXT / IMAGE** -- mapped through the OPENJSON layer with type-appropriate cast for change detection.
@@ -349,16 +387,16 @@ DataTongs detects column types and applies the correct extraction and restoratio
 
 - **Auto-increment columns** -- handled at the `INSERT` level so explicit values can be carried.
 - **Generated / virtual columns** -- auto-excluded.
-- **Spatial types** -- basic support via WKT.
+- **Spatial types** -- extracted as WKT plus the SRID captured separately, so a value arrives in its own reference system.
 - **Vector** (MySQL 9.0+, MariaDB 11.7+) -- carried as its raw bytes in base64, like a binary column. The engines' text form (`VECTOR_TO_STRING`, `VEC_ToText`) keeps six significant digits, which would change a stored float32; base64 keeps it exact.
-- **TEXT / BLOB families** -- supported through string and binary literals.
+- **TEXT / BLOB families** -- text is carried as a string, and binary as base64 that the script decodes with `FROM_BASE64`.
 - **DECIMAL / NUMERIC** -- written as JSON strings (`"12345678901234567890.123456789012345678"`). MySQL reads a JSON number back as a double, so a value with more digits than a double holds would be rounded on delivery. A file that carries a decimal as a number -- one written by hand, by another tool or by an earlier DataTongs -- is converted the same way when SchemaQuench delivers it.
 
 When a column is excluded from extraction, DataTongs logs a warning naming the table, the column, and the underlying type so you know exactly what was skipped.
 
 ### MariaDB
 
-MariaDB uses the MySQL delivery path with the same behaviors as above, except that DECIMAL / NUMERIC values are written as JSON numbers rather than strings. One operational difference: MariaDB's default `max_allowed_packet` is smaller than MySQL 8's 64&nbsp;MB. Because each table's data is delivered as a single JSON payload, delivering a large table can exceed that limit and fail with `Error submitting <N>MB packet; ensure 'max_allowed_packet' is greater than <N>MB`. Raise the server's `max_allowed_packet` (for example `--max-allowed-packet=64M`, or the equivalent in `my.cnf`) to accommodate your largest table's row set.
+MariaDB uses the MySQL delivery path with the same behaviors as above, except that DECIMAL / NUMERIC values are written as JSON numbers rather than strings. One operational difference: each table's delivery is sent to the server in one packet, so delivering a large table can exceed MariaDB's `max_allowed_packet` and fail with `Error submitting <N>MB packet; ensure 'max_allowed_packet' is greater than <N>MB`. Raise the server's `max_allowed_packet` (for example `--max-allowed-packet=64M`, or the equivalent in `my.cnf`) to accommodate your largest table's row set. A MariaDB 10.2–10.5 target, or a patch whose `JSON_TABLE` misreads strings, takes inlined rows in chunks of 50, but the chunks travel to the server in the same script, so the same limit applies.
 
 ---
 
@@ -532,7 +570,7 @@ With `Xml`, DataTongs writes each `.tabledata` file in the [XML delivery shape](
 
 **MySQL and MariaDB merge scripts cannot be tokenized with `Xml`.** A tokenized merge script reads its `.tabledata` file with `JSON_TABLE` when it is deployed, and that cannot read XML, so DataTongs refuses to write one. When every table gets a script (`OutputScripts` on, `ConfigureDataDelivery` off), the run is refused before anything is extracted, with a message naming both settings, and exits `2`. With `--ConfigureDataDelivery` only the tables whose delivery could not be configured need a script: each of those fails with that message after its content file is written, and the run exits `2`. Delivering it through `DataDelivery` (`--ConfigureDataDelivery`) works -- SchemaQuench converts the XML before delivering it -- and so does a script with `ShouldCast:TokenizeScripts` set to `false`, which carries the data converted inside it.
 
-**Known limitation: geometry/geography SRID in data extraction.** Per-row SRID capture is a SQL-Server-only extraction capability — the JSON extraction query captures the SRID (`col.STSrid`) only on SQL Server. PostgreSQL and MySQL JSON extraction capture WKT (`ST_AsText()`) alone, with no per-row SRID companion. XML-encoded extracts inherit this same limitation, since XML is converted from the JSON result — a spatial column extracted as XML from PostgreSQL or MySQL carries WKT without the `.STSrid` companion. On **MySQL**, this no longer loses the reference system for a column whose schema declares a `Srid` restriction (`col POINT SRID 4326` -- see [MySQL column extras](schema-packages.md#mysql-column-extras)): every row in a SRID-restricted column is guaranteed to carry that one reference system, so a deploy target reconstructs it from the schema definition rather than needing the per-row companion. On **PostgreSQL** the same reasoning applies through the column *type* rather than a separate attribute: a typed column (`geometry(Point,4326)`) coerces an incoming SRID-less value to its declared reference system, so that round trip is lossless too. The gap is therefore narrower than it first looks — it remains open for an *unrestricted* MySQL spatial column and an *untyped* PostgreSQL `geometry` column. Those are the cases to watch, and they fail quietly: the WKT arrives intact and the value lands with SRID `0`, so the coordinates look right while the reference system is wrong. Extract spatial data from SQL Server, or type/restrict the destination column, when that matters. All other column types (binary, dates, NULLs, and non-spatial columns) are fully portable in both JSON and XML.
+**Spatial values keep their reference system.** On every engine a geometry or geography value is extracted as WKT with its SRID beside it, as a `<col>.STSrid` companion in JSON and a `<c n="<col>.STSrid">` element in XML, and the delivery rebuilds the value in that reference system. A PostgreSQL, MySQL or MariaDB package extracted before 2.6 has no companion; its values arrive with SRID `0`, so extract it again. All other column types (binary, dates, NULLs, and non-spatial columns) are fully portable in both JSON and XML.
 
 ### Template root discovery
 
@@ -574,7 +612,7 @@ See [Schema Packages -- DataDelivery](schema-packages.md#datadelivery) for the f
 
 ## Schema-Template Data Extraction
 
-Schema templates need per-iteration data delivery -- each tenant gets the same reference data, scaffolded from a canonical source schema. DataTongs extracts data scoped to a single source schema and writes content files and MERGE scripts that use `{{SchemaName}}` as the destination schema reference, so SchemaQuench can resolve it per iteration at deploy time. The common use: extract seed data from a canonical tenant schema so every future onboarding starts from the same known state.
+Schema templates need per-iteration data delivery -- each tenant gets the same reference data, scaffolded from a canonical source schema. DataTongs extracts data scoped to a single source schema and writes content files and merge scripts that use `{{SchemaName}}` as the destination schema reference, so SchemaQuench can resolve it per iteration at deploy time. The common use: extract seed data from a canonical tenant schema so every future onboarding starts from the same known state.
 
 ### Activation
 
