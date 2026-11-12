@@ -362,11 +362,11 @@ SchemaTongs can capture how a reference server is configured, so a package bring
 | `ShouldCast:SettingsOutput` | `Json` | `Json`, `Script` or `Both` (below). |
 | `ShouldCast:ServerObjects` | `false` | SQL Server's server-level objects, as product `After` folders (below). |
 
-**What gets captured.** Without an allowlist, only settings that differ from what the engine starts with, and none that names this machine -- a file path, the host, the port, a server id. What counts as the default:
+**What gets captured.** Without an allowlist, only settings that differ from what the engine starts with, and none that names this machine -- a file path, the host, the port, a server id, or a size the server picks from the machine's memory and CPUs when nothing sets it. What counts as the default:
 
 - **SQL Server:** a configuration option that differs from its documented default (an option outside that list is captured only when allowlisted), each trace flag that is on globally, a database option that differs from the `model` database, and a database-scoped configuration that is not at its default.
-- **PostgreSQL:** a server parameter set in a configuration file or on the command line, and every setting the database carries itself.
-- **MySQL 8.0 and later:** a variable whose value did not come from the build. **MariaDB:** a variable that differs from its default. **MySQL 5.7** cannot say which variables were changed, so it captures server variables only from an allowlist, and SchemaTongs says so. On either engine, a database's character set and collation are captured when they differ from the server's.
+- **PostgreSQL:** a server parameter whose value in the configuration files (where `ALTER SYSTEM` writes) or on the command line differs from the built-in one -- so the values `initdb` writes at their defaults are left out, and a change waiting for a restart is captured at its new value -- and every setting the database carries itself. The locale and time-zone parameters `initdb` takes from the machine count as machine-specific.
+- **MySQL 8.0 and later:** a variable whose value did not come from the build. A variable a session can also set counts only when it was persisted or set in an option file or on the command line, because MySQL reports a session's own `SET` as a runtime change. **MariaDB:** a variable that differs from its default. **MySQL 5.7** cannot say which variables were changed, so it captures server variables only from an allowlist, and SchemaTongs says so. On either engine, a database's character set and collation are captured when they differ from the server's.
 
 **Allowlists are exact.** An allowlist captures exactly its settings, at their default or not, machine-specific or not. An allowlisted setting the server does not have is warned about. A scope the file leaves out captures nothing.
 

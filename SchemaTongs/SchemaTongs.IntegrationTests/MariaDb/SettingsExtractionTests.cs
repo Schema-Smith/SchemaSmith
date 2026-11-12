@@ -19,6 +19,7 @@ public class SettingsExtractionTests : SettingsExtractionSharedTests
     protected override string AdminDatabase => "mysql";
     protected override (string Kind, string Name, string Value) ChangedSetting => ("Option", "COLLATE", _collation);
     protected override (string Kind, string Name) DefaultSetting => ("Option", "CHARACTER SET");
+    protected override string[] NotAChoice => ["innodb_undo_directory", "log_slow_query_file", "relay_log_info_file", "report_port", "back_log", "open_files_limit", "thread_cache_size"];
     protected override (string Kind, string Name) MachineIdentitySetting => ("Variable", "datadir");
 
     // The server's own character set, with a collation of it that is not the server's default.

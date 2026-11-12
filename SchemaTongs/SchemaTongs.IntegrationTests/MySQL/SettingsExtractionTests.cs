@@ -19,6 +19,8 @@ public class SettingsExtractionTests : SettingsExtractionSharedTests
     protected override string AdminDatabase => "mysql";
     protected override (string Kind, string Name, string Value) ChangedSetting => ("Option", "COLLATE", _collation);
     protected override (string Kind, string Name) DefaultSetting => ("Option", "CHARACTER SET");
+    // SchemaSmith's routines set these for their own session, which performance_schema reports as a DYNAMIC source.
+    protected override string[] NotAChoice => ["foreign_key_checks", "group_concat_max_len"];
     protected override (string Kind, string Name) MachineIdentitySetting => ("Variable", "datadir");
 
     // The server's own character set, with a collation of it that is not the server's default.

@@ -38,6 +38,8 @@ public abstract class SettingsExtractionSharedTests
 
     // A server setting that names the machine, which is left out unless allowlisted.
     protected abstract (string Kind, string Name) MachineIdentitySetting { get; }
+    /// <summary>Settings this engine's capture has wrongly taken for a choice: a session's own set, a path, a size the server picks.</summary>
+    protected virtual string[] NotAChoice => [];
 
     private string _connectionString;
     private string _sourceDb;
@@ -216,6 +218,16 @@ public abstract class SettingsExtractionSharedTests
         }).Select(s => $"{s.Name} = {s.Value}").ToList();
 
         Assert.That(atBuiltIn, Is.Empty);
+    }
+
+    [Test]
+    public void ServerSettings_LeaveOutWhatNobodyChose()
+    {
+        if (NotAChoice.Length == 0) Assert.Ignore("no such settings named for this engine");
+        Extract(new Dictionary<string, string> { ["ShouldCast:ServerSettings"] = "true" });
+        var captured = (Load(Path.Join(_productDir, SettingsFile.ServerFileName), SettingScope.Server)?.Settings ?? []).Select(s => s.Name.ToLowerInvariant());
+
+        Assert.That(captured.Intersect(NotAChoice), Is.Empty);
     }
 
     [Test]

@@ -345,21 +345,45 @@ public sealed class MySqlVariableDescriptor(Platform platform, int serverMajorVe
                "DEALLOCATE PREPARE schemasmith_setting;\r\n";
     }
 
+    // A global-only variable has no @@SESSION value, so reading one fails (1238).
+    private static bool HasSessionScope(IDbCommand cmd, string name)
+    {
+        if (!VariableName.IsMatch(name)) return true;
+        try
+        {
+            SettingSql.FirstRow(cmd, $"SELECT @@SESSION.{name}");
+            return true;
+        }
+        catch (DbException)
+        {
+            return false;
+        }
+    }
+
     private static readonly HashSet<string> MachineIdentity = new(StringComparer.OrdinalIgnoreCase)
     {
         "datadir", "basedir", "tmpdir", "socket", "port", "hostname", "server_id", "server_uuid", "log_bin_basename", "log_bin_index",
         "relay_log", "relay_log_basename", "relay_log_index", "pid_file", "general_log_file", "slow_query_log_file", "log_error",
-        "innodb_data_home_dir", "innodb_log_group_home_dir", "secure_file_priv", "plugin_dir", "character_sets_dir", "lc_messages_dir"
+        "innodb_data_home_dir", "innodb_log_group_home_dir", "secure_file_priv", "plugin_dir", "character_sets_dir", "lc_messages_dir",
+        "innodb_undo_directory", "log_slow_query_file", "relay_log_info_file", "slave_load_tmpdir", "report_port", "report_host",
+        "ft_stopword_file",
+        // Sized by the server from the machine's memory, CPUs and file limits when nothing sets them.
+        "back_log", "open_files_limit", "thread_cache_size", "innodb_io_capacity_max", "innodb_buffer_pool_size_auto_min",
+        "table_open_cache_instances", "innodb_buffer_pool_instances"
     };
 
     // MySQL 8 says where each value came from; MariaDB keeps each variable's default; MySQL 5.7 has neither, so nothing
-    // counts as changed there and only an allowlist captures anything.
+    // counts as changed there and only an allowlist captures anything. MySQL reports DYNAMIC for a variable a session set
+    // (SchemaSmith's own routines set foreign_key_checks and group_concat_max_len for their session), so DYNAMIC counts
+    // as a choice only for a variable no session can set.
     public IEnumerable<CapturedSetting> Enumerate(IDbCommand cmd, string database)
     {
         if (CanPersist)
             return SettingSql.Rows(cmd, "SELECT v.VARIABLE_NAME, g.VARIABLE_VALUE, v.VARIABLE_SOURCE FROM performance_schema.variables_info v " +
                                         "JOIN performance_schema.global_variables g ON g.VARIABLE_NAME = v.VARIABLE_NAME")
-                .Select(r => new CapturedSetting(Kind, r[0], r[1], r[2] == "COMPILED", MachineIdentity.Contains(r[0])));
+                .Select(r => new CapturedSetting(Kind, r[0], r[1], r[2] == "COMPILED" || (r[2] == "DYNAMIC" && HasSessionScope(cmd, r[0])),
+                    MachineIdentity.Contains(r[0])))
+                .ToList();
         if (platform == Platform.MariaDb)
             return SettingSql.Rows(cmd, "SELECT LOWER(VARIABLE_NAME), GLOBAL_VALUE, DEFAULT_VALUE FROM information_schema.SYSTEM_VARIABLES WHERE GLOBAL_VALUE IS NOT NULL")
                 .Select(r => new CapturedSetting(Kind, r[0], r[1], r[2] == null || SettingValueComparer.Boolish(r[1], r[2]), MachineIdentity.Contains(r[0])));
