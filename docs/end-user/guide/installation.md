@@ -127,9 +127,11 @@ On Windows:
 ```powershell
 gh release download v2.8.0 --repo Schema-Smith/SchemaSmith --pattern 'SchemaSmith-2.8.0-win-x64.zip'
 Expand-Archive SchemaSmith-2.8.0-win-x64.zip -DestinationPath C:\Tools\SchemaSmith
-# Add C:\Tools\SchemaSmith to PATH via System Properties or:
-[Environment]::SetEnvironmentVariable('Path', $env:Path + ';C:\Tools\SchemaSmith', 'User')
+# Add C:\Tools\SchemaSmith to your user PATH via System Properties or (new shells pick it up):
+[Environment]::SetEnvironmentVariable('Path', [Environment]::GetEnvironmentVariable('Path', 'User') + ';C:\Tools\SchemaSmith', 'User')
 ```
+
+`$env:Path` in a session is the machine and user paths joined, so writing it back with `'User'` would copy the whole machine PATH into your user PATH. The line above reads the user value alone.
 
 The available RIDs are `linux-x64`, `linux-arm64`, `osx-x64`, `osx-arm64`, `win-x64`, and `win-arm64`. Pick the one that matches your target.
 
