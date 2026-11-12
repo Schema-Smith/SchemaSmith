@@ -95,7 +95,12 @@ public static class SqlServerServerObjectCaster
 
     // The script recomputes the same signature on the target; a NULL there (no such object) never equals the captured one.
     // Compared in a binary collation: under the server's usual case-insensitive one a change only in case never applied.
+    // The fingerprint is of the object as captured, not of the body below it, so an edited body reaches only a server whose
+    // object already differs: the header says so where the edit would be made.
     internal static string IfChanged(string signatureSql, string name, string captured, string body) => Lines(
+        "-- Captured from the reference server. To change this object, change it there and extract again: the script runs only",
+        "-- where the server's object differs from the one captured, so an edit to the body below does not reach a server that",
+        "-- still matches.",
         $"DECLARE @name SYSNAME = {N(name)};",
         $"IF ISNULL(({signatureSql}), N'') COLLATE Latin1_General_BIN2 <> {N(captured)} COLLATE Latin1_General_BIN2",
         "BEGIN",

@@ -45,4 +45,13 @@ public class SqlServerServerObjectCasterTests
             Assert.That(args, Does.Not.Contain("@wmi_"));
         });
     }
+
+    // The fingerprint is of the captured object, so an edited body does nothing where the server still matches: the script
+    // has to say so where the edit would be made.
+    [Test]
+    public void AFingerprintedScript_SaysToChangeTheObjectOnTheReferenceServer()
+    {
+        var script = SqlServerServerObjectCaster.IfChanged("SELECT N'x'", "job", "x", "SELECT 1;");
+        Assert.That(script, Does.StartWith("-- Captured from the reference server. To change this object, change it there and extract again"));
+    }
 }

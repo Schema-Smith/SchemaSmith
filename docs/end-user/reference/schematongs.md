@@ -393,7 +393,7 @@ With `ShouldCast:ServerObjects`, each of the server's own objects is written as 
 | `EventSessions` | Extended Events sessions, except the ones SQL Server ships with |
 
 - **Jobs update in place.** A job's `job_id`, and with it the job's history, stays attached. A job that is running when the deploy reaches it is left as it is, and the run says so; the next deploy brings it into line.
-- **Unchanged, untouched.** A job, audit, specification or session script carries a fingerprint of the object taken from the source, and changes the object only when the target's differs. A running session is not restarted; an audit is not switched off and on.
+- **Unchanged, untouched.** A job, audit, specification or session script carries a fingerprint of the object taken from the source, and changes the object only when the target's differs. A running session is not restarted; an audit is not switched off and on. The fingerprint is of the object as captured, so editing the script does not change a server that still matches it: change the object on the reference server and extract again, as each script's header says.
 - **No credentials.** Linked servers, credentials, proxies and Database Mail accounts are left out. A job step that runs under a proxy is written without it, with a warning.
 - **No drop by absence.** An object removed from the package stays on the server, as with every scripted object.
 

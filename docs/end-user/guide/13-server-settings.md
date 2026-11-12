@@ -85,7 +85,7 @@ A server class is more than its settings. With `ShouldCast:ServerObjects`, Schem
 The scripts are written to be run on every deploy:
 
 - **Jobs keep history.** A job is updated in place, so its history stays attached, and a job that is running when the deploy reaches it is left alone until the next one.
-- **Unchanged, untouched.** A job, audit or session that already matches is not modified at all -- no audit switched off and on, no running session restarted.
+- **Unchanged, untouched.** A job, audit or session that already matches is not modified at all -- no audit switched off and on, no running session restarted. "Matches" means matches the reference server as it was captured, so to change a job, change it there and extract again; an edit to the script does not reach a server that still matches.
 - **Credentials stay home.** Linked servers, credentials, proxies and Database Mail accounts are never scripted.
 
 ## Read the outcome
