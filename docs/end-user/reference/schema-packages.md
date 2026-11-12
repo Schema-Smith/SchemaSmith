@@ -1023,7 +1023,7 @@ reports that combination as `SS-XTP-001` before you deploy.
 
 Always Encrypted lets SQL Server store sensitive column data in encrypted form that the server itself cannot read — only authorized clients holding the Column Master Key can decrypt. SchemaTongs extracts encrypted columns and captures all three encryption properties; SchemaQuench declares them with the exact `ENCRYPTED WITH (…)` syntax SQL Server requires. Extract once, deploy everywhere the CMK is distributed — no hand-written DDL.
 
-> **SQL Server only:** Always Encrypted is a SQL Server feature with no equivalent on PostgreSQL, MySQL, or MariaDB. No parity gap — there is no cross-platform AE analogue to implement.
+> **SQL Server only:** Always Encrypted is a SQL Server feature with no equivalent on PostgreSQL, MySQL, or MariaDB. No parity gap — there is no cross-platform AE analogue to implement. A package for another engine that carries `EncryptionType`, `EncryptionKey` or `EncryptionAlgorithm` on a column fails to load, naming the property and the file: every package property must belong to its engine.
 
 ### Column properties
 
