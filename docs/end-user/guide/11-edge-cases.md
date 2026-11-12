@@ -24,7 +24,7 @@ The practical approach works the same way across all alignment settings:
 
 3. **Keep enforcement off during alignment.** While building up the repository, you don't want to accidentally drop objects you haven't captured yet. Leave enforcement settings (`DropUnknownIndexes`, `DropTablesRemovedFromProduct`) off until you're confident the repository represents the complete desired state.
 
-4. **Turn on enforcement to prevent drift from returning.** Once the schema definition is clear and you have verified alignment across environments, enable the enforcement settings. Now SchemaSmith prevents drift from coming back the moment you turn your back.
+4. **Turn on enforcement to prevent drift from returning.** Once the schema definition is clear and you have verified alignment across environments, enable the enforcement settings. From then on, each deploy removes what those settings cover, so drift of that kind does not survive the next run. SchemaSmith does not stop someone changing a database between deploys.
 
 ### Settings that follow this pattern
 
@@ -112,7 +112,7 @@ Suppose you need to rename the `Qty` column to `Quantity` on your `OrderLines` t
 
 **Step 2: Quench.**
 
-SchemaSmith sees `OldName: "Qty"` on the column named `Quantity` and executes a rename (SQL Server `sp_rename`, PostgreSQL `ALTER TABLE ... RENAME COLUMN`, MySQL `ALTER TABLE ... CHANGE COLUMN`) instead of a drop-and-recreate. Your data stays intact. Any `Extensions` metadata attached to the column follows the rename automatically thanks to the `OldName` fallback in the preservation pass.
+SchemaSmith sees `OldName: "Qty"` on the column named `Quantity` and executes a rename (SQL Server `sp_rename`, PostgreSQL `ALTER TABLE ... RENAME COLUMN`, MySQL and MariaDB `ALTER TABLE ... RENAME COLUMN`, or `CHANGE COLUMN` below MySQL 8.0 and MariaDB 10.5.2) instead of a drop-and-recreate. Your data stays intact. Any `Extensions` metadata attached to the column follows the rename automatically thanks to the `OldName` fallback in the preservation pass.
 
 **Step 3: Verify and clean up.**
 

@@ -40,7 +40,7 @@ SchemaQuench reads this declaration, queries the target database, sees that `Dis
 The benefits compound over time:
 
 - **No ordering bugs.** There's no migration chain to break.
-- **No drift.** Every deployment converges to the same declared state.
+- **No drift in what you declare.** Every deployment brings the objects the package declares back to their declared state. What it leaves alone is drift outside the package -- an index added by hand stays unless `DropUnknownIndexes` is on, and a table this product never managed is never dropped.
 - **Readable reviews.** Pull requests show the table as it will be, not a sequence of mutations to decipher.
 - **Repeatable deploys.** Same package, any environment. SchemaQuench computes the right delta for each.
 
