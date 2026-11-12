@@ -1,5 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System.Collections.Generic;
 using System.Data;
 using NUnit.Framework;
 using Schema.Domain;
@@ -23,6 +24,15 @@ public class SettingsExtractionTests : SettingsExtractionSharedTests
     protected override string[] NotAChoice => ["innodb_undo_directory", "log_slow_query_file", "relay_log_info_file", "report_port", "back_log", "open_files_limit",
         "thread_cache_size", "binlog_expire_logs_seconds", "innodb_open_files", "character_set_collations", "innodb_log_write_ahead_size"];
     protected override (string Kind, string Name) MachineIdentitySetting => ("Variable", "datadir");
+
+    protected override IEnumerable<string> SetInConfig(IDbCommand cmd)
+    {
+        cmd.CommandText = "SELECT VARIABLE_NAME FROM information_schema.SYSTEM_VARIABLES WHERE GLOBAL_VALUE_ORIGIN = 'CONFIG'";
+        using var reader = cmd.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read()) names.Add(reader.GetString(0));
+        return names;
+    }
 
     // The server's own character set, with a collation of it that is not the server's default.
     protected override void CreateSourceDatabase(IDbCommand cmd, string name)

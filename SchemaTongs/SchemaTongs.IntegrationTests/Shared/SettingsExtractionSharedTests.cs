@@ -40,6 +40,8 @@ public abstract class SettingsExtractionSharedTests
     protected abstract (string Kind, string Name) MachineIdentitySetting { get; }
     /// <summary>Settings this engine's capture has wrongly taken for a choice: a session's own set, a path, a size the server picks.</summary>
     protected virtual string[] NotAChoice => [];
+    /// <summary>Names this server read from its config file. A packaged image's own my.cnf sets some of <see cref="NotAChoice"/>, which makes them a choice there.</summary>
+    protected virtual IEnumerable<string> SetInConfig(IDbCommand cmd) => [];
 
     private string _connectionString;
     private string _sourceDb;
@@ -227,7 +229,10 @@ public abstract class SettingsExtractionSharedTests
         Extract(new Dictionary<string, string> { ["ShouldCast:ServerSettings"] = "true" });
         var captured = (Load(Path.Join(_productDir, SettingsFile.ServerFileName), SettingScope.Server)?.Settings ?? []).Select(s => s.Name.ToLowerInvariant());
 
-        Assert.That(captured.Intersect(NotAChoice), Is.Empty);
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        var notAChoiceHere = NotAChoice.Except(SetInConfig(cmd).Select(n => n.ToLowerInvariant())).ToList();
+        Assert.That(captured.Intersect(notAChoiceHere), Is.Empty);
     }
 
     [Test]
