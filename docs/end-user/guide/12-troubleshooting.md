@@ -230,7 +230,7 @@ These entries apply to schema-template products (one iteration per tenant schema
 **Fix:**
 
 - Filter the progress log to one schema name to isolate that tenant's sequence end-to-end. Every schema-template log line carries a `[Schema: <name>]` prefix; for a many-database fan-out, the prefix is `[server].[database]`. Both formats are greppable without extra tooling.
-- Set `AllowParallel: false` on the template in `Template.json` to serialize execution. When set, at most one iteration of that template runs at a time. Other templates' parallel-eligible work units continue to fill the thread pool, so the overall deployment isn't fully serialized -- only that template's iterations are. This is the right trade-off when you need a clean per-tenant log for debugging, or when your schema template creates cross-schema foreign keys where DDL parallelism causes lock contention.
+- Set `AllowParallel: false` on the template in `Template.json` to serialize execution. When set, at most one iteration of that template runs at a time. Templates already run one at a time, so this serializes that template's own iterations and nothing else. This is the right trade-off when you need a clean per-tenant log for debugging, or when your schema template creates cross-schema foreign keys where DDL parallelism causes lock contention.
 
 `AllowParallel` is a schema-template property only. For many-database regular templates, use `MaxThreads: 1` in `SchemaQuench.settings.json` to cap global concurrency for that run. See [MaxThreads](../reference/schemaquench.md#maxthreads) and [AllowParallel](../reference/schema-packages.md#allowparallel) for the full interaction.
 
