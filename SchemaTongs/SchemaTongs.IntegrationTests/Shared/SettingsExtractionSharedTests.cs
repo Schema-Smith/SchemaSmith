@@ -197,6 +197,27 @@ public abstract class SettingsExtractionSharedTests
         });
     }
 
+    // initdb writes several parameters to postgresql.conf at their built-in values; a file line is not a choice when the
+    // value is the one the server would have anyway.
+    [Test]
+    public void PostgreSql_NoCapturedServerSetting_IsAtItsBuiltInValue()
+    {
+        if (Platform != Platform.PostgreSQL) Assert.Ignore("pg_settings.boot_val is PostgreSQL's");
+        Extract(new Dictionary<string, string> { ["ShouldCast:ServerSettings"] = "true" });
+        var captured = Load(Path.Join(_productDir, SettingsFile.ServerFileName), SettingScope.Server)?.Settings ?? [];
+
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        var atBuiltIn = captured.Where(s =>
+        {
+            cmd.CommandText = $"SELECT boot_val, unit FROM pg_settings WHERE name = '{s.Name.ToLowerInvariant().Replace("'", "''")}'";
+            using var reader = cmd.ExecuteReader();
+            return reader.Read() && Schema.Settings.SettingValueComparer.PostgreSql(s.Value, reader.IsDBNull(0) ? null : reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1));
+        }).Select(s => $"{s.Name} = {s.Value}").ToList();
+
+        Assert.That(atBuiltIn, Is.Empty);
+    }
+
     [Test]
     public void ServerSettings_LeaveOutTheMachine_UnlessAllowlisted()
     {

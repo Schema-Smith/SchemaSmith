@@ -214,10 +214,41 @@ public sealed class PostgreSqlServerParameterDescriptor : ISettingDescriptor
         "log_directory", "krb_server_keyfile"
     };
 
-    // A setting from a configuration file or the command line is one somebody chose; everything else is the build's default.
-    public IEnumerable<CapturedSetting> Enumerate(IDbCommand cmd, string database) =>
-        SettingSql.Rows(cmd, "SELECT name, setting, source FROM pg_settings")
-            .Select(r => new CapturedSetting(Kind, r[0], r[1], r[2] is not ("configuration file" or "command line"), MachineIdentity.Contains(r[0])));
+    // Chosen by initdb from the machine's locale and time zone, as the paths above are from its layout.
+    internal static readonly HashSet<string> InitdbChoices = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "lc_messages", "lc_monetary", "lc_numeric", "lc_time", "timezone", "log_timezone", "default_text_search_config"
+    };
+
+    // The server's own value is the configuration files' (ALTER SYSTEM writes one) or the command line's. pg_settings shows
+    // this session's, which a database or role setting hides and a pending restart has not reached yet, so the files are read
+    // where the login may; either way a value equal to the built-in one is the default, though initdb wrote it to a file.
+    public IEnumerable<CapturedSetting> Enumerate(IDbCommand cmd, string database)
+    {
+        var files = FileSettings(cmd);
+        foreach (var r in SettingSql.Rows(cmd, "SELECT name, setting, source, boot_val, unit FROM pg_settings"))
+        {
+            string value = null;
+            if (files != null) files.TryGetValue(r[0], out value);
+            if (value == null && (r[2] == "command line" || (files == null && r[2] == "configuration file"))) value = r[1];
+            var isDefault = value == null || SettingValueComparer.PostgreSql(value, r[3], r[4]);
+            yield return new CapturedSetting(Kind, r[0], value ?? r[1], isDefault, MachineIdentity.Contains(r[0]) || InitdbChoices.Contains(r[0]));
+        }
+    }
+
+    // The last valid line for each parameter across the configuration files, or null when the login cannot read them.
+    private static Dictionary<string, string> FileSettings(IDbCommand cmd)
+    {
+        try
+        {
+            return SettingSql.Rows(cmd, "SELECT DISTINCT ON (lower(name)) lower(name), setting FROM pg_file_settings WHERE error IS NULL ORDER BY lower(name), seqno DESC")
+                .ToDictionary(r => r[0], r => r[1], StringComparer.OrdinalIgnoreCase);
+        }
+        catch (DbException)
+        {
+            return null;
+        }
+    }
 }
 
 /// <summary>MySQL / MariaDB <c>Variable</c>. MySQL 8 persists with <c>SET PERSIST</c> (a read-only variable with
