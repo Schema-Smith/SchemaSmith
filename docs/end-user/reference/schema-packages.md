@@ -1302,7 +1302,7 @@ On **PostgreSQL**, `Xml` is shredded natively with `xmltable()` at every support
 
 On **MySQL and MariaDB**, neither engine can shred XML dynamically (both reject a non-constant XPath outright), so SchemaSmith converts an `Xml`-encoded payload to JSON once, up front, and shreds the result exactly as it would a hand-authored JSON payload. Declaring `Xml` there keeps your content files in the same shape as the packages you keep for other engines -- not a version-reach benefit, since MySQL/MariaDB never had a compatibility-level cliff to begin with.
 
-You choose the encoding per delivery, and SchemaSmith shreds whichever you declared, with the one conversion above: a `Json` delivery aimed at a SQL Server database below compatibility level 130 is delivered as XML. Nothing is skipped.
+You choose the encoding per delivery, and SchemaSmith shreds whichever you declared, with the conversions above: a `Json` delivery aimed at a SQL Server database below compatibility level 130 is delivered as XML, and an `Xml` delivery on MySQL or MariaDB is converted to JSON before it is shredded. Nothing is skipped.
 
 The XML row shape is a documented, stable contract -- one `<c>` element per column, named by an `n` attribute so any column name (including `[Order Date]`) is carried verbatim:
 

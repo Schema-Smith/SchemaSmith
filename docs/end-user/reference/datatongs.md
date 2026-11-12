@@ -499,7 +499,7 @@ A per-table `MergeType` on the `Tables[]` entry always wins over the derived def
 
 ### Delivery takes precedence over merge scripts
 
-`--ConfigureDataDelivery` and `ShouldCast:OutputScripts` both default to producing output, so without this rule a table would get delivered twice -- once through the `DataDelivery` block, once through a generated merge script carrying the same rows. When delivery is actually configured for a table this run, DataTongs does not also emit that table's merge script.
+`ShouldCast:OutputScripts` defaults to producing merge scripts, so with `--ConfigureDataDelivery` on, and without this rule, a table would get delivered twice -- once through the `DataDelivery` block, once through a generated merge script carrying the same rows. When delivery is actually configured for a table this run, DataTongs does not also emit that table's merge script.
 
 The check is per table, not a global switch: `--ConfigureDataDelivery` can decline for an individual table (its `Tables/<name>.json` isn't found, or its `DataDelivery` is an authored array with no matching `VariantName`), and a table delivery never covered still gets its script normally. A table whose delivery genuinely was configured -- freshly written or already up to date -- is the only one that loses its script.
 
