@@ -399,8 +399,10 @@ public abstract class RebuildTablePreservationSharedTests : BaseTableQuenchTests
         r.Exec($@"INSERT INTO SchemaSmith_RebuildSetAsideForeignKeys (ChildSchema, ChildTable, KeyName, ParentSchema, ParentTable, ReferencedColumns, Definition, Declared)
                   VALUES ('{r.Db}', '{r.Other}', '{key}', '{r.Db}', '{r.Parent}', '`Id`', 'FOREIGN KEY (`ParentId`) REFERENCES `{r.Parent}` (`Id`)', 1)");
 
-        var deploy = System.Threading.Tasks.Task.Run(() =>
-            r.Exec($"CALL SchemaSmith_ForeignKeyQuench('Declares_{r.Uid}', '{r.Db}', 0, 0, 1)"));
+        // Retried as a deploy retries it: another worker's DDL in the shared database can make its catalog read skip a
+        // table (1684), which a deploy recovers from.
+        var deploy = System.Threading.Tasks.Task.Run(() => TransientRetry.Run(() =>
+            r.Exec($"CALL SchemaSmith_ForeignKeyQuench('Declares_{r.Uid}', '{r.Db}', 0, 0, 1)")));
         // Add the key only once the deploy's own ADD is waiting: it has already looked, and found no key.
         otherCmd.CommandText = $"SELECT COUNT(*) FROM INFORMATION_SCHEMA.PROCESSLIST WHERE ID = {deployId} AND INFO LIKE '%ADD CONSTRAINT%' AND STATE LIKE '%metadata lock%'";
         var waiting = System.Diagnostics.Stopwatch.StartNew();
