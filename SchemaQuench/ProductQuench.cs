@@ -1061,7 +1061,11 @@ public class ProductQuench
             {
                 QuenchProductScripts(_product.AfterFolders, "After Product", false);
 
-                if (!string.IsNullOrWhiteSpace(_product.VersionStampScript))
+                var hasStamp = !string.IsNullOrWhiteSpace(_product.VersionStampScript);
+                // A drift check leaves the stamp out, as it does the template's (DriftExcludedSteps).
+                if (hasStamp && _whatIfOnly && !_drift)
+                    _progressLog.Info("[WhatIf] Would stamp product version");
+                if (hasStamp && !_whatIfOnly)
                 {
                     _progressLog.Info("Stamp product version");
                     command.CommandText = _product.VersionStampScript;
