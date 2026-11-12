@@ -2355,17 +2355,21 @@ A declared property is added, a changed value is updated in place, and `""` or `
 
 Dev uses synthetic data and a lean index set. Staging mirrors production's footprint. Production carries the full reporting stack and the regulated columns. Without a declarative answer, those differences turn into per-environment file copies, branching pipelines, or hand-maintained deploy scripts -- the kind of drift that's fine until a column gets forgotten. `ShouldApplyExpression` is that declarative answer: a SQL fragment attached to a component that decides, at deployment time, whether the component should apply to the current target.
 
-`ShouldApplyExpression` is the universal opt-in/opt-out switch on every component that supports it. The expression is a SQL fragment that returns a single scalar value. When SchemaQuench evaluates it before deploying that component, it considers the result false if it's `0`, the literal string `false`, or empty/null. Anything else means apply the component normally.
+`ShouldApplyExpression` is the universal opt-in/opt-out switch on every component that supports it. How the result is read depends on where the gate sits:
+
+- **On a table or one of its components** it is a SQL predicate, evaluated on the server: true declares the component, false leaves it out of this deploy -- and a component left out that already exists is dropped (see [A gate that turns off an existing object](schemaquench.md#a-gate-that-turns-off-an-existing-object)). A predicate that evaluates to NULL counts as true, so the component deploys. A leading `SELECT` is stripped, so write the predicate itself, not `SELECT CASE … THEN 1 ELSE 0 END`.
+- **On a script folder or a data delivery** it runs as a query. A bare predicate is wrapped for you; a `SELECT` must return a number or boolean: `0`, NULL or no row is false, any other number is true, and a string such as `'false'` fails the deploy.
+
+To vary by environment, compare against a script token each environment overrides -- here `DeployEnvironment`, declared in `Product.json` `ScriptTokens` and set per environment with `SmithySettings_ScriptTokens__DeployEnvironment`. A [custom property](custom-properties.md) is part of the package, so it reads the same everywhere and cannot tell environments apart.
 
 ```json
 {
   "Name": "[Orders]",
-  "Extensions": { "Environment": "Production" },
   "Indexes": [
     {
       "Name": "[IX_Orders_Reporting]",
       "IndexColumns": "[ReportingDate]",
-      "ShouldApplyExpression": "'{{Table.Environment}}' = 'Production'"
+      "ShouldApplyExpression": "'{{DeployEnvironment}}' = 'Production'"
     }
   ]
 }

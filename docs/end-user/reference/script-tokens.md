@@ -164,18 +164,18 @@ Anything you put in an `Extensions` object on a table component is also availabl
 ```json
 {
   "Name": "[Orders]",
-  "Extensions": { "Environment": "Production" },
+  "Extensions": { "Workload": "Reporting" },
   "Indexes": [
     {
       "Name": "[IX_Orders_CreatedDate]",
       "IndexColumns": "[CreatedDate]",
-      "ShouldApplyExpression": "'{{Table.Environment}}' = 'Production'"
+      "ShouldApplyExpression": "'{{Table.Workload}}' = 'Reporting' AND '{{DeployEnvironment}}' = 'Production'"
     }
   ]
 }
 ```
 
-That single expression lets the index decide whether to apply itself based on metadata that lives on the parent table, without leaving the schema package or splitting the definition across environment-specific files.
+That expression combines metadata on the parent table with a script token each environment overrides (`DeployEnvironment`, set per environment with `SmithySettings_ScriptTokens__DeployEnvironment`), so the index decides whether it applies without leaving the schema package or splitting the definition across environment-specific files. A custom property alone cannot do it: it is part of the package, so it reads the same in every environment.
 
 ---
 
@@ -301,7 +301,7 @@ These are two different questions, and confusing them is a real footgun. A moder
 - **Syntax availability** follows the database's compatibility level → gate on `{{CompatibilityLevel}}`.
 - **Server features** (a new engine capability, a version-only DDL form) follow the binary → gate on `{{ServerMajorVersion}}`.
 
-`SERVERPROPERTY('ProductMajorVersion') >= 16` is the gate authors reach for first, and it is the *wrong* gate for syntax: it passes on that compat-100 database and the SQL still fails.
+`SERVERPROPERTY('ProductMajorVersion') >= 16` is the gate authors reach for first, and it does not work as written: `SERVERPROPERTY` returns a `sql_variant` whose base type is `nvarchar`, and a `sql_variant` comparison ranks the numeric family above Unicode, so `>= 16` is false on every server (and `< 16` always true). Even cast to an integer it answers the server question, not the compatibility-level one. Use `{{ServerMajorVersion}}` for the server and `{{CompatibilityLevel}}` for syntax.
 
 ### Availability
 

@@ -137,8 +137,8 @@ Here's where custom properties stop being passive metadata and start driving beh
 
 ### Scope rules
 
-- **Table-level `Extensions`** are available inside the table's own `ShouldApplyExpression` using **bare names** (`{{Environment}}`).
-- **Table-level `Extensions`** are also available in every *child* component's expression fields using the **`Table.` prefix** (`{{Table.Environment}}`).
+- **Table-level `Extensions`** are available inside the table's own `ShouldApplyExpression` using **bare names** (`{{Workload}}`).
+- **Table-level `Extensions`** are also available in every *child* component's expression fields using the **`Table.` prefix** (`{{Table.Workload}}`).
 - **Component-level `Extensions`** are available in that component's own expression fields using bare names (`{{MaskInNonProd}}`).
 - Within a component's expression, the script tokens, the parent table's `Table.`-prefixed tokens and the component's own bare-name tokens are all available. The prefix keeps table and component names apart, so those two never collide.
 - **First definition wins.** The token list is built in the order *script tokens* (`Product.json` and `Template.json` `ScriptTokens`, plus the automatic `ProductName` and `TemplateName`), then the table's `Table.`-prefixed values, then the component's bare values -- and a name is replaced by the first entry that matches it. So a bare custom property that happens to share a name with a `ScriptTokens` entry resolves to the **script token**, not the custom property; the same holds for a table's own bare names in its own `ShouldApplyExpression`. Pick names that do not shadow your script tokens.
@@ -166,26 +166,28 @@ Custom property tokens are narrower than script tokens. They are substituted whi
 
 They do **not** reach `.sql` script files, the `Product.json` and `Template.json` script properties, a `DataDelivery` gate, a MySQL or MariaDB `FullTextIndexes` entry, `Partitioning`, or the declared-object files (events, enum types, domain types, sequences) -- in those places `Extensions` is metadata only. To hand a custom property to a script, read it out of the [`{{TableSchema}}`](script-tokens.md#automatic-tokens) payload, which carries every component's `Extensions` as written.
 
-### Example — environment-conditional index
+### Example — a table property combined with the environment
+
+A custom property is part of the package, so it reads the same in every environment: on its own it cannot tell production from development. Pair it with a script token each environment sets -- here `DeployEnvironment`, declared in `Product.json` `ScriptTokens` and overridden per environment with `SmithySettings_ScriptTokens__DeployEnvironment`:
 
 ```json
 {
   "Schema": "[dbo]",
   "Name": "[Orders]",
   "Extensions": {
-    "Environment": "Production"
+    "Workload": "Reporting"
   },
   "Indexes": [
     {
       "Name": "[IX_Orders_CreatedDate]",
       "IndexColumns": "[CreatedDate]",
-      "ShouldApplyExpression": "'{{Table.Environment}}' = 'Production'"
+      "ShouldApplyExpression": "'{{Table.Workload}}' = 'Reporting' AND '{{DeployEnvironment}}' = 'Production'"
     }
   ]
 }
 ```
 
-At quench time, the index applies only on the database whose deployment is flagged Production. No per-environment file copies. No branching. One declaration, one behavior, switched by a sidecar value your team controls.
+At quench time, the index is declared only where the deploy's `DeployEnvironment` is `Production`. Everywhere else it is not declared, so it is not created there -- and an existing copy the product owns is dropped (see [A gate that turns off an existing object](schemaquench.md#a-gate-that-turns-off-an-existing-object)). The table says what it is; the environment says where the deploy runs. No per-environment file copies, no branching.
 
 ### Example — nested retention value driving a default
 
@@ -219,11 +221,11 @@ At quench time, the index applies only on the database whose deployment is flagg
   "Extensions": {
     "PII": "true"
   },
-  "ShouldApplyExpression": "NOT ('{{PII}}' = 'true' AND '{{Table.Environment}}' = 'NonProd')"
+  "ShouldApplyExpression": "NOT ('{{PII}}' = 'true' AND '{{DeployEnvironment}}' = 'NonProd')"
 }
 ```
 
-Bare names pull from the column's own `Extensions`; `Table.`-prefixed names climb to the parent table.
+Bare names pull from the column's own `Extensions`; `Table.`-prefixed names climb to the parent table, and script tokens such as `DeployEnvironment` resolve here too. Where the gate is false -- a PII column in a non-production deploy -- the column is not declared, so an existing copy is dropped with its data. That is the point of this gate: the column never lives outside production.
 
 ---
 
