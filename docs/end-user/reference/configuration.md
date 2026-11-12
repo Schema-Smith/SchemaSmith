@@ -369,9 +369,10 @@ An optional `LogHygiene` block in any tool's `*.settings.json` tunes the behavio
 
 ```jsonc
 "LogHygiene": {
-  // Suppress the token-logging section entirely -- one notice line, no token
-  // names and no values -- and mask the ScriptTokens values in the
-  // configuration echo. For products with hundreds of tokens. Default: true.
+  // Set false to suppress the token-logging section entirely -- one notice
+  // line, no token names and no values -- and mask the ScriptTokens values in
+  // the configuration echo. For products with hundreds of tokens. Default: true
+  // (tokens are logged, with sensitive values scrubbed).
   "LogTokens": true,
 
   // Scrub these exact token names too, beyond the default patterns.
