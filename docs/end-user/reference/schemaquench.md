@@ -1362,7 +1362,7 @@ Changing a column that already holds data is where a declarative deploy earns it
 | Removed from the package | Dropped under `DropColumnsRemovedFromProduct` | Foreign keys and indexes over it first. |
 | Column order | Only by a [rebuild](configuration.md#rebuildpolicy) | A rebuild is refused for a temporal, change-tracked, replicated, CDC-enabled, ledger or partitioned table (the table itself or any of its indexes), one with Always Encrypted columns, and one whose table or column rename has not landed yet. |
 
-A column change under a schema-bound view, function or security policy, and what `DropSchemaBoundDependents` does about it, is under [Schema-Bound Dependents](#schema-bound-dependents).
+A column change under a schema-bound view, function or security policy is governed by [`DropSchemaBoundDependents`](configuration.md#dropschemabounddependents); a changed function or view that schema-bound objects reference is under [Schema-Bound Dependents](#schema-bound-dependents).
 
 > **Refused before the change:** an Always Encrypted change of any kind -- key, algorithm, encryption type, or removing encryption -- because a standard server cannot re-encrypt the data; a type change that one of the column's CDC change tables cannot take, because the capture job for the whole database would stop; a change that needs a capture-instance rotation when the table's two instances are both in use; a column change a schema-bound module blocks -- any such module while `DropSchemaBoundDependents` is off, one the package does not declare when it is on, and an encrypted one either way; and a change `OnlineApply: Require` has no online form for. Each fires before any of the column's dependents is dropped or the column is changed, and says what to do; it names the column, or the table for the capture-instance limit, or the module for a schema-bound refusal. Earlier steps of the same run may already have applied, such as table and column renames, new tables and columns, and tables dropped by absence.
 
@@ -1873,13 +1873,15 @@ Each table that participates in data delivery carries a `DataDelivery` block in 
 
 See [Schema Packages -- DataDelivery](schema-packages.md#datadelivery) for the full property reference and examples.
 
+**A deleting delivery refuses a cascading foreign key.** When a delivery whose `MergeType` deletes (`Insert/Update/Delete`) targets a table that another table references with `ON DELETE CASCADE`, data delivery for that database stops before any table is merged, because the deletes would cascade into the other table: `Table <table> uses MergeType=Insert/Update/Delete but is referenced by FK <name> on <child> with ON DELETE CASCADE.` Change the `MergeType` to `Insert/Update`, or remove the `CASCADE` rule.
+
 ### Gated deliveries and variants
 
-A table's `DataDelivery` block can also be an array of independently-gated deliveries, each with its own `ShouldApplyExpression`. SchemaQuench evaluates every delivery's gate against the target once per quench, before any content file is read, and every delivery whose gate passes applies -- not just the first match. A delivery whose gate evaluates false is logged as skipped and never touches the table; a delivery whose gate expression itself errors aborts the deployment (fail-closed), the same way a folder-level gate does.
+A table's `DataDelivery` block can also be an array of independently-gated deliveries, each with its own `ShouldApplyExpression`. SchemaQuench evaluates every delivery's gate against each database and schema it delivers to, before any content file is read, and every delivery whose gate passes applies -- not just the first match. A delivery whose gate evaluates false is logged as skipped and never touches the table; a delivery whose gate expression itself errors aborts the deployment (fail-closed), the same way a folder-level gate does.
 
 A delivery's gate resolves the same token vocabulary a folder gate resolves: [`{{ServerMajorVersion}}` and `{{CompatibilityLevel}}`](script-tokens.md#servermajorversion-and-compatibilitylevel) for version gating (see [Gating on the target version](#gating-on-the-target-version) above), plus `{{SchemaName}}` inside a schema-template iteration. A dev/test-only delivery can therefore combine both in one gate -- `"{{CompatibilityLevel}} >= 130 AND DB_NAME() LIKE '%_dev'"` -- without hand-writing the version predicate.
 
-Gate evaluation also runs under `WhatIfONLY`, so a dry run reports the same deliver-vs-skip decisions a real quench would make. The `Insert/Update/Delete` CASCADE-FK check (below) only considers deliveries whose gate is currently passing -- a `Delete` variant that's gated off this run can't abort the deployment over a CASCADE FK it will never execute.
+Gate evaluation also runs under `WhatIfONLY`, so a dry run reports the same deliver-vs-skip decisions a real quench would make. The `Insert/Update/Delete` CASCADE-FK check (above) only considers deliveries whose gate is currently passing -- a `Delete` variant that's gated off this run can't abort the deployment over a CASCADE FK it will never execute.
 
 See [Schema Packages -- Multiple Deliveries](schema-packages.md#multiple-deliveries) for the JSON shape, the three common gating patterns, and the delete-overlap warning for multi-delivery tables that mix `Insert/Update/Delete` with overlapping `MergeFilter`s.
 
