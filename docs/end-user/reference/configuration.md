@@ -922,7 +922,7 @@ statement, naming it.
 | A column the package no longer declares | dropped `INSTANT`, then `INPLACE, LOCK=NONE` |
 | A column whose definition changes | `INSTANT`, then `INPLACE, LOCK=NONE` (a `VARCHAR` widened within its length class is instant on MariaDB; a type change needs the MariaDB 11.2 copy) |
 | A new index, or one built again because it changed, and an index dropped | `INPLACE, LOCK=NONE` |
-| A table whose `RebuildPolicy` sets `OnOrderMismatch`, rebuilt only because its columns are out of order | its columns are moved into order in one statement (`MODIFY COLUMN … AFTER`), instant on MariaDB 10.4 and later, instead of the rebuild. A table with a generated column, and a system-versioned table, is still rebuilt |
+| A table whose `RebuildPolicy` sets `OnOrderMismatch`, rebuilt only because its columns are out of order | its columns are moved into order in one statement (`MODIFY COLUMN … AFTER`), instant on MariaDB 10.4 and later, instead of the rebuild. A table with a generated column is still rebuilt; a system-versioned table (MariaDB) is not moved in place either, and the rebuild it would need is [refused](#when-schemaquench-refuses), so the deploy stops |
 
 The [Deployment Summary](deployment-summary-report.md#details) records `instant`, `online` (`INPLACE, LOCK=NONE`) or
 `unavailable`. Under `WhatIf` the preview shows each statement with its position and the forms it would ask for, and
