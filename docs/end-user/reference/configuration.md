@@ -221,7 +221,7 @@ The path can be absolute or relative to the current working directory. A file na
 
 A mistyped setting is otherwise invisible. `Target:Sever` binds nothing, so the run proceeds exactly as though you had never set it -- and a deployment that silently ignores half your configuration is worse than one that refuses to start.
 
-Each tool therefore checks the settings it was given against the settings it actually reads, and warns about anything it does not recognize:
+Each tool therefore checks the settings it was given against the settings it actually reads, and warns about any key it does not recognize inside a section it reads (`Target:`, `Source:`, `ShouldCast:` and the like):
 
 ```
 WARN  Configuration key 'Target:Sever' is not read by SchemaQuench and will have no effect. Check for a typo.
@@ -229,9 +229,10 @@ WARN  Configuration key 'Target:Sever' is not read by SchemaQuench and will have
 
 It covers every configuration source -- settings file, `SmithySettings_` environment variables, and `--Key=value` overrides on the command line all land in the same configuration and are all checked. A bare switch the tool does not recognize, such as `--NoSuchSwitch`, is stricter: it stops the run before anything happens (`Not recognized: … Nothing was run.`, exit code `2`).
 
-Three things are deliberately **not** reported:
+Four things are **not** reported:
 
-- **Sections the tool does not own.** SchemaQuench says nothing about a `Source:` section, and neither Tongs tool comments on `Target:`. A file may serve more than one tool, or carry settings for a version you have not installed yet.
+- **Top-level keys.** A key outside any section, such as `MaxThreads` or `WhatIfONLY`, is not checked, so a misspelling of one (`MaxThread`) is silently ignored. Every SchemaShears setting is top-level, so none of them is checked. Spell these carefully.
+- **Sections the tool does not own.** SchemaQuench says nothing about a `Source:` section. Both Tongs tools read `Target:` too (each connection key falls back to its `Target:` twin), so they do report a mistyped `Target:` key. A file may serve more than one tool, or carry settings for a version you have not installed yet.
 - **Open sections**, where you choose the names: `ScriptTokens`, `Target:ConnectionProperties`, `Source:ConnectionProperties`, `Target:TemplateTargets`, `FolderMapping`, and `LogHygiene`. Anything beneath these is your value, not a setting name (`LogHygiene` checks its own four keys itself -- see [Tuning the scrubbing](#tuning-the-scrubbing)).
 - **Array elements** such as `Target:Databases:0`.
 
