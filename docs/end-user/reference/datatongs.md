@@ -395,7 +395,7 @@ When a column is excluded from extraction, DataTongs logs a warning naming the t
 
 ### MariaDB
 
-MariaDB uses the MySQL delivery path with the same behaviors as above, except that DECIMAL / NUMERIC values are written as JSON numbers rather than strings. One operational difference: MariaDB's default `max_allowed_packet` is smaller than MySQL 8's 64&nbsp;MB. Because each table's data is delivered as a single JSON payload, delivering a large table can exceed that limit and fail with `Error submitting <N>MB packet; ensure 'max_allowed_packet' is greater than <N>MB`. Raise the server's `max_allowed_packet` (for example `--max-allowed-packet=64M`, or the equivalent in `my.cnf`) to accommodate your largest table's row set.
+MariaDB uses the MySQL delivery path with the same behaviors as above, except that DECIMAL / NUMERIC values are written as JSON numbers rather than strings. One operational difference: each table's data is delivered as a single JSON payload, so delivering a large table can exceed MariaDB's `max_allowed_packet` and fail with `Error submitting <N>MB packet; ensure 'max_allowed_packet' is greater than <N>MB`. Raise the server's `max_allowed_packet` (for example `--max-allowed-packet=64M`, or the equivalent in `my.cnf`) to accommodate your largest table's row set. A MariaDB 10.2–10.5 target, or a patch whose `JSON_TABLE` misreads strings, takes inlined rows in chunks of 50 instead, so a single packet there holds one chunk.
 
 ---
 
@@ -611,7 +611,7 @@ See [Schema Packages -- DataDelivery](schema-packages.md#datadelivery) for the f
 
 ## Schema-Template Data Extraction
 
-Schema templates need per-iteration data delivery -- each tenant gets the same reference data, scaffolded from a canonical source schema. DataTongs extracts data scoped to a single source schema and writes content files and MERGE scripts that use `{{SchemaName}}` as the destination schema reference, so SchemaQuench can resolve it per iteration at deploy time. The common use: extract seed data from a canonical tenant schema so every future onboarding starts from the same known state.
+Schema templates need per-iteration data delivery -- each tenant gets the same reference data, scaffolded from a canonical source schema. DataTongs extracts data scoped to a single source schema and writes content files and merge scripts that use `{{SchemaName}}` as the destination schema reference, so SchemaQuench can resolve it per iteration at deploy time. The common use: extract seed data from a canonical tenant schema so every future onboarding starts from the same known state.
 
 ### Activation
 
