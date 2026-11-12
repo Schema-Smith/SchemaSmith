@@ -66,7 +66,7 @@ A complete `DataTongs.settings.json`:
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `Source:Platform` | string | _(required)_ | One of `"SqlServer"`, `"PostgreSQL"`, `"MySQL"`, or `"MariaDb"`. Selects the script generator. |
+| `Source:Platform` | string | _(required, or its `Target:Platform` twin)_ | One of `"SqlServer"`, `"PostgreSQL"`, `"MySQL"`, or `"MariaDb"`. Selects the script generator. |
 | `Source:Server` | string | _(required)_ | Database server hostname or IP. |
 | `Source:Port` | string | platform default | TCP port. SQL Server `1433`, PostgreSQL `5432`, MySQL `3306`. |
 | `Source:User` | string | _(empty)_ | Login username. SQL Server allows blank for Windows authentication. |
