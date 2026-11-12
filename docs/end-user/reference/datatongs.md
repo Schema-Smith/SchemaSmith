@@ -67,7 +67,7 @@ A complete `DataTongs.settings.json`:
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `Source:Platform` | string | _(required, or its `Target:Platform` twin)_ | One of `"SqlServer"`, `"PostgreSQL"`, `"MySQL"`, or `"MariaDb"`. Selects the script generator. |
-| `Source:Server` | string | _(required)_ | Database server hostname or IP. |
+| `Source:Server` | string | _(required, or its `Target:Server` twin)_ | Database server hostname or IP. |
 | `Source:Port` | string | platform default | TCP port. SQL Server `1433`, PostgreSQL `5432`, MySQL `3306`. |
 | `Source:User` | string | _(empty)_ | Login username. SQL Server allows blank for Windows authentication. |
 | `Source:Password` | string | _(empty)_ | Login password. |
@@ -76,7 +76,7 @@ A complete `DataTongs.settings.json`:
 
 Each connection key falls back to its `Target:` twin when the `Source:` key is absent -- `Platform`, `Server`, `Port`, `User`, `Password`, `IntegratedSecurity`, and `ConnectionProperties` -- so one settings file can point SchemaQuench and DataTongs at the same server. `Source:CompatEncoding` falls back to `Target:CompatEncoding` the same way.
 
-The `--ConnectionString` switch bypasses all `Source` settings and passes the provided value directly to the platform-appropriate driver. `Source:Platform` is still required so the right script generator is used.
+The `--ConnectionString` switch bypasses all `Source` settings and passes the provided value directly to the platform-appropriate driver. `Source:Platform` (or its `Target:Platform` twin) is still required so the right script generator is used.
 
 A source below the [supported engine floor](schemaquench.md#engine-version-compatibility) is refused before anything is extracted, naming the detected version.
 
