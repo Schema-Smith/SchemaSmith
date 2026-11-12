@@ -384,9 +384,13 @@ public sealed class MySqlVariableDescriptor(Platform platform, int serverMajorVe
                 .Select(r => new CapturedSetting(Kind, r[0], r[1], r[2] == "COMPILED" || (r[2] == "DYNAMIC" && HasSessionScope(cmd, r[0])),
                     MachineIdentity.Contains(r[0])))
                 .ToList();
+        // MariaDB says where each global value came from. A COMPILE-TIME value can still differ from DEFAULT_VALUE (one
+        // derived from another variable, or spelled differently), and an AUTO one is sized by the server, so only a value
+        // from an option file, the command line or SET GLOBAL is somebody's choice -- and then only where it is not the default.
         if (platform == Platform.MariaDb)
-            return SettingSql.Rows(cmd, "SELECT LOWER(VARIABLE_NAME), GLOBAL_VALUE, DEFAULT_VALUE FROM information_schema.SYSTEM_VARIABLES WHERE GLOBAL_VALUE IS NOT NULL")
-                .Select(r => new CapturedSetting(Kind, r[0], r[1], r[2] == null || SettingValueComparer.Boolish(r[1], r[2]), MachineIdentity.Contains(r[0])));
+            return SettingSql.Rows(cmd, "SELECT LOWER(VARIABLE_NAME), GLOBAL_VALUE, DEFAULT_VALUE, GLOBAL_VALUE_ORIGIN FROM information_schema.SYSTEM_VARIABLES WHERE GLOBAL_VALUE IS NOT NULL")
+                .Select(r => new CapturedSetting(Kind, r[0], r[1],
+                    r[3] is "COMPILE-TIME" or "AUTO" || r[2] == null || SettingValueComparer.Boolish(r[1], r[2]), MachineIdentity.Contains(r[0])));
         return SettingSql.Rows(cmd, "SHOW GLOBAL VARIABLES").Select(r => new CapturedSetting(Kind, r[0], r[1], true, MachineIdentity.Contains(r[0])));
     }
 }
