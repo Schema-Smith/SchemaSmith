@@ -48,11 +48,21 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
 | `Target:Server` | string | _(required)_ | Database server hostname or IP. |
-| `Target:Port` | string | platform default | TCP port. SQL Server `1433`, PostgreSQL `5432`, MySQL `3306`. |
+| `Target:Port` | string | platform default | TCP port. SQL Server `1433`, PostgreSQL `5432`, MySQL `3306`, MariaDB `3306`. |
 | `Target:User` | string | _(empty)_ | Login username. SQL Server allows blank for Windows auth. |
 | `Target:Password` | string | _(empty)_ | Login password. |
+| `Target:IntegratedSecurity` | bool | `false` | **SQL Server only.** Set to `true` to force Windows Authentication, superseding any configured `User`/`Password`. See [Individual connection settings](configuration.md#individual-connection-settings). |
 | `Target:SecondaryServers` | string or array | _(empty)_ | **SQL Server only.** Additional servers (Availability Group secondaries) to quench in parallel with the primary: a JSON array, one server per item (`["replica-1,14330", "replica-2"]`), or a comma-separated string, where an all-digit item is the port of the server before it. See [Secondary Servers](#secondary-servers). |
 | `Target:ConnectionProperties` | object | `{}` | Arbitrary key-value pairs appended to the connection string. Platform-specific keys -- see the [Configuration Reference](configuration.md#connection-configuration). |
+
+### Target Scope Settings
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `Target:Templates` | string array | `[]` | Run only these templates. Empty array means no filter -- all templates run. See [Target](#target). |
+| `Target:Databases` | string array | `[]` | Run only against these databases. Empty array means no filter -- all discovered databases run. See [Target](#target). |
+| `Target:Schemas` | string array | `[]` | **SQL Server and PostgreSQL**, where schema templates apply. Run only against these schema names. Empty array means no filter -- all discovered schemas run. Applies only to schema-template iterations. See [Target](#target). |
+| `Target:TemplateTargets` | object | `{}` | Per-template target override, keyed by template name: supplies that template's databases (and schemas) for this environment in place of its `DatabaseIdentificationScript` / `SchemaIdentificationScript`. See [TemplateTargets](#templatetargets). |
 
 ### Behavior Settings
 
@@ -61,21 +71,59 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | `SchemaPackagePath` | string | _(required)_ | Path to the schema package directory or ZIP file. |
 | `WhatIfONLY` | bool | `false` | Dry-run mode. Generates SQL without executing. The `--WhatIf` switch turns it on for one run. |
 | `KindleTheForge` | bool | `true` | Deploy SchemaSmith helper procedures and the migration tracking table to each target database before quenching. |
+| `ForceReKindle` | bool | `false` | Re-deploy SchemaSmith's helper procedures even when the in-database kindle stamp is current. The `--ForceReKindle` switch turns it on for one run. See [ForceReKindle](#forcerekindle). |
 | `UpdateTables` | bool | `true` | Apply table structure changes (columns, indexes, constraints, foreign keys) from the schema package. |
-| `DropTablesRemovedFromProduct` | bool | `true` | Drop tables that exist in the database but aren't defined in the schema package. Also settable as a `Product.json` property — see [DropTablesRemovedFromProduct](#droptablesremovedfromproduct). |
-| `PreventDrop` | bool | `false` | Environment-wide no-drop protection: when `true`, the drop-by-absence passes listed under [PreventDrop](#preventdrop) are suppressed for the run, and it completes normally, itemizing the withheld table, column, foreign-key, constraint, statistic and index drops in the deployment summary's `preventDrop` manifest. Transient drop-then-recreate for a declared change is unaffected. See [PreventDrop](#preventdrop). |
-| `DropColumnsRemovedFromProduct` | bool | `true` | Drop columns that exist in the database but aren't defined in the schema package. Resolves across a four-tier cascade (env → product → template → table) with explicit-false-sticky semantics. See [DropColumnsRemovedFromProduct](#dropcolumnsremovedfromproduct). |
+| `OnlineApply` | string | `Off` | `Off`, `Prefer` or `Require`: whether a deploy uses the engine's lower-lock forms of index and column changes. A table's own `OnlineApply` overrides it. See [OnlineApply](configuration.md#onlineapply). |
+| `OnlineApplyMaxDuration` | int | _(unset)_ | **SQL Server only.** Whole minutes, 1 to 10080. From SQL Server 2019, makes each new index a resumable build. Unset, nothing is resumable. See [OnlineApplyMaxDuration](configuration.md#onlineapplymaxduration). |
+| `RebuildPolicyMode` | string | _(unset)_ | The environment tier of the rebuild policy: `NEVER`, `ALWAYS` or `THRESHOLD`, deciding when SchemaQuench rebuilds a table instead of altering it in place. A product, template or table that declares its own policy replaces it whole. With no policy declared anywhere, tables are altered in place. See [RebuildPolicy](configuration.md#rebuildpolicy). |
+| `RebuildPolicyThreshold` | int | _(unset)_ | With `THRESHOLD`, the number of pending column modifications that triggers a rebuild. |
+| `RebuildPolicyOnOrderMismatch` | bool | _(unset)_ | `true` also rebuilds a table whose deployed column order has drifted from the package. Composes with any mode. |
+| `SystemVersioningAlterHistory` | string | _(unset)_ | **MariaDB only.** `KEEP` lets a column change on a system-versioned table proceed, and rewrites the stored history to match. Unset, MariaDB refuses the change. See [SystemVersioningAlterHistory](configuration.md#systemversioningalterhistory). |
 | `DeliverData` | bool | `true` | Run the per-table `DataDelivery` step and the `TableData`-slot scripts. Set to `false` to ship a structure-only deployment that leaves reference data untouched -- pairs naturally with `UpdateTables: true` for "deploy schema, skip data" pipelines. |
 | `RunScriptsTwice` | bool | `false` | Run object scripts twice to verify idempotency. A CI/testing tool. |
 | `Target:SkipUnchangedObjects` | bool | `true` | Do not re-run an object script whose text is unchanged since it last applied and whose object the server still renders as it was left. A hand change on the server, an edited script, an `[ALWAYS]` name or a `-- SchemaSmith: AlwaysRun` comment runs it again. The key lives under `Target`; a top-level `SkipUnchangedObjects` is not read. See [Unchanged Object Scripts](#unchanged-object-scripts). |
+| `Target:UnsupportedFeaturePolicy` | string | `warn` | What to do when the package declares a feature the detected target version cannot support. `warn` emits the object without the unsupported aspect and records it in the deployment summary; `fail` aborts the run with a message naming the feature and the version it requires. See [Version-adaptive code generation](#version-adaptive-code-generation). |
+| `Target:CompatEncoding` | string | `auto` | **SQL Server only.** `auto`, `legacy` (XML) or `modern` (JSON): how SchemaSmith hands its own parsed schema model to SQL Server. `auto` picks from the detected compatibility level and server version; the override is a diagnostic escape hatch, not a tuning knob. See [Forcing the encoding](#forcing-the-encoding). |
 | `TrackRunOnceMigrations` | bool | `true` | Track run-once migration scripts. When `false`, all scripts run on every deployment. |
 | `PruneObsoleteMigrationTracking` | bool | `true` | Remove tracking entries for scripts no longer in the package. When `Target` filters are active, prune is restricted to the targeted scope. See [PruneObsoleteMigrationTracking](#pruneobsoletemigrationtracking). |
 | `CheckpointDirectory` | string | `""` | Directory for checkpoint files used by `--ResumeQuench`. When blank, defaults to a per-platform temp location. See [Checkpoint and Resume](#checkpoint-and-resume). |
 | `MaxThreads` | int | `10` | Maximum parallel work units. Covers both database-level and schema-level iterations. Range 1--20; a value outside it, or one that is not a whole number, falls back to `10`. See [MaxThreads](#maxthreads). |
-| `VerboseLogging` | bool | `false` | Include informational output from user scripts in the progress log: `PRINT` and low-severity messages on SQL Server, `RAISE NOTICE` on PostgreSQL. SchemaSmith's own progress messages always appear. SchemaQuench does not log informational messages from MySQL or MariaDB scripts, so the setting has no effect there. |
 | `ScriptTokens` | object | `{}` | Config-level overrides for product script tokens. |
 
+### Drop Control Settings
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `PreventDrop` | bool | `false` | Environment-wide no-drop protection: when `true`, the drop-by-absence passes listed under [PreventDrop](#preventdrop) are suppressed for the run, and it completes normally, itemizing the withheld table, column, foreign-key, constraint, statistic and index drops in the deployment summary's `preventDrop` manifest. Transient drop-then-recreate for a declared change is unaffected. See [PreventDrop](#preventdrop). |
+| `DropTablesRemovedFromProduct` | bool | `true` | Drop tables that exist in the database but aren't defined in the schema package. Also settable as a `Product.json` property — see [DropTablesRemovedFromProduct](#droptablesremovedfromproduct). |
+| `DropColumnsRemovedFromProduct` | bool | `true` | Drop columns that exist in the database but aren't defined in the schema package. Resolves across a four-tier cascade (env → product → template → table) with explicit-false-sticky semantics. See [DropColumnsRemovedFromProduct](#dropcolumnsremovedfromproduct). |
+| `DropForeignKeysRemovedFromProduct` | bool | `true` | Drop foreign keys that exist in the database but no longer appear in the table JSON. Four-tier cascade, explicit-false-sticky. See [DropForeignKeysRemovedFromProduct](#dropforeignkeysremovedfromproduct). |
+| `DropCheckConstraintsRemovedFromProduct` | bool | `true` | Drop table-level CHECK constraints that exist in the database but no longer appear in the table JSON. Four-tier cascade, explicit-false-sticky. See [DropCheckConstraintsRemovedFromProduct](#dropcheckconstraintsremovedfromproduct). |
+| `DropExcludeConstraintsRemovedFromProduct` | bool | `true` | **PostgreSQL only.** Drop EXCLUDE constraints that exist in the database but no longer appear in the table JSON. Four-tier cascade, explicit-false-sticky. See [DropExcludeConstraintsRemovedFromProduct](#dropexcludeconstraintsremovedfromproduct). |
+| `DropStatisticsRemovedFromProduct` | bool | `true` | **SQL Server and PostgreSQL.** Drop user-created statistics objects that exist in the database but no longer appear in the table JSON. Four-tier cascade, explicit-false-sticky. See [DropStatisticsRemovedFromProduct](#dropstatisticsremovedfromproduct). |
+| `DropIndexesRemovedFromProduct` | bool | `true` | Drop a product-owned index (one SchemaSmith created and tracks) that no longer appears in the table JSON. Four-tier cascade, explicit-false-sticky. See [DropIndexesRemovedFromProduct](#dropindexesremovedfromproduct). |
+| `DropUnknownIndexes` | bool | `false` | Drop indexes on managed tables that aren't defined in the schema package -- out-of-band indexes SchemaSmith never created. Three-tier cascade (env → product → template), explicit-false-sticky. See [DropUnknownIndexes](configuration.md#dropunknownindexes). |
+| `DropSchemaBoundDependents` | bool | `false` | **SQL Server only.** Drop a `SCHEMABINDING` view or function that is blocking a column change, so the change can be applied and the module recreated afterwards. Three-tier cascade (env → product → template), explicit-false-sticky. See [DropSchemaBoundDependents](configuration.md#dropschemabounddependents). |
+| `DropPeriodsRemovedFromProduct` | bool | _(unset)_ | **MariaDB only.** `true` drops an application-time period that the package no longer declares. Unset, the period stays: this flag defaults off, unlike most of the family. A table's own `DropPeriodsRemovedFromProduct` overrides it. See [DropPeriodsRemovedFromProduct](configuration.md#dropperiodsremovedfromproduct). |
+| `DropEventsRemovedFromProduct` | bool | `false` | **MySQL and MariaDB.** Drop a scheduled event that exists on the server but no longer appears in the package. Environment-level only: an event has no product, template or table tier. See [DropEventsRemovedFromProduct](configuration.md#dropeventsremovedfromproduct). |
+
+### Logging and Diagnostics Settings
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `VerboseLogging` | bool | `false` | Include informational output from user scripts in the progress log: `PRINT` and low-severity messages on SQL Server, `RAISE NOTICE` on PostgreSQL. SchemaSmith's own progress messages always appear. SchemaQuench does not log informational messages from MySQL or MariaDB scripts, so the setting has no effect there. |
+| `WriteDebugSql` | bool | `false` | Write the SQL of each step SchemaQuench runs to `.sql` files in `ArtifactPath`. The files hold real values, for local debugging only. The `--WriteDebugSql` switch turns it on for one run. See [Debug SQL output](#debug-sql-output). |
+| `ArtifactPath` | string | _(unset)_ | Directory where `WriteDebugSql` writes the files. Unset, the current working directory; a relative path is resolved from it. The directory is created if it does not exist. See [ArtifactPath](configuration.md#artifactpath). |
+| `FailureContextLines` | int | `25` | How many lines of lead-up context each failure captures in `SchemaQuench - Failures.log`. `0` disables context capture; the roll-up still lists the failed scopes and their errors. See [Failure triage roll-up](configuration.md#failure-triage-roll-up). |
+| `BottleneckThresholdMs` | int | `30000` | The milliseconds an individual slot measurement must exceed to be listed as a bottleneck in the deployment summary. See [Tuning bottleneck detection](deployment-summary-report.md#tuning-bottleneck-detection). |
+| `ExitNonZeroOnWarning` | bool | `false` | Exit `1` instead of `0` when the run finished but logged a warning, for pipelines that treat warnings as failures. Never lowers or replaces a failure code. The `--ExitNonZeroOnWarning` switch turns it on for one run. See [Exit Codes](#exit-codes). |
+| `LogHygiene` | object | _(unset)_ | Tunes how sensitive values are kept out of the logs, with the `LogTokens`, `ScrubTokens`, `ScrubPatterns` and `AllowTokens` keys. Unset, the default scrubbing applies. See [Tuning the scrubbing](configuration.md#tuning-the-scrubbing). |
+
+`ScrubArtifacts` is deprecated and does nothing; a settings file that still carries it gets a warning. See [ScrubArtifacts](configuration.md#scrubartifacts).
+
 ### Full settings file example
+
+Every setting SchemaQuench reads. Apart from `Server`, `ConnectionProperties` and `SchemaPackagePath`, each is shown at its default, and a setting shown as `""` is not set, so SchemaQuench applies its default behavior.
 
 ```json
 {
@@ -84,6 +132,7 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
     "Port": "",
     "User": "",
     "Password": "",
+    "IntegratedSecurity": false,
     "SecondaryServers": "",
     "ConnectionProperties": {
       "TrustServerCertificate": "True"
@@ -91,24 +140,56 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
     "Templates": [],
     "Databases": [],
     "Schemas": [],
-    "SkipUnchangedObjects": true
+    "TemplateTargets": {},
+    "SkipUnchangedObjects": true,
+    "UnsupportedFeaturePolicy": "warn",
+    "CompatEncoding": ""
   },
-  "WhatIfONLY": false,
   "SchemaPackagePath": "./MyProduct",
+  "WhatIfONLY": false,
   "KindleTheForge": true,
+  "ForceReKindle": false,
   "UpdateTables": true,
-  "DropTablesRemovedFromProduct": true,
-  "DropColumnsRemovedFromProduct": true,
+  "OnlineApply": "Off",
+  "OnlineApplyMaxDuration": "",
+  "RebuildPolicyMode": "",
+  "RebuildPolicyThreshold": "",
+  "RebuildPolicyOnOrderMismatch": "",
+  "SystemVersioningAlterHistory": "",
   "DeliverData": true,
   "RunScriptsTwice": false,
   "TrackRunOnceMigrations": true,
   "PruneObsoleteMigrationTracking": true,
   "CheckpointDirectory": "",
   "MaxThreads": 10,
+  "ScriptTokens": {},
+  "PreventDrop": false,
+  "DropTablesRemovedFromProduct": true,
+  "DropColumnsRemovedFromProduct": true,
+  "DropForeignKeysRemovedFromProduct": true,
+  "DropCheckConstraintsRemovedFromProduct": true,
+  "DropExcludeConstraintsRemovedFromProduct": true,
+  "DropStatisticsRemovedFromProduct": true,
+  "DropIndexesRemovedFromProduct": true,
+  "DropUnknownIndexes": "",
+  "DropSchemaBoundDependents": "",
+  "DropPeriodsRemovedFromProduct": "",
+  "DropEventsRemovedFromProduct": false,
   "VerboseLogging": false,
-  "ScriptTokens": {}
+  "WriteDebugSql": false,
+  "ArtifactPath": "",
+  "FailureContextLines": 25,
+  "BottleneckThresholdMs": 30000,
+  "ExitNonZeroOnWarning": false,
+  "LogHygiene": {
+    "LogTokens": true
+  }
 }
 ```
+
+`DropUnknownIndexes` and `DropSchemaBoundDependents` default to `false` but are shown as `""` on purpose. An explicit `false` at the environment tier is sticky: it locks the flag off for every product and template, so a product that turns it on is overruled. Leaving it unset lets them decide.
+
+Settings that apply to one engine or a subset: `Target:IntegratedSecurity`, `Target:SecondaryServers`, `Target:CompatEncoding`, `OnlineApplyMaxDuration` and `DropSchemaBoundDependents` are SQL Server only; `Target:Schemas` and `DropStatisticsRemovedFromProduct` apply on SQL Server and PostgreSQL; `DropExcludeConstraintsRemovedFromProduct` is PostgreSQL only; `DropEventsRemovedFromProduct` applies on MySQL and MariaDB; `DropPeriodsRemovedFromProduct` and `SystemVersioningAlterHistory` are MariaDB only. `VerboseLogging` has no effect on MySQL or MariaDB.
 
 For environment variable mapping, see [Configuration Reference -- Environment Variables](configuration.md#environment-variables).
 
