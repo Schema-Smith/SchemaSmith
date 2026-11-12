@@ -1307,7 +1307,7 @@ SchemaQuench remembers what it has already run, so you never have to worry about
 | `ScriptPath` | The relative path of the script within the template. |
 | `template_name` | The template the script ran under. |
 | `schema_name` | The per-iteration schema for a schema template. Empty for a regular template, and always empty on MySQL and MariaDB, where schema templates do not apply. |
-| `QuenchDate` | Timestamp when the script was executed. Named `CompletedAt` on MySQL and MariaDB. |
+| `QuenchDate` | Timestamp when the script was executed. Before 2.5 it was named `CompletedAt` on MySQL and MariaDB; the next deploy renames it, keeping its values. |
 
 Those five identity columns -- `ProductName`, `QuenchSlot`, `ScriptPath`, `template_name`, and `schema_name` -- are what make a tracking row unique, so the same script is recorded separately per template and per tenant schema. SQL Server and PostgreSQL enforce them as the primary key. MySQL and MariaDB carry an auto-increment `Id` primary key instead and enforce the same five columns as a unique index, with prefix lengths on the three longest.
 

@@ -269,7 +269,7 @@ The array is an explicit replacement, not a merge. The moment you provide `Scrip
 }
 ```
 
-In this example, the team kept the standard folders but added two extra slots (`BetweenTablesAndKeys`, `AfterTablesScripts`) that aren't part of the default set. They can write migration scripts that run after the table structure exists but before foreign keys, or after the table structure but before triggers, without writing any extra glue.
+In this example, the team kept the standard folders but added two extra slots (`BetweenTablesAndKeys`, `AfterTablesScripts`) that aren't part of the default set. They can write migration scripts that run after the table structure exists but before its indexes and foreign keys, or once the tables, indexes and triggers are in place but before table data and foreign keys, without writing any extra glue.
 
 ### Why this matters
 
@@ -420,8 +420,8 @@ Tables are always loaded from `Tables/` regardless of platform. SQL Server adds 
 | `Before` | One-time migration scripts that run after initial object creation and new table creation, but before table modifications. Use for data preparation that must happen before columns are altered or dropped. Sequential, tracked. |
 | `Objects` | Database objects that may have cross-dependencies (schemas, types, catalogs, functions, views, procedures). The retry loop resolves creation order automatically. |
 | `BetweenTablesAndKeys` | Migration scripts that need the table structure to exist but must run before foreign key constraints are enforced. Typical use: populating a new NOT NULL column before FKs block the data load. Sequential, tracked. |
-| `AfterTablesScripts` | Migration scripts that depend on the final table and key structure but must run before triggers are deployed. Sequential, tracked. |
-| `AfterTablesObjects` | Triggers, DDL triggers, rules, and views that depend on the completed table structure. Dependency retry loop. |
+| `AfterTablesScripts` | Migration scripts that run once the tables and their indexes and constraints are in place and the `AfterTablesObjects` have had their first pass, but before table data and foreign keys. Sequential, tracked. |
+| `AfterTablesObjects` | Triggers, DDL triggers, rules, and views that depend on the completed table structure. Deployed right after the tables, before `BetweenTablesAndKeys` scripts; an object that fails there is retried after `AfterTablesScripts`. Dependency retry loop. |
 | `TableData` | Data population scripts (MERGE statements, INSERT/UPDATE seeds). Run after triggers are deployed but before foreign key constraints are applied. Dependency retry loop. |
 | `After` | Final migration scripts. Run after all database objects and data are deployed. Sequential, tracked. |
 | `None` | Parked. The folder is declared and its scripts are loaded and token-resolved, but no execution pass selects this slot, so nothing in it runs and nothing is tracked. A way to keep a folder in the package without deploying it. |
@@ -499,8 +499,8 @@ MyProduct/
     domaintypes.postgresql.schema             PostgreSQL packages
     events.mysql.schema                       MySQL packages
     events.mariadb.schema                     MariaDB packages
-  Before Product/                   SQL scripts run before all templates
-  After Product/                    SQL scripts run after all templates
+  Before Product/                   SQL scripts run before all templates (when Product.json ScriptFolders declares it)
+  After Product/                    SQL scripts run after all templates (when Product.json ScriptFolders declares it)
   Templates/
     TemplateName/
       Template.json                 Template configuration (required)
