@@ -517,10 +517,10 @@ You have a production incident. Two stored procedures need to go out now -- not 
 Generate your manifest from the commit range that holds the fix:
 
 ```bash
-git diff --name-only <before-sha> <after-sha> -- MyProduct/ > patch.manifest
+git diff --name-only --diff-filter=d --relative=MyProduct/ <before-sha> <after-sha> > patch.manifest
 ```
 
-This produces a list of every file changed between those two commits inside the product folder -- exactly what belongs in the patch. No hand-editing a file list; the VCS tells you what changed.
+This produces a list of every file changed or added between those two commits inside the product folder, each relative to the product root the manifest is read against -- exactly what belongs in the patch. `--diff-filter=d` leaves out deleted files, which a manifest cannot name. No hand-editing a file list; the VCS tells you what changed.
 
 ### Build the patch
 
