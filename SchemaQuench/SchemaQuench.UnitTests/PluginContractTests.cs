@@ -107,7 +107,7 @@ public class PluginContractTests
         Assert.That(plugin, Is.EqualTo(reference));
     }
 
-    // Rule 36's structural half: it runs and reads the tools, through skills only.
+    // It runs and reads the tools, through skills only.
     [Test]
     public void ThePluginIsSkillsOnly()
     {
@@ -143,12 +143,36 @@ public class PluginContractTests
         Assert.That((string)manifest["version"], Is.EqualTo(version));
     }
 
-    // DoD 4: the public plugin names no other product.
+    // The words and two-word phrases the plugin's prose may not use, as SHA-256 hashes of their lower-case form, so the
+    // test does not print them itself.
+    private static readonly HashSet<string> OtherProductWords =
+    [
+        "a03407433890e7df44898f7a49665c320cf54af591e9b824a7ec90acf53c4212",
+        "0e6cd7d000dec8a155903a2c5f5a6f46496e51d883e5528b05cae12f7dc4c578",
+        "e48e5a4bf5cd28be6c146d461cecfa30c425d5b87c549578fe571f619913a225",
+        "a33a54a73112eee8b33a5d97c267b922510cb98ac105420cd564f67e142009ee",
+        "bcbe7ab642d1db0be5fa96318f456c9a1b086e1a74389634b9d167201e931473",
+        "07ed400759a0f606a8b5bfa84712aabe7d1b1c45cb6536c8a5727446b6647b84",
+        "bcdcf7f9e899672bd8572850b93691d590f9803e0b9865c7d9519c7c3182f2a1",
+        "2b0a3d4f4cc41cb6fa4cfc8af42c57b3b7ef8805a3417cd8252da8e2616da09c",
+        "88244594c37c3a027d5b905f291f99db80e2059b53067d432f5a51001408abb0",
+    ];
+
+    private static string Sha256(string text) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(text)));
+
+    // The public plugin names no other product.
     [Test]
     public void TheProseNamesNoOtherProduct()
     {
-        var pattern = new Regex(@"\badd-ons?\b|SchemaForge|SchemaHammer|AskForge|paid tier|paid add|\bPro\b", RegexOptions.IgnoreCase);
-        var hits = AllProse().Where(p => pattern.IsMatch(p.Text)).Select(p => p.File).ToList();
+        var hits = AllProse().SelectMany(p =>
+            {
+                var words = Regex.Matches(p.Text.ToLowerInvariant(), @"[a-z0-9]+(?:-[a-z0-9]+)*").Select(m => m.Value).ToList();
+                return words.Concat(words.Zip(words.Skip(1), (a, b) => $"{a} {b}"))
+                    .Where(w => OtherProductWords.Contains(Sha256(w)))
+                    .Select(w => $"{p.File}: \"{w}\"");
+            })
+            .Distinct().ToList();
 
         Assert.That(hits, Is.Empty);
     }
