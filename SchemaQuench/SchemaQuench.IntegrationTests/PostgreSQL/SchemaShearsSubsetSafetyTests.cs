@@ -21,6 +21,8 @@ public class SchemaShearsSubsetSafetyTests : SchemaShearsSubsetSafetyTestsShared
         Config["Target:User"], Config["Target:Password"], Config["Target:Port"], ConnectionString.ReadProperties(Config, "Target:ConnectionProperties"));
     protected override string ProductPlatformFolder => "PostgreSQL";
     protected override string KeptTableManifestEntry => "Templates/Main/Tables/public.ShearsKeep.json";
+    protected override string CompletedCountSql(string scriptPath) =>
+        $"SELECT COUNT(*) FROM \"SchemaSmith\".\"CompletedMigrationScripts\" WHERE \"ProductName\" = 'ShearsSource' AND \"ScriptPath\" = '{scriptPath}'";
     protected override string TableExistsSql(string tableName) =>
         $"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = 'public' AND table_name = '{tableName}'";
     protected override string DropTablesSql => @"

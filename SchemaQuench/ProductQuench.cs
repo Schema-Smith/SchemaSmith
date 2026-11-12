@@ -2345,7 +2345,8 @@ public class ProductQuench
             UpdateTables = _updateTables && template.Tables.Count > 0,
             DeliverData = _deliverData,
             TrackRunOnceMigrations = _trackRunOnceMigrations,
-            PruneObsoleteMigrationTracking = _pruneObsoleteMigrationTracking,
+            // A patch carries only some of the product's migrations, so pruning by absence would erase the rest's history.
+            PruneObsoleteMigrationTracking = _pruneObsoleteMigrationTracking && _product.PruneObsoleteMigrationTracking != false,
             ForceReKindle = _forceReKindle,
             Destructive = _destructive,
             Drops = new DropPolicy(dropRemovedTables, dropRemovedColumns, dropRemovedForeignKeys, dropRemovedCheckConstraints,

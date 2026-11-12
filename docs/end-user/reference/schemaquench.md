@@ -1889,7 +1889,7 @@ When `PruneObsoleteMigrationTracking` is `true` (the default), SchemaQuench remo
 
 When `false`, existing tracking entries are left alone regardless of what scripts are in the current package. This setting is relevant for partial-package deployments -- see [Partial-Package Deployments (Data Fixes)](#partial-package-deployments-data-fixes) for the full profile.
 
-This setting is ignored when `TrackRunOnceMigrations` is `false` (no tracking means no pruning).
+This setting is ignored when `TrackRunOnceMigrations` is `false` (no tracking means no pruning), and when the package's `Product.json` sets `PruneObsoleteMigrationTracking` to `false`, as every SchemaShears patch does.
 
 ### With Target scope
 

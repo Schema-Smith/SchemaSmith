@@ -45,6 +45,9 @@ public static class DropSuppressionStamp
             foreach (var flag in flags.Where(f => AppliesTo(f, platform)))
                 json[flag] = false;
         }
+        // A patch carries only some of the product's migration scripts; pruning the run-once record of every one it leaves
+        // out would make the next full deploy run them again. Not a drop category: no --AllowDrops turns it back on.
+        json["PruneObsoleteMigrationTracking"] = false;
 
         FileWrapper.GetFromFactory().WriteAllText(productJsonPath, json.ToString(Formatting.Indented));
     }

@@ -26,6 +26,17 @@ public class DropSuppressionStampTests
     [TearDown]
     public void TearDown() => Directory.Delete(_dir, recursive: true);
 
+    // A patch leaves out most of the product's migrations; pruning their run-once records would run them all again on the
+    // next full deploy. No drop category allows it.
+    [TestCase]
+    [TestCase("Tables", "Columns", "Indexes")]
+    public void Apply_AlwaysTurnsMigrationPruningOff(params string[] allowDrops)
+    {
+        DropSuppressionStamp.Apply(_productJson, allowDrops);
+
+        Assert.That(JObject.Parse(File.ReadAllText(_productJson))["PruneObsoleteMigrationTracking"]?.Value<bool>(), Is.False);
+    }
+
     [Test]
     public void Apply_EmptyAllowDrops_StampsAllSevenFlagsFalse()
     {

@@ -119,6 +119,11 @@ namespace Schema.Domain
         [JsonProperty(Order = 22)]
         public RebuildPolicy RebuildPolicy { get; set; }
 
+        [JsonProperty(Order = 23)]
+        [SchemaProperty(Description = "Optional. false keeps the run-once record of a migration script the package does not carry, " +
+                                      "even when the PruneObsoleteMigrationTracking setting is on. SchemaShears writes it into every patch.")]
+        public bool? PruneObsoleteMigrationTracking { get; set; }
+
         [JsonIgnore]
         public List<ProductFolder> BeforeFolders => ScriptFolders?.FindAll(f => f.QuenchSlot == ProductQuenchSlot.Before) ?? [];
 

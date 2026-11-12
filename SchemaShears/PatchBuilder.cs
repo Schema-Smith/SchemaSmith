@@ -41,6 +41,7 @@ public class PatchBuilder
 
         PatchPackageWriter.Write(includeSet, request.SourcePath, request.OutputPath);
         DropSuppressionStamp.Apply(Path.Join(request.OutputPath, "Product.json"), request.AllowDrops ?? Array.Empty<string>());
+        PatchTemplateOrder.Prune(request.OutputPath);
 
         if (request.Zip)
         {

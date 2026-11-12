@@ -21,6 +21,8 @@ public class SchemaShearsSubsetSafetyTests : SchemaShearsSubsetSafetyTestsShared
         Config["Target:User"], Config["Target:Password"], Config["Target:Port"], ConnectionString.ReadProperties(Config, "Target:ConnectionProperties"));
     protected override string ProductPlatformFolder => "SqlServer";
     protected override string KeptTableManifestEntry => "Templates/Main/Tables/dbo.ShearsKeep.json";
+    protected override string CompletedCountSql(string scriptPath) =>
+        $"SELECT COUNT(*) FROM SchemaSmith.CompletedMigrationScripts WHERE ProductName = 'ShearsSource' AND ScriptPath = '{scriptPath}'";
     protected override string TableExistsSql(string tableName) => $"SELECT CASE WHEN OBJECT_ID('dbo.{tableName}') IS NULL THEN 0 ELSE 1 END";
     protected override string DropTablesSql => @"
 DROP TABLE IF EXISTS [dbo].[ShearsRemovable];
