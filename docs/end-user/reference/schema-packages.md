@@ -1654,6 +1654,7 @@ SQL Server's answer is to allow **two capture instances per table** so a new one
 | A column dropped | No. It stays in the change table and captures NULL from then on. |
 | A computed column's expression changed | No. A captured computed column is always NULL, whatever its expression. |
 | A column option toggled: `NOT FOR REPLICATION`, `ROWGUIDCOL`, a `DataMaskFunction` | No. None of them is captured. |
+| A regular column turned into a computed one | No. A captured computed column is always NULL. |
 | A column added | Yes. Only a new instance captures it. |
 | A column replaced rather than altered: an identity added or removed, a column-set change, an `AnsiPadding` change, a computed column turned into a regular one | Yes. The replacement has a new position, which the old instance does not record, so it would capture NULL. |
 | `CdcFilegroup`, `CdcSupportsNetChanges` or `CdcIndexName` changed | Yes. Each is fixed per instance. |
@@ -1661,10 +1662,10 @@ SQL Server's answer is to allow **two capture instances per table** so a new one
 When a deploy rotates a tracked table it:
 
 1. Leaves CDC running throughout -- the column work does not interrupt capture.
-2. Creates a second capture instance covering the new column set, named `<schema>_<table>_2` (or the base `<schema>_<table>` if the surviving instance already carries the `_2` suffix).
+2. Creates a second capture instance covering the new column set, named `<schema>_<table>_2` when the instance it replaces has the base name `<schema>_<table>`, and the base name otherwise.
 3. Leaves the original instance and everything it has captured untouched, and names it in the deploy log along with the command to remove it.
 
-Rotation, and the two-instance checks below, apply only to a table that declares `"EnableCDC": true`. A tracked table that leaves `EnableCDC` out is neither rotated nor checked, so a column added to it is not captured.
+Rotation, and the two-instance checks below, apply only to a table that declares `"EnableCDC": true`. A tracked table that leaves `EnableCDC` out is neither rotated nor checked against the two-instance limit, so a column added to it is not captured; the type-change check below still covers it.
 
 On a deploy (not a `--WhatIf` preview), the same rotation happens whenever a tracked table's newest capture instance does not capture one of the table's columns, even when the deploy changed none. A column the instance still captures but the table no longer has is not a reason to rotate. That catches a column a previous deploy added but never got to capture -- because it stopped partway, say -- and an instance created before its computed columns existed.
 
@@ -1672,7 +1673,7 @@ On a deploy (not a `--WhatIf` preview), the same rotation happens whenever a tra
 
 > **Action required:** Retiring the old instance is your call, not SchemaSmith's -- only you know when your readers have drained it. Drop it with `EXEC sys.sp_cdc_disable_table @source_schema = N'<schema>', @source_name = N'<table>', @capture_instance = N'<name>'`.
 
-> **Warning:** Because the old instance occupies one of the two slots, a **second** change that rotates (see the table above) has nowhere to go until you drop it. SchemaSmith refuses that deploy, naming the tables at the limit and printing the `sp_cdc_disable_table` command to clear them, with placeholders for the schema, table and instance. A new column, or a changed `CdcFilegroup`, `CdcSupportsNetChanges` or `CdcIndexName`, is refused before any table is created or changed. A replaced column is refused later: before any existing column is altered or any key or index is dropped, but after new tables and columns are created, renames are applied, `Before` scripts run and tables removed from the product are dropped. A change that does not rotate goes ahead at the limit. Drop the drained instance and re-run. If a table's newest instance is missing columns while both slots are in use, the deploy warns instead, naming the table.
+> **Warning:** Because the old instance occupies one of the two slots, a **second** change that rotates (see the table above) has nowhere to go until you drop it. SchemaSmith refuses that deploy, naming the tables at the limit and printing the `sp_cdc_disable_table` command to clear them, with placeholders for the schema, table and instance. A new column, or a changed `CdcFilegroup`, `CdcSupportsNetChanges` or `CdcIndexName`, is refused before any table is created or changed. A replaced column is refused later: before any existing column is altered or any index or key over a changing column is dropped, but after new tables and columns are created, renames are applied, object scripts without query tokens and `Before` scripts run, temporal versioning is turned off on tables no longer declared temporal, and tables removed from the product are dropped. A change that does not rotate goes ahead at the limit. Drop the drained instance and re-run. If a table's newest instance is missing columns while both slots are in use, the deploy warns instead, naming the table.
 
 Setting `EnableCDC` to `false` disables capture on the table outright, which drops its capture instances and their history. That is a deliberate opt-out rather than a side effect of a schema change, so it takes an explicit `false`: a table that leaves `EnableCDC` out keeps whatever CDC it has, and SchemaTongs writes `EnableCDC` only for a tracked table.
 
