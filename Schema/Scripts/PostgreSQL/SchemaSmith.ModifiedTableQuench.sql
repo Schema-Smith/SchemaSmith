@@ -79,6 +79,15 @@ BEGIN
        AND t2."Schema" = tp."Schema"
        AND NULLIF(t2."OldName", '') = tp."TableName";
 
+    -- #613: ValidateTableOwnership pruned the rows whose name is no longer a table, but before the Before slot ran. A
+    -- Before script that turns an owned table into a same-named view (a table split) leaves a row that would drop the
+    -- view as a table, so the same test is applied again here, where drop-by-absence reads the set.
+    DELETE FROM temp_product_ownership tp
+      WHERE tp."IndexName" IS NULL
+        AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                         WHERE n.nspname = tp."Schema" AND c.relname = tp."TableName" AND c.relkind IN ('r', 'p'))
+        AND NOT EXISTS (SELECT 1 FROM pg_matviews mv WHERE mv.schemaname = tp."Schema" AND mv.matviewname = tp."TableName");
+
     -- No-drop protection tier (#270): when protected mode is active the caller forces
     -- p_DropTablesRemovedFromProduct to FALSE so the table-drop pass below is skipped. Record the
     -- tables that WOULD have been dropped by absence (owned, absent from the package, not sticky
