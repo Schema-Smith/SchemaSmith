@@ -23,7 +23,7 @@ SchemaQuench --LogPath:path/to/logs
 # Pre-flight diagnostics (no deployment)
 SchemaQuench --TestConnection     # validate connections + MinimumVersion, then exit
 SchemaQuench --PreviewTargets     # validate connections + MinimumVersion + show target report, then exit
-SchemaQuench --WhatIf             # dry run: log the SQL a deployment would run, change nothing
+SchemaQuench --WhatIf             # dry run: log the SQL a deployment would run, change none of your objects
 
 # SQL Server
 SchemaQuench --ConnectionString:"Data Source=myserver;Initial Catalog=master;User ID=sa;Password=secret;TrustServerCertificate=True;"
