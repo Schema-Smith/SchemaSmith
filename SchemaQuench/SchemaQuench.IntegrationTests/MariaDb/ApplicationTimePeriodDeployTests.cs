@@ -340,4 +340,46 @@ SELECT COUNT(*) FROM INFORMATION_SCHEMA.PERIODS
         conn.Close();
     }
 
+    /// <summary>
+    /// A protected environment (PreventDrop) drops nothing by absence. It forces the environment's flag off, and a table
+    /// that turns the drop on for itself must not get round that: the period stays and is reported as one PreventDrop kept.
+    /// </summary>
+    [Test]
+    public void UnderPreventDrop_ATableLevelPeriodDrop_KeepsThePeriod_AndReportsIt()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.MariaDb).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+
+        if (SkipUnlessPeriodsReadable(cmd))
+            Assert.Ignore("Deciding what to drop needs MariaDB 11.4 to read the current periods.");
+
+        try
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `{DropTarget}`; SET @ss_drop_periods_removed = 0";
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, DropTargetJson(withPeriod: true));
+            Assert.That(PeriodCount(cmd, DropTarget), Is.EqualTo(1), "setup: the period must be created");
+
+            var json = DropTargetJson(withPeriod: false).Replace("\"Periods\"", "\"DropPeriodsRemovedFromProduct\": true, \"Periods\"");
+            ClearAudit(cmd);
+            cmd.CommandTimeout = 300;
+            // CaptureWouldDrop is what a protected environment passes (ProductQuench: CaptureWouldDrop = _protectedMode).
+            cmd.CommandText = $"CALL SchemaSmith_ParseTableJson('{_mainDb}', '{json.Replace("'", "''")}'); "
+                              + $"CALL SchemaSmith_ModifiedTableQuench('{_productName}', '{_mainDb}', 0, 0, 0, 1, 1, 1, 1, 0, 0)";
+            cmd.ExecuteNonQuery();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(PeriodCount(cmd, DropTarget), Is.EqualTo(1), "PreventDrop must keep a period the package no longer declares");
+                Assert.That(PeriodAudit(cmd, DropTarget), Is.EqualTo("period dropSuppressed"), "and record it for preventDrop.wouldDrop");
+            });
+        }
+        finally
+        {
+            cmd.CommandText = $"SET @ss_drop_periods_removed = 0; DROP TABLE IF EXISTS `{DropTarget}`";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
 }

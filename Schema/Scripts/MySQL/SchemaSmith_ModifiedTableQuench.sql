@@ -4629,6 +4629,18 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                     SELECT TableName, PeriodName INTO @ss_pdd_table, @ss_pdd_name
                       FROM _SchemaSmith_PeriodsToDrop WHERE RowId = @ss_pdd_id;
 
+                    -- A protected environment drops nothing by absence, whatever a table declares: the period is
+                    -- recorded as one PreventDrop kept, as a column or table is.
+                    IF p_CaptureWouldDrop = 1 THEN
+                        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+                        VALUES (CONNECTION_ID(), CONCAT('  Kept application-time period removed from product (PreventDrop): ',
+                                SchemaSmith_StripBacktickWrapping(@ss_pdd_table), '.',
+                                SchemaSmith_StripBacktickWrapping(@ss_pdd_name)));
+                        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+                        VALUES (CONNECTION_ID(), 'period',
+                                CONCAT(SchemaSmith_StripBacktickWrapping(@ss_pdd_table), '.',
+                                       SchemaSmith_StripBacktickWrapping(@ss_pdd_name)), 'dropSuppressed');
+                    ELSE
                     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
                     VALUES (CONNECTION_ID(), CONCAT('  Dropping application-time period removed from product: ',
                             SchemaSmith_StripBacktickWrapping(@ss_pdd_table), '.',
@@ -4652,6 +4664,7 @@ INNER JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
                         VALUES (CONNECTION_ID(), 'period',
                                 CONCAT(SchemaSmith_StripBacktickWrapping(@ss_pdd_table), '.',
                                        SchemaSmith_StripBacktickWrapping(@ss_pdd_name)), 'wouldDrop');
+                    END IF;
                     END IF;
 
                     SELECT (SELECT MIN(RowId) FROM _SchemaSmith_PeriodsToDrop WHERE RowId > @ss_pdd_id) INTO @ss_pdd_id;
