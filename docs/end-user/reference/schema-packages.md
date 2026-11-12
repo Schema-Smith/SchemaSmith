@@ -1270,7 +1270,7 @@ Tables without a `DataDelivery` block are left alone. Tables that declare one ar
 |---|---|---|---|
 | `ContentFile` | string | | Path to the row data, relative to the template root. Typically produced by DataTongs as a `.tabledata` file (raw JSON array). |
 | `ContentEncoding` | string | `Json` | Encoding of `ContentFile`: `Json` (default) or `Xml`. Accepted on every platform. See [Content Encoding](#content-encoding) below. |
-| `MergeType` | string | | One of `Insert`, `Insert/Update`, `Insert/Update/Delete`. See [MergeType](#mergetype) below. |
+| `MergeType` | string | | One of `Insert`, `Insert/Update`, `Insert/Update/Delete`. Required to deliver: a delivery without it, or with `None`, is not run. See [MergeType](#mergetype) below. |
 | `MatchColumns` | string | | Comma-separated column names that identify a row. Prefix a column with `*` for NULL-safe comparison on nullable keys. Matches the `KeyColumns` concept in DataTongs. |
 | `MergeFilter` | string | `""` | Optional SQL `WHERE` clause (without the `WHERE` keyword). Scopes both the rows considered for matching and, when delete is enabled, the rows eligible for deletion. |
 | `MergeDisableTriggers` | bool | `false` | Wrap the merge with platform-appropriate trigger disable/enable. |
@@ -1287,8 +1287,8 @@ A row value that is a JSON object or array, delivered into a text column, arrive
 | Value | Behavior |
 |---|---|
 | `Insert` | Missing rows inserted. Existing rows and extra rows left alone. The seed-data pattern. |
-| `Insert/Update` | Missing rows inserted, changed rows updated. Extra rows left alone. Good for reference tables where environments can append local rows. |
-| `Insert/Update/Delete` | Full sync. Missing rows inserted, changed rows updated, and target rows that don't exist in the source data are deleted. The demo products use this. When `MergeFilter` is set, deletes are scoped by the filter so rows outside it are never removed. |
+| `Insert/Update` | Missing rows inserted, changed rows updated. Extra rows left alone. Good for reference tables where environments can append local rows. The demo products use this. |
+| `Insert/Update/Delete` | Full sync. Missing rows inserted, changed rows updated, and target rows that don't exist in the source data are deleted. When `MergeFilter` is set, deletes are scoped by the filter so rows outside it are never removed. |
 
 The chosen idiom is platform-specific -- `MERGE` on SQL Server and PostgreSQL, `INSERT ... ON DUPLICATE KEY UPDATE` with a conditional delete step on MySQL -- but the declarative contract is the same on every platform.
 

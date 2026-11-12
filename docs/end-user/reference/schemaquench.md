@@ -1985,8 +1985,10 @@ A circular dependency among NOT NULL foreign keys fails the dependency sort -- S
 ### MergeType options
 
 - `Insert` -- Missing rows inserted. Existing rows and extra rows left alone. The seed-data pattern.
-- `Insert/Update` -- Missing rows inserted, changed rows updated. Extra rows left alone. Good for reference tables that environments may append to.
-- `Insert/Update/Delete` -- Full sync. Missing rows inserted, changed rows updated, and target rows not present in the source are deleted. Default, and what the demo products use.
+- `Insert/Update` -- Missing rows inserted, changed rows updated. Extra rows left alone. Good for reference tables that environments may append to. What the demo products use.
+- `Insert/Update/Delete` -- Full sync. Missing rows inserted, changed rows updated, and target rows not present in the source are deleted.
+
+`MergeType` has no default: a delivery that omits it, or sets `None`, is not run.
 
 The chosen idiom varies per platform -- `MERGE` on SQL Server and PostgreSQL, `INSERT ... ON DUPLICATE KEY UPDATE` plus conditional delete on MySQL -- but the `MergeType` you declare is the same contract everywhere.
 
