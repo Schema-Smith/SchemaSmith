@@ -22,7 +22,7 @@ Every custom value lives inside a single property on its containing object calle
   "Name": "[Orders]",
   "Columns": [],
   "Extensions": {
-    "Environment": "Production",
+    "Workload": "Reporting",
     "DataClassification": "PII",
     "OwningTeam": "Identity"
   }
