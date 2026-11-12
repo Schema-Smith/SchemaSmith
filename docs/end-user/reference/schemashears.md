@@ -1,6 +1,6 @@
 # SchemaShears Reference
 
-Surgical deployments demand surgical packages. SchemaShears carves an object-level patch -- a subset of a full product -- from an existing schema package, using a **manifest** that names exactly which files belong in the patch. The result is a stand-alone package you can deploy against any target that already has the full product installed, updating only the objects in scope and leaving everything else undisturbed.
+Surgical deployments demand surgical packages. SchemaShears carves an object-level patch -- a subset of a full product -- from an existing schema package, using a **manifest** that names exactly which files belong in the patch. The result is a stand-alone package you can deploy against any target that already has the full product installed, updating only the objects in scope and leaving every other object in place.
 
 The natural producer of a manifest is your VCS: `git diff --name-only <before> <after>` scoped to the product path is all it takes to turn a commit range into a patch definition. SchemaShears reads that list, resolves the full include set, and hands back a ready-to-quench package.
 
