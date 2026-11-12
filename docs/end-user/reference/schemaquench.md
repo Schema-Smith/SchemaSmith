@@ -322,9 +322,9 @@ The `MaxThreads` setting controls how many of a template's work units run concur
 
 Default: `10`. Range: `1`--`20`. A value outside that range, or one that does not parse as a whole number, is replaced by the default without a message, so `MaxThreads: 32` runs ten at a time, not twenty.
 
-With schema templates, a single database can contribute many work units -- one per discovered schema. A product with a single `TenantWorkspace` template applied to one database hosting 100 tenant schemas produces 100 work units. At `MaxThreads: 8`, the dispatcher runs up to 8 schema iterations concurrently regardless of how many templates or databases are in scope. If you also have regular-template work units queued alongside schema-template units, they all draw from the same pool.
+With schema templates, a single database can contribute many work units -- one per discovered schema. A product with a single `TenantWorkspace` template applied to one database hosting 100 tenant schemas produces 100 work units. At `MaxThreads: 8`, the dispatcher runs up to 8 of that template's schema iterations concurrently, across however many databases are in scope.
 
-> **Note:** Templates with `AllowParallel: false` get their own serial queue. At most one of that template's iterations runs at a time, but other templates' parallel-eligible units continue to run concurrently alongside them. See [AllowParallel](schema-packages.md#allowparallel) for the per-template parallel-disable case.
+> **Note:** A template with `AllowParallel: false` runs its iterations one at a time. Templates never run concurrently, so the setting governs only that template's own iterations. See [AllowParallel](schema-packages.md#allowparallel) for the per-template parallel-disable case.
 
 > **PostgreSQL `max_connections` sizing:** Each active work unit holds roughly four PG connections at peak (one main quench connection plus per-iteration sub-operations). At default `MaxThreads: 10`, plan for around 45 concurrent connections from SchemaQuench. At the cap `MaxThreads: 20`, plan for around 85. Size `max_connections` on the target as `MaxThreads × 4 + headroom for other apps, admin, and monitoring`. PostgreSQL's default `max_connections=100` covers default `MaxThreads` comfortably; tune the database ceiling proportionally if you raise `MaxThreads` or share the server with heavy workloads.
 
