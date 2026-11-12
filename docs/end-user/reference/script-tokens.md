@@ -432,9 +432,11 @@ Your deployment script needs a value from the target database itself -- a tenant
 ```
 
 ```sql
--- After resolution, {{ActiveTenants}} contains one tenant ID per line
+-- After resolution, the ActiveTenants token holds one tenant ID per line
 EXEC dbo.ProvisionAuditTables @TenantIdList = '{{ActiveTenants}}';
 ```
+
+The comments name the token without braces on purpose. A token is replaced everywhere in a script, comments included, so a multi-row value inside a `--` comment would put every row after the first outside the comment, where it runs as SQL.
 
 **PostgreSQL:**
 
@@ -447,7 +449,7 @@ EXEC dbo.ProvisionAuditTables @TenantIdList = '{{ActiveTenants}}';
 ```
 
 ```sql
--- After resolution, {{ActiveTenants}} contains one tenant ID per line
+-- After resolution, the ActiveTenants token holds one tenant ID per line
 CALL public.provision_audit_tables('{{ActiveTenants}}');
 ```
 
@@ -462,7 +464,7 @@ CALL public.provision_audit_tables('{{ActiveTenants}}');
 ```
 
 ```sql
--- After resolution, {{ActiveTenants}} contains one tenant ID per line
+-- After resolution, the ActiveTenants token holds one tenant ID per line
 SET @TenantIdList = '{{ActiveTenants}}';
 CALL ProvisionAuditTables(@TenantIdList);
 ```
@@ -812,7 +814,7 @@ WHERE FlagName = 'NewBilling'
 Any script in the template:
 
 ```sql
--- {{EnabledTargets}} resolves to one target per line
+-- EnabledTargets resolves to one target per line
 PRINT 'Applying billing schema to: {{EnabledTargets}}';
 ```
 
@@ -838,7 +840,7 @@ WHERE flag_name = 'NewBilling'
 Any script in the template:
 
 ```sql
--- {{EnabledTargets}} resolves to one target per line
+-- EnabledTargets resolves to one target per line
 DO $$ BEGIN
   RAISE NOTICE 'Applying billing schema to: %', '{{EnabledTargets}}';
 END $$;
@@ -866,7 +868,7 @@ WHERE `FlagName` = 'NewBilling'
 Any script in the template:
 
 ```sql
--- {{EnabledTargets}} resolves to one target per line
+-- EnabledTargets resolves to one target per line
 SELECT CONCAT('Applying billing schema to: ',
               '{{EnabledTargets}}') AS status;
 ```
