@@ -150,7 +150,7 @@ For the token that makes it work, see [Script Tokens](../reference/script-tokens
 
 ## Conditional deployment with ShouldApplyExpression
 
-`ShouldApplyExpression` is how you declare "this thing only exists in certain places." It lives on tables, columns, indexes, foreign keys, check constraints, indexed views, materialized views, full-text indexes -- every structural component. Before deploying any component with a `ShouldApplyExpression`, SchemaQuench resolves the tokens, runs the expression against the target database, and skips the component if the result is falsy.
+`ShouldApplyExpression` is how you declare "this thing only exists in certain places." It lives on tables, columns, indexes, foreign keys, check constraints, indexed views, materialized views, full-text indexes -- every structural component. Before deploying any component with a `ShouldApplyExpression`, SchemaQuench resolves the tokens, runs the expression against the target database, and when the result is false leaves the component out of this deploy. Out means not declared: a component that does not exist yet is not created, and one that already exists is dropped, exactly as if it had been deleted from the package. A gate is a declaration about the target, not a pause -- see [A gate that turns off an existing object](../reference/schemaquench.md#a-gate-that-turns-off-an-existing-object).
 
 ```json
 {
