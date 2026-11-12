@@ -316,7 +316,7 @@ This extracts only active flags and, if `MergeDelete` is on, only deletes active
 
 When enabled on SQL Server or PostgreSQL, DataTongs wraps each generated script in `ALTER TABLE ... DISABLE TRIGGER ALL` and `ENABLE TRIGGER ALL`. Use this when the target table has audit or notification triggers whose side effects are undesirable during a bulk data refresh.
 
-- **PostgreSQL:** `ALL` includes the internal triggers that enforce foreign keys and deferrable unique or exclusion constraints, on the table that declares a foreign key and on the table it references. Disabling those needs superuser, so on such a table a deploy that runs as an ordinary role fails, and while they are off the rows being written are not checked against those constraints. To disable only your own triggers, edit the script to `DISABLE TRIGGER USER` / `ENABLE TRIGGER USER`.
+- **PostgreSQL:** `ALL` includes the internal triggers that enforce foreign keys and deferrable unique or exclusion constraints, on the table that declares a foreign key and on the table it references. Disabling those needs superuser, so on such a table a deploy that runs as an ordinary role fails, and while they are off the rows being written are not checked against those constraints. To disable only your own triggers, edit the generated script to `DISABLE TRIGGER USER` / `ENABLE TRIGGER USER`; a delivery configured with `--ConfigureDataDelivery` writes no script to edit.
 - **MySQL and MariaDB:** neither engine can disable a trigger, so the setting has no effect and the table's triggers fire during the delivery.
 
 The generated scripts are plain SQL files -- you can edit them to disable specific triggers rather than all of them when fine-grained control is needed.
@@ -395,7 +395,7 @@ When a column is excluded from extraction, DataTongs logs a warning naming the t
 
 ### MariaDB
 
-MariaDB uses the MySQL delivery path with the same behaviors as above, except that DECIMAL / NUMERIC values are written as JSON numbers rather than strings. One operational difference: each table's data is delivered as a single JSON payload, so delivering a large table can exceed MariaDB's `max_allowed_packet` and fail with `Error submitting <N>MB packet; ensure 'max_allowed_packet' is greater than <N>MB`. Raise the server's `max_allowed_packet` (for example `--max-allowed-packet=64M`, or the equivalent in `my.cnf`) to accommodate your largest table's row set. A MariaDB 10.2–10.5 target, or a patch whose `JSON_TABLE` misreads strings, takes inlined rows in chunks of 50 instead, so a single packet there holds one chunk.
+MariaDB uses the MySQL delivery path with the same behaviors as above, except that DECIMAL / NUMERIC values are written as JSON numbers rather than strings. One operational difference: each table's delivery is sent to the server in one packet, so delivering a large table can exceed MariaDB's `max_allowed_packet` and fail with `Error submitting <N>MB packet; ensure 'max_allowed_packet' is greater than <N>MB`. Raise the server's `max_allowed_packet` (for example `--max-allowed-packet=64M`, or the equivalent in `my.cnf`) to accommodate your largest table's row set. A MariaDB 10.2–10.5 target, or a patch whose `JSON_TABLE` misreads strings, takes inlined rows in chunks of 50, but the chunks travel to the server in the same script, so the same limit applies.
 
 ---
 
