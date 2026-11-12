@@ -63,7 +63,7 @@ See [Custom Properties -- JSON Schema Validation](../reference/custom-properties
 
 Schema validation catches structural problems in your JSON files. But valid JSON can still produce invalid SQL. A column referencing a type that doesn't exist, a foreign key pointing to a table that was renamed, a token that was never defined -- these pass schema validation but fail at deployment time. WhatIf mode catches them.
 
-WhatIf runs the full SchemaQuench deployment logic -- validation scripts, token replacement, DDL generation, dependency resolution -- without executing any changes against the database. It's a complete dry run.
+WhatIf runs the full SchemaQuench deployment logic -- validation scripts, token replacement, DDL generation, dependency resolution -- without changing any of your objects. Two things set it apart from a pure dry run: it installs or updates SchemaSmith's own helper schema on the target, so it needs the same permissions as a deployment, and it previews only the top level of changes -- a change that exists only once an earlier one has applied is not shown. See [WhatIf Mode](../reference/schemaquench.md#whatif-mode).
 
 ```bash
 SchemaQuench --WhatIf
