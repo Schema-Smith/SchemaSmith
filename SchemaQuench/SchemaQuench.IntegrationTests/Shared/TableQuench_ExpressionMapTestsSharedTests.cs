@@ -451,13 +451,19 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
             var json = GeneratedJson(table, "concat(`Tag`, 'x')");
             RunTableQuenchProc(cmd, json);
 
-            cmd.CommandText = $@"UPDATE SchemaSmith_ExpressionMap
-                                    SET EngineVersion = 'from-another-server'
-                                  WHERE ObjectTable = '{table}'";
-            Assert.That(cmd.ExecuteNonQuery(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale (only the CONTEXT goes stale -- the recorded canonical text still matches the live object, which is what a real engine upgrade looks like)");
+            int GoStale()
+            {
+                cmd.CommandText = $@"UPDATE SchemaSmith_ExpressionMap
+                                        SET EngineVersion = 'from-another-server'
+                                      WHERE ObjectTable = '{table}'";
+                var rows = cmd.ExecuteNonQuery();
+                ClearMessages(cmd);
+                return rows;
+            }
+            Assert.That(GoStale(), Is.GreaterThan(0), "setup: a mapping row must exist to go stale (only the CONTEXT goes stale -- the recorded canonical text still matches the live object, which is what a real engine upgrade looks like)");
 
-            ClearMessages(cmd);
-            RunTableQuenchProc(cmd, json);
+            // A retried attempt may already have re-baselined and reported it (MariaDB 11.8, concurrent DDL from other workers).
+            RunTableQuenchProc(cmd, json, beforeRetry: () => GoStale());
 
             cmd.CommandText = $"SELECT COUNT(*) FROM SchemaSmith_ExpressionMap WHERE ObjectTable = '{table}' AND EngineVersion = 'from-another-server'";
             var staleLeft = Convert.ToInt32(cmd.ExecuteScalar());

@@ -8,6 +8,7 @@ using log4net;
 using Microsoft.Extensions.Configuration;
 using NSubstitute;
 using Schema.Checkpointing;
+using Schema.Configuration;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.IntegrationTests;
@@ -30,7 +31,7 @@ public abstract class ZipPackageDeploySharedTests
     /// <summary>Counts the rows the zipped Main template's TestTable.tabledata delivers.</summary>
     protected abstract string DeliveredRowsSql { get; }
     protected abstract int ExpectedDeliveredRows { get; }
-    /// <summary>False where data delivery is a recorded downgrade (MySQL below 8.0): the run then exits 1 and delivers nothing.</summary>
+    /// <summary>False where data delivery is a recorded downgrade (MySQL below 8.0): the run then delivers nothing.</summary>
     protected virtual bool TargetDeliversData => true;
 
     private long DeliveredRows(string database)
@@ -66,11 +67,15 @@ public abstract class ZipPackageDeploySharedTests
             var config = FactoryContainer.Resolve<IConfigurationRoot>();
             var packagePath = config["SchemaPackagePath"];
             var checkpoints = config["CheckpointDirectory"];
+            var exitZeroOnDowngrade = config[SettingsKeys.ExitZeroOnDowngrade];
             FactoryContainer.Register(environment);
             LogFactory.Register("ErrorLog", errorLog);
             LogFactory.Register("ProgressLog", progressLog);
             config["SchemaPackagePath"] = zip;
             config["CheckpointDirectory"] = checkpointDir;
+            // A floor server downgrades a feature of ValidProduct (and, below MySQL 8.0, its data delivery); a downgrade is
+            // not what this test is about, a failure still exits non-zero.
+            config[SettingsKeys.ExitZeroOnDowngrade] = "true";
             try
             {
                 Program.Main(["SkipKindlingForge"]);
@@ -78,7 +83,7 @@ public abstract class ZipPackageDeploySharedTests
                 Assert.Multiple(() =>
                 {
                     var exits = environment.ReceivedCalls().Where(c => c.GetMethodInfo().Name == nameof(IEnvironment.Exit)).Select(c => (int)c.GetArguments()[0]!);
-                    Assert.That(exits, Is.EqualTo(new[] { delivers ? 0 : 1 }), "the run's exit: " + string.Join(" | ", errors));
+                    Assert.That(exits, Is.EqualTo(new[] { 0 }),"the run's exit: " + string.Join(" | ", errors));
                     progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching Template: Main")));
                     progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains("Quenching Template: Secondary")));
                     Assert.That(DeliveredRows(config["ScriptTokens:MainDB"]!), Is.EqualTo(delivers ? ExpectedDeliveredRows : 0), "the table data inside the zip was delivered");
@@ -88,6 +93,7 @@ public abstract class ZipPackageDeploySharedTests
             {
                 config["SchemaPackagePath"] = packagePath;
                 config["CheckpointDirectory"] = checkpoints;
+                config[SettingsKeys.ExitZeroOnDowngrade] = exitZeroOnDowngrade;
                 (FactoryContainer.Resolve<ZipFileWrapper>() as IDisposable)?.Dispose();
                 FactoryContainer.Unregister<ZipFileWrapper>();
                 FactoryContainer.Unregister<ZipDirectoryWrapper>();
