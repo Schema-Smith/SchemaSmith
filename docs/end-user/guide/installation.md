@@ -90,7 +90,7 @@ The universal Unix path. One command, any glibc-based Linux distro, any modern m
 curl -fsSL https://schemasmith.com/dl/install.sh | sh
 ```
 
-`install.sh` detects your OS and architecture, resolves the latest release without a GitHub API token, downloads the matching `.tar.gz` bundle, verifies SHA-256 against the release manifest, and installs the four CLI commands onto your PATH. The script is POSIX `sh` -- no bash-isms -- so it runs on whatever shell your container or distro happens to ship.
+`install.sh` detects your OS and architecture, resolves the latest release without a GitHub API token, downloads the matching `.tar.gz` bundle, verifies SHA-256 against the release manifest, and installs the four CLI commands onto your PATH. The script is POSIX `sh` -- no bash-isms -- so it runs on whatever shell your container or distro happens to ship. It always installs the `.tar.gz` bundle, not the `.deb` or `.rpm`, and it refuses musl-based Linux such as Alpine: the binaries target glibc, so use a glibc-based distro or base image there.
 
 By default it installs to `/usr/local/bin` if you run it as root and `~/.local/bin` otherwise. Two environment variables let you override:
 
