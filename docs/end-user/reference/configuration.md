@@ -183,9 +183,9 @@ SchemaQuench --Target__Server=staging-db --Target__ConnectionProperties__TrustSe
 
 A `--Key=value` override sits at the top of the [configuration hierarchy](#configuration-hierarchy) -- it wins over the settings file, user secrets, and environment variables.
 
-Two things to keep in mind:
+Three things to keep in mind:
 
-- The `=` is required for an override. The named switches (`--LogPath`, `--ConfigFile`, `--ConnectionString`) accept a `:` separator, but nesting into arbitrary settings needs the `__`/`=` form so a value containing a colon (a Windows path, a `host:port`) is never mistaken for a key boundary.
+- The `=` is required for an override. Nest with `__` or with `:` -- `--Target__Server=prod-db` and `--Target:Server=prod-db` both set `Target:Server` -- but always end the key with `=`. `--Target:Server:prod-db` sets nothing: everything after the first `:` becomes the value of a top-level `Target` key, which no tool reads and none warns about. The named switches (`--LogPath`, `--ConfigFile`, `--ConnectionString`) accept either separator.
 - `--ConnectionString` still bypasses the individual connection settings. If you pass both `--ConnectionString` and a `--Source__Server=` / `--Target__Server=` override, the full connection string wins for connecting.
 - An override is not range-checked for you. `MaxThreads`, for one, accepts `1` to `20`: a value outside that range, or one that is not a whole number, silently falls back to the default of `10` -- no warning is logged. Check the startup configuration dump when a value looks ignored.
 
