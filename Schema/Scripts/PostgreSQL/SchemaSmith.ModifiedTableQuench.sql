@@ -343,7 +343,7 @@ BEGIN
     ------------------------------------------------------------------------------------------------
     -- COLUMN-ORDER DRIFT, the input to the OnOrderMismatch trigger.
     --
-    -- Reordering existing columns is impossible in place on every engine SchemaSmith supports, so a
+    -- PostgreSQL cannot reorder existing columns in place (MySQL and MariaDB can, under OnlineApply), so a
     -- rebuild is the only mechanism that can converge a table whose columns are in the wrong order.
     -- This pass names the tables where that is true.
     --
