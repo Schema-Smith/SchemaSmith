@@ -360,7 +360,7 @@ Token replacement applies -- `{{MainDB}}`, `{{ReleaseVersion}}`, any token you d
 
 The canonical use is anti-rollback protection. Pair `BaselineValidationScript` with `VersionStampScript`: the stamp records a version identifier after a successful deployment; the baseline checks for that identifier before the next deployment. If someone accidentally runs an older package against an already-upgraded environment, the baseline check aborts before any harm is done.
 
-There is no built-in "previous version" token -- the package declares both versions itself, as ordinary `ScriptTokens`, and bumps them together on each release:
+There is no built-in "previous version" token -- the package declares both versions itself, as ordinary `ScriptTokens`, and bumps them together on each release. In a `Template.json`, where both scripts run in the template's own database:
 
 ```json
 {
