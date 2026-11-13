@@ -54,16 +54,15 @@ public class SelectiveExecutionTests
         // Quench 1: full multi-tenant deploy — every tenant has SeedTenantMarker tracked.
         // Drop in a new migration file that ALL tenants would normally pick up; quench 2 with
         // Target.Schemas = [tenant_acme] must produce a tracking row ONLY for tenant_acme.
-        var migrationFile = Path.Combine(
-            TestHelper.GetTestProductPath("SqlServer", ProductName),
-            "Templates", "TenantBody", "MigrationScripts", "Before", "Migration_NewTenantTouch.sql");
+        var product = TestHelper.CopyTestProduct("SqlServer", ProductName);
+        var migrationFile = Path.Join(product, "Templates", "TenantBody", "MigrationScripts", "Before", "Migration_NewTenantTouch.sql");
 
         lock (FactoryContainer.SharedLockObject)
         {
             SetupSharedMocks();
             ResetTrackingAndCreateTenantSchemas(DefaultTenants);
             var config = FactoryContainer.Resolve<IConfigurationRoot>();
-            config["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", ProductName);
+            config["SchemaPackagePath"] = product;
             ClearTargetFilters(config);
 
             try
@@ -116,11 +115,11 @@ IF NOT EXISTS (SELECT 1 FROM [{{SchemaName}}].[Customers] WHERE CustomerID = 999
             }
             finally
             {
-                if (File.Exists(migrationFile)) File.Delete(migrationFile);
                 ClearTargetFilters(config);
                 DropTenantSchemas(DefaultTenants);
                 LogFactory.Clear();
                 FactoryContainer.Unregister<IEnvironment>();
+                Directory.Delete(product, true);
             }
         }
     }

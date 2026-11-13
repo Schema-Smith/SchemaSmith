@@ -720,7 +720,7 @@ public abstract class TableQuenchTestsSharedTests
         // Clean up any stale ProductOwnership entries from previous test runs
         command.CommandText = $@"DELETE FROM SchemaSmith_ProductOwnership
             WHERE ProductName = 'TestProduct' AND ObjectSchema = '{_testDb}'";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Create table with an extra index
         command.CommandText = $@"
@@ -809,7 +809,7 @@ public abstract class TableQuenchTestsSharedTests
         // Clean up any stale ProductOwnership entries from previous test runs
         command.CommandText = $@"DELETE FROM SchemaSmith_ProductOwnership
             WHERE ProductName = 'TestProduct' AND ObjectSchema = '{_testDb}'";
-        command.ExecuteNonQuery();
+        TransientRetry.Run(() => command.ExecuteNonQuery());
 
         // Create table with an extra index
         command.CommandText = $@"

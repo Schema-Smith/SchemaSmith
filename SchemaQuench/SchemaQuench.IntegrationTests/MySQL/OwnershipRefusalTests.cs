@@ -20,7 +20,7 @@ public class OwnershipRefusalTests : OwnershipRefusalSharedTests
     protected override string TableSchema => MainDb;
 
     protected override void ClearOwnership(string first, string second) =>
-        Exec($"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName IN ('{first}', '{second}')");
+        TransientRetry.Run(() => Exec($"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName IN ('{first}', '{second}')"));
 
     // Functional key parts arrive in 8.0.13; a rename drops one ahead of the rename and rebuilds it over the new name.
     private bool SupportsFunctionalIndexes => new Version(((string)Scalar("SELECT VERSION()")).Split('-')[0]) >= new Version(8, 0, 13);

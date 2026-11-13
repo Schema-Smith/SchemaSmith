@@ -469,7 +469,7 @@ DELETE FROM SchemaSmith.RebuildSetAsideForeignKeys WHERE ChildTable = 'RebuildFk
         finally
         {
             conn.ChangeDatabase("master");
-            Exec(cmd, $"ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]");
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
         }
     }
 

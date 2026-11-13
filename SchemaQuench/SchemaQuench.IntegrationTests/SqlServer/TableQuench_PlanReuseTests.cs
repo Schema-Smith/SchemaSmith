@@ -1,7 +1,9 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -47,14 +49,22 @@ public class TableQuench_PlanReuseTests : BaseTableQuenchTests
             RunTableQuenchProc(cmd, Package);
             RunTableQuenchProc(cmd, Package);
 
-            using var capture = RecompileCapture.ForThisSession(cmd);
-            RunTableQuenchProc(cmd, Package);
-            RunTableQuenchProc(cmd, Package);
+            // The defect recompiles the same statements on every call, so one redeploy without them settles it. A statement
+            // reading a temp table also recompiles when SQL Server has not kept that temp table cached, which a loaded server
+            // can repeat for a few calls; measuring until the repeated set empties keeps that from reading as the defect.
+            List<string> everyTime = null;
+            for (var i = 0; i < 6 && everyTime is not { Count: 0 }; i++)
+            {
+                using var capture = RecompileCapture.ForThisSession(cmd);
+                RunTableQuenchProc(cmd, Package);
+                var recompiled = capture.TempTableRecompiles();
+                TestContext.Out.WriteLine($"redeploy {i + 1} recompiled: {string.Join("; ", recompiled)}");
+                everyTime = everyTime == null ? recompiled : everyTime.Intersect(recompiled).ToList();
+            }
 
-            var recompiles = capture.TempTableRecompiles();
-            Assert.That(recompiles, Is.Empty,
-                "an unchanged redeploy recompiled these statements because their caller re-created a temp table: " +
-                string.Join("; ", recompiles));
+            Assert.That(everyTime, Is.Empty,
+                "every unchanged redeploy recompiled these statements because their caller re-created a temp table: " +
+                string.Join("; ", everyTime));
         }
         finally
         {

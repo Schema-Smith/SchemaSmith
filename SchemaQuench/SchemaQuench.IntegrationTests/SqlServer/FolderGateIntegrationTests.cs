@@ -120,8 +120,7 @@ public class FolderGateIntegrationTests
             {
                 config["SchemaPackagePath"] = null;
                 config["Target:SecondaryServers"] = secondaries;
-                cmd.CommandText = $"IF DB_ID('{probeDb}') IS NOT NULL BEGIN ALTER DATABASE [{probeDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{probeDb}] END";
-                cmd.ExecuteNonQuery();
+                Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, probeDb);
                 if (Directory.Exists(scriptDir)) Directory.Delete(scriptDir, true);
             }
         }

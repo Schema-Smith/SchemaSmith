@@ -29,7 +29,7 @@ public class ConstraintStateRedeployTests : ObjectScriptDeployFixture
         """;
 
     private void CleanUp() =>
-        Exec("DROP TABLE IF EXISTS cs_state_orders; DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = 'ConstraintStateProduct'");
+        TransientRetry.Run(() => Exec("DROP TABLE IF EXISTS cs_state_orders; DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = 'ConstraintStateProduct'"));
 
     [Test]
     public void ANotEnforcedCheck_StaysNotEnforced_WhenThePackageDoesNotMentionIt()

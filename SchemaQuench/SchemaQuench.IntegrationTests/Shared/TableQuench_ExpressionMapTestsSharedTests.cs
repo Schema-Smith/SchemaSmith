@@ -93,9 +93,9 @@ public abstract class TableQuench_ExpressionMapTestsSharedTests : BaseTableQuenc
             cmd.CommandText = $"DROP TABLE IF EXISTS `{_mainDb}`.`{table}`";
             cmd.ExecuteNonQuery();
             cmd.CommandText = $"DELETE FROM SchemaSmith_ExpressionMap WHERE ObjectTable = '{table}'";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             cmd.CommandText = $"DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectType IN ('TABLE', 'INDEX', 'EVENT') AND ObjectSchema = '{_mainDb}' AND ObjectName LIKE '{table}%'";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             ClearMessages(cmd);
         }
         catch (System.Data.Common.DbException) { /* best-effort cleanup */ }

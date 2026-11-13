@@ -47,7 +47,7 @@ public class ContainedDatabaseExtractionTests
     {
         using var conn = Open("master");
         using var cmd = conn.CreateCommand();
-        Run(cmd, $"IF DB_ID('{_sourceDb}') IS NOT NULL BEGIN ALTER DATABASE [{_sourceDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_sourceDb}]; END");
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _sourceDb);
         // Left on: fixtures in other shard processes create contained databases too, and switching it off under them fails both.
     }
 

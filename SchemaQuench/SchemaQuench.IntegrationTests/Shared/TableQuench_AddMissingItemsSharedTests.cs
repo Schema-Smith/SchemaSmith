@@ -757,7 +757,7 @@ CREATE TABLE IF NOT EXISTS `{TestSchema}`.`AddMyIndexIO` (`Id` INT NOT NULL);
         finally
         {
             cmd.CommandText = $"DROP TABLE IF EXISTS `{table}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{table}%'";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
     }
 }

@@ -478,7 +478,7 @@ public abstract class WhatIfParityTestsSharedTests
             Platform.PostgreSQL => $"DELETE FROM \"SchemaSmith\".\"ProductOwnership\" WHERE \"ProductName\" = '{ProductName}'",
             _ => $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{ProductName}'"
         };
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static string LogDirFor(string tempDir, string run)

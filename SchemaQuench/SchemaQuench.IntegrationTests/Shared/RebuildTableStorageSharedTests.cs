@@ -29,22 +29,23 @@ public abstract class RebuildTableStorageSharedTests : BaseTableQuenchTests
             Exec($"USE `{Db}`");
         }
 
-        public void Exec(string sql)
+        // Other fixtures' DDL runs alongside, and MariaDB refuses a catalog read that meets it (1684).
+        public void Exec(string sql) => TransientRetry.Run(() =>
         {
             using var cmd = Conn.CreateCommand();
             cmd.CommandTimeout = 300;
             cmd.CommandText = sql;
             cmd.ExecuteNonQuery();
-        }
+        });
 
-        public string? Scalar(string sql)
+        public string? Scalar(string sql) => TransientRetry.Run(() =>
         {
             using var cmd = Conn.CreateCommand();
             cmd.CommandTimeout = 300;
             cmd.CommandText = sql;
             var v = cmd.ExecuteScalar();
             return v == null || v == DBNull.Value ? null : v.ToString();
-        }
+        });
 
         public string Json(string valType, string extra = "") => $$"""
 [ { "Name": "{{Table}}", "RebuildPolicy": { "Mode": "ALWAYS" }{{extra}},

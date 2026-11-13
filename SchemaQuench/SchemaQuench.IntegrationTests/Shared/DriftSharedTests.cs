@@ -176,8 +176,10 @@ public abstract class DriftSharedTests : ObjectScriptDeployFixture
     {
         if (Platform == Schema.Domain.Platform.SqlServer)
         {
-            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
-            Exec($"IF DB_ID('{database}') IS NOT NULL BEGIN ALTER DATABASE [{database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{database}]; END");
+            using var master = Schema.DataAccess.DbConnectionFactory.ForPlatform(Platform).GetDbConnection(TestConnection("master"));
+            master.Open();
+            using var cmd = master.CreateCommand();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, database);
             return;
         }
         Npgsql.NpgsqlConnection.ClearAllPools();

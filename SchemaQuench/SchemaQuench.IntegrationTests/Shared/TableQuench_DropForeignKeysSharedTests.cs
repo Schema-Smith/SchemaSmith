@@ -105,7 +105,7 @@ public abstract class TableQuench_DropForeignKeysSharedTests : BaseTableQuenchTe
         finally
         {
             Scalar($"DROP TABLE IF EXISTS `si_child_{uid}`, `si_parent_{uid}`");
-            Scalar($"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}'");
+            TransientRetry.Run(() => Scalar($"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}'"));
         }
     }
 

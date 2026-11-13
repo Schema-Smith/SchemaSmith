@@ -398,7 +398,7 @@ public class ProductUpdateTests
                 WHERE table_schema = '{dbName}' AND table_name = 'SchemaSmith_ProductOwnership');
             PREPARE stmt FROM @ddl; EXECUTE stmt; DEALLOCATE PREPARE stmt;
         ";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static readonly List<string> ExpectedScriptLog =

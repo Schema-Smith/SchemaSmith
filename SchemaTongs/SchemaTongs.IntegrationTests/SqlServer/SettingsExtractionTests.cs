@@ -29,7 +29,6 @@ public class SettingsExtractionTests : SettingsExtractionSharedTests
 
     protected override void DropSourceDatabase(IDbCommand cmd, string name)
     {
-        cmd.CommandText = $"IF DB_ID(N'{name}') IS NOT NULL BEGIN ALTER DATABASE [{name}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{name}]; END";
-        cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, name);
     }
 }

@@ -218,7 +218,7 @@ public abstract class TableQuench_TwinNameSharedTests : BaseTableQuenchTests
     {
         foreach (var table in tables)
             TryExec(cmd, $"DROP TABLE IF EXISTS `{table}`");
-        TryExec(cmd, $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}'");
+        Exec(cmd, $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}'");
     }
 
     private static void Exec(IDbCommand cmd, string sql)

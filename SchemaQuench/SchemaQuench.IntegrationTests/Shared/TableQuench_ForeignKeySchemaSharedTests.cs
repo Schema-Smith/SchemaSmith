@@ -51,7 +51,7 @@ public abstract class TableQuench_ForeignKeySchemaSharedTests : BaseTableQuenchT
         finally
         {
             cmd.CommandText = $"DROP TABLE IF EXISTS `wchd_{uid}`; DROP TABLE IF EXISTS `wpar_{uid}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{uid}%'";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
     }
 
@@ -98,7 +98,7 @@ public abstract class TableQuench_ForeignKeySchemaSharedTests : BaseTableQuenchT
         finally
         {
             cmd.CommandText = $"DROP TABLE IF EXISTS `snchd_{uid}`; DROP TABLE IF EXISTS `snpar_{uid}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{uid}%'";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
     }
 
@@ -151,7 +151,7 @@ public abstract class TableQuench_ForeignKeySchemaSharedTests : BaseTableQuenchT
         finally
         {
             cmd.CommandText = $"DROP TABLE IF EXISTS `gchd_{uid}`; DROP TABLE IF EXISTS `gpar_{uid}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{uid}%'";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
     }
 
@@ -202,7 +202,7 @@ public abstract class TableQuench_ForeignKeySchemaSharedTests : BaseTableQuenchT
         }
         finally
         {
-            Exec($"DROP TABLE IF EXISTS `{_mainDb}`.`{child}`; DROP TABLE IF EXISTS `{_mainDb}`.`fkparent_{uid}`; DROP DATABASE IF EXISTS `{other}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{uid}%'");
+            TransientRetry.Run(() => Exec($"DROP TABLE IF EXISTS `{_mainDb}`.`{child}`; DROP TABLE IF EXISTS `{_mainDb}`.`fkparent_{uid}`; DROP DATABASE IF EXISTS `{other}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{uid}%'"));
         }
     }
 }

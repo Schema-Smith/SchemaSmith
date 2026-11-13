@@ -47,7 +47,7 @@ public abstract class TableQuench_TableReplacedByViewSharedTests : BaseTableQuen
         finally
         {
             Exec(cmd, $"DROP VIEW IF EXISTS `{_mainDb}`.`{table}`; DROP TABLE IF EXISTS `{_mainDb}`.`{table}`; DROP TABLE IF EXISTS `{_mainDb}`.`{keep}`;");
-            Exec(cmd, $"DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectType = 'TABLE' AND ProductName = '{product}'");
+            TransientRetry.Run(() => Exec(cmd, $"DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectType = 'TABLE' AND ProductName = '{product}'"));
         }
         conn.Close();
     }

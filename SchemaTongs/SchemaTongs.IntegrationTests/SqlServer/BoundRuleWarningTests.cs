@@ -45,8 +45,7 @@ public class BoundRuleWarningTests
     {
         using var conn = Open("master");
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = $"IF DB_ID('{_sourceDb}') IS NOT NULL BEGIN ALTER DATABASE [{_sourceDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{_sourceDb}]; END";
-        cmd.ExecuteNonQuery();
+        Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, _sourceDb);
     }
 
     [Test]

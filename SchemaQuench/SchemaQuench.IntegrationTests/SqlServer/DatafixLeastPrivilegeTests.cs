@@ -59,6 +59,13 @@ public class DatafixLeastPrivilegeTests : ObjectScriptDeployFixture
             END
             CLOSE sessions;
             DEALLOCATE sessions;
+            -- KILL returns before the session has gone, and DROP LOGIN refuses a login still connected (15434).
+            DECLARE @waits INT = 0;
+            WHILE EXISTS (SELECT 1 FROM sys.dm_exec_sessions WHERE login_name = N'{Login}') AND @waits < 100
+            BEGIN
+                WAITFOR DELAY '00:00:00.100';
+                SET @waits += 1;
+            END
             """);
         Exec($"IF USER_ID('{Login}') IS NOT NULL DROP USER [{Login}]");
         Exec($"IF SUSER_ID('{Login}') IS NOT NULL DROP LOGIN [{Login}]");
