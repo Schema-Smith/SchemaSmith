@@ -208,6 +208,7 @@ public class ServerObjectCastTests
         EveryKind_IsCast_AndRegisteredAsAnAfterFolderForEveryServer();
         RunningTheScriptsWhereNothingChanged_LeavesEveryObjectAlone();
         AJobChangedOnTheServer_IsBroughtBack_KeepingItsIdAndHistory();
+        AnEditedJobScript_ReachesTheServer_AndThenSettles();
         AJobThatSharesASchedule_KeepsItShared();
         ARunningJob_IsLeftAsItIs_AndTheRunSaysSo();
         OnAServerWithoutThem_TheScriptsCreateEveryObject();
@@ -277,6 +278,38 @@ public class ServerObjectCastTests
                 Is.GreaterThanOrEqualTo(history), "and its history");
             Assert.That(Scalar("SELECT s.command FROM msdb.dbo.sysjobsteps s JOIN msdb.dbo.sysjobs j ON j.job_id = s.job_id WHERE j.name = N'ss_job' AND s.step_id = 1"),
                 Is.EqualTo("SELECT 1"), "the step is back as the package has it");
+        });
+    }
+
+    // An edit to the package, with the server still matching what was extracted: the edit is applied, and the next deploy
+    // finds nothing to do.
+    private void AnEditedJobScript_ReachesTheServer_AndThenSettles()
+    {
+        var file = Path.Join(_productDir, "AgentJobs", "ss_job.sql");
+        var script = File.ReadAllText(file);
+        Assert.That(script, Does.Contain("N'SELECT 2'").And.Contain("N'nightly', 1, 4, 1,"), "the step and schedule values are in the script");
+        File.WriteAllText(file, script.Replace("N'SELECT 2'", "N'SELECT 22'").Replace("N'nightly', 1, 4, 1,", "N'nightly', 0, 4, 1,"));
+        var id = JobId("ss_job");
+
+        RunTheScripts("ss_job");
+
+        var modified = Scalar("SELECT CONVERT(NVARCHAR(30), date_modified, 126) FROM msdb.dbo.sysjobs WHERE name = N'ss_job'");
+        var scheduleId = Scalar("SELECT js.schedule_id FROM msdb.dbo.sysjobschedules js JOIN msdb.dbo.sysjobs j ON j.job_id = js.job_id WHERE j.name = N'ss_job'");
+        Assert.Multiple(() =>
+        {
+            Assert.That(StepCommand("ss_job", 2), Is.EqualTo("SELECT 22"), "the edited step reached the server");
+            Assert.That(Scalar("SELECT CAST(sc.enabled AS INT) FROM msdb.dbo.sysjobschedules js JOIN msdb.dbo.sysschedules sc ON sc.schedule_id = js.schedule_id JOIN msdb.dbo.sysjobs j ON j.job_id = js.job_id WHERE j.name = N'ss_job'"),
+                Is.EqualTo(0), "and so did the edited schedule");
+            Assert.That(JobId("ss_job"), Is.EqualTo(id), "the job kept its id");
+        });
+
+        RunTheScripts("ss_job");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Scalar("SELECT CONVERT(NVARCHAR(30), date_modified, 126) FROM msdb.dbo.sysjobs WHERE name = N'ss_job'"), Is.EqualTo(modified), "the next deploy left the job alone");
+            Assert.That(Scalar("SELECT js.schedule_id FROM msdb.dbo.sysjobschedules js JOIN msdb.dbo.sysjobs j ON j.job_id = js.job_id WHERE j.name = N'ss_job'"), Is.EqualTo(scheduleId),
+                "and did not re-attach its schedule");
         });
     }
 

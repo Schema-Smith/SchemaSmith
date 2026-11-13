@@ -184,13 +184,152 @@ public static class SqlServerServerObjectCaster
                             + N':' + CAST(sc.freq_recurrence_factor AS NVARCHAR(10)) + N':' + CAST(sc.active_start_date AS NVARCHAR(10)) + N':' + CAST(sc.active_end_date AS NVARCHAR(10))
                             + N':' + CAST(sc.active_start_time AS NVARCHAR(10)) + N':' + CAST(sc.active_end_time AS NVARCHAR(10)) + N';'
                        FROM msdb.dbo.sysjobschedules js JOIN msdb.dbo.sysschedules sc ON sc.schedule_id = js.schedule_id
-                      WHERE js.job_id = j.job_id ORDER BY sc.name FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), N'')
+                      WHERE js.job_id = j.job_id ORDER BY sc.name COLLATE Latin1_General_BIN2 FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), N'')
           FROM msdb.dbo.sysjobs j
           LEFT JOIN msdb.dbo.syscategories c ON c.category_id = j.category_id
           LEFT JOIN msdb.dbo.sysoperators oe ON oe.id = j.notify_email_operator_id
           LEFT JOIN msdb.dbo.sysoperators op ON op.id = j.notify_page_operator_id
          WHERE j.name = @name
         """;
+
+    // The script's own expected signature, computed from the values it applies, in the form JobSignature reads from msdb.
+    internal const string JobExpected = """
+        CAST(@enabled AS NVARCHAR(1)) + N'|' + ISNULL(@description, N'') + N'|' + ISNULL(@category, N'')
+               + N'|' + CAST(@notify_level_eventlog AS NVARCHAR(10)) + N'|' + CAST(@notify_level_email AS NVARCHAR(10)) + N'|' + CAST(@notify_level_page AS NVARCHAR(10))
+               + N'|' + CAST(@delete_level AS NVARCHAR(10)) + N'|' + CASE WHEN @notify_level_email > 0 THEN ISNULL(@email_operator, N'') ELSE N'' END
+               + N'|' + CASE WHEN @notify_level_page > 0 THEN ISNULL(@page_operator, N'') ELSE N'' END + N'|' + CAST(@start_step_id AS NVARCHAR(10))
+               + N'|' + ISNULL((SELECT CAST(s.step_id AS NVARCHAR(10)) + N':' + s.step_name + N':' + s.subsystem + N':' + ISNULL(CONVERT(NVARCHAR(MAX), CAST(s.command AS VARBINARY(MAX)), 2), N'') + N':' + ISNULL(s.database_name, N'')
+                            + N':' + CAST(s.on_success_action AS NVARCHAR(10)) + N':' + CAST(s.on_success_step_id AS NVARCHAR(10)) + N':' + CAST(s.on_fail_action AS NVARCHAR(10))
+                            + N':' + CAST(s.on_fail_step_id AS NVARCHAR(10)) + N':' + CAST(s.retry_attempts AS NVARCHAR(10)) + N':' + CAST(s.retry_interval AS NVARCHAR(10))
+                            + N':' + ISNULL(s.output_file_name, N'') + N':' + CAST(s.flags AS NVARCHAR(10)) + N':' + ISNULL(s.database_user_name, N'')
+                            + N':' + CAST(s.cmdexec_success_code AS NVARCHAR(10)) + N';'
+                       FROM @steps s ORDER BY s.step_id FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), N'')
+               + N'|' + ISNULL((SELECT sc.name + N':' + CAST(sc.enabled AS NVARCHAR(1)) + N':' + CAST(sc.freq_type AS NVARCHAR(10)) + N':' + CAST(sc.freq_interval AS NVARCHAR(10))
+                            + N':' + CAST(sc.freq_subday_type AS NVARCHAR(10)) + N':' + CAST(sc.freq_subday_interval AS NVARCHAR(10)) + N':' + CAST(sc.freq_relative_interval AS NVARCHAR(10))
+                            + N':' + CAST(sc.freq_recurrence_factor AS NVARCHAR(10)) + N':' + CAST(sc.active_start_date AS NVARCHAR(10)) + N':' + CAST(sc.active_end_date AS NVARCHAR(10))
+                            + N':' + CAST(sc.active_start_time AS NVARCHAR(10)) + N':' + CAST(sc.active_end_time AS NVARCHAR(10)) + N';'
+                       FROM @schedules sc ORDER BY sc.name COLLATE Latin1_General_BIN2 FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), N'')
+        """;
+
+    // A job's settings, steps and schedules are declared once at the top of its script, and the script compares the server's
+    // job with them: an edit to a value is both what is applied and what is compared, so it reaches the server on the next
+    // deploy and then settles.
+    internal static string JobScript(Dictionary<string, string> j, List<Dictionary<string, string>> steps, List<Dictionary<string, string>> schedules)
+    {
+        static string Int(string v) => v ?? "0";
+        var sql = new StringBuilder(Lines(
+            "-- Captured from the reference server. To change the job, edit the values below: the script compares the server's job",
+            "-- with them and runs only where they differ, so an edit reaches the server on the next deploy.",
+            $"DECLARE @name SYSNAME = {N(j["name"])};",
+            $"DECLARE @enabled TINYINT = {Int(j["enabled"])}, @description NVARCHAR(512) = {N(j["description"] ?? "")}, @category SYSNAME = {N(j["category"] ?? "[Uncategorized (Local)]")},",
+            $"        @owner_login SYSNAME = {N(j["owner"] ?? "")}, @notify_level_eventlog INT = {Int(j["notify_level_eventlog"])}, @notify_level_email INT = {Int(j["notify_level_email"])},",
+            $"        @notify_level_page INT = {Int(j["notify_level_page"])}, @delete_level INT = {Int(j["delete_level"])}, @email_operator SYSNAME = {N(j["email_operator"])},",
+            $"        @page_operator SYSNAME = {N(j["page_operator"])}, @start_step_id INT = {Int(j["start_step_id"])};",
+            "-- step_id, step_name, subsystem, command, database_name, on_success_action, on_success_step_id, on_fail_action, on_fail_step_id,",
+            "-- retry_attempts, retry_interval, output_file_name, flags, database_user_name, cmdexec_success_code",
+            "DECLARE @steps TABLE (step_id INT PRIMARY KEY, step_name SYSNAME, subsystem NVARCHAR(40), command NVARCHAR(MAX), database_name SYSNAME NULL,",
+            "        on_success_action TINYINT, on_success_step_id INT, on_fail_action TINYINT, on_fail_step_id INT, retry_attempts INT, retry_interval INT,",
+            "        output_file_name NVARCHAR(200) NULL, flags INT, database_user_name SYSNAME NULL, cmdexec_success_code INT);"));
+        if (steps.Count > 0)
+            sql.Append(Lines("INSERT @steps VALUES") + string.Join("," + "\r\n", steps.Select(s =>
+                $"    ({s["step_id"]}, {N(s["step_name"])}, {N(s["subsystem"])}, {N(s["command"] ?? "")}, {N(s["database_name"])}, {Int(s["on_success_action"])}, " +
+                $"{Int(s["on_success_step_id"])}, {Int(s["on_fail_action"])}, {Int(s["on_fail_step_id"])}, {Int(s["retry_attempts"])}, {Int(s["retry_interval"])}, " +
+                $"{N(s["output_file_name"])}, {Int(s["flags"])}, {N(s["database_user_name"])}, {Int(s["cmdexec_success_code"])})")) + ";\r\n");
+        sql.Append(Lines(
+            "-- name, enabled, freq_type, freq_interval, freq_subday_type, freq_subday_interval, freq_relative_interval, freq_recurrence_factor,",
+            "-- active_start_date, active_end_date, active_start_time, active_end_time",
+            "DECLARE @schedules TABLE (name SYSNAME, enabled TINYINT, freq_type INT, freq_interval INT, freq_subday_type INT, freq_subday_interval INT,",
+            "        freq_relative_interval INT, freq_recurrence_factor INT, active_start_date INT, active_end_date INT, active_start_time INT, active_end_time INT);"));
+        if (schedules.Count > 0)
+            sql.Append(Lines("INSERT @schedules VALUES") + string.Join("," + "\r\n", schedules.Select(sc =>
+                $"    ({N(sc["name"])}, {Int(sc["enabled"])}, {Int(sc["freq_type"])}, {Int(sc["freq_interval"])}, {Int(sc["freq_subday_type"])}, {Int(sc["freq_subday_interval"])}, " +
+                $"{Int(sc["freq_relative_interval"])}, {Int(sc["freq_recurrence_factor"])}, {Int(sc["active_start_date"])}, {Int(sc["active_end_date"])}, " +
+                $"{Int(sc["active_start_time"])}, {Int(sc["active_end_time"])})")) + ";\r\n");
+        sql.Append(Lines(
+            "DECLARE @expected NVARCHAR(MAX) = " + JobExpected.Trim() + ";",
+            $"IF ISNULL(({JobSignature}), N'') COLLATE Latin1_General_BIN2 <> @expected COLLATE Latin1_General_BIN2",
+            "BEGIN",
+            "    DECLARE @job_id UNIQUEIDENTIFIER = (SELECT job_id FROM msdb.dbo.sysjobs WHERE name = @name);",
+            "    -- The owner is a login of the source server: kept where this server has it, otherwise the job keeps or takes the deploying login.",
+            "    DECLARE @owner SYSNAME = CASE WHEN SUSER_ID(@owner_login) IS NOT NULL THEN @owner_login END;",
+            "    -- A running job is left as it is; the next deploy brings it into line.",
+            "    IF @job_id IS NOT NULL AND EXISTS (SELECT 1 FROM msdb.dbo.sysjobactivity a WHERE a.job_id = @job_id",
+            "               AND a.session_id = (SELECT MAX(session_id) FROM msdb.dbo.syssessions) AND a.start_execution_date IS NOT NULL AND a.stop_execution_date IS NULL)",
+            "        RAISERROR(N'Agent job ''%s'' is running; left as it is', 10, 1, @name) WITH NOWAIT;",
+            "    ELSE",
+            "    BEGIN",
+            "        IF NOT EXISTS (SELECT 1 FROM msdb.dbo.syscategories WHERE name = @category AND category_class = 1)",
+            "            EXEC msdb.dbo.sp_add_category @class = N'JOB', @type = N'LOCAL', @name = @category;",
+            "        -- Updated in place when it exists, so its job_id, and with it the run history, stays attached. An operator only where",
+            "        -- one is named: NULL leaves it out, and a level of 0 already says \"never\".",
+            "        IF @job_id IS NULL",
+            "            EXEC msdb.dbo.sp_add_job @job_name = @name, @job_id = @job_id OUTPUT, @enabled = @enabled, @description = @description, @category_name = @category,",
+            "                 @owner_login_name = @owner, @notify_level_eventlog = @notify_level_eventlog, @notify_level_email = @notify_level_email,",
+            "                 @notify_level_page = @notify_level_page, @delete_level = @delete_level, @notify_email_operator_name = @email_operator,",
+            "                 @notify_page_operator_name = @page_operator;",
+            "        ELSE",
+            "            EXEC msdb.dbo.sp_update_job @job_id = @job_id, @enabled = @enabled, @description = @description, @category_name = @category,",
+            "                 @owner_login_name = @owner, @notify_level_eventlog = @notify_level_eventlog, @notify_level_email = @notify_level_email,",
+            "                 @notify_level_page = @notify_level_page, @delete_level = @delete_level, @notify_email_operator_name = @email_operator,",
+            "                 @notify_page_operator_name = @page_operator;",
+            "        IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobsteps WHERE job_id = @job_id) EXEC msdb.dbo.sp_delete_jobstep @job_id = @job_id, @step_id = 0;",
+            "        DECLARE @step_id INT, @step_name SYSNAME, @subsystem NVARCHAR(40), @command NVARCHAR(MAX), @database_name SYSNAME, @on_success_action TINYINT,",
+            "                @on_success_step_id INT, @on_fail_action TINYINT, @on_fail_step_id INT, @retry_attempts INT, @retry_interval INT, @output_file_name NVARCHAR(200),",
+            "                @flags INT, @database_user_name SYSNAME, @cmdexec_success_code INT;",
+            "        DECLARE job_steps CURSOR LOCAL FAST_FORWARD FOR SELECT * FROM @steps ORDER BY step_id;",
+            "        OPEN job_steps;",
+            "        FETCH NEXT FROM job_steps INTO @step_id, @step_name, @subsystem, @command, @database_name, @on_success_action, @on_success_step_id, @on_fail_action,",
+            "              @on_fail_step_id, @retry_attempts, @retry_interval, @output_file_name, @flags, @database_user_name, @cmdexec_success_code;",
+            "        WHILE @@FETCH_STATUS = 0",
+            "        BEGIN",
+            "            EXEC msdb.dbo.sp_add_jobstep @job_id = @job_id, @step_id = @step_id, @step_name = @step_name, @subsystem = @subsystem, @command = @command,",
+            "                 @database_name = @database_name, @on_success_action = @on_success_action, @on_success_step_id = @on_success_step_id,",
+            "                 @on_fail_action = @on_fail_action, @on_fail_step_id = @on_fail_step_id, @retry_attempts = @retry_attempts, @retry_interval = @retry_interval,",
+            "                 @output_file_name = @output_file_name, @flags = @flags, @database_user_name = @database_user_name, @cmdexec_success_code = @cmdexec_success_code;",
+            "            FETCH NEXT FROM job_steps INTO @step_id, @step_name, @subsystem, @command, @database_name, @on_success_action, @on_success_step_id, @on_fail_action,",
+            "                  @on_fail_step_id, @retry_attempts, @retry_interval, @output_file_name, @flags, @database_user_name, @cmdexec_success_code;",
+            "        END",
+            "        CLOSE job_steps;",
+            "        DEALLOCATE job_steps;",
+            "        IF EXISTS (SELECT 1 FROM @steps) EXEC msdb.dbo.sp_update_job @job_id = @job_id, @start_step_id = @start_step_id;",
+            "        DECLARE @schedule_id INT;",
+            "        WHILE 1 = 1",
+            "        BEGIN",
+            "            SET @schedule_id = (SELECT TOP 1 schedule_id FROM msdb.dbo.sysjobschedules WHERE job_id = @job_id);",
+            "            IF @schedule_id IS NULL BREAK;",
+            "            EXEC msdb.dbo.sp_detach_schedule @job_id = @job_id, @schedule_id = @schedule_id, @delete_unused_schedule = 1;",
+            "        END",
+            "        DECLARE @sc_name SYSNAME, @sc_enabled TINYINT, @freq_type INT, @freq_interval INT, @freq_subday_type INT, @freq_subday_interval INT,",
+            "                @freq_relative_interval INT, @freq_recurrence_factor INT, @active_start_date INT, @active_end_date INT, @active_start_time INT, @active_end_time INT;",
+            "        DECLARE job_schedules CURSOR LOCAL FAST_FORWARD FOR SELECT * FROM @schedules ORDER BY name;",
+            "        OPEN job_schedules;",
+            "        FETCH NEXT FROM job_schedules INTO @sc_name, @sc_enabled, @freq_type, @freq_interval, @freq_subday_type, @freq_subday_interval, @freq_relative_interval,",
+            "              @freq_recurrence_factor, @active_start_date, @active_end_date, @active_start_time, @active_end_time;",
+            "        WHILE @@FETCH_STATUS = 0",
+            "        BEGIN",
+            "            -- A schedule another job shares is attached as it is; adding it would give this job a copy of its own.",
+            "            SET @schedule_id = (SELECT TOP 1 schedule_id FROM msdb.dbo.sysschedules",
+            "                 WHERE name = @sc_name AND enabled = @sc_enabled AND freq_type = @freq_type AND freq_interval = @freq_interval",
+            "                   AND freq_subday_type = @freq_subday_type AND freq_subday_interval = @freq_subday_interval AND freq_relative_interval = @freq_relative_interval",
+            "                   AND freq_recurrence_factor = @freq_recurrence_factor AND active_start_date = @active_start_date AND active_end_date = @active_end_date",
+            "                   AND active_start_time = @active_start_time AND active_end_time = @active_end_time ORDER BY schedule_id);",
+            "            IF @schedule_id IS NOT NULL",
+            "                EXEC msdb.dbo.sp_attach_schedule @job_id = @job_id, @schedule_id = @schedule_id;",
+            "            ELSE",
+            "                EXEC msdb.dbo.sp_add_jobschedule @job_id = @job_id, @name = @sc_name, @enabled = @sc_enabled, @freq_type = @freq_type,",
+            "                     @freq_interval = @freq_interval, @freq_subday_type = @freq_subday_type, @freq_subday_interval = @freq_subday_interval,",
+            "                     @freq_relative_interval = @freq_relative_interval, @freq_recurrence_factor = @freq_recurrence_factor,",
+            "                     @active_start_date = @active_start_date, @active_end_date = @active_end_date, @active_start_time = @active_start_time, @active_end_time = @active_end_time;",
+            "            FETCH NEXT FROM job_schedules INTO @sc_name, @sc_enabled, @freq_type, @freq_interval, @freq_subday_type, @freq_subday_interval, @freq_relative_interval,",
+            "                  @freq_recurrence_factor, @active_start_date, @active_end_date, @active_start_time, @active_end_time;",
+            "        END",
+            "        CLOSE job_schedules;",
+            "        DEALLOCATE job_schedules;",
+            "        IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobservers WHERE job_id = @job_id) EXEC msdb.dbo.sp_add_jobserver @job_id = @job_id, @server_name = N'(local)';",
+            "    END",
+            "END"));
+        return sql.ToString();
+    }
 
     private static IEnumerable<ServerObjectScript> Jobs(IDbCommand cmd, Action<string> warn)
     {
@@ -219,71 +358,7 @@ public static class SqlServerServerObjectCaster
             foreach (var s in steps.Where(s => s["proxy_id"] is { } p && p != "0"))
                 warn($"  Agent job '{name}' step '{s["step_name"]}' runs under a proxy, which holds a credential: the step is cast without it.");
 
-            var jobArgs = $"@enabled = {j["enabled"]}, @description = {N(j["description"] ?? "")}, @category_name = {N(j["category"] ?? "[Uncategorized (Local)]")}, " +
-                          "@owner_login_name = @owner, " +
-                          $"@notify_level_eventlog = {j["notify_level_eventlog"]}, @notify_level_email = {j["notify_level_email"]}, " +
-                          $"@notify_level_page = {j["notify_level_page"]}, @delete_level = {j["delete_level"]}" +
-                          // An operator only where one is named: sp_verify_job refuses an empty name, and a level of 0 already says "never".
-                          (j["email_operator"] is { } emailOperator ? $", @notify_email_operator_name = {N(emailOperator)}" : "") +
-                          (j["page_operator"] is { } pageOperator ? $", @notify_page_operator_name = {N(pageOperator)}" : "");
-            var body = new StringBuilder();
-            body.Append(Lines(
-                "    DECLARE @job_id UNIQUEIDENTIFIER = (SELECT job_id FROM msdb.dbo.sysjobs WHERE name = @name);",
-                "    -- The owner is a login of the source server: kept where this server has it, otherwise the job keeps or takes the deploying login.",
-                $"    DECLARE @owner SYSNAME = CASE WHEN SUSER_ID({N(j["owner"] ?? "")}) IS NOT NULL THEN {N(j["owner"] ?? "")} END;",
-                "    -- A running job is left as it is; the next deploy brings it into line.",
-                "    IF @job_id IS NOT NULL AND EXISTS (SELECT 1 FROM msdb.dbo.sysjobactivity a WHERE a.job_id = @job_id",
-                "               AND a.session_id = (SELECT MAX(session_id) FROM msdb.dbo.syssessions) AND a.start_execution_date IS NOT NULL AND a.stop_execution_date IS NULL)",
-                $"        RAISERROR(N'Agent job ''%s'' is running; left as it is', 10, 1, {N(name)}) WITH NOWAIT;",
-                "    ELSE",
-                "    BEGIN"));
-            if (j["category"] is { } category)
-                body.Append(Lines(
-                    $"        IF NOT EXISTS (SELECT 1 FROM msdb.dbo.syscategories WHERE name = {N(category)} AND category_class = 1)",
-                    $"            EXEC msdb.dbo.sp_add_category @class = N'JOB', @type = N'LOCAL', @name = {N(category)};"));
-            body.Append(Lines(
-                "        -- Updated in place when it exists, so its job_id, and with it the run history, stays attached.",
-                "        IF @job_id IS NULL",
-                $"            EXEC msdb.dbo.sp_add_job @job_name = @name, @job_id = @job_id OUTPUT, {jobArgs};",
-                "        ELSE",
-                $"            EXEC msdb.dbo.sp_update_job @job_id = @job_id, {jobArgs};",
-                "        IF EXISTS (SELECT 1 FROM msdb.dbo.sysjobsteps WHERE job_id = @job_id) EXEC msdb.dbo.sp_delete_jobstep @job_id = @job_id, @step_id = 0;"));
-            foreach (var s in steps)
-                body.Append(Lines(
-                    $"        EXEC msdb.dbo.sp_add_jobstep @job_id = @job_id, @step_id = {s["step_id"]}, @step_name = {N(s["step_name"])}, @subsystem = {N(s["subsystem"])},",
-                    $"             @command = {N(s["command"] ?? "")}, @database_name = {N(s["database_name"])}, @on_success_action = {s["on_success_action"]},",
-                    $"             @on_success_step_id = {s["on_success_step_id"]}, @on_fail_action = {s["on_fail_action"]}, @on_fail_step_id = {s["on_fail_step_id"]},",
-                    $"             @retry_attempts = {s["retry_attempts"]}, @retry_interval = {s["retry_interval"]}, @output_file_name = {N(s["output_file_name"])}, @flags = {s["flags"]},",
-                    $"             @database_user_name = {N(s["database_user_name"])}, @cmdexec_success_code = {s["cmdexec_success_code"]};"));
-            if (steps.Count > 0)
-                body.Append(Lines($"        EXEC msdb.dbo.sp_update_job @job_id = @job_id, @start_step_id = {j["start_step_id"]};"));
-            body.Append(Lines(
-                "        DECLARE @schedule_id INT;",
-                "        WHILE 1 = 1",
-                "        BEGIN",
-                "            SET @schedule_id = (SELECT TOP 1 schedule_id FROM msdb.dbo.sysjobschedules WHERE job_id = @job_id);",
-                "            IF @schedule_id IS NULL BREAK;",
-                "            EXEC msdb.dbo.sp_detach_schedule @job_id = @job_id, @schedule_id = @schedule_id, @delete_unused_schedule = 1;",
-                "        END"));
-            // A schedule another job shares is attached as it is; adding it would give this job a copy of its own.
-            foreach (var sc in schedules)
-                body.Append(Lines(
-                    "        SET @schedule_id = (SELECT TOP 1 schedule_id FROM msdb.dbo.sysschedules",
-                    $"             WHERE name = {N(sc["name"])} AND enabled = {sc["enabled"]} AND freq_type = {sc["freq_type"]} AND freq_interval = {sc["freq_interval"]}",
-                    $"               AND freq_subday_type = {sc["freq_subday_type"]} AND freq_subday_interval = {sc["freq_subday_interval"]} AND freq_relative_interval = {sc["freq_relative_interval"]}",
-                    $"               AND freq_recurrence_factor = {sc["freq_recurrence_factor"]} AND active_start_date = {sc["active_start_date"]} AND active_end_date = {sc["active_end_date"]}",
-                    $"               AND active_start_time = {sc["active_start_time"]} AND active_end_time = {sc["active_end_time"]} ORDER BY schedule_id);",
-                    "        IF @schedule_id IS NOT NULL",
-                    "            EXEC msdb.dbo.sp_attach_schedule @job_id = @job_id, @schedule_id = @schedule_id;",
-                    "        ELSE",
-                    $"            EXEC msdb.dbo.sp_add_jobschedule @job_id = @job_id, @name = {N(sc["name"])}, @enabled = {sc["enabled"]}, @freq_type = {sc["freq_type"]},",
-                    $"                 @freq_interval = {sc["freq_interval"]}, @freq_subday_type = {sc["freq_subday_type"]}, @freq_subday_interval = {sc["freq_subday_interval"]},",
-                    $"                 @freq_relative_interval = {sc["freq_relative_interval"]}, @freq_recurrence_factor = {sc["freq_recurrence_factor"]},",
-                    $"                 @active_start_date = {sc["active_start_date"]}, @active_end_date = {sc["active_end_date"]}, @active_start_time = {sc["active_start_time"]}, @active_end_time = {sc["active_end_time"]};"));
-            body.Append(Lines(
-                "        IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysjobservers WHERE job_id = @job_id) EXEC msdb.dbo.sp_add_jobserver @job_id = @job_id, @server_name = N'(local)';",
-                "    END"));
-            yield return new ServerObjectScript("AgentJobs", FileNameFor(name), IfChanged(JobSignature, name, Signature(cmd, $"({JobSignature})", name), body.ToString()));
+            yield return new ServerObjectScript("AgentJobs", FileNameFor(name), JobScript(j, steps, schedules));
         }
     }
 

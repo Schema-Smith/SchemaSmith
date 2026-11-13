@@ -54,4 +54,22 @@ public class SqlServerServerObjectCasterTests
         var script = SqlServerServerObjectCaster.IfChanged("SELECT N'x'", "job", "x", "SELECT 1;");
         Assert.That(script, Does.StartWith("-- Captured from the reference server. To change this object, change it there and extract again"));
     }
+
+    // A job script compares the server with the values it declares, so the header points at those values.
+    [Test]
+    public void AJobScript_SaysToEditItsValues()
+    {
+        var job = new Dictionary<string, string>
+        {
+            ["name"] = "j1", ["enabled"] = "1", ["description"] = null, ["category"] = null, ["owner"] = null, ["notify_level_eventlog"] = "2",
+            ["notify_level_email"] = "0", ["notify_level_page"] = "0", ["delete_level"] = "0", ["email_operator"] = null, ["page_operator"] = null, ["start_step_id"] = "1"
+        };
+        var script = SqlServerServerObjectCaster.JobScript(job, [], []);
+        Assert.Multiple(() =>
+        {
+            Assert.That(script, Does.StartWith("-- Captured from the reference server. To change the job, edit the values below"));
+            Assert.That(script, Does.Contain("IF ISNULL((").And.Contain("<> @expected COLLATE Latin1_General_BIN2"), "the server is compared with the declared values");
+            Assert.That(script, Does.Not.Contain("INSERT @steps"), "a job with no steps declares none");
+        });
+    }
 }
