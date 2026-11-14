@@ -27,6 +27,43 @@ public static class ConnectionString
     }
 
     /// <summary>
+    /// How long each command on an extraction connection may run: <c>Source:CommandTimeoutSeconds</c>, <c>0</c> (the default)
+    /// for no limit. Unset, every command took the client library's 30 seconds, so extracting a large table's data failed.
+    /// A command timeout already in the connection properties or a --ConnectionString wins.
+    /// </summary>
+    public static string WithSourceCommandTimeout(string connectionString, Platform platform, IConfigurationRoot config)
+    {
+        var raw = config?[Configuration.SettingsKeys.SourceCommandTimeoutSeconds];
+        var seconds = 0;
+        if (!string.IsNullOrWhiteSpace(raw) && (!int.TryParse(raw.Trim(), System.Globalization.NumberStyles.None,
+                System.Globalization.CultureInfo.InvariantCulture, out seconds)))
+            throw new Utility.RunFailedException($"{Configuration.SettingsKeys.SourceCommandTimeoutSeconds} is '{raw}'; it must be a whole number of seconds, 0 for no limit.");
+        return WithCommandTimeout(connectionString, platform, seconds);
+    }
+
+    internal static string WithCommandTimeout(string connectionString, Platform platform, int seconds)
+    {
+        if (string.IsNullOrEmpty(connectionString)) return connectionString;
+        switch (platform.GetBasePlatform())
+        {
+            case Platform.SqlServer:
+                var sql = new SqlConnectionStringBuilder(connectionString);
+                if (!sql.ShouldSerialize("Command Timeout")) sql.CommandTimeout = seconds;
+                return sql.ToString();
+            case Platform.PostgreSQL:
+                var pg = new NpgsqlConnectionStringBuilder(connectionString);
+                if (!pg.ShouldSerialize("Command Timeout")) pg.CommandTimeout = seconds;
+                return pg.ToString();
+            case Platform.MySQL:
+                var my = new MySqlConnectionStringBuilder(connectionString);
+                if (!my.ShouldSerialize("Default Command Timeout")) my.DefaultCommandTimeout = (uint)seconds;
+                return my.ToString();
+            default:
+                return connectionString;
+        }
+    }
+
+    /// <summary>
     /// Rebuilds <paramref name="connectionString"/> to target <paramref name="databaseName"/>, preserving
     /// host, auth, and any other connection options. Returns the input unchanged when either argument
     /// is null/empty, so callers can invoke unconditionally.
@@ -43,6 +80,32 @@ public static class ConnectionString
             Platform.MySQL => new MySqlConnectionStringBuilder(connectionString) { Database = databaseName }.ToString(),
             _ => throw new ArgumentOutOfRangeException(nameof(platform), platform, $"Unsupported platform: {platform}")
         };
+    }
+
+    /// <summary>
+    /// Rebuilds <paramref name="connectionString"/> to reach <paramref name="server"/>, keeping its credentials, port and
+    /// every other option. A secondary server is a name sharing the primary's credentials and port settings, so a
+    /// --ConnectionString override reaches a secondary with only the server changed. On SQL Server the override's own
+    /// ",port" carries over unless the secondary names one.
+    /// </summary>
+    public static string RetargetServer(string connectionString, string server, Platform platform)
+    {
+        if (string.IsNullOrEmpty(connectionString) || string.IsNullOrEmpty(server)) return connectionString;
+
+        switch (platform.GetBasePlatform())
+        {
+            case Platform.SqlServer:
+                var builder = new SqlConnectionStringBuilder(connectionString);
+                var port = builder.DataSource?.IndexOf(',') is int comma and >= 0 ? builder.DataSource[comma..] : "";
+                builder.DataSource = server.Contains(',') ? server : server + port;
+                return builder.ToString();
+            case Platform.PostgreSQL:
+                return new NpgsqlConnectionStringBuilder(connectionString) { Host = server }.ToString();
+            case Platform.MySQL:
+                return new MySqlConnectionStringBuilder(connectionString) { Server = server }.ToString();
+            default:
+                throw new ArgumentOutOfRangeException(nameof(platform), platform, $"Unsupported platform: {platform}");
+        }
     }
 
     /// <summary>

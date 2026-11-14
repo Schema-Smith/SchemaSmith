@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -58,6 +59,7 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string JsonIndexPathCode = "SS-JSX-003";
     private const string JsonIndexKeyCode = "SS-JSX-004";
     private const string SelectiveXmlNoPathsCode = "SS-XML-001";
+    private const string XmlSecondaryWithoutPrimaryCode = "SS-XML-002";
     private const string BackfillWithoutDefaultCode = "SS-COL-001";
     private const string CharsetWithoutCollationCode = "SS-COL-002";
     private const string RemovedFunctionCode = "SS-COL-004";
@@ -75,6 +77,8 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string ReplicaIdentityIndexMissingCode = "SS-RI-001";
     private const string IdentifierTooLongCode = "SS-IDENT-002";
     private const int PostgreSqlMaxIdentifierBytes = 63;
+    private const int MySqlMaxIdentifierLength = 64;
+    private const int SqlServerMaxIdentifierLength = 128;
     private const string ReplicaIdentityIndexUnknownCode = "SS-RI-002";
     private const string ReplicaIdentityIndexNotUniqueCode = "SS-RI-003";
     private const string ReplicaIdentityIndexIgnoredCode = "SS-RI-004";
@@ -106,6 +110,13 @@ public sealed class CoherenceCheck : ISchemaCheck
     private const string SystemTimeAutoAloneCode = "SS-PART-014";
     private const string SystemTimePartitionShapeCode = "SS-PART-015";
     private const string PartitioningValueInertCode = "SS-PART-016";
+    private const string PgPartitionBoundShapeCode = "SS-PART-017";
+    private const string PgPartitionDefaultTwiceCode = "SS-PART-018";
+    private const string PgPartitionHashCode = "SS-PART-019";
+    private const string PgPartitionNameCode = "SS-PART-020";
+    private const string PgPartitionKeyColumnCode = "SS-PART-021";
+    private const string PgPartitionedTableUnsupportedCode = "SS-PART-022";
+    private const string PgPartitionNoPartitionsCode = "SS-PART-023";
     private const string PeriodColumnMissingCode = "SS-PER-001";
     private const string SecondPeriodCode = "SS-PER-002";
     private const string MemoryOptimizedPlacementCode = "SS-XTP-001";
@@ -154,6 +165,7 @@ public sealed class CoherenceCheck : ISchemaCheck
         [JsonIndexSameColumnCode] = ErrorLevel,
         [JsonIndexPathCode] = ErrorLevel,
         [SelectiveXmlNoPathsCode] = ErrorLevel,
+        [XmlSecondaryWithoutPrimaryCode] = ErrorLevel,
         [JsonIndexKeyCode] = ErrorLevel,
         [BackfillWithoutDefaultCode] = WarningLevel,
         [CharsetWithoutCollationCode] = WarningLevel,
@@ -202,6 +214,13 @@ public sealed class CoherenceCheck : ISchemaCheck
         [SystemTimeAutoAloneCode] = ErrorLevel,
         [SystemTimePartitionShapeCode] = ErrorLevel,
         [PartitioningValueInertCode] = WarningLevel,
+        [PgPartitionBoundShapeCode] = ErrorLevel,
+        [PgPartitionDefaultTwiceCode] = ErrorLevel,
+        [PgPartitionHashCode] = ErrorLevel,
+        [PgPartitionNameCode] = ErrorLevel,
+        [PgPartitionKeyColumnCode] = ErrorLevel,
+        [PgPartitionedTableUnsupportedCode] = ErrorOrWarningLevel,
+        [PgPartitionNoPartitionsCode] = WarningLevel,
         [PeriodColumnMissingCode] = ErrorLevel,
         [SecondPeriodCode] = ErrorLevel,
         [MemoryOptimizedPlacementCode] = ErrorLevel,
@@ -248,7 +267,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckModeledFolderObjectCoexistence(template));
 
         foreach (var template in ctx.Templates)
-            findings.AddRange(IdentifierLengthFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'"));
+            findings.AddRange(IdentifierLengthFindings(ModeledObjectNamedParts(template), $"Template '{template.Name}'", ctx.Product.Platform));
 
         foreach (var template in ctx.Templates)
         foreach (var table in template.Tables)
@@ -268,6 +287,7 @@ public sealed class CoherenceCheck : ISchemaCheck
                 findings.AddRange(CheckForeignKey(table, fk, location, template, tablesByTemplate, columnsAreOwnedElsewhere));
             findings.AddRange(CheckMySqlFamilyForeignKeys(table, location, tablesByKey, ctx.Product.Platform));
             findings.AddRange(CheckMySqlFamilyColumnTypes(table, location, ctx.Product.Platform));
+            findings.AddRange(CheckQuotedExpressionDefaults(table, location, ctx.Product.Platform));
 
             foreach (var index in table.Indexes)
                 findings.AddRange(CheckIndex(table, index, location, columnsAreOwnedElsewhere));
@@ -279,12 +299,13 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckSpatialIndexes(table, location, columnsAreOwnedElsewhere));
             findings.AddRange(CheckJsonIndexes(table, location, columnsAreOwnedElsewhere));
             findings.AddRange(CheckSelectiveXmlIndexes(table, location));
+            findings.AddRange(CheckXmlSecondaryIndexes(table, location));
             findings.AddRange(CheckEdgeConstraints(table, location, tablesByKey));
             findings.AddRange(CheckCharsetWithoutCollation(table, location));
             findings.AddRange(CheckRebuildPolicy(table.RebuildPolicy, $"Table '{table.Name}'", location));
             findings.AddRange(CheckRowLevelSecurity(table, location));
             findings.AddRange(CheckReplicaIdentity(table, location));
-            findings.AddRange(CheckPostgreSqlIdentifierLength(table, location));
+            findings.AddRange(IdentifierLengthFindings(NamedParts(table), location, ctx.Product.Platform));
             findings.AddRange(CheckSystemVersioningExclusions(table, location));
             findings.AddRange(CheckCdcFilegroup(table, location));
             findings.AddRange(CheckCdcSupportsNetChanges(table, location));
@@ -293,6 +314,7 @@ public sealed class CoherenceCheck : ISchemaCheck
             findings.AddRange(CheckCompressionOptions(table, location));
             findings.AddRange(CheckPartitionPlacement(table, location));
             findings.AddRange(CheckMyPartitioning(table, location, ctx.Product));
+            findings.AddRange(CheckPgPartitioning(table, location, template));
             findings.AddRange(CheckMariaDbPeriods(table, location));
             findings.AddRange(CheckPartitionedForeignKeys(table, location, tablesByKey));
             findings.AddRange(CheckMemoryOptimizedPlacement(table, location));
@@ -521,16 +543,33 @@ public sealed class CoherenceCheck : ISchemaCheck
             if (platform == Platform.MySQL && DeprecatedNumericForm.IsMatch(column.DataType ?? ""))
                 yield return new Finding(Severity.Warning, DeprecatedNumericFormCode, Category, location,
                     $"'{column.DataType}' uses a form MySQL 8.0.17 deprecated (FLOAT(M,D), UNSIGNED on FLOAT, DOUBLE or DECIMAL, or ZEROFILL), which a later release will remove.");
-            // D5: a package extracted before 2.8 wrote an expression default as a quoted string, which deploys as that text.
-            if (QuotedFunctionCall.IsMatch(column.Default ?? ""))
-                yield return new Finding(Severity.Warning, QuotedExpressionDefaultCode, Category, location,
-                    $"Default {column.Default.Trim()} is a quoted function call, so it deploys as that text, not as the expression. " +
-                    "A package extracted before 2.8 wrote expression defaults this way: re-extract it, or write the expression in parentheses.");
         }
     }
 
+    /// <summary>
+    /// A default written as a quoted function call deploys as that text, not as the expression. On the MySQL family a
+    /// package extracted before 2.8 wrote expression defaults this way (D5); anywhere, it is an easy hand-written slip,
+    /// and a quiet one: PostgreSQL reads <c>'now()'</c> once, at the deploy, and keeps that timestamp as the default, and
+    /// SQL Server creates the table and then fails every insert into a datetime column.
+    /// </summary>
+    private static IEnumerable<Finding> CheckQuotedExpressionDefaults(Table table, string tableLocation, Platform platform)
+    {
+        foreach (var column in table.Columns)
+        {
+            var match = QuotedFunctionCall.Match(column.Default ?? "");
+            if (!match.Success) continue;
+            var hint = platform is Platform.MySQL or Platform.MariaDb
+                ? "A package extracted before 2.8 wrote expression defaults this way: re-extract it, or write the expression in parentheses."
+                : $"Write it without the quotes ({match.Groups["call"].Value.Replace("''", "'")}).";
+            yield return new Finding(Severity.Warning, QuotedExpressionDefaultCode, Category, $"{tableLocation} / Column '{column.Name}'",
+                $"Default {column.Default.Trim()} is a quoted function call, so it deploys as that text, not as the expression. {hint}");
+        }
+    }
+
+    // Optionally wrapped in parentheses and N-prefixed, as a hand-written SQL Server default may be.
+    // No space before the parenthesis: 'Pending (review)' is a string, not a call.
     private static readonly System.Text.RegularExpressions.Regex QuotedFunctionCall =
-        new(@"^\s*'\s*[A-Za-z_][A-Za-z0-9_$]*\s*\(.*\)\s*'\s*$", System.Text.RegularExpressions.RegexOptions.Singleline);
+        new(@"^\s*(?:\(\s*)?N?'\s*(?<call>[A-Za-z_][A-Za-z0-9_$]*\(.*\))\s*'\s*(?:\)\s*)?$", System.Text.RegularExpressions.RegexOptions.Singleline);
 
     /// <summary>
     /// A declared <c>MinimumVersion</c> the engine cannot resolve aborts the deploy before any object is
@@ -612,6 +651,38 @@ public sealed class CoherenceCheck : ISchemaCheck
         foreach (var index in sqlTable.XmlIndexes.Where(x => x.Selective != null && (x.Selective.Paths == null || x.Selective.Paths.Count == 0)))
             yield return new Finding(Severity.Error, SelectiveXmlNoPathsCode, Category, $"{tableLocation} / XML index '{index.Name}'",
                 $"Selective XML index '{index.Name}' declares no paths, so there is nothing to index and the deploy would create nothing. Declare at least one path.");
+    }
+
+    /// <summary>
+    /// A secondary XML index is built on a primary XML index of its table, and a secondary selective one on a path of a
+    /// selective XML index. Naming one the table does not declare fails the deploy at CREATE XML INDEX.
+    /// </summary>
+    private static IEnumerable<Finding> CheckXmlSecondaryIndexes(Table table, string tableLocation)
+    {
+        if (table is not SqlServerTable sqlTable) yield break;
+        var byName = sqlTable.XmlIndexes.Where(x => !string.IsNullOrWhiteSpace(x.Name))
+            .ToLookup(x => NormalizeIdentifier(x.Name), StringComparer.OrdinalIgnoreCase);
+        foreach (var index in sqlTable.XmlIndexes.Where(x => !x.IsPrimary && x.Selective == null))
+        {
+            var named = byName[NormalizeIdentifier(index.PrimaryIndex)].ToList();
+            var location = $"{tableLocation} / XML index '{index.Name}'";
+            if (!string.IsNullOrWhiteSpace(index.ForPath))
+            {
+                var selective = named.Where(x => x.Selective != null).ToList();
+                if (selective.Count == 0)
+                    yield return new Finding(Severity.Error, XmlSecondaryWithoutPrimaryCode, Category, location,
+                        $"Secondary selective XML index '{index.Name}' names PrimaryIndex '{index.PrimaryIndex}', which is not a selective XML " +
+                        $"index declared on table '{table.Name}', so the deploy cannot create it. Name one of the table's selective XML indexes.");
+                else if (!selective.Any(x => x.Selective.Paths?.Any(p => string.Equals(p.Name, index.ForPath, StringComparison.OrdinalIgnoreCase)) == true))
+                    yield return new Finding(Severity.Error, XmlSecondaryWithoutPrimaryCode, Category, location,
+                        $"Secondary selective XML index '{index.Name}' names ForPath '{index.ForPath}', which is not a path of selective XML " +
+                        $"index '{index.PrimaryIndex}', so the deploy cannot create it. Name one of that index's Paths.");
+            }
+            else if (!named.Any(x => x.IsPrimary && x.Selective == null))
+                yield return new Finding(Severity.Error, XmlSecondaryWithoutPrimaryCode, Category, location,
+                    $"Secondary XML index '{index.Name}' names PrimaryIndex '{index.PrimaryIndex}', which is not a primary XML index declared " +
+                    $"on table '{table.Name}', so the deploy cannot create it. Name the table's primary XML index, or set IsPrimary.");
+        }
     }
 
     private static IEnumerable<Finding> CheckJsonIndexes(Table table, string tableLocation, bool columnsAreOwnedElsewhere)
@@ -981,7 +1052,8 @@ public sealed class CoherenceCheck : ISchemaCheck
         var hasPrefixKeyParts = table is MySqlTable;
         foreach (var column in keyParts.Take(lastPartIsPeriod ? keyParts.Count - 1 : keyParts.Count).Select(StripOrderingSuffix)
                      .Select(column => hasPrefixKeyParts ? StripPrefixLength(column) : column)
-                     .Where(column => !IsExpressionKeyPart(column))
+                     .Select(column => table is PostgreSqlTable ? PostgreSqlKeyColumn(column) : column)
+                     .Where(column => column != null && !IsExpressionKeyPart(column))
                      .Where(column => !graphPseudoColumns.Contains(NormalizeIdentifier(column), StringComparer.OrdinalIgnoreCase))
                      .Where(column => !localColumnNames.Contains(NormalizeIdentifier(column))))
             yield return new Finding(Severity.Error, IndexColumnCode, Category, location,
@@ -1090,12 +1162,24 @@ public sealed class CoherenceCheck : ISchemaCheck
         {
             var depth = 0;
             var inBacktick = false;
+            // A comma inside a string literal or a double-quoted identifier is part of it ('a,b' in a partition bound).
+            // A doubled quote toggles twice, so it stays inside.
+            var inSingle = false;
+            var inDouble = false;
             var comma = -1;
 
             for (var scan = pos; scan < len; scan++)
             {
                 var c = text[scan];
-                if (c == '`')
+                if (inSingle)
+                    inSingle = c != '\'';
+                else if (inDouble)
+                    inDouble = c != '"';
+                else if (!inBacktick && c == '\'')
+                    inSingle = true;
+                else if (!inBacktick && c == '"')
+                    inDouble = true;
+                else if (c == '`')
                     inBacktick = !inBacktick;
                 else if (!inBacktick && c == '(')
                     depth++;
@@ -1120,34 +1204,56 @@ public sealed class CoherenceCheck : ISchemaCheck
         return result;
     }
 
-    private static IEnumerable<Finding> CheckPostgreSqlIdentifierLength(Table table, string tableLocation) =>
-        table is PostgreSqlTable pgTable ? IdentifierLengthFindings(NamedParts(pgTable), tableLocation) : [];
-
     /// <summary>
-    /// PostgreSQL truncates an identifier longer than 63 bytes, with only a NOTICE. The object is created under the
-    /// shorter name, the next deploy looks for the declared one, misses it, and fails creating it again. The limit is
-    /// in bytes (NAMEDATALEN - 1), so a name in multi-byte characters reaches it sooner than its length suggests.
+    /// A name longer than the engine takes. PostgreSQL truncates one over 63 bytes with only a NOTICE: the object is
+    /// created under the shorter name, the next deploy looks for the declared one, misses it, and fails creating it
+    /// again. The limit is in bytes (NAMEDATALEN - 1), so a multi-byte name reaches it sooner than its length suggests.
+    /// MySQL and MariaDB refuse a name over 64 characters (1059 / 1103) and SQL Server one over 128 (Msg 103), so there
+    /// the deploy stops part-way through instead.
     /// </summary>
-    private static IEnumerable<Finding> IdentifierLengthFindings(IEnumerable<(string Kind, string Name)> parts, string location)
+    private static IEnumerable<Finding> IdentifierLengthFindings(IEnumerable<(string Kind, string Name)> parts, string location, Platform platform)
     {
         foreach (var (kind, name) in parts)
         {
             if (string.IsNullOrEmpty(name)) continue;
-            var bare = name.Length >= 2 && name[0] == '"' && name[^1] == '"' ? name[1..^1] : name;
-            var bytes = System.Text.Encoding.UTF8.GetByteCount(bare);
-            if (bytes <= PostgreSqlMaxIdentifierBytes) continue;
+            var bare = Unwrapped(name, platform);
+            if (platform == Platform.PostgreSQL)
+            {
+                var bytes = System.Text.Encoding.UTF8.GetByteCount(bare);
+                if (bytes <= PostgreSqlMaxIdentifierBytes) continue;
+                yield return new Finding(Severity.Error, IdentifierTooLongCode, Category, location,
+                    $"{kind} '{name}' is {bytes} bytes long. PostgreSQL truncates identifiers to {PostgreSqlMaxIdentifierBytes} " +
+                    "bytes, so it would be stored under a shorter name and the next deploy, not finding the declared one, " +
+                    $"would fail creating it again. Shorten it to {PostgreSqlMaxIdentifierBytes} bytes or fewer.");
+                continue;
+            }
+            // SQL Server's sysname counts UTF-16 code units; MySQL counts characters.
+            var limit = platform == Platform.SqlServer ? SqlServerMaxIdentifierLength : MySqlMaxIdentifierLength;
+            var length = platform == Platform.SqlServer ? bare.Length : bare.EnumerateRunes().Count();
+            if (length <= limit) continue;
             yield return new Finding(Severity.Error, IdentifierTooLongCode, Category, location,
-                $"{kind} '{name}' is {bytes} bytes long. PostgreSQL truncates identifiers to {PostgreSqlMaxIdentifierBytes} " +
-                "bytes, so it would be stored under a shorter name and the next deploy, not finding the declared one, " +
-                $"would fail creating it again. Shorten it to {PostgreSqlMaxIdentifierBytes} bytes or fewer.");
+                $"{kind} '{name}' is {length} characters long. {platform} refuses an identifier over {limit} characters, " +
+                $"so the deploy would stop at it. Shorten it to {limit} characters or fewer.");
         }
     }
 
+    private static string Unwrapped(string name, Platform platform)
+    {
+        if (name.Length < 2) return name;
+        return platform switch
+        {
+            Platform.PostgreSQL when name[0] == '"' && name[^1] == '"' => name[1..^1].Replace("\"\"", "\""),
+            Platform.SqlServer when name[0] == '[' && name[^1] == ']' => name[1..^1].Replace("]]", "]"),
+            Platform.MySQL or Platform.MariaDb when name[0] == '`' && name[^1] == '`' => name[1..^1].Replace("``", "`"),
+            _ => name
+        };
+    }
+
     /// <summary>
-    /// Every name on a table that reaches PostgreSQL DDL as an identifier, for the 63-byte limit (SS-IDENT-002). Column
-    /// <em>lists</em> are out (their items are checked as the columns they name), and <c>SchemaRef</c> is read by no script.
+    /// Every name on a table that reaches DDL as an identifier, for SS-IDENT-002. Column <em>lists</em> are out (their
+    /// items are checked as the columns they name), and <c>SchemaRef</c> is read by no script.
     /// </summary>
-    private static IEnumerable<(string Kind, string Name)> NamedParts(PostgreSqlTable table)
+    private static IEnumerable<(string Kind, string Name)> NamedParts(Table table)
     {
         yield return ("Table", table.Name);
         // Schema is resolved through IDeliverableTable, uniformly across platforms -- the same route
@@ -1168,20 +1274,49 @@ public sealed class CoherenceCheck : ISchemaCheck
             // local ones are, and are NOT covered by checking the related table's own declaration: a
             // package may reference a table it does not declare, and SS-FK-002 resolves the reference
             // without ever looking at whether the stored text can be emitted.
-            if (f is PostgreSqlForeignKey { RelatedTableSchema: { Length: > 0 } relatedSchema })
-                yield return ("Foreign key RelatedTableSchema", relatedSchema);
+            var relatedSchema = f switch
+            {
+                PostgreSqlForeignKey pg => pg.RelatedTableSchema,
+                SqlServerForeignKey ss => ss.RelatedTableSchema,
+                _ => null
+            };
+            if (!string.IsNullOrEmpty(relatedSchema)) yield return ("Foreign key RelatedTableSchema", relatedSchema);
             if (!string.IsNullOrEmpty(f.RelatedTable)) yield return ("Foreign key RelatedTable", f.RelatedTable);
         }
         foreach (var cc in table.CheckConstraints) yield return ("Check constraint", cc.Name);
+
+        var engineParts = table switch
+        {
+            PostgreSqlTable pg => PostgreSqlNamedParts(pg),
+            SqlServerTable ss => SqlServerNamedParts(ss),
+            MySqlTable my => (my.Partitioning?.Partitions ?? []).Select(p => ("Partition", p.Name)),
+            _ => []
+        };
+        foreach (var part in engineParts) yield return part;
+    }
+
+    private static IEnumerable<(string Kind, string Name)> PostgreSqlNamedParts(PostgreSqlTable table)
+    {
         foreach (var ec in table.ExcludeConstraints) yield return ("Exclude constraint", ec.Name);
         foreach (var st in table.Statistics) yield return ("Statistics", st.Name);
         // A pointer, not a declaration -- so it is its own kind. When it names a declared index the index
         // reports separately, which is honest: both the CREATE and the REPLICA IDENTITY clause break.
         if (!string.IsNullOrEmpty(table.ReplicaIdentityIndex))
             yield return ("ReplicaIdentityIndex", table.ReplicaIdentityIndex);
+        foreach (var name in PartitionNames(table.Partitioning)) yield return ("Partition", name);
     }
 
-    /// <summary>Every name on a modeled non-table object that reaches PostgreSQL DDL as a wrapped identifier.</summary>
+    private static IEnumerable<string> PartitionNames(PostgreSqlPartitioning partitioning) =>
+        (partitioning?.Partitions ?? []).SelectMany(p => PartitionNames(p.Partitioning).Prepend(p.Name));
+
+    private static IEnumerable<(string Kind, string Name)> SqlServerNamedParts(SqlServerTable table) =>
+        table.XmlIndexes.Select(i => ("XML index", i.Name))
+            .Concat(table.SpatialIndexes.Select(i => ("Spatial index", i.Name)))
+            .Concat(table.JsonIndexes.Select(i => ("JSON index", i.Name)))
+            .Concat(table.Statistics.Select(s => ("Statistics", s.Name)))
+            .Concat(table.EdgeConstraints.Select(e => ("Edge constraint", e.Name)));
+
+    /// <summary>Every name on a modeled non-table object that reaches DDL as an identifier.</summary>
     private static IEnumerable<(string Kind, string Name)> ModeledObjectNamedParts(Template template)
     {
         foreach (var view in template.MaterializedViews)
@@ -1212,6 +1347,22 @@ public sealed class CoherenceCheck : ISchemaCheck
             foreach (var check in domain.CheckConstraints)
                 yield return ("Domain type check constraint", check.Name);
         }
+
+        foreach (var sequence in template.SqlServerSequences)
+        {
+            yield return ("Sequence", sequence.Name);
+            if (!string.IsNullOrEmpty(sequence.Schema)) yield return ("Sequence schema", sequence.Schema);
+        }
+
+        foreach (var view in template.IndexedViews)
+        {
+            yield return ("Indexed view", view.Name);
+            if (!string.IsNullOrEmpty(view.Schema)) yield return ("Indexed view schema", view.Schema);
+            foreach (var index in view.Indexes) yield return ("Indexed view index", index.Name);
+        }
+
+        foreach (var sequence in template.MariaDbSequences) yield return ("Sequence", sequence.Name);
+        foreach (var evt in template.Events) yield return ("Event", evt.Name);
     }
 
     /// <summary>
@@ -1495,6 +1646,141 @@ public sealed class CoherenceCheck : ISchemaCheck
     }
 
     /// <summary>
+    /// PostgreSQL declarative partitioning: what the engine refuses, or what would deploy other than as written, caught
+    /// before the deploy. Every level of a nested tree is checked as the top one is.
+    /// </summary>
+    private static IEnumerable<Finding> CheckPgPartitioning(Table table, string location, Template template)
+    {
+        if (table is not PostgreSqlTable pg || pg.Partitioning == null) yield break;
+        // A column with variants (ShouldApplyExpression) is declared more than once; one of them stands for it here.
+        var columns = pg.Columns.OfType<PostgreSqlColumn>().GroupBy(c => NormalizeIdentifier(c.Name ?? ""), StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.First(), StringComparer.Ordinal);
+
+        if (string.Equals(pg.PersistenceType?.Trim(), "unlogged", StringComparison.OrdinalIgnoreCase))
+            yield return new Finding(Severity.Error, PgPartitionedTableUnsupportedCode, Category, location,
+                $"Table '{table.Name}' is partitioned and declares PersistenceType Unlogged: PostgreSQL 18 refuses an unlogged partitioned table, and 12 to 17 ignore it. Declare it on no partitioned table.");
+        if (pg.ExcludeConstraints.Count > 0)
+            yield return new Finding(Severity.Warning, PgPartitionedTableUnsupportedCode, Category, location,
+                $"Table '{table.Name}' is partitioned and declares an exclusion constraint, which PostgreSQL accepts on a partitioned table from 17; below that the deploy fails creating it.");
+        if (pg.UpdateFillFactor || pg.FillFactor is not (0 or 100))
+            yield return new Finding(Severity.Warning, PartitioningValueInertCode, Category, location,
+                $"Table '{table.Name}' is partitioned, and a partitioned table holds no rows: its FillFactor is not applied. Declare it on no partitioned table.");
+
+        var names = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var finding in CheckPgPartitioningLevel(table.Name, pg.Partitioning, location, columns, names, isTable: true, pg))
+            yield return finding;
+
+        var declaredTables = template.Tables.Select(t => (Schema: NormalizeIdentifier((t as IDeliverableTable)?.Schema ?? ""), Name: NormalizeIdentifier(t.Name ?? ""))).ToHashSet();
+        var schema = NormalizeIdentifier(pg.Schema ?? "");
+        foreach (var (name, count) in names)
+        {
+            if (count > 1)
+                yield return new Finding(Severity.Error, PgPartitionNameCode, Category, location,
+                    $"Table '{table.Name}' names partition '{name}' {count} times; each partition is a table of its own and needs its own name.");
+            if (declaredTables.Contains((schema, name)))
+                yield return new Finding(Severity.Error, PgPartitionNameCode, Category, location,
+                    $"Partition '{name}' of table '{table.Name}' is also declared as a table. A partition is declared in its parent's Partitioning only.");
+        }
+    }
+
+    private static IEnumerable<Finding> CheckPgPartitioningLevel(string parent, PostgreSqlPartitioning p, string location,
+        Dictionary<string, PostgreSqlColumn> columns, Dictionary<string, int> names, bool isTable, PostgreSqlTable table)
+    {
+        var method = (p.Method ?? "").Trim().ToUpperInvariant();
+        var keyParts = SplitNames(p.Expression ?? "").Select(k => k.Trim()).Where(k => k.Length > 0).ToList();
+        if (keyParts.Count == 0)
+            yield return new Finding(Severity.Error, PartitionExpressionMissingCode, Category, location,
+                $"'{parent}' partitions by {method} with no Expression: PARTITION BY needs the key.");
+
+        // The key's plain columns: declared, and not generated (the engine refuses a generated column in a partition key).
+        var keyColumns = keyParts.Select(PostgreSqlKeyColumn).ToList();
+        foreach (var column in keyColumns.Where(c => c != null).Select(NormalizeIdentifier))
+            if (!columns.TryGetValue(column, out var declared))
+                yield return new Finding(Severity.Error, PgPartitionKeyColumnCode, Category, location,
+                    $"'{parent}' partitions by {method} ({p.Expression}), but the table declares no column '{column}'.");
+            else if (!string.IsNullOrWhiteSpace(declared.GenerationExpression))
+                yield return new Finding(Severity.Error, PgPartitionKeyColumnCode, Category, location,
+                    $"'{parent}' partitions by {method} ({p.Expression}), but '{column}' is a generated column, which PostgreSQL refuses in a partition key.");
+
+        // A primary key or unique constraint on the partitioned table must hold every key column, and none can stand
+        // on a key with an expression in it.
+        if (isTable)
+            foreach (var key in table.Indexes.Where(i => i.PrimaryKey || i.UniqueConstraint || i.Unique))
+            {
+                var held = KeyColumns(table, key).Select(c => NormalizeIdentifier(c.Name ?? "")).ToHashSet(StringComparer.Ordinal);
+                if (keyColumns.Any(c => c == null))
+                    yield return new Finding(Severity.Error, MyPartitionKeyMissesColumnCode, Category, location,
+                        $"'{key.Name}' is a primary or unique key on '{parent}', whose partition key ({p.Expression}) has an expression in it: PostgreSQL refuses a primary or unique key there.");
+                else if (keyColumns.Select(NormalizeIdentifier).FirstOrDefault(c => !held.Contains(c)) is { } missing)
+                    yield return new Finding(Severity.Error, MyPartitionKeyMissesColumnCode, Category, location,
+                        $"'{key.Name}' is a primary or unique key on '{parent}' that does not hold the partition key column '{missing}': PostgreSQL refuses it on a partitioned table.");
+            }
+
+        if (p.Partitions.Count == 0 && method is "RANGE" or "LIST")
+            yield return new Finding(Severity.Warning, PgPartitionNoPartitionsCode, Category, location,
+                $"'{parent}' partitions by {method} and declares no partitions, so every insert fails until one exists (expected only when a partition manager creates them).");
+
+        var defaults = p.Partitions.Count(x => string.Equals((x.Bound ?? "").Trim(), "DEFAULT", StringComparison.OrdinalIgnoreCase));
+        if (defaults > 1)
+            yield return new Finding(Severity.Error, PgPartitionDefaultTwiceCode, Category, location,
+                $"'{parent}' declares {defaults} DEFAULT partitions; a partitioned table takes one.");
+
+        var hash = new List<(string Name, int Modulus, int Remainder)>();
+        foreach (var part in p.Partitions)
+        {
+            var name = NormalizeIdentifier(part.Name ?? "");
+            names[name] = names.GetValueOrDefault(name) + 1;
+            var bound = Regex.Replace((part.Bound ?? "").Trim(), @"\s+", " ");
+            var isDefault = string.Equals(bound, "DEFAULT", StringComparison.OrdinalIgnoreCase);
+            var shapeOk = isDefault
+                ? method != "HASH"
+                : method switch
+                {
+                    "RANGE" => Regex.IsMatch(bound, @"^FOR VALUES FROM \(.*\) TO \(.*\)$", RegexOptions.IgnoreCase | RegexOptions.Singleline),
+                    "LIST" => Regex.IsMatch(bound, @"^FOR VALUES IN \(.*\)$", RegexOptions.IgnoreCase | RegexOptions.Singleline),
+                    "HASH" => Regex.IsMatch(bound, @"^FOR VALUES WITH \(\s*MODULUS\s+\d+\s*,\s*REMAINDER\s+\d+\s*\)$", RegexOptions.IgnoreCase),
+                    _ => true
+                };
+            if (!shapeOk)
+                yield return new Finding(Severity.Error, PgPartitionBoundShapeCode, Category, location,
+                    $"Partition '{part.Name}' of '{parent}' declares '{part.Bound}', which is not a {method} bound: " + method switch
+                    {
+                        "RANGE" => "FOR VALUES FROM (...) TO (...), or DEFAULT.",
+                        "LIST" => "FOR VALUES IN (...), or DEFAULT.",
+                        _ => "FOR VALUES WITH (MODULUS n, REMAINDER r); a HASH partitioned table has no DEFAULT partition."
+                    });
+            else if (method == "HASH" && !isDefault)
+            {
+                var m = Regex.Match(bound, @"MODULUS\s+(\d+)\s*,\s*REMAINDER\s+(\d+)", RegexOptions.IgnoreCase);
+                hash.Add((part.Name, int.Parse(m.Groups[1].Value, CultureInfo.InvariantCulture), int.Parse(m.Groups[2].Value, CultureInfo.InvariantCulture)));
+            }
+            else if (method == "RANGE" && !isDefault && keyParts.Count > 1)
+            {
+                var m = Regex.Match(bound, @"^FOR VALUES FROM \((.*)\) TO \((.*)\)$", RegexOptions.IgnoreCase | RegexOptions.Singleline);
+                if (m.Success && (SplitNames(m.Groups[1].Value).Count != keyParts.Count || SplitNames(m.Groups[2].Value).Count != keyParts.Count))
+                    yield return new Finding(Severity.Error, PgPartitionBoundShapeCode, Category, location,
+                        $"Partition '{part.Name}' of '{parent}' declares '{part.Bound}', but the key has {keyParts.Count} columns: FROM and TO each take one value per key column.");
+            }
+
+            if (part.Partitioning != null)
+                foreach (var finding in CheckPgPartitioningLevel(part.Name, part.Partitioning, location, columns, names, isTable: false, table))
+                    yield return finding;
+        }
+
+        foreach (var h in hash.Where(h => h.Remainder >= h.Modulus || h.Modulus < 1))
+            yield return new Finding(Severity.Error, PgPartitionHashCode, Category, location,
+                $"Partition '{h.Name}' of '{parent}' has REMAINDER {h.Remainder} for MODULUS {h.Modulus}: the remainder must be below the modulus.");
+        foreach (var dup in hash.GroupBy(h => (h.Modulus, h.Remainder)).Where(g => g.Count() > 1))
+            yield return new Finding(Severity.Error, PgPartitionHashCode, Category, location,
+                $"'{parent}' declares MODULUS {dup.Key.Modulus}, REMAINDER {dup.Key.Remainder} more than once ({string.Join(", ", dup.Select(d => d.Name))}).");
+        var moduli = hash.Select(h => h.Modulus).Where(m => m > 0).Distinct().OrderBy(m => m).ToList();
+        for (var i = 0; i + 1 < moduli.Count; i++)
+            if (moduli[i + 1] % moduli[i] != 0)
+                yield return new Finding(Severity.Error, PgPartitionHashCode, Category, location,
+                    $"'{parent}' mixes MODULUS {moduli[i]} and {moduli[i + 1]}: each modulus must be a factor of the next larger one.");
+    }
+
+    /// <summary>
     /// MySQL/MariaDB partitioning (#partitioning K3) internal-consistency checks — the engine equivalent of
     /// the SQL Server SS-PART rules, which this feature shipped without. Only the unambiguous inconsistencies
     /// are flagged (MySQL legitimately allows named HASH partitions, so that is NOT one):
@@ -1545,7 +1831,8 @@ public sealed class CoherenceCheck : ISchemaCheck
                     $"Table '{table.Name}' partitions by SYSTEM_TIME, which partitions a system-versioned table's history: " +
                     "it needs a MariaDB table with IsSystemVersioned true.");
         }
-        else if (string.IsNullOrWhiteSpace(p.Expression))
+        // KEY () with no columns partitions on the primary key, so only KEY may leave the list empty.
+        else if (string.IsNullOrWhiteSpace(p.Expression) && method is not ("KEY" or "LINEAR KEY"))
             yield return new Finding(Severity.Error, PartitionExpressionMissingCode, Category, tableLocation,
                 $"Table '{table.Name}' partitions by {method} but declares no Expression: every method but SYSTEM_TIME " +
                 "partitions on an expression or a column list.");
@@ -1782,7 +2069,8 @@ public sealed class CoherenceCheck : ISchemaCheck
 
         foreach (var finding in CoexistenceFindings(
                      template, "Sequences", DuplicateSequenceCode, "Sequence",
-                     template.Sequences.Select(s => (s.Schema, s.Name)).Concat(template.MariaDbSequences.Select(s => ((string)null, s.Name))),
+                     template.Sequences.Select(s => (s.Schema, s.Name)).Concat(template.MariaDbSequences.Select(s => ((string)null, s.Name)))
+                         .Concat(template.SqlServerSequences.Select(s => (s.Schema, s.Name))),
                      "Two authoring paths for one object leave it ambiguous which one is in charge"))
             yield return finding;
     }
@@ -1848,12 +2136,32 @@ public sealed class CoherenceCheck : ISchemaCheck
     // need a real SQL parser and is out of scope — skip rather than false-flag.
     internal static bool IsExpressionKeyPart(string column) => column.StartsWith('(');
 
+    // A PostgreSQL key part is a column followed by what qualifies it (an operator class, COLLATE, NULLS FIRST/LAST), or an
+    // expression, which a function call can be without outer parentheses. The column is the part's first name; anything
+    // with a parenthesis outside a quoted name is an expression, and names no column here (null).
+    internal static string PostgreSqlKeyColumn(string part)
+    {
+        var text = part.Trim();
+        var end = 0;
+        if (text.StartsWith('"'))
+        {
+            end = 1;
+            while (end < text.Length && (text[end] != '"' || (end + 1 < text.Length && text[end + 1] == '"')))
+                end += text[end] == '"' ? 2 : 1;
+            end = Math.Min(end + 1, text.Length);
+        }
+        else
+            while (end < text.Length && !char.IsWhiteSpace(text[end]) && text[end] != '(') end++;
+        return text[end..].Contains('(') || text[..end].Contains('(') ? null : text[..end];
+    }
+
     /// <summary>The table's columns an index key names, matched the way the deploy matches them; expression key parts name none.</summary>
     internal static IEnumerable<Column> KeyColumns(Table table, Index index)
     {
         var keyNames = SplitNames(index.IndexColumns).Select(StripOrderingSuffix)
             .Select(part => table is MySqlTable ? StripPrefixLength(part) : part)
-            .Where(part => !IsExpressionKeyPart(part))
+            .Select(part => table is PostgreSqlTable ? PostgreSqlKeyColumn(part) : part)
+            .Where(part => part != null && !IsExpressionKeyPart(part))
             .Select(NormalizeIdentifier)
             .ToHashSet(NameComparer(table));
         return table.Columns.Where(c => keyNames.Contains(NormalizeIdentifier(c.Name ?? "")));

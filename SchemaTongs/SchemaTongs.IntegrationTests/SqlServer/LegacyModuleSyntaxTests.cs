@@ -29,7 +29,7 @@ public class LegacyModuleSyntaxTests
     private static readonly string[] ModuleScripts =
     [
         "Views/dbo.vT", "Functions/dbo.fScalar", "Functions/dbo.fInline", "Functions/dbo.fMulti",
-        "Procedures/dbo.pOne", "Triggers/dbo.T.trT", "Triggers/dbo.vT.trV", "DDLTriggers/trDdl"
+        "Procedures/dbo.pOne", "Procedures/dbo.pΩ", "Triggers/dbo.T.trT", "Triggers/dbo.vT.trV", "DDLTriggers/trDdl"
     ];
 
     private string _connectionString = "";
@@ -58,8 +58,7 @@ public class LegacyModuleSyntaxTests
         using var cmd = conn.CreateCommand();
         foreach (var db in new[] { _sourceDb, _targetDb })
         {
-            cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-            cmd.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
         }
     }
 
@@ -91,7 +90,7 @@ public class LegacyModuleSyntaxTests
         cmd.CommandText = @"
 SELECT o.name COLLATE DATABASE_DEFAULT + ':' + RTRIM(o.type) COLLATE DATABASE_DEFAULT + ':' + CASE WHEN sm.definition LIKE '%/* real body */%' THEN 'real' ELSE 'stub' END
   FROM sys.objects o JOIN sys.sql_modules sm ON sm.object_id = o.object_id
- WHERE o.name IN ('vT', 'fScalar', 'fInline', 'fMulti', 'pOne', 'trT', 'trV')
+ WHERE o.name IN (N'vT', N'fScalar', N'fInline', N'fMulti', N'pOne', N'pΩ', N'trT', N'trV')
 UNION ALL
 SELECT t.name COLLATE DATABASE_DEFAULT + ':DDL:' + CASE WHEN sm.definition LIKE '%/* real body */%' THEN 'real' ELSE 'stub' END
   FROM sys.triggers t JOIN sys.sql_modules sm ON sm.object_id = t.object_id
@@ -101,7 +100,7 @@ SELECT t.name COLLATE DATABASE_DEFAULT + ':DDL:' + CASE WHEN sm.definition LIKE 
             while (reader.Read()) modules.Add(reader.GetString(0));
         Assert.That(modules, Is.EquivalentTo(new[]
         {
-            "vT:V:real", "fScalar:FN:real", "fInline:IF:real", "fMulti:TF:real", "pOne:P:real", "trT:TR:real", "trV:TR:real", "trDdl:DDL:real"
+            "vT:V:real", "fScalar:FN:real", "fInline:IF:real", "fMulti:TF:real", "pOne:P:real", "pΩ:P:real", "trT:TR:real", "trV:TR:real", "trDdl:DDL:real"
         }), "a module kept its stub body or lost its kind; scripts:\n" + string.Join("\n----\n", ModuleScripts.Select(k => _scripts.GetValueOrDefault(k))));
     }
 
@@ -185,6 +184,8 @@ SELECT t.name COLLATE DATABASE_DEFAULT + ':DDL:' + CASE WHEN sm.definition LIKE 
         Run(cmd, "CREATE FUNCTION dbo.fInline() RETURNS TABLE AS RETURN /* real body */ (SELECT Id FROM dbo.T)");
         Run(cmd, "CREATE FUNCTION dbo.fMulti() RETURNS @r TABLE (Id INT) AS BEGIN /* real body */ INSERT @r SELECT Id FROM dbo.T RETURN END");
         Run(cmd, "CREATE PROCEDURE dbo.pOne @x INT AS /* real body */ SELECT @x");
+        // A name outside the code page: the stub that creates it is executed as a string, which must keep the letter.
+        Run(cmd, "CREATE PROCEDURE dbo.pΩ AS /* real body */ SELECT 1");
         Run(cmd, "CREATE TRIGGER dbo.trT ON dbo.T AFTER UPDATE AS /* real body */ SELECT 1");
         Run(cmd, "CREATE TRIGGER dbo.trV ON dbo.vT INSTEAD OF DELETE AS /* real body */ SELECT 1");
         Run(cmd, "CREATE TRIGGER trDdl ON DATABASE FOR CREATE_TABLE AS /* real body */ SELECT 1");

@@ -25,10 +25,9 @@ public class DatabaseQuenchDeadlockRetryTests
     {
         var product = new Product { Name = "P", Platform = Platform.SqlServer };
         var template = new Template { Name = "T" };
-        var quench = new DatabaseQuench("srv", product, template, "db",
-            false, "0", false, "0", "1", "1", "1", "1", "1", "1", false, false, false, null);
+        var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", UpdateTables = false, DeliverData = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, null);
         quench.DeadlockRetryBaseMs = 0;   // no real sleeping in unit tests
-        quench.MaxDeadlockAttempts = 4;
+        quench.ContentionRetryAttempts = 4;
         return quench;
     }
 
@@ -57,6 +56,21 @@ public class DatabaseQuenchDeadlockRetryTests
         Assert.That(calls(), Is.EqualTo(3), "should retry twice then succeed on the third attempt");
     }
 
+    // Tier-1 --Drift runs the preview in a transaction it rolls back. SQL Server ends that transaction for a deadlock victim,
+    // so a retry would run, and commit, outside it: the unit fails instead of writing to the target.
+    [Test]
+    public void InsideADriftTransaction_ADeadlockIsNotRetried()
+    {
+        var quench = new DatabaseQuench(new Product { Name = "P", Platform = Platform.SqlServer }, new Template { Name = "T" },
+            new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", Drift = true, DriftInTransaction = true, UpdateTables = false, DeliverData = false }, null);
+        quench.DeadlockRetryBaseMs = 0;
+        quench.ContentionRetryAttempts = 4;
+        var cmd = CommandFailing(1, () => new SqlServerErrorException(1205, "deadlock victim"), out var calls);
+
+        Assert.Throws<SqlServerErrorException>(() => quench.ExecuteNonQueryHandlingMessages(cmd, retryOnDeadlock: true));
+        Assert.That(calls(), Is.EqualTo(1), "the statement is not run again outside the rolled-back transaction");
+    }
+
     [Test]
     public void RetryEnabled_PersistentDeadlock_GivesUpAfterMaxAttempts()
     {
@@ -65,7 +79,7 @@ public class DatabaseQuenchDeadlockRetryTests
 
         Assert.Throws<SqlServerErrorException>(
             () => quench.ExecuteNonQueryHandlingMessages(cmd, retryOnDeadlock: true));
-        Assert.That(calls(), Is.EqualTo(4), "should attempt exactly MaxDeadlockAttempts times");
+        Assert.That(calls(), Is.EqualTo(4), "should attempt exactly ContentionRetryAttempts times");
     }
 
     [Test]

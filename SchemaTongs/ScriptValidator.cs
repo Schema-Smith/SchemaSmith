@@ -29,7 +29,7 @@ internal class ScriptValidator
         var pattern = GetCreatePattern(platform);
         // The legacy SQL Server form carries its CREATE inside an EXEC string; the statement to rename is the one outside
         // any literal, and a blanked literal keeps every index where it was.
-        var searchable = platform.GetBasePlatform() == Platform.SqlServer ? StringLiteral.Replace(script, m => new string(' ', m.Length)) : script;
+        var searchable = platform.GetBasePlatform() is Platform.SqlServer or Platform.PostgreSQL ? SqlTextMask.Blank(script) : script;
         var match = pattern.Match(searchable);
         if (!match.Success)
             return new RewriteResult { Success = false };
@@ -116,7 +116,18 @@ internal class ScriptValidator
         }
         finally
         {
-            transaction.Rollback();
+            // A batch error can end the transaction on the server; rolling back an ended one throws, and a throw here would
+            // replace the result being returned.
+            try
+            {
+                transaction.Rollback();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+            catch (System.Data.Common.DbException)
+            {
+            }
         }
     }
 
@@ -177,10 +188,10 @@ internal class ScriptValidator
         return platform.GetBasePlatform() switch
         {
             Platform.SqlServer => new Regex(
-                @"(?:CREATE\s+(OR\s+ALTER\s+)?|(?<alter>ALTER\s+))(?<kind>FUNCTION|VIEW|PROCEDURE|PROC)\b\s+(\[\w+\]\.)?(?<name>\[\w+\]|\w+)",
+                @"(?:CREATE\s+(OR\s+ALTER\s+)?|(?<alter>ALTER\s+))(?<kind>FUNCTION|VIEW|PROCEDURE|PROC)\b\s+((\[(?:[^\]]|\]\])+\]|\w+)\s*\.\s*)?(?<name>\[(?:[^\]]|\]\])+\]|\w+)",
                 RegexOptions.IgnoreCase | RegexOptions.Singleline),
             Platform.PostgreSQL => new Regex(
-                @"CREATE\s+(OR\s+REPLACE\s+)?(?<kind>FUNCTION|VIEW|PROCEDURE|AGGREGATE)\s+(" + @"""[\w]+""\.|[\w]+\.)?(?<name>""[\w]+""|[\w]+)",
+                @"CREATE\s+(OR\s+REPLACE\s+)?(?<kind>FUNCTION|VIEW|PROCEDURE|AGGREGATE)\s+((""(?:[^""]|"""")+""|\w+)\s*\.\s*)?(?<name>""(?:[^""]|"""")+""|\w+)",
                 RegexOptions.IgnoreCase | RegexOptions.Singleline),
             // The engine's own text: OR REPLACE, ALGORITHM=, SQL SECURITY, AGGREGATE, JSON [RELATIONAL] DUALITY, and
             // identifiers rendered with double quotes when the routine was created under ANSI_QUOTES.
@@ -194,8 +205,6 @@ internal class ScriptValidator
     private static readonly Regex MySqlDropPattern = new(
         @"DROP\s+(?<kind>FUNCTION|VIEW|PROCEDURE)\s+(IF\s+EXISTS\s+)?(?<name>`[^`]+`|""[^""]+""|[\w]+)",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
-
-    private static readonly Regex StringLiteral = new(@"N?'(?:[^']|'')*'", RegexOptions.Compiled | RegexOptions.Singleline);
 
     private static string QuoteTempName(string tempName, Platform platform)
     {

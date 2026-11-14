@@ -1,0 +1,1709 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "SchemaQuench deployment summary 1.4",
+  "type": "object",
+  "properties": {
+    "schemaVersion": {
+      "type": "string",
+      "enum": [
+        "1.4"
+      ]
+    },
+    "tool": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "toolVersion": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "run": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/RunInfo"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "targets": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/TargetSummary"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "migrationScripts": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/MigrationScriptRecord"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "timing": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/TimingSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "failures": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/FailureRecord"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "whatIf": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/WhatIfSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "objectChanges": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/ObjectChangeSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "preventDrop": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/PreventDropSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "unsupportedDowngrade": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/UnsupportedDowngradeSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "lockWaits": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "items": {
+        "anyOf": [
+          {
+            "$ref": "#/definitions/LockWait"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "destructive": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DestructiveSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "drift": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/DriftReport"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "settingOutcomes": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/SettingsSummary"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "tool",
+    "toolVersion",
+    "run",
+    "targets",
+    "migrationScripts",
+    "timing",
+    "failures",
+    "whatIf",
+    "objectChanges",
+    "preventDrop",
+    "unsupportedDowngrade",
+    "lockWaits",
+    "destructive",
+    "drift",
+    "settingOutcomes"
+  ],
+  "additionalProperties": false,
+  "definitions": {
+    "BottleneckEntry": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "durationMs": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "scope",
+        "slot",
+        "durationMs"
+      ],
+      "additionalProperties": false
+    },
+    "CiInfo": {
+      "type": "object",
+      "properties": {
+        "provider": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "pipeline": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runId": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "runAttempt": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "actor": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "environment": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "provider",
+        "pipeline",
+        "runId",
+        "runAttempt",
+        "url",
+        "actor",
+        "environment"
+      ],
+      "additionalProperties": false
+    },
+    "CreatedCounts": {
+      "type": "object",
+      "properties": {
+        "tables": {
+          "type": "integer"
+        },
+        "columns": {
+          "type": "integer"
+        },
+        "indexes": {
+          "type": "integer"
+        },
+        "constraints": {
+          "type": "integer"
+        },
+        "foreignKeys": {
+          "type": "integer"
+        },
+        "procedures": {
+          "type": "integer"
+        },
+        "views": {
+          "type": "integer"
+        },
+        "functions": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tables",
+        "columns",
+        "indexes",
+        "constraints",
+        "foreignKeys",
+        "procedures",
+        "views",
+        "functions"
+      ],
+      "additionalProperties": false
+    },
+    "DbTiming": {
+      "type": "object",
+      "properties": {
+        "database": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "totalMs": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "database",
+        "totalMs"
+      ],
+      "additionalProperties": false
+    },
+    "DestructiveChange": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "objectName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "detail": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "database": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "estimatedRows": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "rowSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "accepted": {
+          "type": "boolean"
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "objectName",
+        "detail",
+        "server",
+        "database",
+        "estimatedRows",
+        "rowSource",
+        "accepted",
+        "outcome"
+      ],
+      "additionalProperties": false
+    },
+    "DestructiveSummary": {
+      "type": "object",
+      "properties": {
+        "policy": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/DestructiveChange"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "policy",
+        "changes"
+      ],
+      "additionalProperties": false
+    },
+    "DriftItem": {
+      "type": "object",
+      "properties": {
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "database": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "objectType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "objectName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "server",
+        "database",
+        "schema",
+        "objectType",
+        "objectName",
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "DriftPlanGroup": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "plan": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "targets": {
+          "type": "integer"
+        },
+        "sample": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "template",
+        "plan",
+        "targets",
+        "sample"
+      ],
+      "additionalProperties": false
+    },
+    "DriftReport": {
+      "type": "object",
+      "properties": {
+        "drifted": {
+          "type": "boolean"
+        },
+        "failOn": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "targets": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/DriftTargetReport"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "planGroups": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/DriftPlanGroup"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "pendingMigrations": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/DriftItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "unverifiable": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/DriftItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "extra": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/DriftItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "drifted",
+        "failOn",
+        "targets",
+        "planGroups",
+        "pendingMigrations",
+        "unverifiable",
+        "extra"
+      ],
+      "additionalProperties": false
+    },
+    "DriftTargetReport": {
+      "type": "object",
+      "properties": {
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "database": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "template": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "status": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "counted": {
+          "type": "integer"
+        },
+        "plan": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "changes": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/DriftItem"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "server",
+        "database",
+        "schema",
+        "template",
+        "status",
+        "counted",
+        "plan",
+        "changes"
+      ],
+      "additionalProperties": false
+    },
+    "DroppedCounts": {
+      "type": "object",
+      "properties": {
+        "tables": {
+          "type": "integer"
+        },
+        "columns": {
+          "type": "integer"
+        },
+        "indexes": {
+          "type": "integer"
+        },
+        "constraints": {
+          "type": "integer"
+        },
+        "foreignKeys": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tables",
+        "columns",
+        "indexes",
+        "constraints",
+        "foreignKeys"
+      ],
+      "additionalProperties": false
+    },
+    "FailureRecord": {
+      "type": "object",
+      "properties": {
+        "phase": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scopeKey": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "contextTail": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "artifactPath": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "kind": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "phase",
+        "scopeKey",
+        "error",
+        "contextTail",
+        "artifactPath",
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "LockWait": {
+      "type": "object",
+      "properties": {
+        "target": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "step": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "attempts": {
+          "type": "integer"
+        },
+        "waitedMs": {
+          "type": "integer"
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "target",
+        "step",
+        "attempts",
+        "waitedMs",
+        "outcome"
+      ],
+      "additionalProperties": false
+    },
+    "MigrationScriptRecord": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "slot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "template": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "database": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "slot",
+        "template",
+        "schema",
+        "server",
+        "database",
+        "outcome"
+      ],
+      "additionalProperties": false
+    },
+    "ModifiedCounts": {
+      "type": "object",
+      "properties": {
+        "tables": {
+          "type": "integer"
+        },
+        "columns": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "tables",
+        "columns"
+      ],
+      "additionalProperties": false
+    },
+    "ObjectChangeDetail": {
+      "type": "object",
+      "properties": {
+        "objectType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "objectName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "action": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mode": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "database": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "objectType",
+        "objectName",
+        "action"
+      ],
+      "additionalProperties": false
+    },
+    "ObjectChangeSummary": {
+      "type": "object",
+      "properties": {
+        "instrumented": {
+          "type": "boolean"
+        },
+        "created": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CreatedCounts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "modified": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/ModifiedCounts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "dropped": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/DroppedCounts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "scriptsRan": {
+          "type": "integer"
+        },
+        "details": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/ObjectChangeDetail"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "scriptsUnchanged": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "instrumented",
+        "created",
+        "modified",
+        "dropped",
+        "scriptsRan",
+        "details",
+        "scriptsUnchanged"
+      ],
+      "additionalProperties": false
+    },
+    "PackageIdentity": {
+      "type": "object",
+      "properties": {
+        "contentHash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "fileCount": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "contentHash",
+        "fileCount"
+      ],
+      "additionalProperties": false
+    },
+    "PreventDropSummary": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean"
+        },
+        "wouldDrop": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/WouldDropEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "enabled",
+        "wouldDrop"
+      ],
+      "additionalProperties": false
+    },
+    "RunHost": {
+      "type": "object",
+      "properties": {
+        "machine": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "user": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "machine",
+        "user"
+      ],
+      "additionalProperties": false
+    },
+    "RunInfo": {
+      "type": "object",
+      "properties": {
+        "product": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "platform": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "startedUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finishedUtc": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "durationMs": {
+          "type": "integer"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "Quench",
+            "WhatIf",
+            "Validate",
+            "Drift"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "Success",
+            "PartialFailure",
+            "Aborted",
+            "Incomplete"
+          ]
+        },
+        "exitCode": {
+          "type": "integer"
+        },
+        "resumedFromCheckpoint": {
+          "type": "boolean"
+        },
+        "settings": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RunSettings"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "driftTier": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "label": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "resumesRunId": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "uuid"
+        },
+        "package": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/PackageIdentity"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "source": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RunSource"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ci": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/CiInfo"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/RunHost"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "product",
+        "platform",
+        "startedUtc",
+        "finishedUtc",
+        "durationMs",
+        "mode",
+        "outcome",
+        "exitCode",
+        "resumedFromCheckpoint",
+        "settings",
+        "driftTier",
+        "id",
+        "label",
+        "resumesRunId",
+        "package",
+        "source",
+        "ci",
+        "host"
+      ],
+      "additionalProperties": false
+    },
+    "RunSettings": {
+      "type": "object",
+      "properties": {
+        "commandTimeoutSeconds": {
+          "type": "integer"
+        },
+        "lockTimeoutSeconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "contentionRetryAttempts": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "commandTimeoutSeconds",
+        "lockTimeoutSeconds",
+        "contentionRetryAttempts"
+      ],
+      "additionalProperties": false
+    },
+    "RunSource": {
+      "type": "object",
+      "properties": {
+        "repository": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "commit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "branch": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "from": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "repository",
+        "commit",
+        "branch",
+        "from"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsScopeCounts": {
+      "type": "object",
+      "properties": {
+        "changed": {
+          "type": "integer"
+        },
+        "pendingRestart": {
+          "type": "integer"
+        },
+        "drift": {
+          "type": "integer"
+        },
+        "fixFailed": {
+          "type": "integer"
+        },
+        "unfixable": {
+          "type": "integer"
+        },
+        "wouldChange": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "changed",
+        "pendingRestart",
+        "drift",
+        "fixFailed",
+        "unfixable",
+        "wouldChange"
+      ],
+      "additionalProperties": false
+    },
+    "SettingsSummary": {
+      "type": "object",
+      "properties": {
+        "server": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SettingsScopeCounts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "database": {
+          "anyOf": [
+            {
+              "$ref": "#/definitions/SettingsScopeCounts"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "server",
+        "database"
+      ],
+      "additionalProperties": false
+    },
+    "SlotTiming": {
+      "type": "object",
+      "properties": {
+        "slot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "totalMs": {
+          "type": "integer"
+        },
+        "targetCount": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slot",
+        "totalMs",
+        "targetCount"
+      ],
+      "additionalProperties": false
+    },
+    "TargetSlotTiming": {
+      "type": "object",
+      "properties": {
+        "slot": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "durationMs": {
+          "type": "integer"
+        },
+        "scriptsRun": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slot",
+        "durationMs",
+        "scriptsRun"
+      ],
+      "additionalProperties": false
+    },
+    "TargetSummary": {
+      "type": "object",
+      "properties": {
+        "server": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "database": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schema": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "template": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "Success",
+            "Failed",
+            "Skipped"
+          ]
+        },
+        "durationMs": {
+          "type": "integer"
+        },
+        "slots": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/TargetSlotTiming"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "databaseSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "schemaSource": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connectedAs": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "server",
+        "database",
+        "schema",
+        "template",
+        "outcome",
+        "durationMs",
+        "slots",
+        "databaseSource",
+        "schemaSource",
+        "connectedAs"
+      ],
+      "additionalProperties": false
+    },
+    "TimingSummary": {
+      "type": "object",
+      "properties": {
+        "totalMs": {
+          "type": "integer"
+        },
+        "bySlot": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/SlotTiming"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "byDatabase": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/DbTiming"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "bottlenecks": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/BottleneckEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "totalMs",
+        "bySlot",
+        "byDatabase",
+        "bottlenecks"
+      ],
+      "additionalProperties": false
+    },
+    "UnsupportedDowngradeEntry": {
+      "type": "object",
+      "properties": {
+        "feature": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "objectName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "feature",
+        "objectName"
+      ],
+      "additionalProperties": false
+    },
+    "UnsupportedDowngradeSummary": {
+      "type": "object",
+      "properties": {
+        "downgrades": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/UnsupportedDowngradeEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "downgrades"
+      ],
+      "additionalProperties": false
+    },
+    "WhatIfEntry": {
+      "type": "object",
+      "properties": {
+        "scope": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "script": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "scope",
+        "script"
+      ],
+      "additionalProperties": false
+    },
+    "WhatIfSummary": {
+      "type": "object",
+      "properties": {
+        "wouldApply": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/WhatIfEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "wouldSkip": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/WhatIfEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "wouldDeliver": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "items": {
+            "anyOf": [
+              {
+                "$ref": "#/definitions/WhatIfEntry"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "wouldApply",
+        "wouldSkip",
+        "wouldDeliver"
+      ],
+      "additionalProperties": false
+    },
+    "WouldDropEntry": {
+      "type": "object",
+      "properties": {
+        "objectType": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "objectName": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "objectType",
+        "objectName"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

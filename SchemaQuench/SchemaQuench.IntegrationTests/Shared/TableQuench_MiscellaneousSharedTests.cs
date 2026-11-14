@@ -39,6 +39,9 @@ public abstract class TableQuench_MiscellaneousSharedTests : BaseTableQuenchTest
               AND INDEX_NAME = 'IDX_WrongName'";
         Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "IDX_WrongName should not exist after rename");
 
+        // Below MariaDB 10.5.2 a rename is a drop and re-add, which must carry the comment the index had.
+        Assert.That(IndexComment(cmd, "DebugRename", "IDX_RightName"), Is.EqualTo("kept on rename"), "the renamed index keeps its comment");
+
         conn.Close();
     }
 
@@ -62,8 +65,15 @@ public abstract class TableQuench_MiscellaneousSharedTests : BaseTableQuenchTest
               AND TABLE_NAME = 'DebugRenameIO'
               AND INDEX_NAME = 'IDX_WrongNameIO'";
         Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0));
+        Assert.That(IndexComment(cmd, "DebugRenameIO", "IDX_RightNameIO"), Is.EqualTo("kept on rename"), "the renamed index keeps its comment");
 
         conn.Close();
+    }
+
+    private static string IndexComment(System.Data.IDbCommand cmd, string table, string index)
+    {
+        cmd.CommandText = $"SELECT MAX(INDEX_COMMENT) FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = '{TestSchema}' AND TABLE_NAME = '{table}' AND INDEX_NAME = '{index}'";
+        return cmd.ExecuteScalar()?.ToString();
     }
 
     [Test]
@@ -258,7 +268,7 @@ VALUES ('{uniqueProductName}', '', '{TestSchema}', 'TABLE', 'TableToBeDropped');
         cmd.CommandText = $@"
 -- TableQuench_ShouldRenameIndex
 CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DebugRename` (`Id` INT NOT NULL);
-CREATE INDEX `IDX_WrongName` ON `{TestSchema}`.`DebugRename` (`Id`);
+CREATE INDEX `IDX_WrongName` ON `{TestSchema}`.`DebugRename` (`Id`) COMMENT 'kept on rename';
 INSERT INTO `{_mainDb}`.SchemaSmith_ProductOwnership (ProductName, TemplateName, ObjectSchema, ObjectType, ObjectName)
 VALUES ('{_productName}', '', '{TestSchema}', 'TABLE', 'DebugRename');
 INSERT INTO `{_mainDb}`.SchemaSmith_ProductOwnership (ProductName, TemplateName, ObjectSchema, ObjectType, ObjectName)
@@ -292,7 +302,7 @@ VALUES ('{_productName}', '', '{TestSchema}', 'INDEX', 'IndexNoLongerInProduct.I
 
 -- Index Only
 CREATE TABLE IF NOT EXISTS `{TestSchema}`.`DebugRenameIO` (`Id` INT NOT NULL);
-CREATE INDEX `IDX_WrongNameIO` ON `{TestSchema}`.`DebugRenameIO` (`Id`);
+CREATE INDEX `IDX_WrongNameIO` ON `{TestSchema}`.`DebugRenameIO` (`Id`) COMMENT 'kept on rename';
 INSERT INTO `{_mainDb}`.SchemaSmith_ProductOwnership (ProductName, TemplateName, ObjectSchema, ObjectType, ObjectName)
 VALUES ('{_productName}', '', '{TestSchema}', 'TABLE', 'DebugRenameIO');
 INSERT INTO `{_mainDb}`.SchemaSmith_ProductOwnership (ProductName, TemplateName, ObjectSchema, ObjectType, ObjectName)
@@ -320,7 +330,7 @@ VALUES ('OtherProduct', '', '{TestSchema}', 'TABLE', 'TableOwnedByOtherProduct')
                     { "Name": "Id", "DataType": "INT", "Nullable": false }
                 ],
                 "Indexes": [
-                    { "Name": "IDX_RightName", "IndexColumns": "Id" }
+                    { "Name": "IDX_RightName", "IndexColumns": "Id", "Comment": "kept on rename" }
                 ]
             },
             {
@@ -384,7 +394,7 @@ VALUES ('OtherProduct', '', '{TestSchema}', 'TABLE', 'TableOwnedByOtherProduct')
             {
                 "Name": "DebugRenameIO",
                 "Indexes": [
-                    { "Name": "IDX_RightNameIO", "IndexColumns": "Id" }
+                    { "Name": "IDX_RightNameIO", "IndexColumns": "Id", "Comment": "kept on rename" }
                 ]
             },
             {

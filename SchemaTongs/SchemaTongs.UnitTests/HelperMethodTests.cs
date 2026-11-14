@@ -280,6 +280,50 @@ public class HelperMethodTests
 
     #endregion
 
+    #region Header name rewrites stay on the header
+
+    // The name rewrite took the first schema.name anywhere and had no trailing boundary, so a body calling a procedure
+    // whose name starts with the object's own name was rewritten mid-identifier, and a CREATE in a header comment was
+    // read as the module's own.
+    [Test]
+    public void ConvertToCreateOrAlter_LeavesALongerNameInTheBodyAlone()
+    {
+        var result = SchemaTongs.ConvertToCreateOrAlter("CREATE PROCEDURE usp_Get AS EXEC dbo.usp_GetAll", "dbo", "usp_Get");
+        Assert.That(result, Is.EqualTo("CREATE OR ALTER PROCEDURE usp_Get AS EXEC dbo.usp_GetAll"));
+    }
+
+    [Test]
+    public void ConvertToCreateOrAlter_QualifiedHeader_OnlyTheHeaderIsRewritten()
+    {
+        var result = SchemaTongs.ConvertToCreateOrAlter("CREATE PROCEDURE dbo.usp_Get AS EXEC dbo.usp_Get_Inner; EXEC dbo.usp_Get", "dbo", "usp_Get");
+        Assert.That(result, Is.EqualTo("CREATE OR ALTER PROCEDURE [dbo].[usp_Get] AS EXEC dbo.usp_Get_Inner; EXEC dbo.usp_Get"));
+    }
+
+    [Test]
+    public void ConvertToCreateOrAlter_ACreateInAHeaderCommentIsNotTheModule()
+    {
+        var input = "/* replaces: CREATE PROCEDURE dbo.usp_Old */\r\n-- don't use CREATE VIEW here\r\nCREATE PROCEDURE dbo.usp_Get AS SELECT 'CREATE PROC x'";
+        var result = SchemaTongs.ConvertToCreateOrAlter(input, "dbo", "usp_Get");
+        Assert.That(result, Is.EqualTo("/* replaces: CREATE PROCEDURE dbo.usp_Old */\r\n-- don't use CREATE VIEW here\r\nCREATE OR ALTER PROCEDURE [dbo].[usp_Get] AS SELECT 'CREATE PROC x'"));
+    }
+
+    [Test]
+    public void DefinedObjectName_SkipsACreateInAComment()
+    {
+        Assert.That(SchemaTongs.DefinedObjectName("-- was CREATE VIEW dbo.vOld\r\nCREATE VIEW dbo.vNew AS SELECT 1 AS x"), Is.EqualTo("vNew"));
+    }
+
+    [Test]
+    public void TriggerTableName_OnlyTheTriggersOwnTableIsRewritten()
+    {
+        var result = SchemaTongs.QualifyTriggerTable("CREATE TRIGGER trg ON dbo.OrdersArchive AFTER INSERT AS SELECT 1", "dbo", "Orders");
+        Assert.That(result, Is.EqualTo("CREATE TRIGGER trg ON dbo.OrdersArchive AFTER INSERT AS SELECT 1"), "a longer table name is not the trigger's table");
+        result = SchemaTongs.QualifyTriggerTable("-- fires ON dbo.Orders\r\nCREATE TRIGGER trg ON dbo.Orders AFTER INSERT AS UPDATE o SET x = 1 FROM dbo.Orders o", "dbo", "Orders");
+        Assert.That(result, Is.EqualTo("-- fires ON dbo.Orders\r\nCREATE TRIGGER trg ON [dbo].[Orders] AFTER INSERT AS UPDATE o SET x = 1 FROM dbo.Orders o"));
+    }
+
+    #endregion
+
     #region ConvertToLegacyModuleForm Tests
 
     // The form every supported version accepts: a guarded stub creates the object when it is missing, then ALTER carries

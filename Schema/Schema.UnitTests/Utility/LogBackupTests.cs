@@ -96,6 +96,33 @@ public class LogBackupTests
         }
     }
 
+    // The deployment summary records the code the run exits with: the summary is written before the exit, and recorded 0
+    // for a run that then exited 1 under ExitNonZeroOnWarning.
+    [TestCase("true", true, 0, 1)]
+    [TestCase("true", false, 0, 0)]
+    [TestCase(null, true, 0, 0)]
+    [TestCase("true", true, 2, 2)]
+    public void EffectiveExitCode_IsTheCodeTheRunExitsWith(string setting, bool warned, int runCode, int expected)
+    {
+        var values = new System.Collections.Generic.Dictionary<string, string>();
+        if (setting != null) values["ExitNonZeroOnWarning"] = setting;
+        FactoryContainer.Register<Microsoft.Extensions.Configuration.IConfigurationRoot>(
+            new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(values).Build());
+        lock (FactoryContainer.SharedLockObject)
+        {
+            WarningCounter.Reset();
+            try
+            {
+                if (warned)
+                    new WarningCounter().DoAppend(new log4net.Core.LoggingEvent(
+                        new log4net.Core.LoggingEventData { Level = log4net.Core.Level.Warn, Message = "a warning" }));
+
+                Assert.That(LogBackup.EffectiveExitCode(runCode), Is.EqualTo(expected));
+            }
+            finally { WarningCounter.Reset(); }
+        }
+    }
+
     // --Validate prints its board as plain lines, so a board of warnings logged nothing at Warn and exited 0 with the
     // switch on. Its Warning findings are passed in and count the same.
     [TestCase(true, 2, 0, 1)]
@@ -136,6 +163,74 @@ public class LogBackupTests
                 LogBackup.BackupLogsAndExit("TestApp", 0, unloggedWarnings: 2);
 
                 progressLog.Received(1).Info("Exit code 1: 2 warning(s) and ExitNonZeroOnWarning is on.");
+            }
+            finally { WarningCounter.Reset(); }
+        }
+    }
+
+    // #617: the count alone left a 4,000-line log to be searched for three lines nobody could name.
+    [Test]
+    public void BackupLogsAndExit_ListsTheWarningsItCounted()
+    {
+        _mockEnvironment.CommandLine.Returns("app.exe --ExitNonZeroOnWarning");
+        FactoryContainer.Register<Microsoft.Extensions.Configuration.IConfigurationRoot>(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
+        _mockDirectory.GetFiles(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<SearchOption>()).Returns(Array.Empty<string>());
+        var said = new System.Collections.Generic.List<string>();
+        var progressLog = Substitute.For<log4net.ILog>();
+        progressLog.When(l => l.Info(Arg.Any<object>())).Do(ci => said.Add($"{ci.Arg<object>()}"));
+        LogFactory.Register("ProgressLog", progressLog);
+        lock (FactoryContainer.SharedLockObject)
+        {
+            WarningCounter.Reset();
+            try
+            {
+                var counter = new WarningCounter();
+                counter.DoAppend(new log4net.Core.LoggingEvent(
+                    new log4net.Core.LoggingEventData { Level = log4net.Core.Level.Warn, Message = "[db]      Unresolved token: {{a}}" }));
+                counter.DoAppend(new log4net.Core.LoggingEvent(
+                    new log4net.Core.LoggingEventData { Level = log4net.Core.Level.Info, Message = "progress" }));
+                counter.DoAppend(new log4net.Core.LoggingEvent(
+                    new log4net.Core.LoggingEventData { Level = log4net.Core.Level.Error, Message = "[db] it broke\nat line 2" }));
+
+                LogBackup.BackupLogsAndExit("TestApp");
+
+                Assert.That(said, Is.EqualTo(new[]
+                {
+                    "Exit code 1: 2 warning(s) and ExitNonZeroOnWarning is on.",
+                    "  WARNING: [db]      Unresolved token: {{a}}",
+                    "  ERROR: [db] it broke",
+                }));
+            }
+            finally { WarningCounter.Reset(); }
+        }
+    }
+
+    [Test]
+    public void BackupLogsAndExit_ListsAtMostFiftyWarnings_AndSaysHowManyMore()
+    {
+        _mockEnvironment.CommandLine.Returns("app.exe --ExitNonZeroOnWarning");
+        FactoryContainer.Register<Microsoft.Extensions.Configuration.IConfigurationRoot>(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build());
+        _mockDirectory.GetFiles(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<SearchOption>()).Returns(Array.Empty<string>());
+        var said = new System.Collections.Generic.List<string>();
+        var progressLog = Substitute.For<log4net.ILog>();
+        progressLog.When(l => l.Info(Arg.Any<object>())).Do(ci => said.Add($"{ci.Arg<object>()}"));
+        LogFactory.Register("ProgressLog", progressLog);
+        lock (FactoryContainer.SharedLockObject)
+        {
+            WarningCounter.Reset();
+            try
+            {
+                var counter = new WarningCounter();
+                for (var i = 1; i <= 53; i++)
+                    counter.DoAppend(new log4net.Core.LoggingEvent(
+                        new log4net.Core.LoggingEventData { Level = log4net.Core.Level.Warn, Message = $"w{i}" }));
+
+                LogBackup.BackupLogsAndExit("TestApp");
+
+                Assert.That(said, Has.Count.EqualTo(52));
+                Assert.That(said[0], Is.EqualTo("Exit code 1: 53 warning(s) and ExitNonZeroOnWarning is on."));
+                Assert.That(said[50], Is.EqualTo("  WARNING: w50"));
+                Assert.That(said[51], Is.EqualTo("  ... and 3 more; search the log for WARNING: and ERROR:."));
             }
             finally { WarningCounter.Reset(); }
         }

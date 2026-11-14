@@ -86,9 +86,16 @@ FLOORS=(
   "floor-mariadb-10213:mariadb:10.2.13:13429:MariaDb"
   "band-mariadb-10221:mariadb:10.2.21:13421:MariaDb"
   "floor-mysql-57:mysql:5.7:13457:MySQL"
-  # The supported floor patches: the 5.7 and 8.0 tags resolve to each line's newest, past every patch-level gate.
-  "floor-mysql-5722:mysql:5.7.22:13422:MySQL"
-  "floor-mysql-8023:mysql:8.0.23:13423:MySQL"
+  # The supported floor patches, and a band at every patch-level gate the floor now sits below: 8.0.12 (INSTANT,
+  # geometry indexes become SPATIAL), 8.0.13 (functional index, DEFAULT expression, the JSON_TABLE integer wrap), 8.0.14
+  # (a foreign key's referenced column keeps its case), 8.0.16 (CHECK), 8.0.17 (multi-valued), 8.0.23 (invisible
+  # column); 5.7.21 is the last patch before JSON_ARRAYAGG. The 5.7 and 8.0 tags resolve to each line's newest.
+  "floor-mysql-5716:mysql:5.7.16:13416:MySQL"
+  "band-mysql-5721:mysql:5.7.21:13432:MySQL"
+  "floor-mysql-8011:mysql:8.0.11:13411:MySQL"
+  "band-mysql-8012:mysql:8.0.12:13433:MySQL"
+  "band-mysql-8015:mysql:8.0.15:13415:MySQL"
+  "band-mysql-8022:mysql:8.0.22:13434:MySQL"
   "floor-postgres-12:postgres:12:15412:PostgreSQL"
   # System versioning without the 10.5 SYSTEM_TIME partitioning forms (STARTS, the interval count) and without AUTO:
   # the only band whose downgrades for them are not empty, and no CI leg runs it.
@@ -101,6 +108,9 @@ FLOORS=(
   "band-mariadb-118:mariadb:11.8:13418:MariaDb"
   "band-mariadb-123:mariadb:12.3:13412:MariaDb"
   "band-mariadb-13:mariadb:13:13413:MariaDb"
+  # MariaDB's minors are feature releases, so the ceiling is pinned by minor too: the bare 13 tag above follows CI's
+  # leg and rolls to 13.1 at its GA, and this keeps 13.0 covered once it does.
+  "band-mariadb-130:mariadb:13.0:13430:MariaDb"
   "band-mysql-80:mysql:8.0:13480:MySQL"
   "band-mysql-84:mysql:8.4:13484:MySQL"
   "band-mysql-97:mysql:9.7:13409:MySQL"
@@ -132,15 +142,21 @@ assert_latest_is_covered() {
     FAILED=1; return
   fi
   major="${ver%%.*}"
-  # MySQL and MariaDB pin whole majors (9, 26, 13); PostgreSQL does too (18). A band matching either
-  # the bare major or major.minor counts as covering it.
-  if printf '%s
-' "${FLOORS[@]}" | grep -qE ":$img:($major|$major\.[0-9]+):"; then
+  minor=$(echo "$ver" | cut -d. -f2)
+  # MySQL and PostgreSQL pin whole majors (26, 18): a band matching the bare major or major.minor covers it. MariaDB's
+  # minors are feature releases (13.1 adds DDL 13.0 lacks), so its latest must be pinned by major.minor exactly --
+  # otherwise the bare-major band rolls 13.0 -> 13.1 at GA and 13.0 loses coverage with no signal.
+  if [ "$img" = mariadb ]; then
+    pattern=":$img:$major\.$minor:"; wanted="$major.$minor"
+  else
+    pattern=":$img:($major|$major\.[0-9]+):"; wanted="$major"
+  fi
+  if printf '%s\n' "${FLOORS[@]}" | grep -qE "$pattern"; then
     echo "  $img:latest = $ver -- covered by a pinned band"
   else
-    echo "  !! $img:latest = $ver and NO band pins major $major."
-    echo "     The ceiling moved. Add \"band-$img-$major:$img:$major:<port>:<category>\" to FLOORS,"
-    echo "     and a matching leg to continuous-integration.yml + release.yml REQUIRED_CHECKS."
+    echo "  !! $img:latest = $ver and NO band pins $wanted."
+    echo "     The ceiling moved. Add \"band-$img-${wanted//./}:$img:$wanted:<port>:<category>\" to FLOORS,"
+    echo "     and, for a new major, a matching leg to continuous-integration.yml + release.yml REQUIRED_CHECKS."
     FAILED=1
   fi
 }
@@ -183,12 +199,19 @@ for f in "${FLOORS[@]}"; do
   echo "--- $image:$tag  (port $port, category $category) ---"
   docker rm -fv "$name" >/dev/null 2>&1
 
+  # MySQL 8.0 and later outgrow 2 GB over the whole SchemaQuench suite: 8.0 latest is OOM-killed partway through the
+  # next project, which then fails every test on a lost connection, and 8.0.22 stalls at the cap until kindling times
+  # out. PostgreSQL 12 to 15 lose a backend to the same cap during SchemaQuench, and the server's recovery fails
+  # whatever is connected at the time.
+  MEM=2g
+  case "$image:$tag" in mysql:8*|mysql:9*|mysql:2[0-9]*|postgres:1[2-5]*) MEM=3g ;; esac
+
   if [ "$image" = "postgres" ]; then
-    docker run -d --name "$name" --memory 2g --memory-swap 2g \
+    docker run -d --name "$name" --memory $MEM --memory-swap $MEM \
       -e POSTGRES_USER="$TEST_USER" -e POSTGRES_PASSWORD="$TEST_PASSWORD" -e POSTGRES_DB=TestMain \
       -p "$port:5432" "$image:$tag" >/dev/null
   else
-    docker run -d --name "$name" --memory 2g --memory-swap 2g \
+    docker run -d --name "$name" --memory $MEM --memory-swap $MEM \
       -e MYSQL_ROOT_PASSWORD="$TEST_PASSWORD" -e MYSQL_USER="$TEST_USER" \
       -e MYSQL_PASSWORD="$TEST_PASSWORD" -e MYSQL_DATABASE=TestMain \
       -p "$port:3306" "$image:$tag" >/dev/null
@@ -201,7 +224,8 @@ for f in "${FLOORS[@]}"; do
     if [ "$image" = "postgres" ]; then
       docker exec "$name" pg_isready -U "$TEST_USER" -d TestMain >/dev/null 2>&1 && ready=1 && break
     else
-      docker exec "$name" sh -c "{ command -v mariadb-admin >/dev/null && P=mariadb-admin || P=mysqladmin; } ; \$P ping -h 127.0.0.1 -u root -p'$TEST_PASSWORD'" >/dev/null 2>&1 && ready=1 && break
+      # The mysql:8.0.11 image ships no mysqladmin; the plain client over TCP answers the same question there.
+      docker exec "$name" sh -c "if command -v mariadb-admin >/dev/null; then mariadb-admin ping -h 127.0.0.1 -u root -p'$TEST_PASSWORD'; elif command -v mysqladmin >/dev/null; then mysqladmin ping -h 127.0.0.1 -u root -p'$TEST_PASSWORD'; else mysql -h 127.0.0.1 -u root -p'$TEST_PASSWORD' -e 'SELECT 1'; fi" >/dev/null 2>&1 && ready=1 && break
     fi
     echo -n "."; sleep 2
   done
@@ -255,6 +279,11 @@ for f in "${FLOORS[@]}"; do
       # The full output, so a failure that does not reproduce alone still has its message.
       faillog="${TMPDIR:-/tmp}/floor-sweep/${name}-$(basename "$proj" .csproj).log"
       mkdir -p "$(dirname "$faillog")" && echo "$out" > "$faillog" && echo "    full output: $faillog"
+    fi
+    if [ "$(docker inspect -f '{{.State.OOMKilled}}' "$name" 2>/dev/null)" = "true" ]; then
+      echo "  FAIL: $name was killed for running out of memory ($MEM) -- failures from here on are the lost server."
+      FAILED=1
+      break
     fi
   done
 

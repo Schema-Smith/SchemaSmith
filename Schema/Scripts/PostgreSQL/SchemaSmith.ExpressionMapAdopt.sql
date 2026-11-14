@@ -22,6 +22,12 @@ DECLARE
   v_version TEXT := current_setting('server_version');
   v_rendered TEXT;
   v_adopted INTEGER := 0;
+  v_rebaselined INTEGER := 0;
+  v_previous TEXT;
+  v_recorded TEXT;
+  v_first TEXT;
+  v_try TEXT;
+  v_match BOOLEAN;
   r RECORD;
 BEGIN
   IF to_regclass('pg_temp.temp_columns') IS NULL AND to_regclass('pg_temp.temp_indexes') IS NULL THEN RETURN; END IF;
@@ -77,6 +83,21 @@ BEGIN
        WHERE COALESCE(col."GenerationExpression", '') != '' AND a.generation_expression IS NOT NULL
          AND col."GenerationExpression" != a.generation_expression
          AND NOT "SchemaSmith"."ExpressionMapUnchanged"(col."TableSchema", col."TableName", 'COLUMN', col."Name", 'generated', col."GenerationExpression", a.generation_expression);
+
+    -- Column defaults, set on the copy's own column (LIKE copies the column without its default).
+    INSERT INTO temp_expression_map_candidates
+      SELECT col."TableSchema", col."TableName", 'COLUMN', col."Name", 'default', col."Default", a.column_default::TEXT,
+             'ALTER TABLE {probe} ALTER COLUMN ' || quote_ident(col."Name") || ' SET DEFAULT ' || col."Default",
+             'SELECT pg_catalog.pg_get_expr(d.adbin, d.adrelid) FROM pg_catalog.pg_attrdef d JOIN pg_catalog.pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum WHERE d.adrelid = ''pg_temp.schemasmith_probe''::regclass AND a.attname = ' || quote_literal(col."Name")
+        FROM temp_columns col
+        JOIN information_schema.columns a
+          ON a.table_schema = col."TableSchema" AND a.table_name = col."TableName" AND a.column_name = col."Name"
+       WHERE COALESCE(col."Default", '') != '' AND a.column_default IS NOT NULL
+         AND NOT col."IsSerial"
+         AND COALESCE(col."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%'
+         AND COALESCE(col."GenerationExpression", '') = ''
+         AND col."Default" != a.column_default::TEXT
+         AND NOT "SchemaSmith"."ExpressionMapUnchanged"(col."TableSchema", col."TableName", 'COLUMN', col."Name", 'default', col."Default", a.column_default::TEXT);
   END IF;
 
   -- Partial-index filters. The key does not shape the predicate, so the copy's index is keyed on a constant.
@@ -91,23 +112,91 @@ BEGIN
        WHERE COALESCE(i."FilterExpression", '') != '' AND idx.indpred IS NOT NULL
          AND i."FilterExpression" != PG_GET_EXPR(idx.indpred, idx.indrelid)
          AND NOT "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX', i."Name", 'filter', i."FilterExpression", PG_GET_EXPR(idx.indpred, idx.indrelid));
+
+    -- Expression index keys: the copy's only index, built on the declared keys with the declared access method.
+    INSERT INTO temp_expression_map_candidates
+      SELECT i."TableSchema", i."TableName", 'INDEX', i."Name", 'keys',
+             "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"),
+             "SchemaSmith"."IndexKeyList"(idx.indexrelid),
+             'CREATE INDEX ON {probe} USING ' || COALESCE(NULLIF(i."AccessMethod", ''), 'btree') || ' (' || "SchemaSmith"."QuoteIndexColumnList"(i."IndexColumns") || ')',
+             'SELECT "SchemaSmith"."IndexKeyList"(indexrelid) FROM pg_catalog.pg_index WHERE indrelid = ''pg_temp.schemasmith_probe''::regclass'
+        FROM temp_indexes i
+        JOIN pg_catalog.pg_index idx ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(i."TableSchema") || '.' || "SchemaSmith"."QuoteName"(i."TableName"))
+        JOIN pg_catalog.pg_class ic ON ic.oid = idx.indexrelid AND ic.relname = i."Name" AND ic.relkind IN ('i', 'I')
+       WHERE i."IndexColumns" LIKE '%(%'
+         AND "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") != "SchemaSmith"."IndexKeyList"(idx.indexrelid)
+         AND NOT "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX', i."Name", 'keys',
+               "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"), "SchemaSmith"."IndexKeyList"(idx.indexrelid));
+  END IF;
+
+  -- Exclusion constraints: the copy gets the declared constraint, and each slot is read back from it.
+  IF to_regclass('pg_temp.temp_excludes') IS NOT NULL THEN
+    INSERT INTO temp_expression_map_candidates
+      SELECT c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'keys',
+             "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns"),
+             "SchemaSmith"."ExcludeKeyList"(con.oid),
+             'ALTER TABLE {probe} ADD EXCLUDE' || CASE WHEN NULLIF(TRIM(c."AccessMethod"), '') IS NOT NULL THEN ' USING ' || c."AccessMethod" ELSE '' END ||
+             ' (' || (SELECT STRING_AGG("SchemaSmith"."QuoteIndexColumnList"((celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',' ORDER BY n)
+                        FROM JSON_ARRAY_ELEMENTS(c."ExcludeColumns"::JSON) WITH ORDINALITY AS e(celem, n)) || ')' ||
+             CASE WHEN NULLIF(TRIM(c."FilterExpression"), '') IS NOT NULL THEN ' WHERE (' || c."FilterExpression" || ')' ELSE '' END,
+             'SELECT "SchemaSmith"."ExcludeKeyList"(oid) FROM pg_catalog.pg_constraint WHERE conrelid = ''pg_temp.schemasmith_probe''::regclass AND contype = ''x'''
+        FROM temp_excludes c
+        JOIN pg_catalog.pg_constraint con
+          ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
+         AND con.conname = c."Name" AND con.contype = 'x'
+       WHERE "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns") != "SchemaSmith"."ExcludeKeyList"(con.oid)
+         AND NOT "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'keys',
+               "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns"), "SchemaSmith"."ExcludeKeyList"(con.oid));
+    INSERT INTO temp_expression_map_candidates
+      SELECT c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'filter', c."FilterExpression",
+             COALESCE("SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)), ''),
+             'ALTER TABLE {probe} ADD EXCLUDE' || CASE WHEN NULLIF(TRIM(c."AccessMethod"), '') IS NOT NULL THEN ' USING ' || c."AccessMethod" ELSE '' END ||
+             ' (' || (SELECT STRING_AGG("SchemaSmith"."QuoteIndexColumnList"((celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',' ORDER BY n)
+                        FROM JSON_ARRAY_ELEMENTS(c."ExcludeColumns"::JSON) WITH ORDINALITY AS e(celem, n)) || ')' ||
+             CASE WHEN NULLIF(TRIM(c."FilterExpression"), '') IS NOT NULL THEN ' WHERE (' || c."FilterExpression" || ')' ELSE '' END,
+             'SELECT COALESCE("SchemaSmith"."StripParenWrapping"(pg_catalog.pg_get_expr(i.indpred, i.indrelid)), '''') FROM pg_catalog.pg_constraint x JOIN pg_catalog.pg_index i ON i.indexrelid = x.conindid WHERE x.conrelid = ''pg_temp.schemasmith_probe''::regclass AND x.contype = ''x'''
+        FROM temp_excludes c
+        JOIN pg_catalog.pg_constraint con
+          ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
+         AND con.conname = c."Name" AND con.contype = 'x'
+        JOIN pg_catalog.pg_index idx ON idx.indexrelid = con.conindid
+       WHERE COALESCE(c."FilterExpression", '') != ''
+         AND c."FilterExpression" != COALESCE("SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)), '')
+         AND NOT "SchemaSmith"."ExpressionMapUnchanged"(c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'filter',
+               c."FilterExpression", COALESCE("SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)), ''));
   END IF;
 
   FOR r IN SELECT * FROM temp_expression_map_candidates LOOP
-    v_rendered := NULL;
-    BEGIN
-      EXECUTE format('CREATE TEMPORARY TABLE schemasmith_probe (LIKE %I.%I)', r."ObjectSchema", r."ObjectTable");
-      EXECUTE replace(r."Render", '{probe}', 'pg_temp.schemasmith_probe');
-      EXECUTE r."ReadBack" INTO v_rendered;
-      -- Always roll the copy back; the rendering survives in the variable.
-      RAISE EXCEPTION USING ERRCODE = 'SSPRB';
-    EXCEPTION
-      WHEN SQLSTATE 'SSPRB' THEN NULL;
-      WHEN OTHERS THEN v_rendered := NULL;
-    END;
-
-    -- Byte for byte: the C collation compares bytes whatever the database's collation is.
-    CONTINUE WHEN v_rendered IS NULL OR v_rendered COLLATE "C" != r."LiveText" COLLATE "C";
+    -- Three texts are tried, in turn, on the copy. The declared text. Then the text recorded when it was applied, which is
+    -- what a dump/restore or pg_upgrade re-parses on the new server. Then the declared text's own rendering, re-parsed.
+    -- Some renderings are not a fixed point -- status IN ('open','paid') on varchar comes back from a re-parse as a
+    -- different ARRAY form -- so after an upgrade only the second or third can match what the server now holds.
+    v_recorded := NULL;
+    SELECT m."CanonicalText" INTO v_recorded FROM "SchemaSmith"."ExpressionMap" m
+     WHERE m."ObjectSchema" = r."ObjectSchema" AND m."ObjectTable" = r."ObjectTable" AND m."ObjectKind" = r."ObjectKind"
+       AND m."ObjectName" = r."ObjectName" AND m."Slot" = r."Slot" AND m."AuthoredText" = r."AuthoredText";
+    v_first := NULL;
+    v_match := FALSE;
+    FOR i IN 1 .. 3 LOOP
+      v_try := CASE i WHEN 1 THEN r."AuthoredText" WHEN 2 THEN v_recorded ELSE v_first END;
+      CONTINUE WHEN v_try IS NULL OR (i > 1 AND v_try = r."AuthoredText");
+      v_rendered := NULL;
+      BEGIN
+        EXECUTE format('CREATE TEMPORARY TABLE schemasmith_probe (LIKE %I.%I)', r."ObjectSchema", r."ObjectTable");
+        EXECUTE replace(replace(r."Render", r."AuthoredText", v_try), '{probe}', 'pg_temp.schemasmith_probe');
+        EXECUTE r."ReadBack" INTO v_rendered;
+        -- Always roll the copy back; the rendering survives in the variable.
+        RAISE EXCEPTION USING ERRCODE = 'SSPRB';
+      EXCEPTION
+        WHEN SQLSTATE 'SSPRB' THEN NULL;
+        WHEN OTHERS THEN v_rendered := NULL;
+      END;
+      IF i = 1 THEN v_first := v_rendered; END IF;
+      -- Byte for byte: the C collation compares bytes whatever the database's collation is.
+      v_match := v_rendered IS NOT NULL AND v_rendered COLLATE "C" = r."LiveText" COLLATE "C";
+      EXIT WHEN v_match;
+    END LOOP;
+    CONTINUE WHEN NOT v_match;
 
     IF p_WhatIf THEN
       INSERT INTO temp_expression_map_adopt_undo
@@ -122,6 +211,13 @@ BEGIN
                               AND u."ObjectName" = r."ObjectName" AND u."Slot" = r."Slot");
     END IF;
 
+    -- A row recorded under another major version is the engine re-rendering its own text after an upgrade (PostgreSQL
+    -- 14 changed how it deparses several expressions), not a declaration verified for the first time: said as such.
+    v_previous := NULL;
+    SELECT m."EngineVersion" INTO v_previous FROM "SchemaSmith"."ExpressionMap" m
+     WHERE m."ObjectSchema" = r."ObjectSchema" AND m."ObjectTable" = r."ObjectTable" AND m."ObjectKind" = r."ObjectKind"
+       AND m."ObjectName" = r."ObjectName" AND m."Slot" = r."Slot" AND m."AuthoredText" = r."AuthoredText";
+
     INSERT INTO "SchemaSmith"."ExpressionMap" AS em
       ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot", "AuthoredText", "CanonicalText",
        "PlatformName", "EngineVersion", "CompatLevel", "UpdatedUtc")
@@ -130,9 +226,16 @@ BEGIN
     ON CONFLICT ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot")
     DO UPDATE SET "AuthoredText" = EXCLUDED."AuthoredText", "CanonicalText" = EXCLUDED."CanonicalText",
                   "EngineVersion" = EXCLUDED."EngineVersion", "UpdatedUtc" = now();
-    v_adopted := v_adopted + 1;
+    IF v_previous IS NOT NULL AND SPLIT_PART(v_previous, '.', 1) <> SPLIT_PART(v_version, '.', 1) THEN
+      v_rebaselined := v_rebaselined + 1;
+    ELSE
+      v_adopted := v_adopted + 1;
+    END IF;
   END LOOP;
 
+  IF v_rebaselined > 0 THEN
+    RAISE NOTICE '  Re-baselined % expression(s) recorded under an earlier PostgreSQL major version, after checking each on a scratch copy of its table: PostgreSQL % renders the declared text as exactly what the database holds. No object was changed.', v_rebaselined, v_version;
+  END IF;
   IF v_adopted > 0 THEN
     RAISE NOTICE '  Verified % expression(s) on a scratch copy of their table: the declared text renders to exactly what the database holds, so they are recorded rather than re-applied.', v_adopted;
   END IF;

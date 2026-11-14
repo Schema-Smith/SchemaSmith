@@ -36,7 +36,7 @@ public abstract class TableQuench_CompressionSharedTests : BaseTableQuenchTests
         finally
         {
             cmd.CommandText = $"DROP TABLE IF EXISTS `{t}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '{t}%'";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
     }
 

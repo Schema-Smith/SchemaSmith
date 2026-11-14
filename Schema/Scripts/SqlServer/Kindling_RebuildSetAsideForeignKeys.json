@@ -1,0 +1,66 @@
+{
+  "Schema": "[SchemaSmith]",
+  "Name": "[RebuildSetAsideForeignKeys]",
+  "Columns": [
+    {
+      "Name": "[ChildSchema]",
+      "DataType": "NVARCHAR(128)",
+      "Nullable": false
+    },
+    {
+      "Name": "[ChildTable]",
+      "DataType": "NVARCHAR(128)",
+      "Nullable": false
+    },
+    {
+      "Name": "[KeyName]",
+      "DataType": "NVARCHAR(128)",
+      "Nullable": false
+    },
+    {
+      "Name": "[ParentSchema]",
+      "DataType": "NVARCHAR(128)",
+      "Nullable": false
+    },
+    {
+      "Name": "[ParentTable]",
+      "DataType": "NVARCHAR(128)",
+      "Nullable": false
+    },
+    {
+      "Name": "[Definition]",
+      "DataType": "NVARCHAR(MAX)",
+      "Nullable": false
+    },
+    {
+      "Name": "[WasTrusted]",
+      "DataType": "BIT",
+      "Nullable": false
+    },
+    {
+      "Name": "[WasEnabled]",
+      "DataType": "BIT",
+      "Nullable": false
+    },
+    {
+      "Name": "[Declared]",
+      "DataType": "BIT",
+      "Nullable": false
+    },
+    {
+      "Name": "[CapturedAt]",
+      "DataType": "DATETIME",
+      "Nullable": false,
+      "Default": "GETDATE()"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "[PK_RebuildSetAsideForeignKeys]",
+      "PrimaryKey": true,
+      "Unique": true,
+      "Clustered": true,
+      "IndexColumns": "[ChildSchema],[ChildTable],[KeyName]"
+    }
+  ]
+}

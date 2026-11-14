@@ -1,0 +1,63 @@
+{
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional. Relative path to the generated JSON Schema, for editor validation and autocomplete. Ignored at deploy time."
+    },
+    "Name": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "Schema": {
+      "type": "string",
+      "description": "Optional. The sequence's schema; dbo when omitted, or the template's schema in a schema template."
+    },
+    "DataType": {
+      "type": "string",
+      "description": "tinyint, smallint, int, bigint, or decimal(p[,0]) / numeric(p[,0]) with p up to 38. A user-defined alias type is accepted and compared as its base type, which is what SQL Server records. Defaults to bigint. SQL Server cannot alter a sequence's type, so a changed type is refused."
+    },
+    "Start": {
+      "type": "integer",
+      "description": "The first value, applied when the sequence is created. SQL Server cannot change it afterwards. NOT the current value -- that is data, and SchemaSmith never resets it."
+    },
+    "Increment": {
+      "type": "integer",
+      "description": "Step between values. Negative for a descending sequence."
+    },
+    "MinValue": {
+      "type": "integer",
+      "description": "Optional. The lowest value. Omitted means the data type's minimum."
+    },
+    "MaxValue": {
+      "type": "integer",
+      "description": "Optional. The highest value. Omitted means the data type's maximum."
+    },
+    "Cache": {
+      "type": "integer",
+      "minimum": 0.0,
+      "description": "Optional. Values pre-allocated in memory. Omitted means SQL Server's default cache; 0 means NO CACHE."
+    },
+    "Cycle": {
+      "type": "boolean",
+      "description": "When true the sequence wraps to MinValue after reaching MaxValue instead of erroring."
+    },
+    "ShouldApplyExpression": {
+      "type": "string"
+    },
+    "VariantName": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional label for a conditional variant — names the intent behind its ShouldApplyExpression and appears in deployment logging when the variant is applied."
+    },
+    "Description": {
+      "type": "string",
+      "description": "Optional. Stored as the MS_Description extended property. An omitted value leaves an existing description alone; \"\" removes it."
+    },
+    "Extensions": {}
+  },
+  "additionalProperties": false,
+  "required": [
+    "Name"
+  ]
+}

@@ -5,9 +5,11 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
-using System.Reflection;
+using System.Threading.Tasks;
 using log4net;
 using Microsoft.Extensions.Configuration;
 using Schema.DataAccess;
@@ -16,6 +18,9 @@ using Schema.Domain.SqlServer;
 using Schema.Checkpointing;
 using Schema.Isolators;
 using Schema.Utility;
+using SchemaQuench.Settings;
+using Schema.Domain.Settings;
+using Schema.Settings;
 using SchemaQuench.Reporting;
 using Schema.Configuration;
 
@@ -29,12 +34,13 @@ public class ProductQuench
     private readonly ILog _progressLog = LogFactory.GetLogger("ProgressLog");
     private readonly Product _product = LoadPackage(() => Product.Load());
 
-    private readonly string _whatIfOnly;
+    private readonly bool _whatIfOnly;
     private readonly int _maxThreads;
     private readonly string _primaryServer;
     private readonly List<string> _secondaryServers = [];
     private readonly bool _runScriptsTwice;
     private readonly bool _skipKindling;
+    private readonly bool _exitZeroOnDowngrade;
     private readonly bool _forceReKindle;
     private readonly bool _updateTables;
     private readonly bool _deliverData;
@@ -46,6 +52,11 @@ public class ProductQuench
     private readonly IReadOnlyList<string> _targetSchemas;
     private readonly IReadOnlyDictionary<string, TemplateTarget> _templateTargets;
     private readonly ICheckpointing _checkpointing;
+    private readonly SessionTimeouts _timeouts = SessionTimeouts.Default;
+    private int _warnedOverrideWithoutUserVariables;
+    private readonly Dictionary<string, TargetVersionInfo> _detectedVersions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ContentionLog _contention = new();
+    private readonly DestructivePolicy _destructive = DestructivePolicy.Default;
     private bool _updateFailed;
 
     // Run-level timing collector (#243 Deployment Summary Report, slice 1). Started/stopped around
@@ -72,6 +83,16 @@ public class ProductQuench
     // object-script "ran" rows are recorded C#-side. Assembled into the report's objectChanges.
     private readonly ChangeAuditCapture _changeAudit = new();
 
+    // H1: a drift check -- a preview whose answer is whether the deploy would change anything.
+    private readonly bool _drift;
+    private readonly DriftFailOn _driftFailOn;
+    private readonly DriftCapture _driftCapture = new();
+    private readonly int _driftTier = -1;
+    internal bool IsDrift => _drift;
+    internal int DriftTier => _driftTier;
+    internal DriftReport DriftReport { get; private set; }
+    private static readonly ConcurrentDictionary<string, object> DriftDatabaseLocks = new();
+
     // Thread-safe collection of every scope failure (tenant work units today; product/server
     // phases as their capture is added), rendered once into the end-of-run roll-up.
     private readonly ConcurrentBag<FailureRecord> _failureRecords = new();
@@ -83,6 +104,10 @@ public class ProductQuench
     // WriteDeploymentSummary so an abort-path write can never double-fire alongside the
     // normal-completion write.
     private DateTime _startedUtc;
+    // The same id is on every structured log line of the run (RunContext, started by Main).
+    private readonly Guid _runId = RunContext.Id;
+    private Task<PackageIdentity> _packageIdentity;
+    private DeploymentRecordRun _deploymentRecord;
     private bool _summaryWritten;
     // Captured pre-run (before this run marks any of its own steps complete) so the report
     // reflects whether the run RESUMED — reading the checkpoint at emit time would see this
@@ -124,15 +149,33 @@ public class ProductQuench
 
         _logHygiene = LogHygieneOptions.FromConfiguration(_config);
 
-        if (!int.TryParse(_config[SettingsKeys.MaxThreads], out _maxThreads) || _maxThreads < 1 || _maxThreads > 20)
+        var maxThreadsSetting = _config[SettingsKeys.MaxThreads];
+        if (!int.TryParse(maxThreadsSetting, out _maxThreads) || _maxThreads < 1 || _maxThreads > 20)
+        {
+            if (!string.IsNullOrWhiteSpace(maxThreadsSetting))
+                _progressLog.Warn($"MaxThreads '{maxThreadsSetting}' is not a whole number from 1 to 20; using 10.");
             _maxThreads = 10;
+        }
         // --WhatIf is the switch people reach for; it is the same dry run as the WhatIfONLY setting.
         var whatIfSwitch = CommandLineParser.ContainsSwitch("WhatIf")
                            && !string.Equals(CommandLineParser.ValueOfSwitch("WhatIf"), "false", StringComparison.OrdinalIgnoreCase);
-        _whatIfOnly = FormatWhatIfOnly(whatIfSwitch || _config[SettingsKeys.WhatIfOnly]?.ToLower() == "true");
+        _whatIfOnly = whatIfSwitch || _config[SettingsKeys.WhatIfOnly]?.ToLower() == "true";
+        _drift = CommandLineParser.ContainsSwitch("Drift")
+                 && !string.Equals(CommandLineParser.ValueOfSwitch("Drift"), "false", StringComparison.OrdinalIgnoreCase);
+        if (_drift)
+        {
+            if (IsWhatIfOnly)
+                throw new RunFailedException("--Drift and --WhatIf (or WhatIfONLY) ask different questions: --Drift answers whether each target "
+                                             + "matches the package, --WhatIf lists what a deploy would do. Use one.");
+            _driftFailOn = DriftFailOn.Parse(CommandLineParser.ValueOfSwitch("DriftFailOn"));
+            _whatIfOnly = true;
+        }
         _runScriptsTwice = _config[SettingsKeys.RunScriptsTwice]?.ToLower() == "true";
-        _primaryServer = _config[SettingsKeys.Target.Server] ?? "localhost";
+        _primaryServer = PrimaryServer(_config);
         _skipKindling = _config[SettingsKeys.KindleTheForge]?.ToLower() == "false";
+        _exitZeroOnDowngrade = CommandLineParser.ContainsSwitch(SettingsKeys.ExitZeroOnDowngrade)
+                               || ConfigBool(_config, SettingsKeys.ExitZeroOnDowngrade) == true;
+        if (_drift) _driftTier = DriftTiers.Choose(_product.Platform, _skipKindling, _config[SettingsKeys.DriftHelperDatabase]);
         // CLI-overridable (unlike the other kindling flags): ForceReKindle is an ad-hoc operational
         // gesture run on demand, not a sticky pipeline default, so a command-line switch is the natural UX.
         _forceReKindle = CommandLineParser.ContainsSwitch("ForceReKindle") || _config[SettingsKeys.ForceReKindle]?.ToLower() == "true";
@@ -145,7 +188,14 @@ public class ProductQuench
         _targetDatabases = ReadFilterArray(SettingsKeys.Target.Databases);
         _targetSchemas = ReadFilterArray(SettingsKeys.Target.Schemas);
         _templateTargets = ReadTemplateTargets(_config);
-        _checkpointing = FileCheckpointManager.GetFromFactory();
+        // Read here so a bad value stops the run before anything connects, naming the setting.
+        _timeouts = SessionTimeouts.Read(_config);
+        _destructive = DestructivePolicy.Read(_config);
+        RefuseNonBooleanDropSettings(_config);
+        // A tier-1 drift check holds its kindle's locks until it rolls back; another session must wait a bounded time, not forever.
+        if (_drift && _driftTier == 1 && _timeouts.LockTimeoutSeconds == null) _timeouts = _timeouts with { LockTimeoutSeconds = 10 };
+        // A preview neither records progress nor reads or discards a failed deploy's resume point (A16).
+        _checkpointing = IsWhatIfOnly ? NoCheckpointing.Instance : FileCheckpointManager.GetFromFactory();
 
         // Secondary servers are SqlServer-only (Availability Groups)
         if (_product.Platform == Platform.SqlServer)
@@ -239,8 +289,31 @@ public class ProductQuench
 
         var policy = new RebuildPolicy { OnOrderMismatch = onOrderMismatch == true };
         if (!string.IsNullOrWhiteSpace(mode)) policy.Mode = mode.Trim().ToUpperInvariant();
-        if (int.TryParse(threshold, out var parsedThreshold)) policy.Threshold = parsedThreshold;
+        if (!string.IsNullOrWhiteSpace(threshold))
+        {
+            if (!int.TryParse(threshold, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsedThreshold))
+                throw new RunFailedException($"{SettingsKeys.RebuildPolicyThreshold} is '{threshold}', which is not a whole number. "
+                                             + "Set it to a number of changes, or leave it out to use the package's setting.");
+            policy.Threshold = parsedThreshold;
+        }
         return policy;
+    }
+
+    // Drop settings read with ConfigBool. Most default to true, so a value that is neither true nor false must not read as
+    // unset: "flase" meant as false would fall through to dropping.
+    private static readonly string[] DropSettings =
+    [
+        SettingsKeys.DropTablesRemovedFromProduct, SettingsKeys.DropColumnsRemovedFromProduct, SettingsKeys.DropForeignKeysRemovedFromProduct,
+        SettingsKeys.DropCheckConstraintsRemovedFromProduct, SettingsKeys.DropExcludeConstraintsRemovedFromProduct,
+        SettingsKeys.DropStatisticsRemovedFromProduct, SettingsKeys.DropIndexesRemovedFromProduct, SettingsKeys.DropPeriodsRemovedFromProduct,
+        SettingsKeys.DropEventsRemovedFromProduct, SettingsKeys.DropUnknownIndexes, SettingsKeys.DropSchemaBoundDependents
+    ];
+
+    internal static void RefuseNonBooleanDropSettings(IConfiguration config)
+    {
+        foreach (var key in DropSettings)
+            if (!string.IsNullOrWhiteSpace(config[key]) && ConfigBool(config, key) == null)
+                throw new RunFailedException($"{key} is '{config[key]}', which is not true or false. Set it to true or false, or leave it out to use the package's setting.");
     }
 
     internal static bool? ConfigBool(IConfiguration config, string key)
@@ -329,16 +402,6 @@ public class ProductQuench
     };
 
     /// <summary>
-    /// Formats the WhatIfOnly value per platform convention.
-    /// SqlServer/MySQL use "1"/"0"; PostgreSQL uses "true"/"false".
-    /// </summary>
-    internal string FormatWhatIfOnly(bool isWhatIf) => _product.Platform switch
-    {
-        Platform.PostgreSQL => isWhatIf ? "true" : "false",
-        _ => isWhatIf ? "1" : "0"
-    };
-
-    /// <summary>
     /// Formats boolean flags per platform convention.
     /// SqlServer/MySQL use "1"/"0"; PostgreSQL uses "true"/"false".
     /// </summary>
@@ -378,18 +441,9 @@ public class ProductQuench
         _progressLog.Info("Validate server version floor");
         foreach (var server in _secondaryServers.Union([_primaryServer]))
         {
-            using var command = GetCommand(server);
-            try
-            {
-                var info = TargetVersionDetector.Detect(command, _product.Platform);
-                _progressLog.Info($"  {server}: detected {info.Platform} version {VersionHelper.DisplayVersion(info)}");
-                PreFlightVersionGuard.CheckOrThrow(info, server);
-            }
-            finally
-            {
-                command.Connection?.Close();
-                command.Connection?.Dispose();
-            }
+            var info = DetectedVersion(server);
+            _progressLog.Info($"  {server}: detected {info.Platform} version {VersionHelper.DisplayVersion(info)}");
+            PreFlightVersionGuard.CheckOrThrow(info, server);
         }
     }
 
@@ -408,6 +462,22 @@ public class ProductQuench
         }
     }
 
+    // The connection test reads each server's version on the connection it opens; a check run on its own opens one.
+    private TargetVersionInfo DetectedVersion(string server)
+    {
+        if (_detectedVersions.TryGetValue(server, out var known)) return known;
+        using var command = GetCommand(server);
+        try
+        {
+            return _detectedVersions[server] = TargetVersionDetector.Detect(command, _product.Platform);
+        }
+        finally
+        {
+            command.Connection?.Close();
+            command.Connection?.Dispose();
+        }
+    }
+
     internal void ValidateMinimumVersion()
     {
         if (string.IsNullOrWhiteSpace(_product.MinimumVersion))
@@ -420,18 +490,7 @@ public class ProductQuench
         _progressLog.Info("Validate Minimum Version");
         var detected = new List<(string Server, TargetVersionInfo Info)>();
         foreach (var server in _secondaryServers.Union([_primaryServer]))
-        {
-            using var command = GetCommand(server);
-            try
-            {
-                detected.Add((server, TargetVersionDetector.Detect(command, _product.Platform)));
-            }
-            finally
-            {
-                command.Connection?.Close();
-                command.Connection?.Dispose();
-            }
-        }
+            detected.Add((server, DetectedVersion(server)));
 
         var failures = BuildMinimumVersionFailures(detected, required.Value, _product.MinimumVersion);
         if (failures.Count > 0)
@@ -508,9 +567,7 @@ public class ProductQuench
     /// <summary>
     /// Returns the active WhatIfOnly value (for testing visibility).
     /// </summary>
-    internal bool IsWhatIfOnly => _product.Platform == Platform.PostgreSQL
-        ? _whatIfOnly == "true"
-        : _whatIfOnly == "1";
+    internal bool IsWhatIfOnly => _whatIfOnly;
 
     // The engine is named because a package run with another engine's settings fails here, and "unable to connect"
     // alone reads as a server that is down.
@@ -518,47 +575,64 @@ public class ProductQuench
         $"Unable to connect to {platform.ToDisplayName()} at {server}{detail}{(string.IsNullOrWhiteSpace(user) ? "" : $" with user {user}")}" +
         (string.IsNullOrWhiteSpace(reason) ? "" : $": {reason}");
 
-    internal virtual IDbCommand GetCommand(string server)
+    // --ConnectionString reaches every server: as given on the primary, and with the server substituted on a secondary,
+    // which shares the primary's credentials and port settings.
+    // The server a run with no Target:Server deploys to; DatabaseQuench tells the primary from a secondary by it.
+    internal static string PrimaryServer(IConfiguration config) => config[SettingsKeys.Target.Server] ?? "localhost";
+
+    private string ConnectionStringOverrideFor(string server)
     {
-        var initDb = GetInitDatabase(_product.Platform);
         var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
-        string connectionString;
-        if (!string.IsNullOrEmpty(connectionStringOverride) && server == _primaryServer)
-        {
-            if (_product.Platform.GetBasePlatform() == Platform.MySQL &&
-                !connectionStringOverride.Contains("AllowUserVariables", StringComparison.OrdinalIgnoreCase))
-            {
-                LogFactory.GetLogger("ProgressLog").Warn("Connection string override for MySQL does not contain AllowUserVariables=true. " +
-                                                         "This is required for SchemaSmith stored procedures that use PREPARE/EXECUTE.");
-            }
-            connectionString = connectionStringOverride;
-        }
-        else
-        {
-            connectionString = TargetConnectionString.Build(_product.Platform, server, initDb, _config);
-        }
-        var factory = DbConnectionFactory.ForPlatform(_product.Platform);
-        var connection = factory.GetDbConnection(connectionString);
-        if (connection is Microsoft.Data.SqlClient.SqlConnection sqlConnection)
-            sqlConnection.InfoMessage += (_, e) => LogServerMessages(server, initDb, e.Errors);
-        else if (connection is Npgsql.NpgsqlConnection pgConnection)
-            pgConnection.Notice += (_, e) =>
-            {
-                if (DatabaseQuench.ShouldLogPostgreSqlNotice(e.Notice.MessageText, e.Notice.Where, VerboseLogging))
-                    LogServerMessage(server, initDb, e.Notice.MessageText);
-            };
+        if (string.IsNullOrEmpty(connectionStringOverride)) return connectionStringOverride;
+        if (_product.Platform.GetBasePlatform() == Platform.MySQL
+            && !connectionStringOverride.Contains("AllowUserVariables", StringComparison.OrdinalIgnoreCase)
+            && System.Threading.Interlocked.Exchange(ref _warnedOverrideWithoutUserVariables, 1) == 0)
+            _progressLog.Warn("Connection string override for MySQL does not contain AllowUserVariables=true. " +
+                              "This is required for SchemaSmith stored procedures that use PREPARE/EXECUTE.");
+        if (string.Equals(server, _primaryServer, StringComparison.OrdinalIgnoreCase)) return connectionStringOverride;
+        return ConnectionString.RetargetServer(connectionStringOverride, server, _product.Platform);
+    }
+
+    // Every connection the run opens, whatever database it targets. A failure to connect names the server (and the
+    // database when it is not the init one), which a raw driver message does not.
+    private IDbCommand OpenCommand(string server, string connectionString, string target = "", string logMessagesFor = null)
+    {
+        var connection = DbConnectionFactory.ForPlatform(_product.Platform).GetDbConnection(connectionString);
+        if (logMessagesFor != null) LogServerMessagesOf(connection, server, logMessagesFor);
         try
         {
             connection.Open();
         }
+        // prepush-allow: generic-catch -- any failure to connect is reported with the server it was for
         catch (Exception e)
         {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User], e.Message), e);
+            connection.Dispose();
+            throw new RunFailedException(ConnectFailure(_product.Platform, server, target, _config[SettingsKeys.Target.User], e.Message), e);
         }
-        var command = connection.CreateCommand();
-        command.CommandTimeout = 0;
+        _timeouts.ApplyLockTimeout(connection, _product.Platform);
+        return _timeouts.NewCommand(connection);
+    }
 
-        return command;
+    private void LogServerMessagesOf(IDbConnection connection, string server, string database)
+    {
+        if (connection is Microsoft.Data.SqlClient.SqlConnection sqlConnection)
+            sqlConnection.InfoMessage += (_, e) => LogServerMessages(server, database, e.Errors);
+        else if (connection is Npgsql.NpgsqlConnection pgConnection)
+            pgConnection.Notice += (_, e) =>
+            {
+                if (DatabaseQuench.ShouldLogPostgreSqlNotice(e.Notice.MessageText, e.Notice.Where, VerboseLogging))
+                    LogServerMessage(server, database, e.Notice.MessageText);
+            };
+    }
+
+    internal virtual IDbCommand GetCommand(string server)
+    {
+        var initDb = GetInitDatabase(_product.Platform);
+        var connectionStringOverride = ConnectionStringOverrideFor(server);
+        var connectionString = !string.IsNullOrEmpty(connectionStringOverride)
+            ? connectionStringOverride
+            : TargetConnectionString.Build(_product.Platform, server, initDb, _config);
+        return OpenCommand(server, connectionString, logMessagesFor: initDb);
     }
 
     // A product script's messages are logged as a template script's are: on SQL Server those raised with state 100, on
@@ -572,9 +646,9 @@ public class ProductQuench
 
     private void LogServerMessage(string server, string database, string message)
     {
-        var line = $"[{server}].[{database}]      {message}";
-        if (DatabaseQuench.IsServerWarning(message)) _progressLog.Warn(line);
-        else _progressLog.Info(line);
+        var line = $"[{server}].[{database}]      ";
+        if (DatabaseQuench.IsServerWarning(message)) _progressLog.Warn(line + LevelPrefixConverter.WithoutWarningPrefix(message));
+        else _progressLog.Info(line + message);
     }
 
     private bool VerboseLogging => _config[SettingsKeys.VerboseLogging]?.ToLower() == "true";
@@ -611,20 +685,8 @@ public class ProductQuench
         if (string.IsNullOrWhiteSpace(ResolveIdentificationDatabase(template)))
             return GetCommand(server);
 
-        var connectionString = ComposeIdentificationConnectionString(server, template);
-        var factory = DbConnectionFactory.ForPlatform(_product.Platform);
-        var connection = factory.GetDbConnection(connectionString);
-        try
-        {
-            connection.Open();
-        }
-        catch (Exception e)
-        {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, $" [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]", _config[SettingsKeys.Target.User], e.Message), e);
-        }
-        var command = connection.CreateCommand();
-        command.CommandTimeout = 0;
-        return command;
+        return OpenCommand(server, ComposeIdentificationConnectionString(server, template),
+            $" [IdentificationDatabase: {ResolveIdentificationDatabase(template)}]");
     }
 
     /// <summary>
@@ -638,8 +700,8 @@ public class ProductQuench
     internal virtual string ComposeIdentificationConnectionString(string server, Template template)
     {
         var identificationDb = ResolveIdentificationDatabase(template);
-        var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
-        if (!string.IsNullOrEmpty(connectionStringOverride) && server == _primaryServer)
+        var connectionStringOverride = ConnectionStringOverrideFor(server);
+        if (!string.IsNullOrEmpty(connectionStringOverride))
             return ConnectionString.RetargetDatabase(connectionStringOverride, identificationDb, _product.Platform);
 
         return TargetConnectionString.Build(_product.Platform, server, identificationDb, _config);
@@ -657,24 +719,7 @@ public class ProductQuench
     /// transaction AND cannot target a non-admin DB; SQL Server / MySQL happen to tolerate the
     /// override's target DB but the admin-DB target is the correct contract across all engines.
     /// </summary>
-    internal virtual IDbCommand GetCommandForAdminDb(string server)
-    {
-        var connectionString = ComposeAdminDbConnectionString(server);
-        var factory = DbConnectionFactory.ForPlatform(_product.Platform);
-        var connection = factory.GetDbConnection(connectionString);
-        try
-        {
-            connection.Open();
-        }
-        catch (Exception e)
-        {
-            throw new RunFailedException(ConnectFailure(_product.Platform, server, "", _config[SettingsKeys.Target.User], e.Message), e);
-        }
-        var command = connection.CreateCommand();
-        command.CommandTimeout = 0;
-
-        return command;
-    }
+    internal virtual IDbCommand GetCommandForAdminDb(string server) => OpenCommand(server, ComposeAdminDbConnectionString(server));
 
     /// <summary>
     /// Composes the admin-database connection string used by <see cref="GetCommandForAdminDb"/>.
@@ -685,17 +730,9 @@ public class ProductQuench
     internal virtual string ComposeAdminDbConnectionString(string server)
     {
         var initDb = GetInitDatabase(_product.Platform);
-        var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
-        if (!string.IsNullOrEmpty(connectionStringOverride) && server == _primaryServer)
-        {
-            if (_product.Platform.GetBasePlatform() == Platform.MySQL &&
-                !connectionStringOverride.Contains("AllowUserVariables", StringComparison.OrdinalIgnoreCase))
-            {
-                LogFactory.GetLogger("ProgressLog").Warn("Connection string override for MySQL does not contain AllowUserVariables=true. " +
-                                                         "This is required for SchemaSmith stored procedures that use PREPARE/EXECUTE.");
-            }
+        var connectionStringOverride = ConnectionStringOverrideFor(server);
+        if (!string.IsNullOrEmpty(connectionStringOverride))
             return ConnectionString.RetargetDatabase(connectionStringOverride, initDb, _product.Platform);
-        }
         return TargetConnectionString.Build(_product.Platform, server, initDb, _config);
     }
 
@@ -728,7 +765,7 @@ public class ProductQuench
     {
         var templates = LoadTemplates();
         TemplateTargetValidator.Validate(_templateTargets, templates, _targetTemplates);
-        if (!TryFilterTemplatesByTarget(templates, out var inScope)) return true;
+        if (!TryFilterTemplatesByTarget(templates, out var inScope)) return false;
 
         var previews = new List<TemplatePreview>();
         foreach (var template in inScope)
@@ -842,10 +879,15 @@ public class ProductQuench
     public void QuenchProduct(bool suppressKindlingForTesting = false)
     {
         _startedUtc = DateTime.UtcNow;
+        _checkpointing.StampRunId(_runId);
+        // A package with table data can be large; the hash is only needed when the summary is written.
+        _packageIdentity = Task.Run(ComputePackageIdentity);
 
         _runTiming.Start();
         try
         {
+            // Inside the try: whatever reading the run's identity throws ends in an Aborted summary, not a bare crash.
+            _deploymentRecord = BuildDeploymentRecord();
             QuenchProductCore(suppressKindlingForTesting);
         }
         catch (RunFailedException)
@@ -868,16 +910,39 @@ public class ProductQuench
         }
         _runTiming.Stop();
 
+        if (_drift) DecideDrift();
+
         // Normal Success / continue-mode PartialFailure. (Hard-abort sites inside Core already wrote
         // their Aborted summary and Exit()ed before control could return here.)
         WriteDeploymentSummary(
             Failed ? RunOutcome.PartialFailure : Incomplete ? RunOutcome.Incomplete : RunOutcome.Success,
-            Failed ? 2 : Incomplete ? 1 : 0);
+            ExitCode);
+    }
+
+    /// <summary>2 a target failed; under --Drift 5 when a target drifted; 1 finished with something left unapplied; 0.</summary>
+    public int ExitCode => _drift ? DriftVerdict.ExitCode(Failed, DriftReport?.Drifted == true, Incomplete) : RunExitCode(Failed, Incomplete, _exitZeroOnDowngrade);
+
+    // 1 for a run that finished with a downgrade, unless the pipeline expects downgrades (ExitZeroOnDowngrade, #616): the
+    // summary still says Incomplete and lists each one. ExitNonZeroOnWarning is applied after this, so it still wins.
+    internal static int RunExitCode(bool failed, bool incomplete, bool exitZeroOnDowngrade) =>
+        failed ? 2 : incomplete && !exitZeroOnDowngrade ? 1 : 0;
+
+    private void DecideDrift()
+    {
+        var units = _targetResults
+            .Select(t => new DriftUnit(t.Server, t.Database, t.Schema, t.Template, t.Outcome == TargetOutcome.Failed, t.Outcome == TargetOutcome.Skipped))
+            .OrderBy(u => u.Display, StringComparer.Ordinal)
+            .ToList();
+        DriftReport = DriftVerdict.Decide(units, _changeAudit.Snapshot(), _driftCapture, _driftFailOn);
+        foreach (var (warn, line) in DriftVerdict.ConsoleLines(DriftReport))
+            if (warn) _progressLog.Warn(line);
+            else _progressLog.Info(line);
     }
 
     private void QuenchProductCore(bool suppressKindlingForTesting)
     {
         _progressLog.Info($"Begin Quench of {_product.Name}");
+        _progressLog.Info($"Run {_runId}");
 
         if (_protectedMode)
             _progressLog.Info("PreventDrop is ENABLED — this environment will skip every drop-by-absence and report the suppressed drops (no objects are dropped for being absent from the product).");
@@ -885,6 +950,7 @@ public class ProductQuench
             _progressLog.Warn($"PreventDrop value '{_config[SettingsKeys.PreventDrop]}' is not a recognized boolean (true/false) — the no-drop protection tier is NOT enabled.");
 
         LogProductInfo();
+        if (_drift) _progressLog.Info(DriftTiers.Explain(_driftTier));
 
         ValidateOnlineApply();
 
@@ -897,7 +963,12 @@ public class ProductQuench
         RemoveOldTableQuenchScripts();
 
         if (CommandLineParser.ContainsSwitch("ResumeQuench"))
-            _progressLog.Info("Resuming: each database continues from its own checkpoint, and product scripts run again");
+        {
+            if (IsWhatIfOnly)
+                _progressLog.Warn("--WhatIf previews the whole deploy: --ResumeQuench is ignored, and the checkpoints are left for the real run");
+            else
+                _progressLog.Info("Resuming: each database continues from its own checkpoint, and product scripts run again");
+        }
 
         using var command = GetCommand(_primaryServer);
 
@@ -932,7 +1003,7 @@ public class ProductQuench
             if (_product.QueryTokens.Count > 0)
             {
                 _progressLog.Info("Resolving Product Level Query Tokens");
-                TokenHelper.ResolveQueryTokens(_product.QueryTokens, _product.NonQueryTokens.ToList(), command, Path.GetDirectoryName(_product.FilePath), _product.Platform);
+                TokenHelper.ResolveQueryTokens(_product.QueryTokens, _product.NonQueryTokens.ToList(), command, _product.Platform);
                 foreach (var script in _product.ScriptFolders.SelectMany(p => p.Scripts))
                     script.ReplaceQueryTokens(_product.QueryTokens.ToList());
             }
@@ -961,7 +1032,8 @@ public class ProductQuench
 
             if (RefuseFoldedTableNameCollisions(templatesInScope)) return;
 
-            QuenchProductScriptsWithCheckpoint(_product.BeforeFolders, "Before Product", true);
+            QuenchServerSettings();
+            QuenchProductScripts(_product.BeforeFolders, "Before Product", true);
 
             foreach (var template in templatesInScope)
             {
@@ -987,9 +1059,13 @@ public class ProductQuench
             }
             else
             {
-                QuenchProductScriptsWithCheckpoint(_product.AfterFolders, "After Product", false);
+                QuenchProductScripts(_product.AfterFolders, "After Product", false);
 
-                if (!string.IsNullOrWhiteSpace(_product.VersionStampScript))
+                var hasStamp = !string.IsNullOrWhiteSpace(_product.VersionStampScript);
+                // A drift check leaves the stamp out, as it does the template's (DriftExcludedSteps).
+                if (hasStamp && _whatIfOnly && !_drift)
+                    _progressLog.Info("[WhatIf] Would stamp product version");
+                if (hasStamp && !_whatIfOnly)
                 {
                     _progressLog.Info("Stamp product version");
                     command.CommandText = _product.VersionStampScript;
@@ -1039,14 +1115,16 @@ public class ProductQuench
         _summaryWritten = true;
         try
         {
-            var mode = IsWhatIfOnly ? RunMode.WhatIf : RunMode.Quench;
+            var mode = _drift ? RunMode.Drift : IsWhatIfOnly ? RunMode.WhatIf : RunMode.Quench;
             var resumed = _checkpointing.ResumedAny;
             var summary = DeploymentSummaryAssembler.Assemble(
-                _product.Name, _product.Platform.ToString(), ToolVersion(),
-                _startedUtc, DateTime.UtcNow, mode, outcome, exitCode, resumed,
+                _product.Name, _product.Platform.ToString(), CommandLineParser.ToolVersion(),
+                _startedUtc, DateTime.UtcNow, mode, outcome, LogBackup.EffectiveExitCode(exitCode), resumed,
                 _targetResults.ToArray(), _runTiming, _migrationScripts.Snapshot(),
                 _whatIf.Snapshot(), _failureRecords.ToArray(), BottleneckThresholdMs(), _changeAudit,
-                protectedModeEnabled: _protectedMode);
+                protectedModeEnabled: _protectedMode, lockWaits: _contention.Snapshot(), settings: _timeouts,
+                destructivePolicy: _destructive.Policy, drift: DriftReport, driftTier: _drift ? _driftTier : null,
+                identity: BuildRunIdentity());
             var (jsonPath, mdPath) = ResolveReportPaths(CommandLineParser.ValueOfSwitch("report", null), ConfigHelper.ResolveLogPath(), "SchemaQuench");
             EnsureReportDirectory(jsonPath);
             var file = FileWrapper.GetFromFactory();
@@ -1087,11 +1165,12 @@ public class ProductQuench
     // for template scripts.
     internal static string MakeScriptPathRelative(string filePath, string baseDir)
     {
-        var stripped = LongPathSupport.StripLongPathPrefix(filePath);
-        if (!string.IsNullOrEmpty(baseDir)) stripped = stripped.Replace(baseDir, "");
-        return stripped
-            .Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-            .TrimStart(Path.AltDirectorySeparatorChar);
+        var path = LongPathSupport.StripLongPathPrefix(filePath).Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        var root = (baseDir ?? "").Replace(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar).TrimEnd(Path.AltDirectorySeparatorChar);
+        // Only in front: the root can occur inside the rest of the path, and "." occurs in nearly every file name.
+        if (root.Length > 0 && path.StartsWith(root + Path.AltDirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            path = path[(root.Length + 1)..];
+        return path.TrimStart(Path.AltDirectorySeparatorChar);
     }
 
     private int BottleneckThresholdMs() =>
@@ -1099,11 +1178,57 @@ public class ProductQuench
 
     // Mirrors CommandLineParser.ShowVersionAndExit's reflection so the deployment summary
     // reports the same tool version the CLI's --version switch shows.
-    private static string ToolVersion()
+    private bool IsZipPackage => ZipFileWrapper.IsValidZipFile(_config[SettingsKeys.SchemaPackagePath]);
+
+    // A zipped package is read through its own archive: the shared one is in use by the load on another thread.
+    private PackageIdentity ComputePackageIdentity()
     {
-        var assembly = Assembly.GetEntryAssembly() ?? Assembly.GetExecutingAssembly();
-        return assembly.GetCustomAttribute<AssemblyFileVersionAttribute>()?.Version
-               ?? assembly.GetName().Version?.ToString() ?? "unknown";
+        PackageIdentity identity;
+        if (IsZipPackage)
+        {
+            using var archive = ZipFile.OpenRead(_config[SettingsKeys.SchemaPackagePath]!);
+            identity = PackageContentHash.ForZip(archive.Entries.Select(e => (IZipEntry)new ZipEntryWrapper(e)));
+        }
+        else
+        {
+            identity = PackageContentHash.ForFolder(Path.GetDirectoryName(_product.FilePath), ConfigHelper.ResolveLogPath());
+        }
+        if (identity == null) _progressLog.Warn("Could not hash the package's content; the deployment summary will not name it.");
+        else _progressLog.Info($"Package {identity.ContentHash} ({identity.FileCount} files)");
+        return identity;
+    }
+
+    private DeploymentRecordRun BuildDeploymentRecord()
+    {
+        if (IsWhatIfOnly || _drift) return null;
+        var setting = _config[SettingsKeys.DeploymentHistory]?.Trim();
+        if (string.Equals(setting, "off", StringComparison.OrdinalIgnoreCase) || string.Equals(setting, "false", StringComparison.OrdinalIgnoreCase)) return null;
+        if (!string.IsNullOrEmpty(setting) && !string.Equals(setting, "on", StringComparison.OrdinalIgnoreCase) && !string.Equals(setting, "true", StringComparison.OrdinalIgnoreCase))
+            _progressLog.Warn($"DeploymentHistory '{setting}' is not on or off; the deployment record is written.");
+        var retentionSetting = _config[SettingsKeys.DeploymentHistoryRetentionDays]?.Trim();
+        var retention = 400;
+        if (!string.IsNullOrEmpty(retentionSetting) && (!int.TryParse(retentionSetting, out retention) || retention < 0))
+        {
+            _progressLog.Warn($"DeploymentHistoryRetentionDays '{retentionSetting}' is not a whole number of days, 0 or more; 400 is used.");
+            retention = 400;
+        }
+        var identity = RunIdentity.Build(_runId, key => _config[key], EnvironmentWrapper.GetFromFactory(), PackageGitSource(), null, RunHost.Current());
+        return new DeploymentRecordRun(_runId, _product.Name, CommandLineParser.ToolVersion(), identity.Source?.Commit, identity.Source?.Branch, identity.Label,
+            identity.Ci?.Url, identity.Ci?.Actor ?? identity.Host?.User, retention,
+            wait => wait ? WaitForPackageIdentity()?.ContentHash : _packageIdentity is { IsCompletedSuccessfully: true } done ? done.Result?.ContentHash : null,
+            () => _checkpointing.ResumedRunId);
+    }
+
+    private GitSource PackageGitSource() => IsZipPackage ? null : GitSourceReader.Read(Path.GetDirectoryName(Path.GetFullPath(_product.FilePath)));
+
+    // A hash that failed costs the summary its package, never the summary.
+    private PackageIdentity WaitForPackageIdentity() =>
+        _packageIdentity?.ContinueWith(t => t.IsCompletedSuccessfully ? t.Result : null).GetAwaiter().GetResult();
+
+    private RunIdentity BuildRunIdentity()
+    {
+        return RunIdentity.Build(_runId, key => _config[key], EnvironmentWrapper.GetFromFactory(), PackageGitSource(), WaitForPackageIdentity(), RunHost.Current())
+            .WithResume(_checkpointing.ResumedRunId);
     }
 
     internal static readonly string[] SpecialTokenTags = ["TableSchema_", "ObjectScripts_", "QueryTokens_", "MaterializedViewSchema_", "IndexedViewSchema_",
@@ -1215,7 +1340,48 @@ public class ProductQuench
         return templates;
     }
 
-    internal void QuenchProductScriptsWithCheckpoint(List<ProductFolder> folders, string msg, bool isBefore)
+    // D12: the server settings the package declares, on every server the product deploys to (configuration is per instance,
+    // so a secondary gets them too), before the Before scripts. Absent means unmanaged: without ServerSettings.json no server
+    // is contacted. No checkpoint: it re-runs on resume.
+    internal void QuenchServerSettings()
+    {
+        if (_product.ServerSettings == null) return;
+        var servers = _product.Platform == Platform.SqlServer ? _secondaryServers.Prepend(_primaryServer).Distinct(StringComparer.OrdinalIgnoreCase).ToList() : [_primaryServer];
+        string stop = null;
+        foreach (var server in servers)
+        {
+            _progressLog.Info(IsWhatIfOnly ? $"[WhatIf] Server settings on {server}" : $"Server settings on {server}");
+            using var command = GetCommand(server);
+            try
+            {
+                var major = SettingDescriptors.MajorVersion(_product.Platform, TargetVersionDetector.Detect(command, _product.Platform).ServerComparable);
+                var step = new SettingsStep(kind => SettingDescriptors.For(_product.Platform, SettingScope.Server, kind, major));
+                var result = step.Run(command, _product.ServerSettings, null, IsWhatIfOnly, e => FolderGate.ShouldApply(command, e), _changeAudit,
+                    new ChangeTarget(server, null), (level, message) => LogServerSetting(level, $"  {message}"));
+                if (result.Stopped) stop ??= $"{server}: {result.StopMessage}";
+            }
+            finally
+            {
+                command.Connection?.Close();
+                command.Connection?.Dispose();
+            }
+        }
+        if (stop == null) return;
+        _anyFailure = true;
+        throw new RunFailedException($"Server settings stopped the deploy on {stop}");
+    }
+
+    private void LogServerSetting(SettingLevel level, string message)
+    {
+        switch (level)
+        {
+            case SettingLevel.Error: _progressLog.Error(message); break;
+            case SettingLevel.Warning: _progressLog.Warn(message); break;
+            default: _progressLog.Info(message); break;
+        }
+    }
+
+    internal void QuenchProductScripts(List<ProductFolder> folders, string msg, bool isBefore)
     {
         _updateFailed = false;
         // #576: the previous run's debug files for the product's own scripts go, as each target's do in DatabaseQuench.
@@ -1232,7 +1398,7 @@ public class ProductQuench
             // SQL Server: quench to primary and secondary servers in parallel, filtering by ServerToQuench
             var serverQueue = new TaskQueueManager<string>(_maxThreads);
             _secondaryServers.Union([_primaryServer]).Distinct().ToList()
-                .ForEach(server => serverQueue.AddToQueue(server, s => QuenchScriptsToServerWithCheckpoint(s, msg,
+                .ForEach(server => serverQueue.AddToQueue(server, s => QuenchProductScriptsOnServer(s, msg,
                     folders.Where(f => s.Equals(_primaryServer) ? f.QuenchOnPrimary : f.QuenchOnSecondary).ToList(),
                     isBefore)));
             serverQueue.WaitForAll();
@@ -1247,7 +1413,7 @@ public class ProductQuench
                     _progressLog.Info($"  Skipping folder '{folder.FolderPath}' — ServerToQuench is Secondary and no SecondaryServers are configured");
                 onPrimary = folders.Where(f => f.QuenchOnPrimary).ToList();
             }
-            QuenchScriptsToServerWithCheckpoint(_primaryServer, msg, onPrimary, isBefore);
+            QuenchProductScriptsOnServer(_primaryServer, msg, onPrimary, isBefore);
         }
 
         if (_updateFailed)
@@ -1293,16 +1459,9 @@ public class ProductQuench
         _progressLog.Info("Testing connection to configured servers");
         var allServers = _secondaryServers.Union([_primaryServer]).ToList();
 
+        // Union has already merged an address listed twice; the same server under two addresses is caught below.
         foreach (var server in allServers)
         {
-            if (serverNames.ContainsKey(server))
-            {
-                _progressLog.Error($"  Duplicate server configured: {server}");
-                _errorLog.Error($"Duplicate server configured {server}");
-                shouldFail = true;
-                continue;
-            }
-
             try
             {
                 using var cmd = GetCommand(server);
@@ -1312,6 +1471,7 @@ public class ProductQuench
                     cmd.CommandText = GetServerIdQuery(_product.Platform);
                     var serverName = cmd.ExecuteScalar()?.ToString() ?? "UNKNOWN";
                     serverNames.Add(server, serverName);
+                    _detectedVersions[server] = TargetVersionDetector.Detect(cmd, _product.Platform);
 
                     _progressLog.Info($"  {server} ({serverName}) connection succeeded");
                 }
@@ -1347,7 +1507,7 @@ public class ProductQuench
         _progressLog.Info("");
     }
 
-    private void QuenchScriptsToServerWithCheckpoint(string server, string message, IEnumerable<ProductFolder> folders, bool isBefore)
+    private void QuenchProductScriptsOnServer(string server, string message, IEnumerable<ProductFolder> folders, bool isBefore)
     {
         _progressLog.Info($"Quenching {message} Scripts to {server}");
         using var productScriptCommand = GetCommand(server);
@@ -1357,10 +1517,11 @@ public class ProductQuench
             // flattening their scripts. Evaluated on the same server command the scripts run against.
             var scriptsToQuench = GateProductFolders(productScriptCommand, folders, server)
                 .SelectMany(f => f.Scripts).Select(j => j.Clone()).ToList();
-            QuenchScriptsWithCheckpoint(productScriptCommand, scriptsToQuench, server, isBefore);
+            QuenchProductScriptList(productScriptCommand, scriptsToQuench, server, isBefore);
         }
-        catch
+        catch (RunFailedException)
         {
+            // Logged where it failed (the failing scripts, a folder gate); anything else is a defect and surfaces.
             _updateFailed = true;
         }
         finally
@@ -1567,11 +1728,9 @@ public class ProductQuench
         var workUnits = new List<WorkUnit>();
         foreach (var server in serverList)
         {
+            // False only when the template's failure setting says to stop.
             if (!EnumerateAndProvisionWorkUnitsForServer(template, server, workUnits, previewOnly))
-            {
-                if (ShouldAbortOnFailure(template))
-                    break;
-            }
+                break;
         }
         return workUnits;
     }
@@ -1656,8 +1815,16 @@ public class ProductQuench
                     command.CommandText = template.DatabaseIdentificationScript;
                     databases = new List<string>();
                     using var reader = command.ExecuteReader();
+                    var blank = 0;
                     while (reader.Read())
-                        databases.Add($"{reader[0]}");
+                    {
+                        var name = reader[0] is DBNull ? null : reader[0]?.ToString();
+                        // A blank name would deploy into whatever database the connection lands in.
+                        if (string.IsNullOrWhiteSpace(name)) { blank++; continue; }
+                        databases.Add(name);
+                    }
+                    if (blank > 0)
+                        _progressLog.Warn($"DatabaseIdentificationScript for template '{template.Name}' on {server} returned {blank} blank database name{(blank == 1 ? "" : "s")}; skipped.");
                 }
                 finally
                 {
@@ -1703,9 +1870,10 @@ public class ProductQuench
                 wouldCreateThisDb = gate.WouldCreate;
             }
 
-            if (template.IsSchemaTemplate && wouldCreateThisDb && !schemasOverride && !previewOnly)
+            // A preview too: the database does not exist yet, so there is nothing to discover schemas in.
+            if (template.IsSchemaTemplate && wouldCreateThisDb && !schemasOverride)
             {
-                _progressLog.Info($"[{server}].[{db}] [WhatIf] Schemas are discovered once the database exists; template '{template.Name}' would deploy to each.");
+                _progressLog.Info($"[{server}].[{db}] {(previewOnly ? "" : "[WhatIf] ")}Schemas are discovered once the database exists; template '{template.Name}' would deploy to each.");
                 workUnits.Add(new WorkUnit(server, db, template.Name, "")
                 {
                     DatabaseSource = databaseSource,
@@ -1994,22 +2162,11 @@ public class ProductQuench
     /// </summary>
     internal virtual IDbCommand GetCommandForDatabase(string server, string databaseName)
     {
-        var connectionStringOverride = CommandLineParser.ValueOfSwitch("ConnectionString", null);
-        string connectionString;
-        if (!string.IsNullOrEmpty(connectionStringOverride) && server == _primaryServer)
-        {
-            connectionString = ConnectionString.RetargetDatabase(connectionStringOverride, databaseName, _product.Platform);
-        }
-        else
-        {
-            connectionString = TargetConnectionString.Build(_product.Platform, server, databaseName, _config);
-        }
-        var factory = DbConnectionFactory.ForPlatform(_product.Platform);
-        var connection = factory.GetDbConnection(connectionString);
-        connection.Open();
-        var command = connection.CreateCommand();
-        command.CommandTimeout = 0;
-        return command;
+        var connectionStringOverride = ConnectionStringOverrideFor(server);
+        var connectionString = !string.IsNullOrEmpty(connectionStringOverride)
+            ? ConnectionString.RetargetDatabase(connectionStringOverride, databaseName, _product.Platform)
+            : TargetConnectionString.Build(_product.Platform, server, databaseName, _config);
+        return OpenCommand(server, connectionString, $" [Database: {databaseName}]");
     }
 
     /// <summary>
@@ -2118,34 +2275,35 @@ public class ProductQuench
         // template would be created in it, which is the preview; the unit succeeds, as the real run would.
         if (IsWhatIfOnly && unit.WouldCreateDatabase)
         {
-            var scope = string.IsNullOrEmpty(unit.SchemaName) ? $"[{unit.Server}].[{unit.DatabaseName}]" : $"[{unit.Server}].[{unit.DatabaseName}].[{unit.SchemaName}]";
+            // The same scope a deploying unit reports (DatabaseQuench.LogPrefix), so a target has one name in the summary.
+            var scope = $"[{unit.Server}].[{unit.DatabaseName}]" + (string.IsNullOrEmpty(unit.SchemaName) ? "" : $" [Schema: {unit.SchemaName}]");
             _progressLog.Info($"{scope} [WhatIf] Would deploy template '{template.Name}' into the new, empty database '{unit.DatabaseName}': every object it declares would be created.");
             _targetResults.Add(new TargetResult(scope, unit.Server, unit.DatabaseName, unit.SchemaName ?? "", unit.TemplateName,
                 TargetOutcome.Success, 0, unit.DatabaseSource, unit.SchemaSource));
             return;
         }
 
-        var dropRemovedTables = FormatBooleanFlag(ResolveCascadedFlag(
+        var dropRemovedTables = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropTablesRemovedFromProduct), _product.DropTablesRemovedFromProduct,
-            template.DropTablesRemovedFromProduct, defaultValue: true));
-        var dropRemovedColumns = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropTablesRemovedFromProduct, defaultValue: true);
+        var dropRemovedColumns = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropColumnsRemovedFromProduct), _product.DropColumnsRemovedFromProduct,
-            template.DropColumnsRemovedFromProduct, defaultValue: true));
-        var dropRemovedForeignKeys = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropColumnsRemovedFromProduct, defaultValue: true);
+        var dropRemovedForeignKeys = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropForeignKeysRemovedFromProduct), _product.DropForeignKeysRemovedFromProduct,
-            template.DropForeignKeysRemovedFromProduct, defaultValue: true));
-        var dropRemovedCheckConstraints = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropForeignKeysRemovedFromProduct, defaultValue: true);
+        var dropRemovedCheckConstraints = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropCheckConstraintsRemovedFromProduct), _product.DropCheckConstraintsRemovedFromProduct,
-            template.DropCheckConstraintsRemovedFromProduct, defaultValue: true));
-        var dropRemovedExcludeConstraints = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropCheckConstraintsRemovedFromProduct, defaultValue: true);
+        var dropRemovedExcludeConstraints = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropExcludeConstraintsRemovedFromProduct), _product.DropExcludeConstraintsRemovedFromProduct,
-            template.DropExcludeConstraintsRemovedFromProduct, defaultValue: true));
-        var dropRemovedStatistics = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropExcludeConstraintsRemovedFromProduct, defaultValue: true);
+        var dropRemovedStatistics = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropStatisticsRemovedFromProduct), _product.DropStatisticsRemovedFromProduct,
-            template.DropStatisticsRemovedFromProduct, defaultValue: true));
-        var dropRemovedIndexes = FormatBooleanFlag(ResolveCascadedFlag(
+            template.DropStatisticsRemovedFromProduct, defaultValue: true);
+        var dropRemovedIndexes = ResolveCascadedFlag(
             ConfigBool(_config, SettingsKeys.DropIndexesRemovedFromProduct), _product.DropIndexesRemovedFromProduct,
-            template.DropIndexesRemovedFromProduct, defaultValue: true));
+            template.DropIndexesRemovedFromProduct, defaultValue: true);
         // Environment tier only. The table tier lives on MariaDbTable and is resolved inside the proc,
         // because putting it on the shared Table type would publish a MariaDB-only setting into the
         // SQL Server, PostgreSQL and MySQL schemas -- the exact leak MariaDbTable exists to prevent.
@@ -2162,13 +2320,8 @@ public class ProductQuench
         // is unaffected (verified across all three engines).
         if (_protectedMode)
         {
-            dropRemovedTables = FormatBooleanFlag(false);
-            dropRemovedColumns = FormatBooleanFlag(false);
-            dropRemovedForeignKeys = FormatBooleanFlag(false);
-            dropRemovedCheckConstraints = FormatBooleanFlag(false);
-            dropRemovedExcludeConstraints = FormatBooleanFlag(false);
-            dropRemovedStatistics = FormatBooleanFlag(false);
-            dropRemovedIndexes = FormatBooleanFlag(false);
+            dropRemovedTables = dropRemovedColumns = dropRemovedForeignKeys = dropRemovedCheckConstraints = false;
+            dropRemovedExcludeConstraints = dropRemovedStatistics = dropRemovedIndexes = false;
             dropUnknownIndexes = false;
             dropRemovedPeriods = false;
         }
@@ -2178,20 +2331,39 @@ public class ProductQuench
         // the table's own — whole, never field by field.
         var rebuildPolicy = ResolveCascadedPolicy(
             ReadEnvRebuildPolicy(_config), _product.RebuildPolicy, template.RebuildPolicy, table: null);
-        var quench = new DatabaseQuench(unit.Server, _product, template, unit.DatabaseName, unit.SchemaName,
-            suppressKindling, _whatIfOnly, _runScriptsTwice, dropRemovedTables,
-            dropRemovedColumns, dropRemovedForeignKeys, dropRemovedCheckConstraints, dropRemovedExcludeConstraints, dropRemovedStatistics, dropRemovedIndexes, dropUnknownIndexes,
-            _updateTables && template.Tables.Count > 0, _deliverData, _checkpointing,
-            _trackRunOnceMigrations, _pruneObsoleteMigrationTracking, _forceReKindle)
+        var quench = new DatabaseQuench(_product, template, new DatabaseQuenchOptions
+        {
+            Server = unit.Server,
+            DatabaseName = unit.DatabaseName,
+            SchemaName = unit.SchemaName,
+            SuppressKindling = suppressKindling,
+            WhatIf = IsWhatIfOnly,
+            Drift = _drift,
+            DriftInTransaction = _drift && _driftTier == 1,
+            DriftHelperDatabase = _drift && _driftTier == 2 ? _config[SettingsKeys.DriftHelperDatabase] : null,
+            RunScriptsTwice = _runScriptsTwice,
+            UpdateTables = _updateTables && template.Tables.Count > 0,
+            DeliverData = _deliverData,
+            TrackRunOnceMigrations = _trackRunOnceMigrations,
+            // A patch carries only some of the product's migrations, so pruning by absence would erase the rest's history.
+            PruneObsoleteMigrationTracking = _pruneObsoleteMigrationTracking && _product.PruneObsoleteMigrationTracking != false,
+            ForceReKindle = _forceReKindle,
+            Destructive = _destructive,
+            Drops = new DropPolicy(dropRemovedTables, dropRemovedColumns, dropRemovedForeignKeys, dropRemovedCheckConstraints,
+                dropRemovedExcludeConstraints, dropRemovedStatistics, dropRemovedIndexes, dropUnknownIndexes),
+        }, _checkpointing)
         {
             // Carry the override-origin signals through so EnsureSchemaExists can branch on
             // TemplateTargets-driven provisioning + skip-missing. Defaults preserve existing
             // behavior for discovery-sourced units.
             SchemaFromOverride = unit.SchemaFromOverride,
+            Timeouts = _timeouts,
+            Contention = _contention,
             ProvisionSchemaIfMissing = unit.ProvisionSchemaIfMissing,
             RunTiming = _runTiming,
             MigrationScripts = _migrationScripts,
             WhatIf = _whatIf,
+            DriftCapture = _drift ? _driftCapture : null,
             ChangeAudit = _changeAudit,
             ReadsChangeAudit = _updateTables,
             CaptureWouldDrop = _protectedMode,
@@ -2204,17 +2376,27 @@ public class ProductQuench
             // per-table or per-object level for this to cascade from. Forced OFF under the no-drop
             // protection tier (PreventDrop) exactly like every other drop-by-absence pass -- the tier's
             // contract is that nothing is dropped for being absent from the product, events included.
-            DropRemovedEvents = !_protectedMode && (ConfigBool(_config, SettingsKeys.DropEventsRemovedFromProduct) ?? false)
+            DropRemovedEvents = !_protectedMode && (ConfigBool(_config, SettingsKeys.DropEventsRemovedFromProduct) ?? false),
+            DeploymentRecord = _deploymentRecord
         };
         var workUnitStopwatch = Stopwatch.StartNew();
-        quench.Execute();
+        // A tier-1 drift check's uncommitted kindle holds locks on the helpers every other unit of the database needs.
+        // A tier-2 check replaces the helper database's state with each target's, so units sharing it take turns.
+        if (_drift && _driftTier is 1 or 2)
+        {
+            var lockDatabase = _driftTier == 1 ? unit.DatabaseName : _config[SettingsKeys.DriftHelperDatabase];
+            lock (DriftDatabaseLocks.GetOrAdd($"{unit.Server}\u0001{lockDatabase}".ToLowerInvariant(), _ => new object()))
+                quench.Execute();
+        }
+        else
+            quench.Execute();
         workUnitStopwatch.Stop();
         _targetResults.Add(new TargetResult(
             quench.LogPrefix, unit.Server, unit.DatabaseName, unit.SchemaName ?? "", unit.TemplateName,
             TargetResult.DeriveOutcome(quench.QuenchSuccessful, quench.WasSkipped), workUnitStopwatch.ElapsedMilliseconds,
             // Source disclosure rides the record that already has one row per work unit, so the report
             // carries the audit trail the progress log used to repeat per unit.
-            unit.DatabaseSource, unit.SchemaSource));
+            unit.DatabaseSource, unit.SchemaSource, quench.ConnectedAs));
         if (!quench.QuenchSuccessful)
         {
             if (quench.LastFailure != null) _failureRecords.Add(quench.LastFailure);
@@ -2225,7 +2407,7 @@ public class ProductQuench
         }
     }
 
-    private void QuenchScriptsWithCheckpoint(IDbCommand destCmd, List<SqlScript> scriptList, string server, bool isBefore)
+    private void QuenchProductScriptList(IDbCommand destCmd, List<SqlScript> scriptList, string server, bool isBefore)
     {
         var initDb = GetInitDatabase(_product.Platform);
         var serverMsg = string.IsNullOrWhiteSpace(server) ? "" : $"[{server}].";
@@ -2350,10 +2532,12 @@ public class ProductQuench
     /// at this level (product Before/After scripts run before/around per-database template work), so
     /// the product name + server stand in for the scope DatabaseQuench.GetDebugFileName uses.
     /// </summary>
-    private string GetProductDebugFileName(string label, string server)
+    private string GetProductDebugFileName(string label, string server) => ProductDebugFileName(label, server, _product.Name);
+
+    internal static string ProductDebugFileName(string label, string server, string productName)
     {
-        var serverSuffix = string.IsNullOrEmpty(server) ? "" : $" {server}";
-        return $"SchemaQuench - {label}{serverSuffix} {_product.Name}.sql";
+        var serverSuffix = string.IsNullOrEmpty(server) ? "" : $" {FileNameEncoder.Encode(server)}";
+        return $"SchemaQuench - {label}{serverSuffix} {FileNameEncoder.Encode(productName)}.sql";
     }
 
     private void ResetDb(IDbCommand destCmd)

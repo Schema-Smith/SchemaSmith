@@ -47,6 +47,9 @@ public class DataDeliveryConfiguratorContext
     /// <summary>Comma-separated key column names from the database.</summary>
     public string KeyColumns { get; set; }
 
+    /// <summary>The columns the content file was extracted with, when the extraction leaves out an all-NULL column.</summary>
+    public string Columns { get; set; }
+
     /// <summary>Default merge type if the table config doesn't specify one.</summary>
     public string DefaultMergeType { get; set; }
 

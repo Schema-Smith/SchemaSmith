@@ -8,6 +8,8 @@ using System.Reflection;
 using System.Text.RegularExpressions;
 using NUnit.Framework;
 using Schema.Capabilities;
+using Schema.Domain;
+using Schema.Utility;
 
 namespace Schema.UnitTests.Scripts;
 
@@ -388,5 +390,91 @@ public class SqlServerScriptGuardTests
             + "cannot be indexed at all, and anything over 450 characters exceeds the 900-byte key limit "
             + "once combined. Neither fails a deploy -- the first makes the correlated joins LOB scans "
             + "and the second logs a maximum-key-length warning on every run: " + string.Join(", ", tooWide));
+    }
+
+    /// <summary>
+    /// SS-1 (identifier safety): a message held in a variable is passed as RAISERROR's argument, never as its format. As
+    /// the format, every % in the message -- a name holding one, a LIKE pattern an error quotes -- is read as a
+    /// placeholder: the message comes out mangled, or RAISERROR fails on it instead of reporting it.
+    /// </summary>
+    [Test]
+    public void NoRaiseErrorTakesItsFormatFromAVariable()
+    {
+        var offences = SqlServerScripts()
+            .SelectMany(s => WithoutLineComments(s.Sql).Split('\n')
+                .Select((line, i) => (s.Name, Line: i + 1, Text: line.Trim()))
+                .Where(l => Regex.IsMatch(l.Text, @"RAISERROR\s*\(\s*@\w+\s*,", RegexOptions.IgnoreCase)))
+            .Select(l => $"{l.Name}:{l.Line}: {l.Text}  -- use RAISERROR('%s', <severity>, <state>, @variable)")
+            .ToList();
+        Assert.That(offences, Is.Empty, string.Join(Environment.NewLine, offences));
+    }
+
+    /// <summary>
+    /// The XML tier is what kindles on SQL Server 2008 and 2008 R2, which parse a procedure whole at CREATE time: one
+    /// statement from 2012 or later fails the kindle, and nothing deploys. String literals are left out, since
+    /// dynamic SQL is run only where the server has what it names.
+    /// </summary>
+    [Test]
+    public void TheXmlTierUsesNoStatementOrFunctionNewerThan2008()
+    {
+        var names = ForgeKindler.GetKindlingScripts(Platform.SqlServer, IngestEncoding.Xml).Select(s => s.FileName)
+            .Append("ParseTableXmlIntoTempTables.sql")
+            .ToList();
+        Assert.That(names, Does.Contain("SchemaSmith.IndexedViewXmlQuench.sql"), "the XML tier's kindle list");
+
+        var newer = new Regex(@"\b(THROW|IIF|CHOOSE|CONCAT|FORMAT|TRY_CONVERT|TRY_CAST|TRY_PARSE|STRING_AGG|STRING_SPLIT|OPENJSON|EOMONTH|DATEFROMPARTS)\b(?=\s*[\(;0-9@]|\s*$)",
+            RegexOptions.IgnoreCase | RegexOptions.Multiline);
+        var offences = names
+            .SelectMany(name => Regex.Replace(WithoutLineComments(ResourceLoader.Load(name, Platform.SqlServer)), @"N?'(?:[^']|'')*'",
+                    m => "''" + new string('\n', m.Value.Count(c => c == '\n')))
+                .Split('\n')
+                .Select((line, i) => (Name: name, Line: i + 1, Text: line.Trim())))
+            .Where(l => newer.IsMatch(l.Text))
+            .Select(l => $"{l.Name}:{l.Line}: {l.Text}")
+            .ToList();
+        Assert.That(offences, Is.Empty, string.Join(Environment.NewLine, offences));
+    }
+
+    /// <summary>
+    /// The console shows a server message at severity 10 only when its state is 100 (or under VerboseLogging), so
+    /// progress raised at any other state is silent: sequence creation printed nothing on an ordinary run.
+    /// </summary>
+    [Test]
+    public void EveryInformationalMessage_IsRaisedAtTheStateTheConsoleShows()
+    {
+        var raised = 0;
+        var offences = new List<string>();
+        foreach (var (name, sql) in SqlServerScripts())
+            // The first argument is only ever a literal, a variable or a message id; an open span over quoted text backtracks exponentially.
+            foreach (Match m in Regex.Matches(WithoutLineComments(sql), @"RAISERROR\s*\(\s*(?:N?'(?:[^']|'')*'|@\w+|\d+)\s*,\s*10\s*,\s*(\d+)\s*[,)]",
+                         RegexOptions.IgnoreCase, TimeSpan.FromSeconds(10)))
+            {
+                raised++;
+                if (m.Groups[1].Value != "100") offences.Add($"{name}: {m.Value}");
+            }
+        Assert.That(raised, Is.GreaterThan(20), "no informational RAISERROR was found; the pattern is stale");
+        Assert.That(offences, Is.Empty, string.Join(Environment.NewLine, offences));
+    }
+
+    /// <summary>
+    /// A statement the deploy runs is printed by the preview. Skipping it under WhatIf without printing it hid the
+    /// indexed-view DDL and the sequence DDL from --WhatIf, which showed only the narration around them.
+    /// </summary>
+    [Test]
+    public void NoStatementIsSkippedUnderWhatIfWithoutBeingPrinted()
+    {
+        var offences = new List<string>();
+        foreach (var (name, sql) in SqlServerScripts())
+        {
+            var lines = WithoutLineComments(sql).Split('\n');
+            for (var i = 0; i < lines.Length; i++)
+            {
+                var m = Regex.Match(lines[i], @"@WhatIf\s*=\s*0\s+EXEC\s*(?:sp_executesql\s+|\(\s*)(@\w+)", RegexOptions.IgnoreCase);
+                if (!m.Success) continue;
+                var printedBefore = i > 0 && Regex.IsMatch(lines[i - 1], @"PrintWithNoWait\]?\s+" + m.Groups[1].Value + @"\b", RegexOptions.IgnoreCase);
+                if (!printedBefore) offences.Add($"{name}:{i + 1}: {lines[i].Trim()}");
+            }
+        }
+        Assert.That(offences, Is.Empty, string.Join(Environment.NewLine, offences));
     }
 }

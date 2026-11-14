@@ -26,7 +26,7 @@ BEGIN
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT INTO _SchemaSmith_LivePrimaryKeys (TableKey, NormColumns)
     SELECT SchemaSmith_IdentifierKey(s.TABLE_NAME),
-           GROUP_CONCAT(CONCAT('`', s.COLUMN_NAME, '`',
+           GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(s.COLUMN_NAME), '`',
                                IF(s.SUB_PART IS NOT NULL, CONCAT('(', s.SUB_PART, ')'), ''),
                                CASE WHEN CAST(s.COLLATION AS BINARY) = CAST('D' AS BINARY) THEN ' DESC' ELSE '' END)
                         ORDER BY s.SEQ_IN_INDEX SEPARATOR ',')
@@ -72,9 +72,7 @@ BEGIN
     -- A statement of its own: MySQL cannot open a temporary table twice in one statement.
     UPDATE _SchemaSmith_PrimaryKeyStmts p
       JOIN _SchemaSmith_Tables t ON t.TableKey = p.TableKey
-       SET p.AutoIncrementColumn = CASE WHEN COALESCE(t.AutoIncrementKeyClause, '') <> ''
-                                        THEN SchemaSmith_StripBacktickWrapping(SUBSTRING_INDEX(SUBSTRING_INDEX(t.AutoIncrementKeyClause, '(', -1), ')', 1))
-                                        END;
+       SET p.AutoIncrementColumn = t.AutoIncrementColumn;
     -- An AUTO_INCREMENT column that is not the key's first part needs an index of its own leading with it; one the
     -- table already has serves. The catalog is read into a snapshot, never joined by set-based DML (#337).
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_LeadingIndexColumns;
@@ -116,20 +114,20 @@ BEGIN
     IF EXISTS (SELECT 1 FROM _SchemaSmith_PrimaryKeyStmts WHERE HasKey = 1) THEN
         INSERT INTO _SchemaSmith_PkForeignKeyColumns (TableKey, Cols)
         SELECT SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_NAME),
-               LOWER(GROUP_CONCAT(CONCAT('`', k.REFERENCED_COLUMN_NAME, '`') ORDER BY k.POSITION_IN_UNIQUE_CONSTRAINT SEPARATOR ','))
+               LOWER(GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(k.REFERENCED_COLUMN_NAME), '`') ORDER BY k.POSITION_IN_UNIQUE_CONSTRAINT SEPARATOR ','))
           FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
          WHERE k.REFERENCED_TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.REFERENCED_TABLE_SCHEMA) = v_DbKey
          GROUP BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.REFERENCED_TABLE_NAME;
         INSERT INTO _SchemaSmith_PkForeignKeyColumns (TableKey, Cols)
         SELECT SchemaSmith_IdentifierKey(k.TABLE_NAME),
-               LOWER(GROUP_CONCAT(CONCAT('`', k.COLUMN_NAME, '`') ORDER BY k.ORDINAL_POSITION SEPARATOR ','))
+               LOWER(GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(k.COLUMN_NAME), '`') ORDER BY k.ORDINAL_POSITION SEPARATOR ','))
           FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE k
          WHERE k.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(k.TABLE_SCHEMA) = v_DbKey
            AND k.REFERENCED_TABLE_NAME IS NOT NULL
          GROUP BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME;
         INSERT INTO _SchemaSmith_PkOtherIndexColumns (TableKey, Cols)
         SELECT SchemaSmith_IdentifierKey(s.TABLE_NAME),
-               LOWER(GROUP_CONCAT(CONCAT('`', s.COLUMN_NAME, '`') ORDER BY s.SEQ_IN_INDEX SEPARATOR ','))
+               LOWER(GROUP_CONCAT(CONCAT('`', SchemaSmith_EscapeBackticks(s.COLUMN_NAME), '`') ORDER BY s.SEQ_IN_INDEX SEPARATOR ','))
           FROM INFORMATION_SCHEMA.STATISTICS s
          WHERE s.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(s.TABLE_SCHEMA) = v_DbKey
            AND s.INDEX_NAME <> 'PRIMARY'
@@ -148,15 +146,15 @@ BEGIN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Converge primary keys');
     END IF;
 
-    SET @ss_pk_id := (SELECT MIN(RowId) FROM _SchemaSmith_PrimaryKeyStmts);
+    SELECT (SELECT MIN(RowId) FROM _SchemaSmith_PrimaryKeyStmts) INTO @ss_pk_id;
     WHILE @ss_pk_id IS NOT NULL DO
         SELECT TableName, AuditName, HasKey, ForeignKeyBlocks,
                -- The key MySQL generated for a keyless table goes with its column, in the statement that adds the
                -- declared key: the column cannot be dropped on its own, nor the key replaced while it stays.
-               CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ',
+               CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ',
                       IF(HasKey = 1, 'DROP PRIMARY KEY, ', ''),
                       'ADD PRIMARY KEY (', KeyColumns, ')',
-                      IF(AutoIncrementColumn IS NULL, '', CONCAT(', ADD KEY (`', AutoIncrementColumn, '`)')))
+                      IF(AutoIncrementColumn IS NULL, '', CONCAT(', ADD KEY (`', SchemaSmith_EscapeBackticks(AutoIncrementColumn), '`)')))
           INTO @ss_pk_table, @ss_pk_audit, @ss_pk_haskey, @ss_pk_fk_needs, @exec_sql
           FROM _SchemaSmith_PrimaryKeyStmts WHERE RowId = @ss_pk_id;
         SET @ss_pk_generated := IF(@ss_pk_haskey = 1, SchemaSmith_IsGeneratedInvisiblePrimaryKey(p_DatabaseName, @ss_pk_table, 'my_row_id'), 0);
@@ -219,7 +217,7 @@ BEGIN
                 INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'index', @ss_pk_audit, 'created');
             END IF;
         END IF;
-        SET @ss_pk_id := (SELECT MIN(RowId) FROM _SchemaSmith_PrimaryKeyStmts WHERE RowId > @ss_pk_id);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_PrimaryKeyStmts WHERE RowId > @ss_pk_id) INTO @ss_pk_id;
     END WHILE;
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_PrimaryKeyStmts;

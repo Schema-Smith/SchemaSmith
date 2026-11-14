@@ -56,6 +56,46 @@ public class TableFileResolverTests
     // Non-variant tests never exercise the gate delegate; pass an arbitrary one.
     private static readonly Func<string, bool> AnyGate = _ => true;
 
+    // One table whose file differs from its canonical name only in case: the file is renamed to match (Paul, 2026-11-10).
+    // Writing the new spelling over the old would keep the old one on Windows and macOS, and leave both on Linux.
+    [Test]
+    public void Resolve_AFileWhoseNameDiffersOnlyInCase_IsReplacedByTheCanonicalName()
+    {
+        var existing = Path.Join("pkg", "Tables", "dbo.orders.json");
+        StubTablesFolder((existing, TableJson("dbo", "orders")));
+
+        var res = new TableFileResolver(TablesDir, Platform.SqlServer, isSchemaTemplate: false, AnyGate).Resolve("dbo", "Orders");
+
+        Assert.That(Path.GetFileName(res.WritePath), Is.EqualTo("dbo.Orders.json"));
+        _file.Received(1).Delete(existing);
+    }
+
+    // A file the author named otherwise is theirs to keep: only a case-only difference is normalized.
+    [Test]
+    public void Resolve_AFileWithAnotherName_KeepsIt()
+    {
+        var existing = Path.Join("pkg", "Tables", "orders-table.json");
+        StubTablesFolder((existing, TableJson("dbo", "Orders")));
+
+        var res = new TableFileResolver(TablesDir, Platform.SqlServer, isSchemaTemplate: false, AnyGate).Resolve("dbo", "Orders");
+
+        Assert.That(res.WritePath, Is.EqualTo(existing));
+        _file.DidNotReceive().Delete(Arg.Any<string>());
+    }
+
+    // Two tables whose names differ only in case extract to one file, and one would be lost: refused by name.
+    [Test]
+    public void TwoTablesWhoseNamesDifferOnlyInCase_AreRefusedByName()
+    {
+        var e = Assert.Throws<Schema.Utility.RunFailedException>(() =>
+            TableFileResolver.RefuseCaseOnlyNames([("dbo", "Orders"), ("dbo", "orders"), ("dbo", "Items"), ("sales", "Orders")], isSchemaTemplate: false));
+
+        Assert.That(e.Message, Does.Contain("dbo.Orders").And.Contain("dbo.orders").And.Not.Contain("Items").And.Not.Contain("sales.Orders"));
+        Assert.DoesNotThrow(() => TableFileResolver.RefuseCaseOnlyNames([("dbo", "Orders"), ("sales", "orders")], isSchemaTemplate: false));
+        Assert.Throws<Schema.Utility.RunFailedException>(() =>
+            TableFileResolver.RefuseCaseOnlyNames([("t1", "Orders"), ("t1", "ORDERS")], isSchemaTemplate: true));
+    }
+
     [Test]
     public void Resolve_NoExistingFileForTable_ReturnsCanonicalBarePath()
     {

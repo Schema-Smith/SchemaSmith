@@ -29,28 +29,19 @@ namespace Schema.IntegrationTests.PostgreSQL;
 [NonParallelizable]
 public class SequenceTests
 {
-    private string _server = "", _user = "", _password = "", _port = "";
-    private Dictionary<string, string> _props = new();
     private string _db = "";
 
+    // A schema of its own in the suite's kindled database, not a database: nothing here is a database-level setting, and a
+    // database cost a CREATE DATABASE and a kindle per run. Every connection puts the schema first on its search_path.
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-        _server = config["PostgreSQL:Server"] ?? "127.0.0.1";
-        _user = config["PostgreSQL:User"];
-        _password = config["PostgreSQL:Password"];
-        _port = config["PostgreSQL:Port"];
-        _props = ConnectionString.ReadProperties(config, "PostgreSQL:ConnectionProperties");
-
         _db = $"ss_seq_{Guid.NewGuid():N}"[..28].ToLowerInvariant();
-        using var maint = Open("postgres");
-        Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
-        Exec(maint, $"CREATE DATABASE \"{_db}\"");
-
-        using var c = Open(_db);
-        using var cmd = c.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.PostgreSQL);
+        using (var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString()))
+        {
+            main.Open();
+            Exec(main, $"CREATE SCHEMA \"{_db}\"");
+        }
     }
 
     [OneTimeTearDown]
@@ -58,18 +49,18 @@ public class SequenceTests
     {
         try
         {
-            using var maint = Open("postgres");
-            Exec(maint, $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{_db}' AND pid <> pg_backend_pid()");
-            Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
+            using var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
+            main.Open();
+            Exec(main, $"DROP SCHEMA IF EXISTS \"{_db}\" CASCADE");
         }
         catch (DbException) { /* teardown must not mask an assertion */ }
     }
 
-    private IDbConnection Open(string database)
+    private IDbConnection Open(string schema)
     {
-        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL)
-            .GetDbConnection(ConnectionString.Build(Platform.PostgreSQL, _server, database, _user, _password, _port, _props));
+        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         c.Open();
+        Exec(c, $"SET search_path = \"{schema}\", public");
         return c;
     }
 
@@ -90,8 +81,8 @@ public class SequenceTests
     }
 
 
-    private static string Package(string name, string extra = "") =>
-        "[{ \"Schema\": \"public\", \"Name\": \"" + name + "\"" + extra + " }]";
+    private string Package(string name, string extra = "") =>
+        "[{ \"Schema\": \"" + _db + "\", \"Name\": \"" + name + "\"" + extra + " }]";
 
     private static void Deploy(IDbCommand cmd, string json, bool whatIf = false)
     {
@@ -103,7 +94,7 @@ public class SequenceTests
     private static string Attr(IDbCommand cmd, string name, string column)
     {
         cmd.CommandText = "SELECT q." + column + "::text FROM pg_sequence q JOIN pg_class c ON c.oid = q.seqrelid "
-                          + "WHERE c.relname = '" + name + "'";
+                          + "WHERE c.relnamespace = current_schema()::regnamespace AND c.relname = '" + name + "'";
         return Convert.ToString(cmd.ExecuteScalar());
     }
 
@@ -136,15 +127,15 @@ public class SequenceTests
             if (Convert.ToInt32(cmd.ExecuteScalar()) < 150000)
                 Assert.Ignore("UNLOGGED sequences need PostgreSQL 15; below it the downgrade path applies.");
 
-            string Persistence() { cmd.CommandText = "SELECT relpersistence::text FROM pg_class WHERE relname = 'seq_unlogged'"; return Convert.ToString(cmd.ExecuteScalar()); }
+            string Persistence() { cmd.CommandText = "SELECT relpersistence::text FROM pg_class WHERE relnamespace = current_schema()::regnamespace AND relname = 'seq_unlogged'"; return Convert.ToString(cmd.ExecuteScalar()); }
 
             Deploy(cmd, Package("seq_unlogged", ", \"PersistenceType\": \"Unlogged\""));
             Assert.That(Persistence(), Is.EqualTo("u"), "the sequence must be created unlogged");
-            cmd.CommandText = "SELECT COUNT(*) FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() AND \"ObjectName\" = 'public.seq_unlogged' AND \"ActionType\" = 'modified'";
+            cmd.CommandText = "SELECT COUNT(*) FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() AND \"ObjectName\" = current_schema() || '.seq_unlogged' AND \"ActionType\" = 'modified'";
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0),
                 "it must be created unlogged, not created and then altered -- the summary would report a change that was not one");
 
-            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateSequenceJSON\"('public', 'seq_unlogged')";
+            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateSequenceJSON\"(current_schema()::text, 'seq_unlogged')";
             Assert.That(Convert.ToString(cmd.ExecuteScalar()), Does.Contain("\"PersistenceType\": \"Unlogged\""),
                 "extraction must carry it");
 
@@ -168,9 +159,9 @@ public class SequenceTests
                 Exec2(cmd, "SET schemasmith.version_override = '14'");
                 Deploy(cmd, Package("seq_unlogged14", ", \"PersistenceType\": \"Unlogged\""));
 
-                cmd.CommandText = "SELECT relpersistence::text FROM pg_class WHERE relname = 'seq_unlogged14'";
+                cmd.CommandText = "SELECT relpersistence::text FROM pg_class WHERE relnamespace = current_schema()::regnamespace AND relname = 'seq_unlogged14'";
                 Assert.That(Convert.ToString(cmd.ExecuteScalar()), Is.EqualTo("p"), "below 15 the sequence is created logged");
-                cmd.CommandText = "SELECT COUNT(*) FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() AND \"ObjectName\" = 'public.seq_unlogged14' AND \"ActionType\" = 'downgraded'";
+                cmd.CommandText = "SELECT COUNT(*) FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"SessionId\" = pg_backend_pid() AND \"ObjectName\" = current_schema() || '.seq_unlogged14' AND \"ActionType\" = 'downgraded'";
                 Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the skipped clause is recorded as a downgrade");
 
                 Exec2(cmd, "SET schemasmith.unsupported_policy = 'fail'");
@@ -255,7 +246,7 @@ public class SequenceTests
 
             cmd.CommandText = @"SELECT COUNT(*) FROM pg_class s
                                   JOIN pg_namespace n ON n.oid = s.relnamespace
-                                 WHERE s.relkind = 'S' AND n.nspname = 'public'
+                                 WHERE s.relkind = 'S' AND n.nspname = current_schema()
                                    AND s.relname LIKE 'owned_probe%'
                                    AND NOT EXISTS (SELECT 1 FROM pg_depend d
                                                     WHERE d.objid = s.oid
@@ -274,7 +265,7 @@ public class SequenceTests
             Deploy(cmd, Package("seq_round", ", \"Increment\": 4, \"MaxValue\": 400"));
             Exec2(cmd, "SELECT nextval('seq_round')");
 
-            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateSequenceJSON\"('public', 'seq_round')";
+            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateSequenceJSON\"(current_schema()::text, 'seq_round')";
             var json = cmd.ExecuteScalar() as string ?? "";
 
             Assert.Multiple(() =>
@@ -294,7 +285,7 @@ public class SequenceTests
         {
             Deploy(cmd, Package("seq_whatif"), whatIf: true);
 
-            cmd.CommandText = "SELECT COUNT(*) FROM pg_class WHERE relkind = 'S' AND relname = 'seq_whatif'";
+            cmd.CommandText = "SELECT COUNT(*) FROM pg_class WHERE relnamespace = current_schema()::regnamespace AND relkind = 'S' AND relname = 'seq_whatif'";
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero);
         });
     }
@@ -307,7 +298,7 @@ public class SequenceTests
 
     private static string Comment(IDbCommand cmd, string name)
     {
-        cmd.CommandText = "SELECT OBJ_DESCRIPTION(c.oid, 'pg_class') FROM pg_class c WHERE c.relname = '" + name + "' AND c.relkind = 'S'";
+        cmd.CommandText = "SELECT OBJ_DESCRIPTION(c.oid, 'pg_class') FROM pg_class c WHERE c.relnamespace = current_schema()::regnamespace AND c.relname = '" + name + "' AND c.relkind = 'S'";
         return cmd.ExecuteScalar() as string;
     }
 

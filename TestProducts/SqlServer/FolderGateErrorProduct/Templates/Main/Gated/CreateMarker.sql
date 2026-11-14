@@ -1,0 +1,1 @@
+CREATE TABLE dbo.GateMarker (Id INT NOT NULL);

@@ -16,6 +16,7 @@
 -- SchemaSmith_OwnedNameMatches compares an ownership row's 'table.object' name with a table and an object name: the
 -- table half by the server's table rule, the object half by this one. Matching on the length of the table name keeps a
 -- table name that itself contains a dot whole.
+-- SchemaSmith_OwnedKeyMatches is the same match against a table key and an object key already computed.
 
 DROP FUNCTION IF EXISTS `SchemaSmith_NameKeyCI`;
 
@@ -47,6 +48,25 @@ BEGIN
        AND SchemaSmith_IdentifierKey(LEFT(ownedName, CHAR_LENGTH(tableName))) = SchemaSmith_IdentifierKey(tableName)
        AND SUBSTRING(ownedName, CHAR_LENGTH(tableName) + 1, 1) = '.'
        AND SchemaSmith_NameKeyCI(SUBSTRING(ownedName, CHAR_LENGTH(tableName) + 2)) = SchemaSmith_NameKeyCI(objectName), 0);
+END //
+
+DELIMITER ;
+
+DROP FUNCTION IF EXISTS `SchemaSmith_OwnedKeyMatches`;
+
+DELIMITER //
+
+CREATE FUNCTION `SchemaSmith_OwnedKeyMatches`(ownedName VARCHAR(520) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+                                              tableKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+                                              objectKey VARCHAR(260) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin)
+RETURNS TINYINT
+NOT DETERMINISTIC
+NO SQL
+BEGIN
+    RETURN COALESCE(CHAR_LENGTH(ownedName) > CHAR_LENGTH(tableKey) + 1
+       AND SchemaSmith_IdentifierKey(LEFT(ownedName, CHAR_LENGTH(tableKey))) = tableKey
+       AND SUBSTRING(ownedName, CHAR_LENGTH(tableKey) + 1, 1) = '.'
+       AND SchemaSmith_NameKeyCI(SUBSTRING(ownedName, CHAR_LENGTH(tableKey) + 2)) = objectKey, 0);
 END //
 
 DELIMITER ;

@@ -157,6 +157,64 @@ public class FailureIsolationTests
         }
     }
 
+    /// <summary>
+    /// A WhatIf run changes nothing: the product's version stamp and its After Product scripts are reported, not run. The
+    /// stamp is product-level C#, the same on every engine.
+    /// </summary>
+    [Test]
+    public void AWhatIfRun_DoesNotRunTheProductVersionStamp()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            var productPath = TestHelper.GetTestProductPath("SqlServer", FailureProductName);
+            var productFile = Path.Join(productPath, "Product.json");
+            var original = File.ReadAllText(productFile);
+            var finalizeDir = Path.Join(productPath, "Finalize");
+            var whatIf = config[Schema.Configuration.SettingsKeys.WhatIfOnly];
+            const string afterMarker = "AfterProductWhatIfProbe";
+            const string stampMarker = "VersionStampWhatIfProbe";
+            var tenants = FiveTenants.Where(t => t != "tenant_boom").ToArray();
+
+            try
+            {
+                Directory.CreateDirectory(finalizeDir);
+                File.WriteAllText(Path.Join(finalizeDir, "Finalize.sql"),
+                    $"CREATE TABLE [{{{{MainDB}}}}].dbo.{afterMarker} (Id INT)");
+                File.WriteAllText(productFile, original
+                    .Replace("\"ScriptFolders\": [],",
+                        "\"ScriptFolders\": [ { \"FolderPath\": \"Finalize\", \"QuenchSlot\": \"After\" } ],")
+                    .Replace("\"Platform\": \"MSSQL\"",
+                        $"\"VersionStampScript\": \"CREATE TABLE [{{{{MainDB}}}}].dbo.{stampMarker} (Id INT)\",\n    \"Platform\": \"MSSQL\""));
+                config["SchemaPackagePath"] = productPath;
+                config[Schema.Configuration.SettingsKeys.WhatIfOnly] = "true";
+
+                SetupSharedMocks();
+                DropMarkers(afterMarker, stampMarker);
+                ResetTrackingAndCreateTenantSchemas(tenants, FailureProductName);
+                RunSchemaQuench();
+                _environment.DidNotReceive().Exit(2);
+                Assert.Multiple(() =>
+                {
+                    Assert.That(MarkerExists(stampMarker), Is.False, "a WhatIf run executed the product's version stamp");
+                    Assert.That(MarkerExists(afterMarker), Is.False, "a WhatIf run executed an After Product script");
+                });
+                _progressLog.Received(1).Info(Arg.Is<string>(m => m.Contains("[WhatIf] Would stamp product version")));
+                _progressLog.DidNotReceive().Info("Stamp product version");
+            }
+            finally
+            {
+                config[Schema.Configuration.SettingsKeys.WhatIfOnly] = whatIf;
+                File.WriteAllText(productFile, original);
+                if (Directory.Exists(finalizeDir)) Directory.Delete(finalizeDir, true);
+                DropMarkers(afterMarker, stampMarker);
+                DropTenantSchemas(tenants, FailureProductName);
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+            }
+        }
+    }
+
     private void DropMarkers(params string[] tables)
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);

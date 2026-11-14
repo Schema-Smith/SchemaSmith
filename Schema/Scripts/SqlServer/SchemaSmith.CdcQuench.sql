@@ -21,8 +21,8 @@ BEGIN TRY
     SET @v_SQL = ''
     SELECT @v_SQL = @v_SQL +
       CASE WHEN t.EnableCDC = 1 AND st.is_tracked_by_cdc = 0
-           THEN 'RAISERROR(''  Enable CDC on ' + t.[Schema] + '.' + t.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @role_name = NULL' + ISNULL(', @filegroup_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup) + '''', '') +
+           THEN 'RAISERROR(''  Enable CDC on ' + REPLACE(REPLACE(t.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(t.[Name], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                'EXEC sys.sp_cdc_enable_table @source_schema = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', @source_name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + ''', @role_name = NULL' + ISNULL(', @filegroup_name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.CdcFilegroup), '''', '''''') + '''', '') +
                 -- Unset reproduces what earlier versions produced (#426). They enabled CDC before a new table's primary key
                 -- existed, so SQL Server's default (ON once there is a key) gave OFF for a new table and ON for a keyed
                 -- existing one. The key now exists by the time this runs, so a new table has to be told.
@@ -30,13 +30,13 @@ BEGIN TRY
                      WHEN t.NewTable = 1 THEN ', @supports_net_changes = 0'
                      ELSE '' END +
                 ISNULL(', @index_name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.CdcIndexName), '''', '''''') + '''', '') + ';' + CHAR(13) + CHAR(10) +
-                'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE(t.[Schema] + '.' + t.[Name], '''', '''''') + ''', ''created'');' + CHAR(13) + CHAR(10)
+                'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE((t.[Schema] + '.' + t.[Name]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''created'');' + CHAR(13) + CHAR(10)
            -- One row per capture instance: each is named, and the table is recorded once.
            WHEN t.EnableCDC = 0 AND st.is_tracked_by_cdc = 1
-           THEN 'RAISERROR(''  Disable CDC on ' + t.[Schema] + '.' + t.[Name] + ' (capture instance ' + REPLACE(REPLACE(ct.capture_instance, '''', ''''''), '%', '%%') + ')'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                'EXEC sys.sp_cdc_disable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(t.[Name]) + ''', @capture_instance = N''' + ct.capture_instance + ''';' + CHAR(13) + CHAR(10) +
+           THEN 'RAISERROR(''  Disable CDC on ' + REPLACE(REPLACE(t.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(t.[Name], '''', ''''''), '%', '%%') + ' (capture instance ' + REPLACE(REPLACE(ct.capture_instance, '''', ''''''), '%', '%%') + ')'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                'EXEC sys.sp_cdc_disable_table @source_schema = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Schema]), '''', '''''') + ''', @source_name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(t.[Name]), '''', '''''') + ''', @capture_instance = N''' + REPLACE(ct.capture_instance, '''', '''''') + ''';' + CHAR(13) + CHAR(10) +
                 CASE WHEN ct.capture_instance = (SELECT MIN(c2.capture_instance) FROM cdc.change_tables c2 WITH (NOLOCK) WHERE c2.source_object_id = st.[object_id])
-                     THEN 'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE(t.[Schema] + '.' + t.[Name], '''', '''''') + ''', ''dropped'');' + CHAR(13) + CHAR(10)
+                     THEN 'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE((t.[Schema] + '.' + t.[Name]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''dropped'');' + CHAR(13) + CHAR(10)
                      ELSE '' END
            ELSE '' END
       FROM #Tables t WITH (NOLOCK)
@@ -70,8 +70,9 @@ BEGIN TRY
                     WHERE ct.source_object_id = st.[object_id]
                     ORDER BY ct.create_date DESC, ct.[object_id] DESC) newest
       WHERE st.is_tracked_by_cdc = 1 AND t.EnableCDC = 1
+        -- A computed column is captured as NULL whatever it is, so an instance without one loses nothing (#618).
         AND EXISTS (SELECT 1 FROM sys.columns sc
-                     WHERE sc.[object_id] = st.[object_id] AND sc.is_column_set = 0
+                     WHERE sc.[object_id] = st.[object_id] AND sc.is_column_set = 0 AND sc.is_computed = 0
                        AND NOT EXISTS (SELECT 1 FROM cdc.captured_columns cc WITH (NOLOCK)
                                         WHERE cc.[object_id] = newest.ChangeTableId AND cc.column_name = sc.[name]))
 
@@ -97,8 +98,8 @@ BEGIN TRY
   BEGIN
     SET @v_SQL = ''
     SELECT @v_SQL = @v_SQL +
-      'RAISERROR(''  CDC ROTATED on ' + r.[Schema] + '.' + r.[TableName] + ': new capture instance ' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ' now captures ' + CASE WHEN r.Reason = 'filegroup' THEN 'this table on filegroup ' + r.NewFilegroup WHEN r.Reason = 'netchanges' THEN 'with net changes ' + CASE WHEN r.NewNetChanges = 1 THEN 'ON' ELSE 'OFF' END WHEN r.Reason = 'index' THEN 'identifying rows by index ' + REPLACE(r.NewIndexName, '''', '''''') WHEN r.Reason = 'capture' THEN 'every current column (the previous instance did not)' ELSE 'the new column set' END + '. The previous instance ' + r.OldCaptureInstance + ' STILL HOLDS ITS HISTORY and was NOT dropped -- drain it, then drop it with EXEC sys.sp_cdc_disable_table @capture_instance = N''''' + r.OldCaptureInstance + '''''. Until then the next column change on this table WILL FAIL: SQL Server allows only two capture instances.'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-      'EXEC sys.sp_cdc_enable_table @source_schema = N''' + SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + ''', @source_name = N''' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) + ''', @capture_instance = N''' + CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END + ''', @role_name = NULL' + ISNULL(', @filegroup_name = N''' + r.NewFilegroup + '''', '') +
+      'RAISERROR(''  CDC ROTATED on ' + REPLACE(REPLACE(r.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(r.[TableName], '''', ''''''), '%', '%%') + ': new capture instance ' + REPLACE(REPLACE((CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') + ' now captures ' + REPLACE(REPLACE((CASE WHEN r.Reason = 'filegroup' THEN 'this table on filegroup ' + r.NewFilegroup WHEN r.Reason = 'netchanges' THEN 'with net changes ' + CASE WHEN r.NewNetChanges = 1 THEN 'ON' ELSE 'OFF' END WHEN r.Reason = 'index' THEN 'identifying rows by index ' + r.NewIndexName WHEN r.Reason = 'capture' THEN 'every current column (the previous instance did not)' ELSE 'the new column set' END) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') + '. The previous instance ' + REPLACE(REPLACE(r.OldCaptureInstance, '''', ''''''), '%', '%%') + ' STILL HOLDS ITS HISTORY and was NOT dropped -- drain it, then drop it with EXEC sys.sp_cdc_disable_table @capture_instance = N''''' + REPLACE(REPLACE(r.OldCaptureInstance, '''', ''''''), '%', '%%') + '''''. Until then the next column change on this table WILL FAIL: SQL Server allows only two capture instances.'', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+      'EXEC sys.sp_cdc_enable_table @source_schema = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(r.[Schema]), '''', '''''') + ''', @source_name = N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(r.[TableName]), '''', '''''') + ''', @capture_instance = N''' + REPLACE((CASE WHEN r.OldCaptureInstance = b.BaseName THEN b.BaseName + '_2' ELSE b.BaseName END) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', @role_name = NULL' + ISNULL(', @filegroup_name = N''' + REPLACE(r.NewFilegroup, '''', '''''') + '''', '') +
       ISNULL(', @supports_net_changes = ' + CAST(r.NewNetChanges AS VARCHAR(1)), '') +
       -- The declared index, else the one the old instance identifies rows by. Without it sp_cdc_enable_table picks the
       -- primary key, so an instance on a unique index would move off it, and net changes with no primary key would fail.
@@ -106,7 +107,7 @@ BEGIN TRY
                 AND EXISTS (SELECT 1 FROM sys.indexes i WHERE i.[object_id] = OBJECT_ID(r.[Schema] + '.' + r.[TableName]) AND i.[name] COLLATE DATABASE_DEFAULT = r.NewIndexName)
            THEN ', @index_name = N''' + REPLACE(r.NewIndexName, '''', '''''') + ''''
            ELSE '' END + ';' + CHAR(13) + CHAR(10) +
-      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE(r.[Schema] + '.' + r.[TableName], '''', '''''') + ''', ''modified'');' + CHAR(13) + CHAR(10)
+      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''changeDataCapture'', ''' + REPLACE((r.[Schema] + '.' + r.[TableName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''modified'');' + CHAR(13) + CHAR(10)
       FROM #CdcRotate r WITH (NOLOCK)
       CROSS APPLY (SELECT SchemaSmith.fn_StripBracketWrapping(r.[Schema]) + '_' + SchemaSmith.fn_StripBracketWrapping(r.[TableName]) AS BaseName) b
     IF @v_SQL <> ''
@@ -117,6 +118,6 @@ BEGIN TRY
   SET NOCOUNT OFF
 END TRY
 BEGIN CATCH
-    DECLARE @v_RethrowMsg NVARCHAR(4000) = ERROR_MESSAGE();
-    RAISERROR(@v_RethrowMsg, 16, 1);
+    DECLARE @v_RethrowMsg NVARCHAR(4000) = CASE WHEN ERROR_NUMBER() = 50000 THEN ERROR_MESSAGE() ELSE N'Msg ' + CAST(ERROR_NUMBER() AS NVARCHAR(10)) + N', Line ' + CAST(ERROR_LINE() AS NVARCHAR(10)) + ISNULL(N', Procedure ' + ERROR_PROCEDURE(), N'') + N': ' + ERROR_MESSAGE() END;
+    RAISERROR('%s', 16, 1, @v_RethrowMsg);
 END CATCH

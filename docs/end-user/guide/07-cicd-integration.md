@@ -51,7 +51,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Checkout schema package
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Deploy Schema
         env:
@@ -68,14 +68,23 @@ This uses a self-hosted runner with SchemaQuench pre-installed. Credentials flow
 
 SchemaSmith ships a composite action, listed on the
 [GitHub Marketplace](https://github.com/marketplace/actions/schemasmith-deploy) --
-`uses: Schema-Smith/schemasmith-deploy@vX.Y.Z`
-(replace with a release tag; pinning the tag pins both the action and the CLI
-version it runs, or set the `version` input explicitly). It fetches the matching
+`uses: Schema-Smith/schemasmith-deploy@vYYYY.MM.N`
+(replace with a release tag such as `v2026.12.0` -- releases are numbered by the year
+and month they ship, then the release within that month; pinning the tag pins both the
+action and the CLI version it runs, or set the `version` input explicitly). It fetches the matching
 self-contained binary for the runner OS at run time -- no runtime install, and no
 self-hosted runner with SchemaQuench pre-installed required. Modes: `deploy`,
-`whatif`, `validate`, `test-connection`, `preview-targets`; connection inputs
+`whatif`, `drift`, `validate`, `test-connection`, `preview-targets`; connection inputs
 pass the password via env, never on the command line; outputs include
-`exit-code`, `log-dir`, and `summary-path`.
+`exit-code`, `log-dir`, `summary-path` and `summary-json-path`.
+
+The run reports itself on the workflow run with no extra steps:
+
+- **Job summary.** The deployment summary appears on the job's page (turn it off with `step-summary: false`).
+- **Annotations.** Each failed target is an error annotation, placed on the failing script when it is in the repository, so it shows on that file in the pull request. Drift, features the target could not take, and changes the destructive-change policy refused are warnings. GitHub shows ten of each per step; the rest are in the summary.
+- **Pull-request comment.** With `pr-comment: true` on a pull request, the summary is posted as a comment and the same comment is updated on later runs. The workflow needs `permissions: pull-requests: write`; a pull request from a fork cannot have it, and then the run notes that and carries on.
+
+`mode: drift` runs a [drift check](../reference/schemaquench.md#drift-checks) and fails the step with exit code `5` when a target has drifted; add `continue-on-error: true` to report drift without failing the job.
 
 ### Jenkins
 
@@ -149,6 +158,8 @@ steps:
 ```
 
 Credentials are stored in Variable Groups or Azure Key Vault and linked to the pipeline. The named agent pool `SchemaSmith` ensures the job runs on an agent with SchemaQuench installed.
+
+To show the deployment summary on the run's page, add a step after the deploy that runs `echo "##vso[task.uploadsummary]$(Build.SourcesDirectory)/SchemaQuench - Summary.md"` (point it at the folder `--LogPath` writes to). On GitLab, keep the summary with the job by listing `SchemaQuench - Summary.md` and `SchemaQuench - Summary.json` under `artifacts: paths`.
 
 ### Runner and agent requirements
 
@@ -231,7 +242,7 @@ jobs:
 
     steps:
       - name: Checkout PR branch
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Deploy base schema
         env:
@@ -305,6 +316,21 @@ WhatIf runs the full deployment logic — validation, token replacement, DDL gen
 
 The [WhatIf-in-PR pattern](#the-whatif-in-pr-pattern) above shows a complete pipeline for this. Once you trust the package and the pipeline, direct deploys are the normal mode — WhatIf earns its keep during complex migrations and when you're working with an unfamiliar target, not as a standing gate on every production run.
 
+### Drift check
+
+Did someone change production by hand since the last release? `--Drift` runs the deploy's decisions as a preview and
+changes nothing; it exits `0` when every target matches the package and `5` when one has drifted, so a scheduled job can
+alert on it.
+
+```bash
+SchemaQuench --Drift
+```
+
+`--DriftFailOn:drop` narrows the gate to removals, and `--DriftFailOn:migrations` fails a target whose release is not
+deployed yet. On MySQL and MariaDB, either set `KindleTheForge: false` against targets that have been deployed, or point
+`Target:DriftHelperDatabase` at a database of its own so the target is not touched. See
+[Drift Checks](../reference/schemaquench.md#drift-checks).
+
 ### Idempotency CI check
 
 Runs every object script and `[ALWAYS]` script twice in sequence and requires both passes to succeed. A strong guarantee that your scripts are truly stateless and can be re-applied after a partial failure.
@@ -318,6 +344,16 @@ Runs every object script and `[ALWAYS]` script twice in sequence and requires bo
 ```
 
 Run this against a disposable database in CI — it is not meant for production targets. `RunScriptsTwice` is an idempotency check, not a dependency-resolution mechanism: the retry loop already handles inter-object dependencies. Run-once migration scripts are excluded from the double-run.
+
+## Tracing a run
+
+Every deployment summary names the run that wrote it: a run id, the package's content hash, the commit and branch, and the pipeline run with its link. On GitHub Actions, Azure DevOps, GitLab and Jenkins that needs no setup. Add a label your team recognises, and on any other system the pipeline facts, with the [run identity settings](../reference/configuration.md#run-identity-settings):
+
+```bash
+SchemaQuench --RunLabel:2026.11.3
+```
+
+Archive `SchemaQuench - Summary.json` with the build, and any summary found later says which release, commit and pipeline run it came from. Two targets whose `run.package.contentHash` match received the same package, even when it was deployed from an artifact with no commit to compare. The fields: [Run identity](../reference/deployment-summary-report.md#run-identity).
 
 ## Secret management
 

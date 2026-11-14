@@ -14,7 +14,8 @@
                                        // User/Password above — for when a credential is present
                                        // but should not be used.
         // "CompatEncoding": "", // Override the payload encoding chosen for the source server
-                                 // (Json | Xml). Blank = choose automatically.
+                                 // auto | legacy (XML) | modern (JSON). Blank = auto.
+        // "CommandTimeoutSeconds": 0, // How long one extraction command may run. 0 (default) = no limit.
         "ConnectionProperties": {
             // Extra connection-string properties, and they are PER ENGINE -- a key one engine does not know
             // is rejected outright, so this ships empty rather than pre-filled. SQL Server against a
@@ -88,7 +89,15 @@
 
         // MySQL and MariaDB
         "Events": true,
-        "Packages": true // MariaDB 10.3+ only
+        "Packages": true, // MariaDB 10.3+ only
+
+        // Server and database settings (all platforms; off unless set)
+        "ServerSettings": false, // Write ServerSettings.json beside Product.json
+        "DatabaseSettings": false, // Write DatabaseSettings.json in the template folder (not for a schema template)
+        "SettingsDefaultPolicy": "Report", // Report, EnforceWarn or EnforceError: the Fix and OnDrift every written setting gets
+        "SettingsAllowlist": "", // A file of { "Server": [ { "Kind", "Name" } ], "Database": [ ... ] }: capture exactly these (blank = only settings changed from their defaults)
+        "SettingsOutput": "Json", // Json, Script (compare-then-set scripts in a folder the deploy runs) or Both (JSON deploys; scripts are a copy to review)
+        "ServerObjects": false // SQL Server only: server triggers, Agent jobs, operators and alerts, server audits, Extended Events sessions, as product After folders
     },
     "OrphanHandling": {
         "Mode": "Detect" // Detect, DetectWithCleanupScripts, or DetectDeleteAndCleanup
@@ -122,7 +131,7 @@
         // Optional — extra names whose values are masked in logs, beyond the built-in sensitive-name list.
         // Names are matched case-insensitively against setting and token names.
         // "ScrubTokens": [ "ApiKey" ]
-    },
-    "ScriptTokens": {} // Token values substituted into extracted scripts, e.g. { "MainDB": "AppDb" }.
+    }
     // "ExitNonZeroOnWarning": false // Exit 1 instead of 0 when the run logged a warning, for pipelines that treat warnings as failures. Also the --ExitNonZeroOnWarning switch.
+    // "LogFormat": "text" // text, or json: one JSON object per line on the console and in the log files, for a log platform to read with no parse rules. Also --LogFormat:json.
 }

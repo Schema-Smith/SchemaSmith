@@ -34,6 +34,12 @@ BEGIN
                             AND po."TableName" = t."Name"
                             AND po."IndexName" IS NULL);
 
+  -- A table this package now declares as a partition is owned through its parent; its own row goes.
+  DELETE FROM "SchemaSmith"."ProductOwnership" po
+    WHERE po."ProductName" = p_ProductName
+      AND po.template_name = p_TemplateName
+      AND EXISTS (SELECT 1 FROM temp_partitions p WHERE p."TableSchema" = po."Schema" AND p."Name" = po."TableName");
+
   RAISE NOTICE 'Refresh PreventDrop marker for tables present in the product';
   UPDATE "SchemaSmith"."ProductOwnership" po
      SET "PreventDrop" = COALESCE(t."PreventDrop", FALSE)

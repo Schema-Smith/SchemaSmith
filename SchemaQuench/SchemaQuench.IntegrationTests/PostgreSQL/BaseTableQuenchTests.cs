@@ -28,7 +28,8 @@ public class BaseTableQuenchTests
         _mainDb = config["ScriptTokens:MainDB"];
     }
 
-    protected void RunTableQuenchProc(IDbCommand cmd, string json, bool indexOnly = false, bool dropTablesRemovedFromProduct = false, bool whatIf = false, string productName = "")
+    protected void RunTableQuenchProc(IDbCommand cmd, string json, bool indexOnly = false, bool dropTablesRemovedFromProduct = false, bool whatIf = false, string productName = "",
+        bool dropUnknownIndexes = false)
     {
         var prod = string.IsNullOrEmpty(productName) ? _productName : productName;
         cmd.CommandTimeout = 300;
@@ -37,7 +38,7 @@ public class BaseTableQuenchTests
 CALL ""SchemaSmith"".""IndexOnlyQuench""(p_ProductName := '{prod}', p_TableDefinitions := '{json.Replace("'", "''")}', p_DropUnknownIndexes := true);
 CALL ""SchemaSmith"".""FixupIndexOwnership""(p_ProductName := '{prod}');
 "
-            : $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{prod}', p_TableDefinitions := '{json.Replace("'", "''")}', p_WhatIf := {(whatIf ? "true" : "false")}, p_DropTablesRemovedFromProduct := {(dropTablesRemovedFromProduct ? "true" : "false")}, p_DropUnknownIndexes := false)";
+            : $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{prod}', p_TableDefinitions := '{json.Replace("'", "''")}', p_WhatIf := {(whatIf ? "true" : "false")}, p_DropTablesRemovedFromProduct := {(dropTablesRemovedFromProduct ? "true" : "false")}, p_DropUnknownIndexes := {(dropUnknownIndexes ? "true" : "false")})";
         var retry = true;
         var tries = 0;
         while (retry && tries++ < 10)

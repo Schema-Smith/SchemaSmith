@@ -70,6 +70,17 @@ public class DeploymentSummaryEmitTests
         Assert.That(relative, Is.EqualTo("Jobs/SubFolder/Job 2.sql"));
     }
 
+    // The product root was removed wherever it occurred, not only in front: a package at "." lost every dot, so the
+    // summary listed Templates/Main/v10sql, and run-once tracking keyed on the same mangled path.
+    [TestCase("./Templates/Main/v1.0.sql", ".", "Templates/Main/v1.0.sql")]
+    [TestCase("Templates/Main/v1.0.sql", ".", "Templates/Main/v1.0.sql")]
+    [TestCase("pkg/Templates/pkg/a.sql", "pkg", "Templates/pkg/a.sql")]
+    [TestCase("other/pkg/a.sql", "pkg", "other/pkg/a.sql")]
+    public void MakeScriptPathRelative_RemovesTheRootOnlyInFront(string path, string baseDir, string expected)
+    {
+        Assert.That(ProductQuench.MakeScriptPathRelative(path, baseDir), Is.EqualTo(expected));
+    }
+
     [Test]
     public void MakeScriptPathRelative_EmptyBaseDir_ReturnsNormalizedTrimmedPath()
     {

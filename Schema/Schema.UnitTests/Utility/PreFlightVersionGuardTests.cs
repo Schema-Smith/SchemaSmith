@@ -89,7 +89,15 @@ namespace Schema.UnitTests.Utility
         [Test]
         public void CheckOrThrow_MySqlAtFloor_DoesNotThrow()
         {
-            var info = new TargetVersionInfo(Platform.MySQL, "5.7.22", 507);   // 5.7 floor (5.7.22)
+            var info = new TargetVersionInfo(Platform.MySQL, "5.7.16", 507);   // 5.7 floor (5.7.16)
+
+            Assert.DoesNotThrow(() => PreFlightVersionGuard.CheckOrThrow(info, "mysql"));
+        }
+
+        [Test]
+        public void CheckOrThrow_MySql80AtFloor_DoesNotThrow()
+        {
+            var info = new TargetVersionInfo(Platform.MySQL, "8.0.11", 800);   // 8.0 floor (8.0.11)
 
             Assert.DoesNotThrow(() => PreFlightVersionGuard.CheckOrThrow(info, "mysql"));
         }
@@ -103,14 +111,14 @@ namespace Schema.UnitTests.Utility
             Assert.That(ex!.Message, Does.Contain("below the minimum supported"));
         }
 
-        [TestCase("5.7.21")]
-        [TestCase("8.0.22")]
+        [TestCase("5.7.15")]
+        [TestCase("8.0.10")]
         public void CheckOrThrow_MySqlInsideTheRefusedPatchBand_Throws_NamingBothFloors(string raw)
         {
             var info = new TargetVersionInfo(Platform.MySQL, raw, VersionHelper.ParseDetectedVersion(raw, Platform.MySQL)!.Value);
 
             var ex = Assert.Throws<RunFailedException>(() => PreFlightVersionGuard.CheckOrThrow(info, "mysql"));
-            Assert.That(ex!.Message, Does.Contain(raw).And.Contain("5.7.22").And.Contain("8.0.23"));
+            Assert.That(ex!.Message, Does.Contain(raw).And.Contain("5.7.16").And.Contain("8.0.11"));
         }
     }
 }

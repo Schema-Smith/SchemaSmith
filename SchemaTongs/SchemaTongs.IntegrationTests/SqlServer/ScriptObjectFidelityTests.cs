@@ -7,6 +7,7 @@ using System.Linq;
 using log4net;
 using Microsoft.Extensions.Configuration;
 using NSubstitute;
+using Newtonsoft.Json.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -53,8 +54,7 @@ public class ScriptObjectFidelityTests
         using var cmd = conn.CreateCommand();
         foreach (var db in new[] { _sourceDb, _targetDb })
         {
-            cmd.CommandText = $"IF DB_ID('{db}') IS NOT NULL BEGIN ALTER DATABASE [{db}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{db}]; END";
-            cmd.ExecuteNonQuery();
+            Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, db);
         }
     }
 
@@ -124,23 +124,50 @@ SELECT CONVERT(VARCHAR(1), tt.is_memory_optimized) + ':' + i.type_desc COLLATE D
     [Test]
     public void Sequence_WideDecimalAliasTypeAndCache_RoundTrip()
     {
+        // Extracted as declared JSON, deployed through SequenceQuench, and compared attribute by attribute with the source.
+        // An alias type comes back as its base type: SQL Server records the base for a sequence, so that is all there is.
         using var conn = Open(_targetDb);
         using var cmd = conn.CreateCommand();
-        foreach (var name in new[] { "SqBig", "SqNoCache", "SqAlias" })
-            Deploy(cmd, Script("Sequences", $"dbo.{name}"));
-
-        cmd.CommandText = @"
-SELECT sq.name COLLATE DATABASE_DEFAULT + ':' + TYPE_NAME(sq.user_type_id) COLLATE DATABASE_DEFAULT + ':' + CONVERT(VARCHAR(3), sq.precision) + ':' + CONVERT(VARCHAR(1), sq.is_cached) + ':' + ISNULL(CONVERT(VARCHAR(10), sq.cache_size), '-') + ':' + CONVERT(VARCHAR(50), sq.maximum_value)
-  FROM sys.sequences sq ORDER BY sq.name";
-        var sequences = new List<string>();
-        using (var reader = cmd.ExecuteReader())
-            while (reader.Read()) sequences.Add(reader.GetString(0));
-        Assert.That(sequences, Is.EqualTo(new[]
+        cmd.CommandTimeout = 300;
+        ForgeKindler.KindleTheForge(cmd, Platform.SqlServer);
+        var declared = new JArray(new[] { "SqBig", "SqNoCache", "SqAlias" }.Select(n => JObject.Parse(Script("Sequences", $"dbo.{n}")))).ToString();
+        void Quench()
         {
-            "SqAlias:MyInt:10:1:-:2147483647",
-            "SqBig:decimal:38:1:50:99999999999999999999999999999999999999",
-            "SqNoCache:int:10:0:-:100"
-        }), "the wide type, the alias type or CACHE was lost");
+            cmd.CommandText = "EXEC [SchemaSmith].[SequenceQuench] @ProductName = N'Fidelity', @Sequences = @x";
+            cmd.Parameters.Clear();
+            var x = cmd.CreateParameter(); x.ParameterName = "@x"; x.Value = ModelXmlSerializer.ToIngestXml(declared, "Sequences", "Sequence"); cmd.Parameters.Add(x);
+            cmd.ExecuteNonQuery();
+            cmd.Parameters.Clear();
+        }
+        Quench();
+
+        const string state = @"
+SELECT sq.name COLLATE DATABASE_DEFAULT + ':' + TYPE_NAME(sq.system_type_id) COLLATE DATABASE_DEFAULT + ':' + CONVERT(VARCHAR(3), sq.precision) + ':' + CONVERT(VARCHAR(1), sq.is_cached) + ':' + ISNULL(CONVERT(VARCHAR(10), sq.cache_size), '-')
+       + ':' + CONVERT(VARCHAR(50), sq.minimum_value) + ':' + CONVERT(VARCHAR(50), sq.maximum_value) + ':' + CONVERT(VARCHAR(50), sq.start_value) + ':' + CONVERT(VARCHAR(50), sq.increment) + ':' + CONVERT(VARCHAR(1), sq.is_cycling)
+  FROM sys.sequences sq ORDER BY sq.name";
+        List<string> Read(IDbCommand c)
+        {
+            c.CommandText = state;
+            var rows = new List<string>();
+            using var reader = c.ExecuteReader();
+            while (reader.Read()) rows.Add(reader.GetString(0));
+            return rows;
+        }
+        using var source = Open(_sourceDb);
+        using var sourceCmd = source.CreateCommand();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(Read(cmd), Is.EqualTo(Read(sourceCmd)), "the wide type, a bound, CACHE, CYCLE or the start was lost on the way through");
+            Assert.That(JObject.Parse(Script("Sequences", "dbo.SqBig")).ContainsKey("MaxValue"), Is.False, "a bound equal to the type's is not written");
+            Assert.That(JObject.Parse(Script("Sequences", "dbo.SqAlias"))["DataType"]?.ToString(), Is.EqualTo("int"));
+        });
+
+        cmd.CommandText = "DELETE FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+        cmd.ExecuteNonQuery();
+        Quench();
+        cmd.CommandText = "SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID";
+        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero, "a redeploy of what was extracted changes nothing");
     }
 
     // ---- full-text catalogs ----------------------------------------------------------------------------------
@@ -178,6 +205,26 @@ SELECT sq.name COLLATE DATABASE_DEFAULT + ':' + TYPE_NAME(sq.user_type_id) COLLA
         Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("vNew"), "the old name must not come back as a second view");
     }
 
+    // ---- extended properties ---------------------------------------------------------------------------------
+
+    // G3: an alias type's, a table type's and a synonym's extended properties are written after the object, so a deploy
+    // to a database that never had them carries them.
+    [Test]
+    public void TypesAndSynonyms_CarryTheirExtendedProperties_ToADatabaseThatNeverHadThem()
+    {
+        using var conn = Open(_targetDb);
+        using var cmd = conn.CreateCommand();
+        Deploy(cmd, Script("DataTypes", "dbo.Money2"));
+        Deploy(cmd, Script("DataTypes", "dbo.TT"));
+        Deploy(cmd, Script("Synonyms", "dbo.SynT"));
+        cmd.CommandText = @"
+SELECT STRING_AGG(CONVERT(NVARCHAR(400), x.objname + N'.' + x.name + N'=' + CONVERT(NVARCHAR(200), x.value)), N'|') WITHIN GROUP (ORDER BY x.objname, x.name)
+  FROM (SELECT objname, name, value FROM fn_listextendedproperty(NULL, 'SCHEMA', 'dbo', 'TYPE', NULL, NULL, NULL)
+        UNION ALL
+        SELECT objname, name, value FROM fn_listextendedproperty(NULL, 'SCHEMA', 'dbo', 'SYNONYM', NULL, NULL, NULL)) x";
+        Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("Money2.MS_Description=Amount's type|Money2.Owner=Finance|SynT.MS_Description=Points at T|TT.MS_Description=Line items"));
+    }
+
     // ---- fixture ---------------------------------------------------------------------------------------------
 
     private string Script(string folder, string name)
@@ -211,7 +258,7 @@ SELECT sq.name COLLATE DATABASE_DEFAULT + ':' + TYPE_NAME(sq.user_type_id) COLLA
             var parts = ci.ArgAt<string>(0).Replace('\\', '/').Split('/');
             if (parts.Length < 2) return;
             var folder = parts[^2];
-            if (folder is "DataTypes" or "Sequences" or "FullTextCatalogs" or "Views")
+            if (folder is "DataTypes" or "Sequences" or "FullTextCatalogs" or "Views" or "Synonyms")
                 _scripts[$"{folder}/{System.IO.Path.GetFileNameWithoutExtension(parts[^1])}"] = ci.ArgAt<string>(1);
         });
         var progressLog = Substitute.For<ILog>();
@@ -231,9 +278,9 @@ SELECT sq.name COLLATE DATABASE_DEFAULT + ':' + TYPE_NAME(sq.user_type_id) COLLA
             config["Source:database"] = _sourceDb;
             foreach (var prop in ConnectionString.ReadProperties(config, "SqlServer:ConnectionProperties"))
                 config[$"Source:ConnectionProperties:{prop.Key}"] = prop.Value;
-            foreach (var kind in new[] { "Tables", "Schemas", "Functions", "Procedures", "TableTriggers", "StopLists", "DDLTriggers", "XMLSchemaCollections", "IndexedViews", "Synonyms" })
+            foreach (var kind in new[] { "Tables", "Schemas", "Functions", "Procedures", "TableTriggers", "StopLists", "DDLTriggers", "XMLSchemaCollections", "IndexedViews" })
                 config[$"ShouldCast:{kind}"] = "false";
-            foreach (var kind in new[] { "UserDefinedTypes", "Sequences", "Catalogs", "Views" })
+            foreach (var kind in new[] { "UserDefinedTypes", "Sequences", "Catalogs", "Views", "Synonyms" })
                 config[$"ShouldCast:{kind}"] = "true";
             FactoryContainer.Register<IConfigurationRoot>(config);
             new SchemaTongs(Platform.SqlServer).CastTemplate();
@@ -286,6 +333,12 @@ CREATE TYPE dbo.TT AS TABLE (
             Run(cmd, "CREATE FULLTEXT CATALOG FT_Opts WITH ACCENT_SENSITIVITY = OFF AS DEFAULT");
             Run(cmd, "CREATE FULLTEXT CATALOG FT_Plain");
         }
+        Run(cmd, "CREATE TYPE dbo.Money2 FROM DECIMAL(10, 2) NULL");
+        Run(cmd, "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Amount''s type', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TYPE', @level1name = N'Money2'");
+        Run(cmd, "EXEC sys.sp_addextendedproperty @name = N'Owner', @value = N'Finance', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TYPE', @level1name = N'Money2'");
+        Run(cmd, "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Line items', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'TYPE', @level1name = N'TT'");
+        Run(cmd, "CREATE SYNONYM dbo.SynT FOR dbo.T");
+        Run(cmd, "EXEC sys.sp_addextendedproperty @name = N'MS_Description', @value = N'Points at T', @level0type = N'SCHEMA', @level0name = N'dbo', @level1type = N'SYNONYM', @level1name = N'SynT'");
         Run(cmd, "CREATE VIEW dbo.vOld AS SELECT 1 AS x");
         Run(cmd, "EXEC sp_rename 'dbo.vOld', 'vNew'");
     }

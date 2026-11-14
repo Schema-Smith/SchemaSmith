@@ -126,6 +126,114 @@ public abstract class HelperFunctionsSharedTests
 
     #endregion
 
+    #region EscapeBackticks Tests
+
+    [Test]
+    public void EscapeBackticks_DoublesEveryBacktick_AndKeepsTheRestOfTheNameAsGiven()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT SchemaSmith_EscapeBackticks(' `a``b` ')";
+        var result = command.ExecuteScalar()?.ToString();
+
+        Assert.That(result, Is.EqualTo(" ``a````b`` "));
+    }
+
+    [Test]
+    public void EscapeBackticks_ConcatenatesWithLiteralsAndColumnsOfOtherCollations()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT CONCAT('`', SchemaSmith_EscapeBackticks(CONVERT('x`y' USING utf8mb4) COLLATE utf8mb4_bin), '`.`', SchemaSmith_EscapeBackticks(TABLE_NAME), '`') FROM information_schema.TABLES WHERE TABLE_NAME = 'TABLES' LIMIT 1";
+        var result = command.ExecuteScalar()?.ToString();
+
+        Assert.That(result, Is.EqualTo("`x``y`.`TABLES`"));
+    }
+
+    [Test]
+    public void EscapeBackticks_Null_ReturnsNull()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT SchemaSmith_EscapeBackticks(NULL)";
+
+        Assert.That(command.ExecuteScalar(), Is.EqualTo(System.DBNull.Value));
+    }
+
+    #endregion
+
+    #region CleanCheckClause Tests
+
+    [Test]
+    public void CleanCheckClause_KeepsAQuoteEscapedWithABackslashInsideALiteral()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = @"SELECT SchemaSmith_CleanCheckClause('(''a\\''b'' like ''%x%'')')";
+
+        Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo(@"('a\'b' like '%x%')"));
+    }
+
+    [Test]
+    public void CleanCheckClause_UndoesTheStringEscapingOfAClauseExtractedBeforeItWasUnescaped()
+    {
+        using var command = _connection.CreateCommand();
+        // What an older extraction wrote for ('a\'b' like '%x%') with a column `d\f`: every quote and backslash escaped.
+        command.CommandText = @"SELECT SchemaSmith_CleanCheckClause('(_utf8mb4\\''a\\\\\\''b\\'' like _utf8mb4\\''%x%\\'' and `d\\\\f` > 0)')";
+
+        Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo(@"('a\'b' like '%x%' and `d\f` > 0)"));
+    }
+
+    [Test]
+    public void CheckClauseText_ReadsTheLiveClauseAsTheSqlThatWasDeclared()
+    {
+        using (var gate = _connection.CreateCommand())
+        {
+            gate.CommandText = "SELECT SchemaSmith_SupportsCheckConstraints()";
+            Assume.That(System.Convert.ToInt32(gate.ExecuteScalar()), Is.EqualTo(1), "no CHECK_CONSTRAINTS before MySQL 8.0.16");
+        }
+        using var create = _connection.CreateCommand();
+        create.CommandText = "CREATE TABLE ck_probe (`d\\f é` INT, CONSTRAINT ck_probe_a CHECK (`d\\f é` > 0 AND 'a\\'b' like '%x%'))";
+        create.ExecuteNonQuery();
+        try
+        {
+            using var command = _connection.CreateCommand();
+            command.CommandText = "SELECT SchemaSmith_CleanCheckClause(SchemaSmith_CheckClauseText(CHECK_CLAUSE)) FROM information_schema.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'ck_probe_a'";
+            var clause = command.ExecuteScalar()?.ToString();
+
+            Assert.That(clause, Does.Contain("`d\\f é` > 0").And.Contain("'a\\'b' like '%x%'"));
+        }
+        finally
+        {
+            using var drop = _connection.CreateCommand();
+            drop.CommandText = "DROP TABLE ck_probe";
+            drop.ExecuteNonQuery();
+        }
+    }
+
+    #endregion
+
+    #region DecodeStringLiteral Tests
+
+    // The body of a string literal (no outer quotes) read back as the value the engine stores for it.
+    [TestCase(@"it''s", "it's")]
+    [TestCase(@"it\'s", "it's")]
+    [TestCase(@"x\\d", @"x\d")]
+    [TestCase(@"\\\\", @"\\")]
+    [TestCase(@"a\nb\tc", "a\nb\tc")]
+    [TestCase(@"100\%", @"100\%")]
+    [TestCase(@"\d", "d")]
+    [TestCase("plain", "plain")]
+    public void DecodeStringLiteral_ReadsTheValueALiteralBodyStands(string body, string value)
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT SchemaSmith_DecodeStringLiteral(@body)";
+        var parameter = command.CreateParameter();
+        parameter.ParameterName = "@body";
+        parameter.Value = body;
+        command.Parameters.Add(parameter);
+
+        Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo(value));
+    }
+
+    #endregion
+
     #region SafeBacktickWrap Tests
 
     [Test]

@@ -213,4 +213,34 @@ public class DataDirectoryQuenchTests
         Assert.DoesNotThrow(() => Deploy($", \"DataDirectory\": \"{DataDir}\""));
         Assert.That(DeployedPath(), Does.StartWith(DataDir + "/"));
     }
+
+    // The table rebuilt by the procedure itself, after the parse it reads, on this fixture's connection.
+    private void Rebuild(string extraProps)
+    {
+        var json = "[{ \"Name\": \"`" + TableName + "`\", \"Engine\": \"InnoDB\"" + extraProps
+                   + ", \"Columns\": [ { \"Name\": \"`id`\", \"DataType\": \"INT\", \"Nullable\": false } ],"
+                   + " \"Indexes\": [ { \"Name\": \"PRIMARY\", \"PrimaryKey\": true, \"Unique\": true, \"IndexColumns\": \"`id`\" } ] }]";
+        Exec($"CALL SchemaSmith_ParseTableJson('{_testDb}', '{json.Replace("'", "''")}')");
+        Exec($"CALL SchemaSmith_RebuildTable('{_testDb}', '{TableName}', 0)");
+    }
+
+    [Test]
+    public void ARebuiltTable_StaysInItsDataDirectory_WhenThePackageDoesNotDeclareIt()
+    {
+        Exec($"CREATE TABLE `{_testDb}`.`{TableName}` (`id` INT NOT NULL PRIMARY KEY) DATA DIRECTORY='{DataDir}'");
+
+        Rebuild("");
+
+        Assert.That(DeployedPath(), Does.StartWith(DataDir + "/"), DeployedPath());
+    }
+
+    [Test]
+    public void ARebuiltTable_IsBuiltInItsDeclaredDataDirectory()
+    {
+        Exec($"CREATE TABLE `{_testDb}`.`{TableName}` (`id` INT NOT NULL PRIMARY KEY)");
+
+        Rebuild($", \"DataDirectory\": \"{DataDir}\"");
+
+        Assert.That(DeployedPath(), Does.StartWith(DataDir + "/"), DeployedPath());
+    }
 }

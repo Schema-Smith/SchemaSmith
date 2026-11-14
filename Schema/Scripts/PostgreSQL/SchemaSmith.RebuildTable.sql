@@ -3,13 +3,13 @@
 -- Redistribution outside of SchemaSmith product usage is prohibited.
 
 -- Replaces one table with a table built to the DECLARED definition, carrying its rows across:
--- refuse-if-blocked, capture the sequence position, drop inbound foreign keys, create a shadow, copy,
+-- refuse-if-blocked, capture the sequence position, set inbound foreign keys aside, create a shadow, copy,
 -- restore the sequence, swap, drop the old one. Nothing in here decides WHEN a rebuild should happen --
 -- the caller decides that and calls this; the procedure is also directly callable, which is what makes it
 -- testable before any decision path exists.
 --
 -- Deliberately NOT this procedure's job: indexes, primary keys, unique/exclude/check constraints, foreign
--- keys, and the table-level attributes (fillfactor, access method, LOGGED/UNLOGGED, row-level security).
+-- keys, and row-level security. The table's storage is the one exception: the shadow is created with it (step 6).
 -- The old table is dropped whole, which takes all of them with it, and the ordinary quench passes that
 -- follow re-add them from the same JSON that produced temp_columns -- ModifiedTableQuench's table-attribute
 -- pass converges persistence/access-method/RLS/fillfactor, MissingIndexesAndConstraintsQuench re-adds the
@@ -64,11 +64,15 @@ DECLARE
   v_LockSql TEXT;
   v_DropInboundFkSql TEXT;
   v_CreateShadowSql TEXT;
+  v_ShadowPersistence TEXT;
+  v_ShadowStorage TEXT;
   v_CopySql TEXT;
   v_SeqRestoreSql TEXT;
   v_SeqRenameSql TEXT;
   v_SwapSql TEXT;
   v_DropOldSql TEXT;
+  v_SearchPath TEXT;
+  v_Unrestorable RECORD;
 BEGIN
   -- Identifiers are interpolated into dynamic DDL on the one code path in SchemaSmith that destroys data,
   -- so they go through quote_ident() rather than the hand-built '"' || x || '"' form the sibling quench
@@ -164,6 +168,77 @@ BEGIN
                                      AND na.attnum > 0 AND NOT na.attisdropped)) THEN
     RAISE EXCEPTION 'Table rebuild refused for %: a declared column carries an OldName that still exists on the live table under that old name, so a column rename is pending. The copy matches columns by their current name and would silently discard that column''s data. Let the rename land first.',
       v_ObjectName;
+  END IF;
+
+  -- INBOUND FOREIGN KEYS. Every key another table holds against this one comes off before the swap (step 6 says why)
+  -- and is set aside in "SchemaSmith"."RebuildSetAsideForeignKeys", which ForeignKeyQuench reads to put each one back as
+  -- it was, validated or NOT VALID. A key this package declares comes back from its declaration. One it does not
+  -- declare -- another product's, or one a DBA added -- comes back from the definition captured here, which needs the
+  -- rebuilt table to still have what it references: the columns, unchanged, under a declared primary key or unique
+  -- constraint over exactly those columns. When it would not, the rebuild is refused here, naming the key.
+  --
+  -- The definition is read with search_path = pg_catalog, so the referenced table is always schema-qualified in it
+  -- and the restore does not depend on the search_path of whichever run puts it back.
+  v_SearchPath := current_setting('search_path');
+  PERFORM set_config('search_path', 'pg_catalog', TRUE);
+  DROP TABLE IF EXISTS temp_rebuild_inbound_keys;
+  CREATE TEMPORARY TABLE temp_rebuild_inbound_keys AS
+    SELECT pn.nspname::TEXT AS "ChildSchema", pc.relname::TEXT AS "ChildTable", con.conname::TEXT AS "KeyName",
+           REGEXP_REPLACE(pg_get_constraintdef(con.oid), '\s+NOT VALID$', '') AS "Definition",
+           con.convalidated AS "WasTrusted",
+           FALSE AS "Declared",
+           NULL::TEXT AS "Need",
+           (SELECT STRING_AGG(quote_ident(a.attname), ', ' ORDER BY k.ord)
+              FROM UNNEST(con.confkey) WITH ORDINALITY AS k(attnum, ord)
+              JOIN pg_catalog.pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum) AS "ReferencedColumns",
+           (SELECT ARRAY_AGG(a.attname::TEXT)
+              FROM UNNEST(con.confkey) AS k(attnum)
+              JOIN pg_catalog.pg_attribute a ON a.attrelid = con.confrelid AND a.attnum = k.attnum) AS "ReferencedNames"
+      FROM pg_catalog.pg_constraint con
+      JOIN pg_catalog.pg_class pc ON pc.oid = con.conrelid
+      JOIN pg_catalog.pg_namespace pn ON pn.oid = pc.relnamespace
+      WHERE con.contype = 'f'
+        AND con.confrelid = v_Oid
+        AND con.conparentid = 0;  -- not the copies of a partitioned table's key on its partitions
+  PERFORM set_config('search_path', v_SearchPath, TRUE);
+
+  UPDATE temp_rebuild_inbound_keys k SET "Declared" = TRUE
+   WHERE EXISTS (SELECT 1 FROM temp_fks f
+                  WHERE f."TableSchema" = k."ChildSchema" AND f."TableName" = k."ChildTable" AND f."Name" = k."KeyName");
+
+  UPDATE temp_rebuild_inbound_keys k SET "Need" = 'every referenced column to stay declared'
+   WHERE NOT k."Declared"
+     AND EXISTS (SELECT 1 FROM UNNEST(k."ReferencedNames") AS r(name)
+                  WHERE NOT EXISTS (SELECT 1 FROM temp_columns c
+                                     WHERE c."TableSchema" = v_SchemaRaw AND c."TableName" = v_TableRaw AND c."Name" = r.name));
+
+  -- The declared keys the rebuilt table will have, as column sets: the primary key and the unfiltered unique ones.
+  UPDATE temp_rebuild_inbound_keys k SET "Need" = 'a declared primary key or unique constraint over exactly (' || k."ReferencedColumns" || ')'
+   WHERE NOT k."Declared" AND k."Need" IS NULL
+     AND NOT EXISTS (SELECT 1 FROM temp_indexes i
+                      WHERE i."TableSchema" = v_SchemaRaw AND i."TableName" = v_TableRaw
+                        AND (i."PrimaryKey" OR i."Unique" OR i."UniqueConstraint")
+                        AND COALESCE(i."FilterExpression", '') = ''
+                        AND (SELECT ARRAY_AGG(n ORDER BY n)
+                               FROM (SELECT TRIM(BOTH '"' FROM REGEXP_REPLACE(TRIM(x), '\s+(ASC|DESC)$', '', 'i')) AS n
+                                       FROM UNNEST(STRING_TO_ARRAY(i."IndexColumns", ',')) AS x) d)
+                          = (SELECT ARRAY_AGG(n ORDER BY n) FROM UNNEST(k."ReferencedNames") AS n));
+
+  IF to_regclass('pg_temp.temp_existing_columns') IS NOT NULL THEN
+    UPDATE temp_rebuild_inbound_keys k SET "Need" = 'the referenced columns to keep their current definition'
+     WHERE NOT k."Declared" AND k."Need" IS NULL
+       AND EXISTS (SELECT 1 FROM UNNEST(k."ReferencedNames") AS r(name)
+                     JOIN temp_columns c ON c."TableSchema" = v_SchemaRaw AND c."TableName" = v_TableRaw AND c."Name" = r.name
+                     JOIN temp_existing_columns ec ON ec."TableSchema" = c."TableSchema" AND ec."TableName" = c."TableName" AND ec."ColumnName" = c."Name"
+                    WHERE REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(c."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC')
+                       != REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(UPPER(ec."DataType"), ' (', '('), '( ', '('), ' )', ')'), ', ', ','), ' ,', ','), 'DECIMAL', 'NUMERIC'));
+  END IF;
+
+  SELECT * INTO v_Unrestorable FROM temp_rebuild_inbound_keys WHERE "Need" IS NOT NULL ORDER BY "ChildSchema", "ChildTable", "KeyName" LIMIT 1;
+  IF FOUND THEN
+    RAISE EXCEPTION 'Table rebuild refused for %: foreign key % on %.% references it and is not declared in this package. A rebuild sets such keys aside and restores them afterwards, which needs %. Declare the key in the package that owns %.%, or change this table with Before/After migration scripts.',
+      v_ObjectName, v_Unrestorable."KeyName", v_Unrestorable."ChildSchema", v_Unrestorable."ChildTable", v_Unrestorable."Need",
+      v_Unrestorable."ChildSchema", v_Unrestorable."ChildTable";
   END IF;
 
   ----------------------------------------------------------------------------------------------------
@@ -392,9 +467,8 @@ BEGIN
   -- constrained against the table that was moved aside instead of the one that replaced it. The DROP failing
   -- afterwards is merely what makes that visible.
   --
-  -- They are NOT re-added here. Each one is defined in its OWNING table's JSON, so that table's foreign-key
-  -- quench pass sees it missing and re-creates it from the package. Re-adding them inside this procedure
-  -- would mean maintaining FK construction against a second source of truth.
+  -- They are not re-added here: the shadow has no key for them to reference until the index pass runs. They are set
+  -- aside instead (step 2), and ForeignKeyQuench puts each one back.
   SELECT STRING_AGG('RAISE NOTICE ' || quote_literal('  Dropping inbound foreign key ' || pn.nspname || '.' || pc.relname || '.' || con.conname) || ';' || CHR(10) ||
                     'ALTER TABLE ' || quote_ident(pn.nspname) || '.' || quote_ident(pc.relname) ||
                       ' DROP CONSTRAINT ' || quote_ident(con.conname) || ';' || CHR(10) ||
@@ -405,9 +479,33 @@ BEGIN
     JOIN pg_catalog.pg_class pc ON pc.oid = con.conrelid
     JOIN pg_catalog.pg_namespace pn ON pn.oid = pc.relnamespace
     WHERE con.contype = 'f'
-      AND con.confrelid = v_Oid;
+      AND con.confrelid = v_Oid
+      AND con.conparentid = 0;  -- not the copies of a partitioned table's key on its partitions
 
-  v_CreateShadowSql := 'CREATE TABLE ' || v_ShadowQualified || ' (' || v_ShadowColumnList || ');';
+  -- STORAGE. The shadow is created where and how the table is stored -- declared where the package declares it, as
+  -- it is otherwise -- because what it is created with is what the table has afterwards. Created bare, an unlogged
+  -- table came back logged, a table on another tablespace came back on the default, and its storage parameters were
+  -- gone; a DECLARED tablespace then failed the placement check that follows, which refuses to move a table. The
+  -- declared fillfactor is written into the shadow rather than set afterwards, which would only apply to new pages;
+  -- 100 is the default, so it is written as nothing.
+  SELECT CASE WHEN LOWER(COALESCE(t."PersistenceType", '')) = 'unlogged'
+                OR (COALESCE(t."PersistenceType", '') = '' AND c.relpersistence = 'u') THEN 'UNLOGGED ' ELSE '' END,
+         ' USING ' || quote_ident(COALESCE(NULLIF(t."AccessMethod", ''), am.amname)) ||
+         COALESCE(' WITH (' || NULLIF(CONCAT_WS(', ',
+           CASE WHEN t."UpdateFillFactor" AND t."FillFactor" <> 100 THEN 'fillfactor=' || t."FillFactor" END,
+           (SELECT STRING_AGG(opt, ', ' ORDER BY opt) FROM UNNEST(c.reloptions) AS o(opt)
+             WHERE NOT (t."UpdateFillFactor" AND opt LIKE 'fillfactor=%')),
+           (SELECT STRING_AGG('toast.' || opt, ', ' ORDER BY opt) FROM pg_catalog.pg_class tc, UNNEST(tc.reloptions) AS o(opt)
+             WHERE tc.oid = c.reltoastrelid)), '') || ')', '') ||
+         COALESCE(' TABLESPACE ' || quote_ident(COALESCE(NULLIF(t."Tablespace", ''), ts.spcname)), '')
+    INTO v_ShadowPersistence, v_ShadowStorage
+    FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_am am ON am.oid = c.relam
+    LEFT JOIN pg_catalog.pg_tablespace ts ON ts.oid = c.reltablespace
+    JOIN temp_tables t ON t."Schema" = v_SchemaRaw AND t."Name" = v_TableRaw
+   WHERE c.oid = v_Oid;
+
+  v_CreateShadowSql := 'CREATE ' || v_ShadowPersistence || 'TABLE ' || v_ShadowQualified || ' (' || v_ShadowColumnList || ')' || v_ShadowStorage || ';';
 
   v_CopySql := CASE WHEN v_CopyColumnList IS NULL THEN NULL
                     ELSE 'INSERT INTO ' || v_ShadowQualified || ' (' || v_CopyColumnList || ')' || CHR(10) ||
@@ -455,7 +553,12 @@ BEGIN
         JOIN pg_catalog.pg_class pc ON pc.oid = con.conrelid
         JOIN pg_catalog.pg_namespace pn ON pn.oid = pc.relnamespace
         WHERE con.contype = 'f'
-          AND con.confrelid = v_Oid;
+          AND con.confrelid = v_Oid
+          AND con.conparentid = 0;  -- not the copies of a partitioned table's key on its partitions
+    INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType")
+      SELECT pg_backend_pid(), 'foreignKey', k."ChildSchema" || '.' || k."ChildTable" || '.' || k."KeyName", 'wouldCreate'
+        FROM temp_rebuild_inbound_keys k
+        WHERE NOT k."Declared";
     RETURN;
   END IF;
 
@@ -471,6 +574,14 @@ BEGIN
   -- race. This is the one operation in SchemaSmith that destroys user data, so it pays for a verification
   -- scan rather than trusting that INSERT ... SELECT moved everything.
   EXECUTE 'SELECT COUNT(*) FROM ' || v_Qualified INTO v_RowsBefore;
+
+  -- In the rebuild's transaction, so a rollback takes the record with the keys it would have restored.
+  DELETE FROM "SchemaSmith"."RebuildSetAsideForeignKeys" s
+   USING temp_rebuild_inbound_keys k
+   WHERE s."ChildSchema" = k."ChildSchema" AND s."ChildTable" = k."ChildTable" AND s."KeyName" = k."KeyName";
+  INSERT INTO "SchemaSmith"."RebuildSetAsideForeignKeys" ("ChildSchema", "ChildTable", "KeyName", "ParentSchema", "ParentTable", "Definition", "WasTrusted", "Declared")
+    SELECT k."ChildSchema", k."ChildTable", k."KeyName", v_SchemaRaw, v_TableRaw, k."Definition", k."WasTrusted", k."Declared"
+      FROM temp_rebuild_inbound_keys k;
 
   CALL "SchemaSmith"."ExecuteOrDebug"(v_DropInboundFkSql, FALSE);
   CALL "SchemaSmith"."ExecuteOrDebug"(v_CreateShadowSql, FALSE);

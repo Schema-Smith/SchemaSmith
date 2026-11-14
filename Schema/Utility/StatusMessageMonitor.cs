@@ -40,9 +40,16 @@ public class StatusMessageMonitor : IDisposable
     /// <param name="pollIntervalMs">Polling interval in milliseconds (default 200ms).</param>
     /// <param name="sessionConnection">The writing session's own open connection, read on each flush.</param>
     /// <param name="warn">Told once when live progress is lost.</param>
+    // Where the routines write their messages: the target's own table, or a drift check's helper database (H1, tier 2).
+    private readonly string _table;
+    private readonly int? _commandTimeoutSeconds;
+
     public StatusMessageMonitor(string connectionString, long sessionId, Action<string> callback, int pollIntervalMs = 200,
-                                IDbConnection sessionConnection = null, Action<string> warn = null)
+                                IDbConnection sessionConnection = null, Action<string> warn = null, string table = "SchemaSmith_StatusMessages",
+                                int? commandTimeoutSeconds = null)
     {
+        _table = table;
+        _commandTimeoutSeconds = commandTimeoutSeconds;
         _connectionString = connectionString;
         _sessionId = sessionId;
         _callback = callback;
@@ -104,14 +111,22 @@ public class StatusMessageMonitor : IDisposable
 
     internal void PollOnce() => PollThrough(ReadConnection);
 
+    // The deploy's command timeout when it passes one; otherwise the provider's default.
+    private IDbCommand NewCommand(IDbConnection connection)
+    {
+        var command = connection.CreateCommand();
+        if (_commandTimeoutSeconds is { } seconds) command.CommandTimeout = seconds;
+        return command;
+    }
+
     private IDbConnection ReadConnection =>
         _sessionConnection is { State: ConnectionState.Open } ? _sessionConnection : _connection;
 
     private void PollThrough(IDbConnection connection)
     {
         if (connection == null) return;
-        using var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id, Message FROM SchemaSmith_StatusMessages WHERE SessionId = @sid AND Id > @lastId ORDER BY Id";
+        using var command = NewCommand(connection);
+        command.CommandText = $"SELECT Id, Message FROM {_table} WHERE SessionId = @sid AND Id > @lastId ORDER BY Id";
 
         var sidParam = command.CreateParameter();
         sidParam.ParameterName = "@sid";
@@ -193,8 +208,8 @@ public class StatusMessageMonitor : IDisposable
         // Clean up messages for this session
         try
         {
-            using var command = ReadConnection.CreateCommand();
-            command.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = @sid";
+            using var command = NewCommand(ReadConnection);
+            command.CommandText = $"DELETE FROM {_table} WHERE SessionId = @sid";
 
             var sidParam = command.CreateParameter();
             sidParam.ParameterName = "@sid";

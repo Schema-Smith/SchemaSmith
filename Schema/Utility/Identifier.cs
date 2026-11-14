@@ -1,5 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System.Collections.Generic;
 using Schema.Domain;
 
 namespace Schema.Utility;
@@ -88,6 +89,8 @@ public static class Identifier
             if (open != '\0')
             {
                 if (!inWrap && c == open) { inWrap = true; continue; }
+                // ]] inside a bracketed name is a ], not the end of it.
+                if (inWrap && c == close && i + 1 < value.Length && value[i + 1] == close && open != close) { i++; continue; }
                 if (inWrap && c == close) { inWrap = false; continue; }
             }
             if (!inWrap && c == '.')
@@ -95,5 +98,64 @@ public static class Identifier
         }
 
         return (null, Unwrap(value, platform));
+    }
+
+    /// <summary>
+    /// Splits a comma-separated list of delimited names (<c>[a],[b]</c>, <c>"a","b"</c>, <c>`a`,`b`</c>) at the commas
+    /// between items only: a comma inside a delimited name, a string literal or parentheses belongs to its item. Items
+    /// keep their delimiters and any prefix or suffix (<c>*[a]</c>, <c>G[b]</c>, <c>[c] DESC</c>), trimmed; empty items
+    /// are dropped.
+    /// </summary>
+    public static List<string> SplitDelimitedList(string list, Platform platform)
+    {
+        var items = new List<string>();
+        if (string.IsNullOrEmpty(list)) return items;
+
+        var (open, close) = platform.GetBasePlatform() switch
+        {
+            Platform.SqlServer => ('[', ']'),
+            Platform.PostgreSQL => ('"', '"'),
+            Platform.MySQL => ('`', '`'),
+            _ => ('\0', '\0')
+        };
+
+        var start = 0;
+        var depth = 0;
+        var inName = false;
+        var inString = false;
+        for (var i = 0; i < list.Length; i++)
+        {
+            var c = list[i];
+            if (inString)
+            {
+                // A doubled quote is one quote and the string goes on; toggling twice gives the same result.
+                if (c == '\'') inString = false;
+                continue;
+            }
+            if (inName)
+            {
+                // ]] inside a bracketed name is a ]; a doubled " or ` closes and reopens, which leaves it open.
+                if (c == close && open != close && i + 1 < list.Length && list[i + 1] == close) { i++; continue; }
+                if (c == close) inName = false;
+                continue;
+            }
+            if (c == open && open != '\0') inName = true;
+            else if (c == '\'') inString = true;
+            else if (c == '(') depth++;
+            else if (c == ')') depth--;
+            else if (c == ',' && depth == 0)
+            {
+                Add(list.Substring(start, i - start));
+                start = i + 1;
+            }
+        }
+        Add(list.Substring(start));
+        return items;
+
+        void Add(string item)
+        {
+            item = item.Trim();
+            if (item.Length > 0) items.Add(item);
+        }
     }
 }

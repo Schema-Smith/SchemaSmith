@@ -47,7 +47,9 @@ public static class GettingStarted
             Console.WriteLine("No settings file was found, so nothing was run. Looked for:");
             foreach (var candidate in candidates) Console.WriteLine($"  {candidate}");
             Console.WriteLine();
-            WriteHowToConfigure(app, settings, $"Put a {fileName} in one of those places with these settings:");
+            WriteHowToConfigure(app, settings, candidates.Count == 1
+                ? $"Put a {fileName} there with these settings:"
+                : $"Put a {fileName} in one of those places with these settings:");
             EnvironmentWrapper.GetFromFactory().Exit(2);
             return true;
         }
@@ -57,7 +59,12 @@ public static class GettingStarted
         WriteHeader(app, summary);
         Console.WriteLine("Nothing is configured yet, so nothing was run.");
         Console.WriteLine();
-        WriteHowToConfigure(app, settings, $"Fill in these settings in {settingsFile}:");
+        if (settingsFile == candidates[0])
+            WriteHowToConfigure(app, settings, $"Fill in these settings in {settingsFile}:");
+        else
+            // The file beside the tool can sit under a folder only an administrator may change (a Chocolatey install).
+            WriteHowToConfigure(app, settings, "Name a settings file of your own with --ConfigFile:<path>, holding these settings:",
+                $"or fill them in {settingsFile}, the file that was read (editing it can need administrator rights).");
         EnvironmentWrapper.GetFromFactory().Exit(0);
         return true;
     }
@@ -98,7 +105,8 @@ public static class GettingStarted
         Console.WriteLine();
     }
 
-    private static void WriteHowToConfigure(string app, IReadOnlyList<FirstRunSetting> settings, string lead)
+    private static void WriteHowToConfigure(string app, IReadOnlyList<FirstRunSetting> settings, string lead,
+        string lastAlternative = "or name your own settings file with --ConfigFile:<path>.")
     {
         var listed = settings.Where(s => s.Meaning != null).ToList();
         Console.WriteLine(lead);
@@ -107,7 +115,7 @@ public static class GettingStarted
             Console.WriteLine($"  {setting.Key.PadRight(width)}  {setting.Meaning}");
         Console.WriteLine();
         Console.WriteLine($"Or set them as environment variables ({EnvironmentPrefix}{listed[0].Key.Replace(":", "__")}=...),");
-        Console.WriteLine("or name your own settings file with --ConfigFile:<path>.");
+        Console.WriteLine(lastAlternative);
         Console.WriteLine();
         Console.WriteLine($"{app} --help lists every option. Reference: " +
                           $"https://github.com/Schema-Smith/SchemaSmith/blob/main/docs/end-user/reference/{app.ToLowerInvariant()}.md");

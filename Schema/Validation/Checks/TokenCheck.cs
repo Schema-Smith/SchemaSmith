@@ -57,10 +57,13 @@ public sealed class TokenCheck : ISchemaCheck
     //                           version off SQL Server), resolved per-target in Phase B
     //  - TableXml / MaterializedViewXml / IndexedViewXml   Schema/Domain/Template.cs: XML twins of the
     //                           *Schema tokens (A2), for shredding the model as XML on the legacy SQL Server tier
+    //  - EventSchema / DomainTypeSchema / EnumTypeSchema / SequenceSchema   Schema/Domain/Template.cs: the
+    //                           declared events, domain types, enum types and sequences as JSON
     private static readonly HashSet<string> BuiltInTokens = new(StringComparer.OrdinalIgnoreCase)
     {
         "ProductName", "TemplateName", "SchemaName", "TableSchema", "MaterializedViewSchema", "IndexedViewSchema",
         "TableXml", "MaterializedViewXml", "IndexedViewXml",
+        "EventSchema", "DomainTypeSchema", "EnumTypeSchema", "SequenceSchema",
         "repo_path", "BranchName", "ServerMajorVersion", "CompatibilityLevel"
     };
 

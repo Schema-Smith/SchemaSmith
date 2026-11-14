@@ -30,14 +30,15 @@ public class ServerWarningLoggingTests
         {
             ConfigHelper.ConfigureLog4Net();
             WarningCounter.Reset();
-            var quench = new DatabaseQuench("server", new Product { Name = "P", Platform = Platform.SqlServer }, new Template { Name = "T" }, "db",
-                false, "0", false, "0", "1", "1", "1", "1", "1", "1", false, false, false, null);
+            var quench = new DatabaseQuench(new Product { Name = "P", Platform = Platform.SqlServer }, new Template { Name = "T" }, new DatabaseQuenchOptions { Server = "server", DatabaseName = "db", UpdateTables = false, DeliverData = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, null);
 
             quench.LogServerMessage("      Kept dbo.T.IX as it is");
             Assert.That(WarningCounter.Count, Is.Zero, "a progress line must not count");
 
             quench.LogServerMessage("      WARNING: Kept dbo.T.IX as it is: foreign key dbo.C.FK references it");
             Assert.That(WarningCounter.Count, Is.EqualTo(1), "a WARNING: line from the server must be logged as a warning");
+            // The layout puts WARNING: in front of the line, so the message's own would print it twice.
+            Assert.That(WarningCounter.Kept, Is.EqualTo(new[] { "WARNING: [server].[db]       Kept dbo.T.IX as it is: foreign key dbo.C.FK references it" }));
         }
         finally
         {

@@ -18,6 +18,20 @@ public static class TestHelper
     public static string GetTestProductPath(string platform, string productName) =>
         Path.Combine(TestProductsPath, platform, productName);
 
+    // A test that adds or removes a file in a product edits a copy: the SQL Server tests run as several processes, and
+    // another process deploying the shared folder would read the half-made change.
+    public static string CopyTestProduct(string platform, string productName)
+    {
+        var source = GetTestProductPath(platform, productName);
+        var copy = Path.Join(Path.GetTempPath(), $"{productName}_{Guid.NewGuid():N}");
+        foreach (var dir in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
+            Directory.CreateDirectory(Path.Join(copy, Path.GetRelativePath(source, dir)));
+        Directory.CreateDirectory(copy);
+        foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+            File.Copy(file, Path.Join(copy, Path.GetRelativePath(source, file)));
+        return copy;
+    }
+
     private static string FindSolutionRoot()
     {
         var dir = AppContext.BaseDirectory;

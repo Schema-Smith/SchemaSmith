@@ -137,6 +137,28 @@ public class SchemaGeneratorTests
         Assert.That(errors, Is.Empty, "the engine's own serialized event must satisfy the schema it generates");
     }
 
+    // A type that contains itself -- a PostgreSQL partition that is itself partitioned -- built the schema inline forever
+    // and overflowed the stack. It is defined once and referred to where it recurs, and still validates every level.
+    [Test]
+    public void ARecursiveType_IsDefinedOnce_AndValidatesEveryLevel()
+    {
+        var generated = SchemaGenerator.GenerateSchema(typeof(Schema.Domain.PostgreSQL.PostgreSqlTable), Platform.PostgreSQL);
+        Assert.That(generated["definitions"]?["PostgreSqlPartitioning"], Is.Not.Null, "the recursive type is defined once");
+        var schema = NJsonSchema.JsonSchema.FromJsonAsync(generated.ToString()).GetAwaiter().GetResult();
+
+        static string Table(string innerMethod) => $$"""
+            { "Name": "events", "Partitioning": { "Method": "LIST", "Expression": "region", "Partitions": [
+                { "Name": "events_eu", "Bound": "FOR VALUES IN ('eu')",
+                  "Partitioning": { "Method": "{{innerMethod}}", "Expression": "created_at", "Partitions": [
+                    { "Name": "events_eu_2026", "Bound": "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')" } ] } } ] } }
+            """;
+        Assert.Multiple(() =>
+        {
+            Assert.That(schema.Validate(Table("RANGE")), Is.Empty, "a nested declaration is valid");
+            Assert.That(schema.Validate(Table("RANGES")), Is.Not.Empty, "and a bad method two levels down is still caught");
+        });
+    }
+
     // CDC is SQL Server-only, so the template default is offered only in the SQL Server template schema.
     [TestCase(Platform.SqlServer, true)]
     [TestCase(Platform.PostgreSQL, false)]
@@ -209,6 +231,22 @@ public class SchemaGeneratorTests
         // ValidationScript is recommended, not required (Paul, 2026-08-21): the deploy path skips it
         // when unset, so requiring it rejected packages that deploy perfectly well.
         Assert.That(required, Does.Not.Contain("ValidationScript"));
+    }
+
+    [Test]
+    public void SettingsSchema_RequiresEveryDeclaredPart_AndNamesTheDriftLevels()
+    {
+        var schema = SchemaGenerator.GenerateSchema(typeof(Schema.Domain.Settings.SettingsFile));
+        var setting = schema["properties"]?["Settings"]?["items"];
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(schema["properties"]?["$schema"], Is.Not.Null, "an editor-facing $schema key is allowed");
+            Assert.That(schema["properties"]?["FilePath"], Is.Null, "FilePath is JsonIgnore");
+            Assert.That(setting?["required"]?.ToObject<List<string>>(), Is.EquivalentTo(new[] { "Kind", "Name", "Value", "Fix", "OnDrift" }));
+            Assert.That(setting?["properties"]?["OnDrift"]?["type"]?.ToString(), Is.EqualTo("string"), "written as a name, not a number");
+            Assert.That(setting?["properties"]?["Display"], Is.Null, "Display is derived, not authored");
+        });
     }
 
     [Test]

@@ -6,7 +6,9 @@ namespace SchemaQuench;
 
 // Mode is the form a statement ran in under OnlineApply (online, resumable, unavailable); null for everything else.
 // Target is where the change was made; a fleet run records the same change once per target.
-public sealed record ChangeAuditRow(string ObjectType, string ObjectName, string Action, string Mode = null, ChangeTarget Target = null);
+// Detail and EstimatedRows describe a destructive change (H3): what changed, and the table's rows from the catalog.
+public sealed record ChangeAuditRow(string ObjectType, string ObjectName, string Action, string Mode = null, ChangeTarget Target = null,
+    string Detail = null, long? EstimatedRows = null);
 
 // Schema is set only for a schema template's iteration.
 public sealed record ChangeTarget(string Server, string Database, string Schema = null);
@@ -29,9 +31,10 @@ public sealed class ChangeAuditCapture
 
     public void MarkInstrumented() => _instrumented = true;
 
-    public void Record(string objectType, string objectName, string action, string mode = null, ChangeTarget target = null)
+    public void Record(string objectType, string objectName, string action, string mode = null, ChangeTarget target = null,
+        string detail = null, long? estimatedRows = null)
     {
-        lock (_gate) _rows.Add(new ChangeAuditRow(objectType, objectName, action, mode, target));
+        lock (_gate) _rows.Add(new ChangeAuditRow(objectType, objectName, action, mode, target, detail, estimatedRows));
     }
 
     public void RecordRan(string objectType, string objectName, ChangeTarget target = null) => Record(objectType, objectName, "ran", target: target);

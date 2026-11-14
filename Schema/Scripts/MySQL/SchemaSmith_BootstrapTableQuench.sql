@@ -64,6 +64,8 @@ BEGIN
     DECLARE v_Collation VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_AcCollation VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_LiveCollation VARCHAR(64) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+    DECLARE v_LiveLength BIGINT;
+    DECLARE v_DeclLength BIGINT;
     DECLARE v_CollateClauses LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     DECLARE v_ColExists INT;
     DECLARE v_HasStatusTable INT DEFAULT 0;
@@ -213,12 +215,24 @@ BEGIN
         END WHILE;
     END IF;
 
+    -- DYNAMIC: on a server whose innodb_default_row_format is COMPACT or REDUNDANT an index key stops at 767 bytes, short
+    -- of the unique keys these tables carry. One created that way before is converted, so a key added to it fits.
     SET v_Sql = CONCAT('CREATE TABLE IF NOT EXISTS `', v_TableName, '` (', v_ColumnList, v_PkClause,
-                       ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci');
+                       ') ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci ROW_FORMAT=DYNAMIC');
     SET @v_stmt = v_Sql;
     PREPARE stmt FROM @v_stmt;
     EXECUTE stmt;
     DEALLOCATE PREPARE stmt;
+
+    IF EXISTS (SELECT 1 FROM information_schema.tables
+                WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey
+                  AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
+                  AND UPPER(row_format) IN ('COMPACT', 'REDUNDANT')) THEN
+        SET @v_stmt = CONCAT('ALTER TABLE `', v_TableName, '` ROW_FORMAT=DYNAMIC');
+        PREPARE stmt FROM @v_stmt;
+        EXECUTE stmt;
+        DEALLOCATE PREPARE stmt;
+    END IF;
 
     -- Step 3: COLUMN-level declarative rename (OldName), run BEFORE the existing-columns snapshot
     -- below (Step 4 add-missing-columns) so a renamed column's data is not left behind under an
@@ -359,13 +373,13 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapExistingCols;
 
-    SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddColStmts);
+    SELECT (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddColStmts) INTO @v_addcol_id;
     WHILE @v_addcol_id IS NOT NULL DO
         SELECT Stmt INTO @exec_sql FROM _SchemaSmith_BootstrapAddColStmts WHERE RowId = @v_addcol_id;
         PREPARE stmt FROM @exec_sql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
-        SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddColStmts WHERE RowId > @v_addcol_id);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddColStmts WHERE RowId > @v_addcol_id) INTO @v_addcol_id;
     END WHILE;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapAddColStmts;
 
@@ -375,8 +389,9 @@ BEGIN
     -- not cosmetic: the collation decides whether a UNIQUE index treats two names differing only by
     -- case as one key. A ci->bin change can only ever SPLIT keys that were previously equal, never
     -- merge two into one, so this ALTER cannot fail on duplicate values no matter what is stored.
-    -- Only columns that actually declare a Collation are considered; everything else keeps the table
-    -- default and is never rewritten.
+    -- Only columns that actually declare a Collation are considered for it; everything else keeps the table
+    -- default and is never rewritten. A declared VARCHAR longer than the live one is widened the same way (never
+    -- narrowed): a deployment created before the width grew would otherwise keep truncating what it stores.
     SET v_AcCnt = COALESCE(JSON_LENGTH(JSON_EXTRACT(p_TableDefinitions, '$.Columns')), 0);
     SET v_AcIdx = 0;
     SET v_CollateClauses = '';
@@ -387,16 +402,21 @@ BEGIN
         SET v_AcDefault = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].Default')));
         SET v_AcCollation = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$.Columns[', v_AcIdx, '].Collation')));
 
-        IF v_AcCollation IS NOT NULL AND TRIM(v_AcCollation) <> '' THEN
+        SET v_DeclLength = IF(UPPER(TRIM(v_AcDataType)) LIKE 'VARCHAR(%)',
+                              CAST(SUBSTRING_INDEX(SUBSTRING_INDEX(v_AcDataType, '(', -1), ')', 1) AS UNSIGNED), NULL);
+        IF (v_AcCollation IS NOT NULL AND TRIM(v_AcCollation) <> '') OR v_DeclLength IS NOT NULL THEN
             SET v_LiveCollation = NULL;
-            SELECT collation_name INTO v_LiveCollation
+            SET v_LiveLength = NULL;
+            SELECT collation_name, character_maximum_length INTO v_LiveCollation, v_LiveLength
             FROM information_schema.columns
             WHERE table_schema = v_DbCi AND SchemaSmith_IdentifierKey(table_schema) = v_DbKey
               AND SchemaSmith_IdentifierKey(table_name) = v_TableKey
               AND SchemaSmith_NameKeyCI(column_name) = SchemaSmith_NameKeyCI(v_AcColName)
             LIMIT 1;
+            SET v_AcCollation = COALESCE(NULLIF(TRIM(v_AcCollation), ''), v_LiveCollation);
 
-            IF v_LiveCollation IS NOT NULL AND CAST(v_LiveCollation AS BINARY) <> CAST(v_AcCollation AS BINARY) THEN
+            IF v_LiveCollation IS NOT NULL AND (CAST(v_LiveCollation AS BINARY) <> CAST(v_AcCollation AS BINARY)
+                                                OR v_DeclLength > v_LiveLength) THEN
                 SET v_CollateClauses = CONCAT(v_CollateClauses, IF(v_CollateClauses = '', '', ', '),
                     'MODIFY COLUMN `', v_AcColName, '` ', v_AcDataType, ' COLLATE ', v_AcCollation,
                     CASE WHEN v_AcNullable = 1 THEN ' NULL' ELSE ' NOT NULL' END,
@@ -619,13 +639,13 @@ BEGIN
 
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapExistingIdxs;
 
-    SET @v_addidx_id := (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddIdxStmts);
+    SELECT (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddIdxStmts) INTO @v_addidx_id;
     WHILE @v_addidx_id IS NOT NULL DO
         SELECT Stmt INTO @exec_sql FROM _SchemaSmith_BootstrapAddIdxStmts WHERE RowId = @v_addidx_id;
         PREPARE stmt FROM @exec_sql;
         EXECUTE stmt;
         DEALLOCATE PREPARE stmt;
-        SET @v_addidx_id := (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddIdxStmts WHERE RowId > @v_addidx_id);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_BootstrapAddIdxStmts WHERE RowId > @v_addidx_id) INTO @v_addidx_id;
     END WHILE;
     DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_BootstrapAddIdxStmts;
 END//

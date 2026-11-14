@@ -123,6 +123,10 @@
         }
       },
       "additionalProperties": false
+    },
+    "PruneObsoleteMigrationTracking": {
+      "type": "boolean",
+      "description": "Optional. false keeps the run-once record of a migration script the package does not carry, even when the PruneObsoleteMigrationTracking setting is on. SchemaShears writes it into every patch."
     }
   },
   "additionalProperties": false,

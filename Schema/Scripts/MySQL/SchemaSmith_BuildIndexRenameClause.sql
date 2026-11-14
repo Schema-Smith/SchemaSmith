@@ -19,7 +19,7 @@ BEGIN
   -- metadata-only `RENAME INDEX old TO new`. Below that (MariaDB 10.2-10.5, which lack the syntax)
   -- it degrades to `DROP INDEX old, ADD [UNIQUE] INDEX new (cols)` -- a rebuild, but the only route
   -- pre-10.5.2. The recreated index is reconstructed from the OLD index's live catalog metadata
-  -- (columns in SEQ_IN_INDEX order, prefix lengths, DESC key parts, uniqueness), so it matches the
+  -- (columns in SEQ_IN_INDEX order, prefix lengths, DESC key parts, uniqueness, comment), so it matches the
   -- existing index exactly; only the name changes. (An index rename is detected only when the old
   -- index already matches the desired columns + uniqueness, so this is a true rename.)
   -- p_DatabaseName is no longer read here: the snapshot below was already scoped to it by the
@@ -27,10 +27,11 @@ BEGIN
   -- four call sites for a parameter that costs nothing to leave unused.
   DECLARE v_NonUnique TINYINT;
   DECLARE v_NormColumns TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+  DECLARE v_Comment VARCHAR(1024) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
   DECLARE v_ErrMsg VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
   IF SchemaSmith_SupportsRenameIndex() = 1 THEN
-    RETURN CONCAT('RENAME INDEX `', p_OldIndexName, '` TO `', p_NewIndexName, '`');
+    RETURN CONCAT('RENAME INDEX `', SchemaSmith_EscapeBackticks(p_OldIndexName), '` TO `', SchemaSmith_EscapeBackticks(p_NewIndexName), '`');
   END IF;
 
   -- The degrade path reads the ONE row the caller already built in _SchemaSmith_IdxDetectSnap
@@ -39,8 +40,8 @@ BEGIN
   -- SEQ_IN_INDEX-ordered column list with prefix lengths and DESC key parts, which is exactly the
   -- clause body an ADD INDEX needs. One row per (TableName, IndexName) by primary key, so this is a
   -- single reference to the temp table -- no repeat read, no ER_CANT_REOPEN_TABLE (1137) exposure.
-  SELECT snap.NonUnique, snap.NormColumns
-    INTO v_NonUnique, v_NormColumns
+  SELECT snap.NonUnique, snap.NormColumns, snap.IndexComment
+    INTO v_NonUnique, v_NormColumns, v_Comment
     FROM _SchemaSmith_IdxDetectSnap snap
    WHERE snap.TableKey = SchemaSmith_IdentifierKey(p_TableName)
      AND snap.IndexKey = SchemaSmith_NameKeyCI(p_OldIndexName);
@@ -52,9 +53,10 @@ BEGIN
       SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = v_ErrMsg;
   END IF;
 
-  RETURN CONCAT('DROP INDEX `', p_OldIndexName, '`, ADD ',
+  RETURN CONCAT('DROP INDEX `', SchemaSmith_EscapeBackticks(p_OldIndexName), '`, ADD ',
       IF(v_NonUnique = 0, 'UNIQUE ', ''),
-      'INDEX `', p_NewIndexName, '` (', v_NormColumns, ')');
+      'INDEX `', SchemaSmith_EscapeBackticks(p_NewIndexName), '` (', v_NormColumns, ')',
+      IF(COALESCE(v_Comment, '') = '', '', CONCAT(' COMMENT ', QUOTE(v_Comment))));
 END //
 
 DELIMITER ;

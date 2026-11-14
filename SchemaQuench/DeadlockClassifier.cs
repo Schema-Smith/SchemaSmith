@@ -120,6 +120,24 @@ internal static class DeadlockClassifier
     }
 
     /// <summary>
+    /// A command stopped by the client for running past Target:CommandTimeoutSeconds: SqlClient reports -2, Npgsql wraps a
+    /// <see cref="TimeoutException"/>, MySqlConnector reports CommandTimeoutExpired. Not contention, and not retried.
+    /// </summary>
+    public static bool IsCommandTimeout(Exception ex)
+    {
+        for (var e = ex; e != null; e = e.InnerException)
+            switch (e)
+            {
+                case SqlException { Number: -2 }:
+                case NpgsqlException { InnerException: TimeoutException }:
+                    return true;
+                case MySqlException my when my.ErrorCode == MySqlErrorCode.CommandTimeoutExpired:
+                    return true;
+            }
+        return false;
+    }
+
+    /// <summary>
     /// InnoDB's lock-wait timeout (1205). Exposed as a code predicate rather than checked inline for the
     /// same reason <see cref="ConnectionLostClassifier.IsMySqlConnectionLostCode"/> is: MySqlConnector's
     /// exception cannot be constructed from a test, so this is the only surface where the classification

@@ -55,6 +55,10 @@ namespace Schema.Domain.PostgreSQL
         [JsonProperty(Order = 11, NullValueHandling = NullValueHandling.Ignore)]
         public string Tablespace { get; set; }
 
+        [SchemaProperty(Description = "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it.")]
+        [JsonProperty(Order = 12, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
+
         public class ExcludeColumn
         {
             [SchemaProperty(Required = true)]

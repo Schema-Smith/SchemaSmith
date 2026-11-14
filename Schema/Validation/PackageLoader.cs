@@ -60,15 +60,17 @@ public static class PackageLoader
             if (failure != null) templateLoadFindings.Add(failure);
         }
 
-        // Skip-and-report, not skip-and-forget: a component file Template.Load excluded because it
-        // wasn't valid JSON at all still needs to surface as a finding, or the run would exit clean
-        // over a package it silently loaded less of. ComponentLoadErrors records EVERY component that
-        // failed to load — consumers listing the bad files depend on that — so the filter lives here,
-        // where the question is what `--Validate` should PRINT: a parseable-but-wrong component is
-        // dropped because JsonSchemaCheck's own pass reports it precisely as SS-JSON-001, and emitting
-        // both would report one file twice.
-        var loadFindings = templates
-            .SelectMany(t => t.ComponentLoadErrors)
+        // Skip-and-report, not skip-and-forget: a component file Template.Load excluded still needs to
+        // surface as a finding, or the run would exit clean over a package it silently loaded less of.
+        // An unparseable one is always reported. A parseable one is usually a schema violation that
+        // JsonSchemaCheck reports precisely as SS-JSON-001, so it is reported only when no check names
+        // the file (SchemaPackageValidator) -- which is what catches a rule only a converter enforces.
+        var componentErrors = templates.SelectMany(t => t.ComponentLoadErrors).ToList();
+        var unlessNamed = componentErrors
+            .Where(e => e.IsValidJson)
+            .Select(e => new Finding(Severity.Error, "SS-LOAD-001", "Load", e.FilePath, e.Message))
+            .ToList();
+        var loadFindings = componentErrors
             .Where(e => !e.IsValidJson)
             .Select(e => new Finding(Severity.Error, "SS-LOAD-001", "Load", e.FilePath, e.Message))
             // A template whose own Template.json couldn't be loaded at all — see TryLoadTemplate.
@@ -82,7 +84,7 @@ public static class PackageLoader
             .Concat(templates.SelectMany(t => t.FileTokenErrors)
                 .Select(e => new Finding(Severity.Error, FileTokenCode, TokenCategory, e.FilePath, e.Message)))
             .ToList();
-        return new LoadedPackage(product, templates, loadFindings);
+        return new LoadedPackage(product, templates, loadFindings, unlessNamed);
     }
 
     // A template whose own Template.json can't even be loaded — genuinely unparseable JSON, or a

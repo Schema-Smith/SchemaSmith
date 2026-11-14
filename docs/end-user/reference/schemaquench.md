@@ -25,6 +25,9 @@ SchemaQuench --TestConnection     # validate connections + MinimumVersion, then 
 SchemaQuench --PreviewTargets     # validate connections + MinimumVersion + show target report, then exit
 SchemaQuench --WhatIf             # dry run: log the SQL a deployment would run, change none of your objects
 
+# The JSON Schema of this version's deployment summary (Summary.json); needs no settings file
+SchemaQuench --WriteSummarySchema:deployment-summary.schema.json
+
 # SQL Server
 SchemaQuench --ConnectionString:"Data Source=myserver;Initial Catalog=master;User ID=sa;Password=secret;TrustServerCertificate=True;"
 
@@ -84,6 +87,11 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 | `Target:SkipUnchangedObjects` | bool | `true` | Do not re-run an object script whose text is unchanged since it last applied and whose object the server still renders as it was left. A hand change on the server, an edited script, an `[ALWAYS]` name or a `-- SchemaSmith: AlwaysRun` comment runs it again. The key lives under `Target`; a top-level `SkipUnchangedObjects` is not read. See [Unchanged Object Scripts](#unchanged-object-scripts). |
 | `Target:UnsupportedFeaturePolicy` | string | `warn` | What to do when the package declares a feature the detected target version cannot support. `warn` emits the object without the unsupported aspect and records it in the deployment summary; `fail` aborts the run with a message naming the feature and the version it requires. See [Version-adaptive code generation](#version-adaptive-code-generation). |
 | `Target:CompatEncoding` | string | `auto` | **SQL Server only.** `auto`, `legacy` (XML) or `modern` (JSON): how SchemaSmith hands its own parsed schema model to SQL Server. `auto` picks from the detected compatibility level and server version; the override is a diagnostic escape hatch, not a tuning knob. See [Forcing the encoding](#forcing-the-encoding). |
+| `Target:DestructiveChangePolicy` | string | `warn` | What a deploy does about dropping a table or column the package no longer declares: `allow`, `warn` (log and summary), or `fail` (refuse the step before anything in it is dropped). An unknown value stops the run. See [DestructiveChangePolicy](configuration.md#destructivechangepolicy). |
+| `Target:AcceptDestructive` | string | `""` | The destructive changes that are intended, as `schema.table` or `schema.table.column`, separated by `;`; they go ahead under `fail`. Set per run, not in the package. |
+| `Target:LockTimeoutSeconds` | int | _(engine default)_ | How long one statement waits for a lock another session holds (1--86400). Set on every connection the deploy opens. Unset, a deploy waits as the engine does: on SQL Server and PostgreSQL, forever. See [Timeouts and contention](configuration.md#timeouts-and-contention). |
+| `Target:ContentionRetryAttempts` | int | `20` | How many times a statement that timed out waiting for a lock, or lost a deadlock, is run (1--100). SchemaSmith's own steps and the kindle only; scripts and data delivery are never retried. |
+| `Target:CommandTimeoutSeconds` | int | `0` | How long one command may run; `0` is no limit. A command stopped by it is not retried. |
 | `TrackRunOnceMigrations` | bool | `true` | Track run-once migration scripts. When `false`, all scripts run on every deployment. |
 | `PruneObsoleteMigrationTracking` | bool | `true` | Remove tracking entries for scripts no longer in the package. When `Target` filters are active, prune is restricted to the targeted scope. See [PruneObsoleteMigrationTracking](#pruneobsoletemigrationtracking). |
 | `CheckpointDirectory` | string | `""` | Directory for checkpoint files used by `--ResumeQuench`. When blank, defaults to a per-platform temp location. See [Checkpoint and Resume](#checkpoint-and-resume). |
@@ -94,7 +102,7 @@ SchemaQuench reads configuration from `SchemaQuench.settings.json` (or the file 
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `PreventDrop` | bool | `false` | Environment-wide no-drop protection: when `true`, the drop-by-absence passes listed under [PreventDrop](#preventdrop) are suppressed for the run, and it completes normally, itemizing the withheld table, column, foreign-key, constraint, statistic and index drops in the deployment summary's `preventDrop` manifest. Transient drop-then-recreate for a declared change is unaffected. See [PreventDrop](#preventdrop). |
+| `PreventDrop` | bool | `false` | Environment-wide no-drop protection: when `true`, the drop-by-absence passes listed under [PreventDrop](#preventdrop) are suppressed for the run, and it completes normally, itemizing the withheld table, column, foreign-key, constraint, statistic, index and (MariaDB) application-time period drops in the deployment summary's `preventDrop` manifest. Transient drop-then-recreate for a declared change is unaffected. See [PreventDrop](#preventdrop). |
 | `DropTablesRemovedFromProduct` | bool | `true` | Drop tables that exist in the database but aren't defined in the schema package. Also settable as a `Product.json` property — see [DropTablesRemovedFromProduct](#droptablesremovedfromproduct). |
 | `DropColumnsRemovedFromProduct` | bool | `true` | Drop columns that exist in the database but aren't defined in the schema package. Resolves across a four-tier cascade (env → product → template → table) with explicit-false-sticky semantics. See [DropColumnsRemovedFromProduct](#dropcolumnsremovedfromproduct). |
 | `DropForeignKeysRemovedFromProduct` | bool | `true` | Drop foreign keys that exist in the database but no longer appear in the table JSON. Four-tier cascade, explicit-false-sticky. See [DropForeignKeysRemovedFromProduct](#dropforeignkeysremovedfromproduct). |
@@ -400,7 +408,7 @@ This list is the authoritative order. A step named for a procedure (`ModifiedTab
 5. **Validate baseline** -- Executes `Template.BaselineValidationScript` if configured; a falsy result or an error stops the deploy. Checkpointed as `ValidateBaseline`.
 6. **Setup scripts** -- Executes scripts from any folder in the `Setup` slot, before any object or table is touched. Sequential, run on every deploy, and the first error stops the deploy. See [The Setup slot](#the-setup-slot).
 7. **Objects, first pass** -- Executes the `Objects`-slot scripts whose text holds no `{{…}}` token (a script that needs a query token is held back), using the dependency retry loop. If `RunScriptsTwice` is enabled, runs a complete second pass to verify idempotency.
-8. **Types and sequences** -- PostgreSQL deploys the template's declared domain types, enum types and sequences; MariaDB its sequences. Before the tables, because a column can be of a domain or enum type and a default can call `nextval()`. Checkpointed as `DomainTypeQuench`, `EnumTypeQuench` and `SequenceQuench`.
+8. **Types and sequences** -- PostgreSQL deploys the template's declared domain types, enum types and sequences; SQL Server and MariaDB their sequences. Before the tables, because a column can be of a domain or enum type and a default can call `nextval()` or `NEXT VALUE FOR`. Checkpointed as `DomainTypeQuench`, `EnumTypeQuench` and `SequenceQuench`.
 9. **Add tables and columns** -- Parses `Tables/*.json` into session working tables for every later table step, then, in this order: refuses the deploy if another product owns a declared table (see [Table Ownership](#table-ownership)); on SQL Server neutralizes or refuses what the detected version cannot support (`DegradeUnsupportedFeatures`) and refuses a CDC change the capture-instance limit would block (`CdcPreflight`); checks each expression SchemaSmith has not recorded on a scratch copy (`ExpressionMapAdopt`, see [Expression change detection](#expression-change-detection)); and runs `MissingTableAndColumnQuench`, which renames tables and columns by `OldName`, creates missing tables and adds missing columns. Never checkpointed -- a resumed run repeats it to rebuild the session working tables. Skipped when `UpdateTables` is `false` or the template is index-only.
 10. **Objects, second pass** -- Retries the token-free `Objects`-slot scripts, now that missing tables exist, then resolves the template's query tokens into every slot's scripts.
 11. **Before scripts** -- Executes migration scripts from any folder in the `Before` slot. Sequential and tracked.
@@ -439,10 +447,10 @@ These are the minimum versions SchemaSmith supports for deployment:
 |----------|------------------|
 | SQL Server | 2008 (major version 10) |
 | PostgreSQL | 12 |
-| MySQL | 5.7.22 on the 5.7 line; 8.0.23 on the 8.0 line |
+| MySQL | 5.7.16 on the 5.7 line; 8.0.11 on the 8.0 line |
 | MariaDB | 10.2.13 |
 
-**MySQL's floor is a patch, on two lines.** MySQL 5.7.0-5.7.21 lack `JSON_ARRAYAGG`, so DataTongs extracts nothing from them. MySQL 8.0.0-8.0.22 lack, patch by patch, features SchemaSmith reads as "8.0": functional indexes, enforced CHECK constraints, multi-valued indexes and invisible columns. Both bands are refused before anything runs, naming the detected version. MariaDB's floor is a patch too: 10.2.13. The `JSON` type SchemaSmith's helpers declare arrived in 10.2.7, but 10.2.7 and 10.2.8 return NULL from every JSON function that builds a string holding a backtick, and every extracted name holds one; table data delivery arrives altered on 10.2.9 and 10.2.10, and runs the server out of memory on 10.2.11 and 10.2.12.
+**MySQL's floor is a patch, on two lines:** each line's oldest GA that can still be run. That is 5.7.16 on the 5.7 line (older 5.7 images no longer load) and 8.0.11 on the 8.0 line (its first GA). 5.7.0-5.7.15 and 8.0.0-8.0.10 are refused before anything runs, naming the detected version. Within the 8.0 line, features that arrived in a later patch (functional indexes and expression defaults in 8.0.13, enforced CHECK constraints in 8.0.16, multi-valued indexes in 8.0.17, invisible columns in 8.0.23) are each gated on their own patch and degrade through the unsupported-feature policy below it. MariaDB's floor is a patch too: 10.2.13. The `JSON` type SchemaSmith's helpers declare arrived in 10.2.7, but 10.2.7 and 10.2.8 return NULL from every JSON function that builds a string holding a backtick, and every extracted name holds one; table data delivery arrives altered on 10.2.9 and 10.2.10, and runs the server out of memory on 10.2.11 and 10.2.12.
 
 **And the other end of the range is measured, not assumed — new in v2.7.0.** Every engine also has a
 CI leg pinned to that engine's **`latest`** tag, so each release is exercised against whatever the vendor
@@ -468,7 +476,7 @@ decaying into "current as of whenever someone last looked".
 
 You can raise the floor for a specific product by declaring `MinimumVersion` in `Product.json`. Before any deployment work begins, SchemaQuench detects the version of every resolved target. If any target is below the declared floor, the entire run aborts with a manifest naming each below-floor server and its detected version. Nothing is deployed -- no partial work, no side effects on any target.
 
-See [Schema Packages -- Product.json](schema-packages.md#productjson) for the accepted value formats (`16` or `2022` for SQL Server; `15` for PostgreSQL; `8.0` for MySQL; `10.6` for MariaDB) and configuration details. The declared value may be any supported version — for example `5.7.22` (MySQL) or `10.2.13` (MariaDB) to pin exactly at the floor. On MySQL and MariaDB a value with a patch is compared patch for patch, so `8.0.30` refuses an 8.0.22 server; a value with a pre-release suffix, such as PostgreSQL `18beta1`, reads as its leading number.
+See [Schema Packages -- Product.json](schema-packages.md#productjson) for the accepted value formats (`16` or `2022` for SQL Server; `15` for PostgreSQL; `8.0` for MySQL; `10.6` for MariaDB) and configuration details. The declared value may be any supported version — for example `5.7.16` (MySQL) or `10.2.13` (MariaDB) to pin exactly at the floor. On MySQL and MariaDB a value with a patch is compared patch for patch, so `8.0.30` refuses an 8.0.22 server; a value with a pre-release suffix, such as PostgreSQL `18beta1`, reads as its leading number.
 
 If a target's version cannot be determined, that is a hard error -- SchemaQuench never deploys blind against an unknown version. An unparseable `MinimumVersion` value fails at startup before any connections open.
 
@@ -510,6 +518,7 @@ A feature a target version lacks is either taken by an equivalent longer path (s
 | **Expression statistics** (`CREATE STATISTICS` on an expression) | PostgreSQL 14 | skips the statistic + records a downgrade |
 | **Removing a column's generation** (`DROP EXPRESSION`) | PostgreSQL 13 | drops and re-adds the column as a plain column + records a downgrade (the previously-computed values are not preserved, unlike the in-place conversion available on 13+). Under `fail` the deploy is refused before anything is dropped |
 | **Table access method** (changing it on an existing table, `SET ACCESS METHOD`) | PostgreSQL 15 | leaves the table on its current access method + records a downgrade. A new table gets its declared method on every supported version (`CREATE TABLE ... USING`, PostgreSQL 12) |
+| **Table access method on a partitioned table** (`AccessMethod` with `Partitioning`) | PostgreSQL 17 | creates the partitioned table without one, so its partitions take the database's default + records a downgrade |
 | **`VIRTUAL` generated columns** | PostgreSQL 18 | skips the column + records a downgrade (`STORED` is unaffected — it has been available since 12) |
 | **`NOT ENFORCED` constraints** (a check constraint or foreign key with `Enforced: false`) | PostgreSQL 18 | creates the constraint enforced + records a downgrade; `Validated: false` (`NOT VALID`) is available since 12 |
 | **`WITHOUT OVERLAPS`** (a primary key or unique constraint with `WithoutOverlaps: true`, a temporal key) | PostgreSQL 18 | creates the key without the clause + records a downgrade; on 18 the key needs the `btree_gist` extension when a key column is scalar |
@@ -535,7 +544,7 @@ Two independent adaptations, both automatic. Below **compatibility level** 130 (
 | `Target:CompatEncoding` | SchemaQuench (deployment) | `auto` (default), `legacy` (XML), `modern` (JSON) |
 | `Source:CompatEncoding` | SchemaTongs (extraction) | same three |
 
-For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `Source:CompatEncoding` too, for the queries it builds a delivery script from.
+For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `Source:CompatEncoding` too, for the queries it builds a delivery script from. Any other value forces nothing: the encoding is chosen as for `auto`, and SchemaQuench warns that the value is ignored.
 
 > **Don't confuse this with `DeliveryEncoding`.** Two settings, both with "encoding" in the name, and they control unrelated things. **`CompatEncoding`** (this one) is how SchemaSmith talks to SQL Server about *its own schema model* — invisible in your package and in the resulting database. **[`ShouldCast:DeliveryEncoding`](datatongs.md#delivery-encoding-xml-for-legacy-sql-server)** is a DataTongs feature that decides the format of the *data content files it writes* — `Json` or `Xml` — which is what you want when porting data to another platform or handing it to an external vendor. Changing one tells you nothing about the other.
 
@@ -559,6 +568,7 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 | **Dynamic data masking** (`MASKED WITH`) | SQL Server 2016 | creates the column *unmasked* + records a downgrade |
 | **Always Encrypted** (`ENCRYPTED WITH`) | SQL Server 2016 | creates the column *unencrypted* + records a downgrade |
 | **Nonclustered columnstore index** | SQL Server 2012 | skips the index + records a downgrade |
+| **Declared SQL Server sequence** (`Sequences/*.json`) | SQL Server 2012 | skips the sequence + records a downgrade |
 | **Clustered columnstore index** | SQL Server 2014 | skips the index + records a downgrade |
 | **Writable nonclustered columnstore** | SQL Server 2016 | skips the index + records a downgrade. On 2012 and 2014 a nonclustered columnstore index makes its table read-only, so creating it would change what the application can do. An index already on the table is left in place |
 | **Clustered columnstore beside rowstore indexes** | SQL Server 2016 | skips the columnstore index and keeps the rowstore indexes, which carry keys and uniqueness + records a downgrade. SQL Server 2014 refuses the combination. An index already on the table is left in place |
@@ -577,6 +587,7 @@ For example `SmithySettings_Target__CompatEncoding=legacy`. DataTongs honours `S
 | **Graph tables** (`NODE` / `EDGE`) | SQL Server 2017 | creates the table with all its declared columns, *without* graph semantics + records a downgrade |
 | **Edge constraints** (`EdgeConstraints` on an edge table) | SQL Server 2019 | creates the edge table without the constraint + records a downgrade |
 | **Ledger tables** | SQL Server 2022 | creates an ordinary table + records a downgrade. The direction is deliberate: a ledger table cannot be converted or dropped afterwards, so not creating one is far easier to recover from than creating one by accident |
+| **Database-scoped configuration setting** (`ScopedConfiguration` in `DatabaseSettings.json`) | SQL Server 2016 | reads nothing and reports the setting as one that cannot be fixed on this server, at its `OnDrift` level |
 | **XML compression** | SQL Server 2022 | creates the table, index or XML index without the compression clause + records a downgrade. Nothing an application can observe changes — only the storage saving is lost |
 
 > **Check the manifest before deploying to a pre-2016 target.** Under the default `warn`, a masked column is created unmasked and an Always Encrypted column is created unencrypted — the deploy completes and the downgrade is recorded (the run exits `1`, outcome `Incomplete`), but the protection is not there. If a silently-unprotected column is worse for you than a failed deployment, set `Target:UnsupportedFeaturePolicy=fail`.
@@ -595,7 +606,7 @@ One further case is compatibility-level gated rather than version gated: a `Json
 
 
 
-The supported range (MySQL 5.7.22 and 8.0.23 through current, MariaDB 10.2.13 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
+The supported range (MySQL 5.7.16 and 8.0.11 through current, MariaDB 10.2.13 through current) spans versions that differ in available DDL and JSON support, so the same package adapts per target.
 
 The schema model itself parses on every supported version — a version-agnostic `JSON_EXTRACT` shred stands in for `JSON_TABLE` (MySQL 8.0 / MariaDB 10.6), so nothing about kindling or ingest depends on the target version. Beyond that, a feature a target lacks is either taken by an equivalent path (same end state) or degraded through the **unsupported-feature policy** (`Target:UnsupportedFeaturePolicy`, default `warn` → emit without the feature + an **Unsupported Feature Downgrades** line; `fail` → abort with a "requires MySQL N" message):
 
@@ -604,7 +615,7 @@ The schema model itself parses on every supported version — a version-agnostic
 | **Column rename** (`RENAME COLUMN`) | MySQL 8.0 / MariaDB 10.5.2 | reproduces the rename with `CHANGE COLUMN`, reconstructing the current column definition (same end state) |
 | **Index rename** (`RENAME INDEX`) | MariaDB 10.5.2 (MySQL 5.7 has it) | drops and recreates the index under the new name from its live definition (same end state) |
 | **Instant column add or drop** (`OnlineApply` `Prefer` or `Require`) | MySQL 8.0.29 / MariaDB 10.4 | adds or drops the column with `ALGORITHM=INPLACE, LOCK=NONE` instead, which rebuilds the table without blocking writes, and records `online` as its mode. MySQL 8.0.12–8.0.28 and MariaDB 10.3 add instantly only at the end of the table; MySQL 5.7 and MariaDB 10.2 have no `INSTANT` |
-| **Online table copy** (`OnlineApply` `Prefer`, `ALGORITHM=COPY, LOCK=NONE`) | MariaDB 11.2 | a change `INPLACE` cannot take, such as a column type change, runs as written, blocking writes while it copies, and records `unavailable` as its mode; under `Require` the deploy is refused, naming the statement |
+| **Online table copy** (`OnlineApply` `Prefer`, `ALGORITHM=COPY, LOCK=NONE`) | MariaDB 11.2 (MySQL: no equivalent at any version) | a change `INPLACE` cannot take, such as a column type change, runs as written, blocking writes while it copies, and records `unavailable` as its mode; under `Require` the deploy is refused, naming the statement |
 | **CHECK constraints** | MySQL 8.0.16 / MariaDB 10.2.22 | emits the table *without* the check + records a downgrade (MySQL before 8.0.16 parses and ignores CHECK, so it can neither be created nor detected; MariaDB before 10.2.22 has no `INFORMATION_SCHEMA.CHECK_CONSTRAINTS`, so a deployed check cannot be read back). On MariaDB a column's own `CheckExpression` is skipped and recorded the same way. A check's `Enforced: false` (`NOT ENFORCED`, MySQL only) rides the same gate. Because a check cannot be read on MariaDB before 10.2.22, one created outside SchemaSmith is not dropped ahead of a column it reads, so removing that column fails with the engine's error; drop the check in a `Before` script |
 | **Invisible index** (`INVISIBLE`; MariaDB `IGNORED`) | MySQL 8.0 / MariaDB 10.6 | stores the index *visible* — the visibility clause is suppressed — + records a downgrade. The modified-index compare ignores the visibility difference below the floor, so re-deploys stay idempotent instead of churning the index every run |
 | **Invisible column** (`Column.Invisible`) | MySQL 8.0.23 / MariaDB 10.3 | stores the column *visible* — the `INVISIBLE` clause is suppressed — + records a downgrade. The modified-column compare ignores the visibility difference below the floor, so re-deploys stay idempotent instead of churning the column every run |
@@ -618,13 +629,14 @@ The schema model itself parses on every supported version — a version-agnostic
 | **Temporal key** (a unique or primary key with `WithoutOverlaps: true` over a period) | MariaDB 10.5.3 (MySQL: no equivalent at any version) | creates the key over the period's end and start columns, without `WITHOUT OVERLAPS` + records a downgrade |
 | **Vector index** (`IndexType: VECTOR`) | MariaDB 11.7 (MySQL: no vector index in the Community server at any version) | skips the index + records a downgrade |
 | **Explicit system-time columns** (declared `GeneratedAlways` `RowStart` / `RowEnd` on an existing table that has the implicit pair) | MariaDB 11.7 (MySQL: no system versioning at any version) | keeps the table's hidden `row_start` / `row_end` + records a downgrade. A new table takes the declared columns on every version that has system versioning |
-| **Table-level system versioning** (`WITH SYSTEM VERSIONING`) | MariaDB 10.3 (MySQL: no equivalent) | creates an ordinary, non-versioned table + records a downgrade |
+| **Table-level system versioning** (`WITH SYSTEM VERSIONING`) | MariaDB 10.3 (MySQL: no equivalent at any version) | creates an ordinary, non-versioned table + records a downgrade |
 | **`SYSTEM_TIME` partitioning by count or with `STARTS`** (a `SYSTEM_TIME` table with no partition list, or with `StartsAt`) | MariaDB 10.5 (MySQL: no equivalent) | creates the versioned table without its `SYSTEM_TIME` partitioning + records a downgrade. MariaDB 10.3 and 10.4 accept only a list that names every partition, which deploys there |
 | **`COLLATE` on a generated column** | MariaDB 10.2.37 / 10.3.28 / 10.4.18 / 10.5.9, on each line (MySQL: always) | creates the column in its character set's default collation (the set read from the `Collation` when `CharacterSet` is not declared) + records a downgrade; earlier patches reject the clause, and a redeploy leaves the column as it is |
 | **`SYSTEM_TIME` partitioning with `AUTO`** | MariaDB 10.9.1 (MySQL: no equivalent) | creates the partitioning without `AUTO` + records a downgrade: the history is still partitioned, and new history partitions are added by hand |
-| **Per-column history exclusion** (`WITHOUT SYSTEM VERSIONING`) | MariaDB 10.3.4 (MySQL: no equivalent) | creates the column without the exclusion + records a downgrade — the column survives, the exclusion does not |
+| **Per-column history exclusion** (`WITHOUT SYSTEM VERSIONING`) | MariaDB 10.3.4 (MySQL: no equivalent at any version) | creates the column without the exclusion + records a downgrade — the column survives, the exclusion does not |
 | **Declared sequence** (`Sequences/*.json`) | MariaDB 10.3 (MySQL: no equivalent at any version) | skips the sequence + records a downgrade |
 | **Sequence data type** (`DataType` other than `bigint`) | MariaDB 11.5 | creates the sequence as a signed `bigint` + records a downgrade |
+| **Persisted server variable** (`Variable` in `ServerSettings.json`) | MySQL 8.0 (MariaDB: no `SET PERSIST` at any version) | sets the variable with `SET GLOBAL`, which takes effect now and is lost at the next restart, and warns that the value reverts; the next deploy after a restart sets it again |
 
 > **A `DEFAULT` expression below MySQL 8.0.13 costs you the column, not the default.** Most degrades in this table relax an aspect and keep the object; this one skips the whole column, so under the default `warn` the deploy completes (exit `1`, outcome `Incomplete`) and a column your package declares is simply not there. If any table targets MySQL below 8.0.13 and uses an expression default, either give it a literal default or set `Target:UnsupportedFeaturePolicy=fail`.
 
@@ -632,7 +644,7 @@ The schema model itself parses on every supported version — a version-agnostic
 
 **One more routes through the same policy but is gated on the server's filesystem, not its version.** **Page compression** (`Compression`, MySQL only) needs a data directory on a filesystem that supports hole punching, and MySQL refuses it anywhere else with error 4029 — a Windows data directory, for one. Under `warn` the table is created without its `COMPRESSION` option and the downgrade is recorded; under `fail` the deploy stops. A changed `Compression` on an existing table is applied with `ALTER TABLE`, which compresses the pages written from then on; the pages already there keep theirs until the table is rebuilt.
 
-The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7.22 or later on the 5.7 line or 8.0.23 through current, or to MariaDB 10.2.13 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
+The version-sensitive catalog reads (CHECK constraints, index visibility) are branched so they parse on the older server too, and integer display widths / FK default actions are normalized on compare so an unchanged table doesn't phantom-modify across versions. The end state is identical — deploy the same package to MySQL 5.7.16 through current, or MariaDB 10.2.13 through current, and you get the same database, minus only the features the target genuinely cannot support (which the deployment summary names).
 
 ### MariaDB (MySQL family) — where the native DDL diverges
 
@@ -716,6 +728,12 @@ the changes that reach your declarations and your own scripts. Each was checked 
 | 9.7 | A stricter row-size check refuses some very wide tables (release notes). | Split the table or move wide columns to `TEXT`/`BLOB`. |
 | current patches | Widening an indexed column past 767 bytes on a `COMPACT` or `REDUNDANT` row format is refused (`1071`; 8.0.46, 8.4.11, 9.7.2); older patches allowed it. | Use `DYNAMIC` (the default) or keep the column narrow enough. |
 | 8.0.29 | Before it, from 8.0.23, the catalog leaves an invisible column out of a foreign key's column list, so extraction writes the key short. | Extract from 8.0.29 or later. |
+| 8.0.23 | Before it, the catalog shows no default for a `TEXT`, `BLOB` or `JSON` column whose default is an expression such as `('x')` (checked on 8.0.22): extraction writes no default, and every deploy re-applies the declared one with `MODIFY COLUMN`. | Run 8.0.23 or later, or give the default to a `VARCHAR` column instead. |
+| 8.0.23 | Before it, inside a stored procedure or function, `SET @v := (SELECT ...)` gives `NULL` from its second run in a session on 8.0.22 (checked on 8.0.22; 8.0.21 is correct). | Nothing for SchemaSmith's own routines. In yours, write `SELECT (SELECT ...) INTO @v`. |
+| 8.0.21 | Before it, `JSON_TABLE` misreads scalars: a JSON `null` into a number column fails the insert under strict mode (before 8.0.20), into a text column it becomes the text `null`, and an integer of 2³¹ or more wraps with no warning (before 8.0.13). | Nothing for data delivery, which reads each value as JSON on those patches and converts it itself, including in a DataTongs script generated on a later MySQL: SchemaQuench rewrites its row source when it runs the script there. Your own `JSON_TABLE` scripts need the same care. |
+| 8.0.14 | Before it, the catalog reports a foreign key's referenced column in lowercase. | Nothing: extraction and rebuilds look the column up and keep its declared case. |
+| 8.0.12 | From it, a plain index on a geometry column is created `SPATIAL`; on 8.0.11 it is a `BTREE` prefix index (checked on 8.0.11 and 8.0.22). | Declare the index `SPATIAL` to get the same index on every patch. |
+| 8.0.41 | Patches before it carry engine fixes for changes SchemaSmith makes: expression defaults added or changed by `ALTER TABLE` (8.0.19, 8.0.22, 8.0.24), a collation change under a unique index (8.0.20), views over views or using `ROLLUP` (8.0.24, 8.0.26), `INSTANT` column changes (8.0.30, 8.0.31), and rows lost by an `INPLACE` rebuild (8.0.41) (release notes). | Run the latest 8.0 patch you can. On an older one, check its release notes for the features you use. |
 
 `VALUES()` inside `ON DUPLICATE KEY UPDATE` is deprecated (warning `1287`) but still runs through 26.7; SchemaSmith's own
 scripts use it.
@@ -806,7 +824,7 @@ See exactly what SchemaQuench would do before it touches a single table. Set `Wh
   - `Would SKIP (previously quenched): {script}` for scripts already recorded in `CompletedMigrationScripts`.
 - **Object scripts** (Objects, AfterTablesObjects, Table Data) are logged but not executed.
 - **Product Before/After scripts** are logged but not executed.
-- **Template version stamp** isn't executed; a log message indicates the stamp would occur.
+- **Version stamp scripts** (the template's and the product's) aren't executed; a log message indicates each stamp would occur.
 
 **Console verbosity — `--WhatIfDetail`.** By default WhatIf prints one line per script (`Would APPLY: …` / `Would SKIP …` / `Would DELIVER …`), which is thorough but noisy on a large package. Pass `--WhatIfDetail:concise` to collapse each section into a per-category count (for example `12 would apply, 3 would skip`); `--WhatIfDetail:normal` (the default) keeps the per-script lines; `--WhatIfDetail:verbose` is reserved for future extra detail and currently matches `normal`. Two kinds of line are printed one at a time at every setting: a product `Before`/`After` script's `Would Quench` line and a `DataDelivery` block's `Would DELIVER` line. This affects only the **console** stream — the `SchemaQuench - Summary.md`/`.json` files always carry the full per-script listing regardless of the switch.
 
@@ -819,7 +837,7 @@ The gaps a dry run has are each explained where the feature is; this is the one 
 - **The top level only.** The cascade limitation above: a change that only exists once an earlier change has applied is not in the preview.
 - **Helpers are installed.** Kindling runs as on a real deploy, so the target gets SchemaSmith's schema and procedures and the run needs the same [permissions](#permissions).
 - **Table steps preview.** Every quench procedure runs with its WhatIf flag, logs the SQL it would run and records `would*` actions for the deployment summary -- the foreign-key, materialized-view, event and indexed-view steps included.
-- **Scripts are listed.** Setup scripts are logged as `Would APPLY`, object and migration scripts as `Would APPLY` or `Would SKIP`, table-data scripts as `Would DELIVER` and product scripts as `Would Quench`. Template query tokens are not resolved, so an object script that uses one is always previewed as would-apply, never as unchanged; a migration script is matched by its path instead, so one already recorded is still previewed as a skip. Product query tokens are resolved, as on a real run. Setup scripts and the template version stamp are named, not run.
+- **Scripts are listed.** Setup scripts are logged as `Would APPLY`, object and migration scripts as `Would APPLY` or `Would SKIP`, table-data scripts as `Would DELIVER` and product scripts as `Would Quench`. Template query tokens are not resolved, so an object script that uses one is always previewed as would-apply, never as unchanged; a migration script is matched by its path instead, so one already recorded is still previewed as a skip. Product query tokens are resolved, as on a real run. Setup scripts and the version stamps are named, not run.
 - **Unchanged is a skip.** The stamps are read and a script that would not re-run is reported `SKIP (unchanged)`; nothing is recorded. See [Unchanged Object Scripts](#unchanged-object-scripts).
 - **Deliveries are decided.** Delivery gates are evaluated and each delivery is reported as it would run or be skipped. See [Gated deliveries and variants](#gated-deliveries-and-variants).
 - **No copy check on MySQL.** The scratch-copy comparison of an expression SchemaSmith has not recorded is skipped on MySQL and MariaDB, where the copy would be a real table, so such an expression previews as a change there. See [Expression change detection](#expression-change-detection).
@@ -827,8 +845,8 @@ The gaps a dry run has are each explained where the feature is; this is the one 
 - **Refusals still fire.** What the real run would refuse, the preview refuses: a table [another product owns](#table-ownership), a [rebuild](configuration.md#when-schemaquench-refuses) of a temporal, CDC, change-tracked, replicated or ledger table (SQL Server), a published, inherited or partitioned one (PostgreSQL) or a system-versioned one (MariaDB), a partitioned table due for drop by absence, a `DataDirectory` move or removal of `IsSystemVersioned` (MySQL, MariaDB), an Always Encrypted change, a CDC change a change table cannot take, and a column change blocked by a dependent the package does not declare. The exceptions are the MySQL and MariaDB foreign-key and rename refusals in [Column Changes](#column-changes), which run only on a live deploy.
 - **Nothing is created.** A database `CreateIfMissing` would create is reported, not created, and its work units do not run: each logs one line saying every object the template declares would be created. See [CreateIfMissing](#createifmissing).
 - **Ownership not stamped.** Ownership rows and markers are a real write, so the preview skips them; on SQL Server the extended-property statements are printed instead. See [Table Ownership](#table-ownership).
-- **No map is recorded.** Nothing is recorded, and anything the scratch-copy check verified is put back after the index step, before foreign keys are previewed.
-- **Steps are checkpointed.** The table steps are recorded under the same step names as a real run, and a clean preview deletes them at the end. A preview that fails leaves them behind, and a later `--ResumeQuench` reads them as completed work -- so do not resume a real run from a failed preview's checkpoints. See [WhatIf and checkpoints](#whatif-and-checkpoints).
+- **No map is recorded.** Nothing is recorded and anything the scratch-copy check verified is put back at the end of the run.
+- **Nothing is checkpointed.** A preview neither records progress nor reads or removes the checkpoint files, so a failed deploy's resume point is still there after you preview it. See [WhatIf and checkpoints](#whatif-and-checkpoints).
 
 ### Debug SQL output
 
@@ -836,9 +854,92 @@ With `WriteDebugSql` on (or the `--WriteDebugSql` switch), SchemaQuench writes t
 
 ### When to use WhatIf
 
-Reach for WhatIf while you're debugging a tricky deployment or while you're still building confidence with the tooling. Inspect the generated SQL, confirm the changes match intent, then run for real. Once you trust the package and the pipeline, direct quenches are the normal mode -- WhatIf isn't a required gate on every deployment.
+Reach for WhatIf while you're debugging a tricky deployment or while you're still building confidence with the tooling. Inspect the generated SQL, confirm the changes match intent, then run for real. Once you trust the package and the pipeline, direct quenches are the normal mode -- WhatIf isn't a required gate on every deployment. To ask only whether a target still matches its package, with an exit code a pipeline can act on, use a [drift check](#drift-checks).
 
 ---
+
+## Drift Checks
+
+Does each target still match its package? `--Drift` answers that and changes nothing: it runs the deploy's own
+decisions as a preview and reports whether the plan is empty.
+
+```bash
+SchemaQuench --Drift
+```
+
+| Exit code | Meaning |
+|---|---|
+| `0` | No drift: a deploy with these settings would change nothing on any target. |
+| `5` | Drift: a deploy would change something on at least one target. |
+| `2` | A target failed or could not be checked, which wins over `5`. |
+
+`1` still means a target lacks a feature the package declares, and `--ExitNonZeroOnWarning` still turns only a `0` into
+a `1`, so a pipeline can tell drift from a warning. `--Drift` with `--WhatIf` (or `WhatIfONLY`) is refused: they ask
+different questions.
+
+### What counts as drift
+
+Drift is a change the deploy would make with the same settings -- not every way the database differs from the package.
+A table the package dropped, under `DropTablesRemovedFromProduct: false`, is not drift, because a deploy would leave it.
+
+- **Counted:** every table, column, index, constraint, key, sequence, type, CDC, change-tracking and temporal change
+  the preview would make (`wouldCreate`, `wouldModify`, `wouldRebuild`, `wouldDrop`), and every object script whose
+  [stamp](#unchanged-object-scripts) says it changed, or whose object is missing.
+  A database the deploy would create, and a server or database setting with `Fix: true` it would change, count too;
+  a server setting counts on every target on that server.
+- **Reported, not counted:** a run-once migration not yet run (`pendingMigrations`) -- this release is not deployed
+  yet; an object script never stamped, so whether it changed cannot be said (`unverifiable`); and a drop
+  [`PreventDrop`](#preventdrop) kept (`extra`). An `unverifiable` target is logged as a warning, since nothing counted is not the same as matching: it exits `0`, or `1` under [`--ExitNonZeroOnWarning`](configuration.md#exit-codes).
+- **Left out:** Setup scripts, data delivery and the version stamp, which act on every deploy by design, and scripts
+  that run every deploy (`[ALWAYS]` and product Before/After scripts, and an object script that can never be
+  [stamped](#unchanged-object-scripts), such as one in a folder declared without an `ObjectType`).
+
+**Narrowing it -- `--DriftFailOn:<list>`.** A comma list of actions (`create`, `modify`, `drop`) and object types
+(`table`, `column`, `index`, `constraint`, `foreignKey`, `statistic`, `xmlIndex`, `fullTextIndex`, `sequence`,
+`domainType`, `domainConstraint`, `enumType`, `enumValue`, `temporal`, `changeDataCapture`, `changeTracking`,
+`database`, `schema`, `indexedView`, `materializedView`, `event`, `period`, `serverSetting`, `databaseSetting`, `modules`, `migrations`). A change counts
+when its action and its type are both listed; each side defaults to all, except `migrations`, which counts only when
+named. The default is `create,modify,drop,modules`. `--DriftFailOn:drop` gates on removals only;
+`--DriftFailOn:migrations` fails a target whose release is not deployed yet. An unknown word stops the run, exit `2`.
+
+### How it reads the targets
+
+The first line of the run says which tier ran and why.
+
+| Tier | When | Engines | What the target sees |
+|---|---|---|---|
+| 0 | `KindleTheForge: false` | All four | Nothing that stays: the run's own audit rows, and what a [WhatIf](#whatif-mode) run writes and puts back. The helpers already there answer, after a check that they are this build's: missing or out of date fails the target, exit `2`. |
+| 1 | Kindling on | SQL Server, PostgreSQL | Nothing. Everything -- the kindle included -- runs on one connection in one transaction that is always rolled back. |
+| 2 | Kindling on, `Target:DriftHelperDatabase` set | MySQL, MariaDB | Nothing. The helpers are kindled into that database, the target's ownership, stamps, run migrations and expression map are copied into it, and the target is read from there. |
+
+MySQL and MariaDB commit DDL on their own, so they have no tier 1: with kindling on and no helper database, `--Drift`
+is refused, naming both ways out. The helper database must exist and the drift account must own it; SchemaQuench does
+not create it. Name it with `"DriftHelperDatabase"` in the `Target` section or `SmithySettings_Target__DriftHelperDatabase`.
+
+**Rights.** Tier 0 needs read access and the rights a [WhatIf](#whatif-mode) run needs on SchemaSmith's own tables; on SQL Server the scratch-copy check of an [expression](#expression-change-detection) SchemaSmith has not recorded also needs `CREATE TABLE` and `ALTER` on the table's schema, and without them such an expression counts as drift.
+Tier 1 needs the rights of a deploy, since the kindle runs before it is rolled back. Tier 2 needs read access to the
+target and ownership of the helper database.
+
+**Locks.** A tier-1 kindle holds its locks until the rollback, so tier-1 targets of one database run one at a time and
+`Target:LockTimeoutSeconds` defaults to `10` for the check: a blocked statement fails the target rather than waiting.
+Targets sharing a helper database take turns too.
+
+### Reading the result
+
+On the console, each template gets one line per distinct plan rather than the detail of every target -- a fan-out to
+50 tenants that all need the same change says so once (`Tenant: drift, plan a41c… on 48 of 50 target(s)`), and names
+the targets that differ. Two tenants share a plan when they need the same changes, with the schema name set aside. The
+[deployment summary](deployment-summary-report.md#drift) has the verdict per target, every counted change, and the
+plan groups.
+
+### Limits
+
+- **The top level only,** as for WhatIf: a change that exists only once an earlier change has applied is not seen.
+- **Expressions on MySQL.** An expression SchemaSmith has not recorded is compared on a scratch copy on SQL Server and
+  PostgreSQL; on MySQL and MariaDB the copy would be a real table, so such an expression counts as drift until a deploy
+  records it.
+- **Read-only targets** fail the check, exit `2`, even with `SkipIfReadOnly`: skipping would read as no drift.
+- **The change audit must be readable.** A target whose audit cannot be read fails rather than report no drift.
 
 ## Pre-Flight Diagnostics
 
@@ -960,6 +1061,8 @@ Before SchemaQuench can shape your database, it needs its tools in place. Kindle
 
 KindleTheForge runs on every quench, but the install itself is **version-stamped and self-skipping**: SchemaSmith records a content-hash stamp of the helper objects in each target database and the call returns immediately when the stamp matches the current tooling — so a normal deployment pays the install cost only when the tooling actually changes. In a normal release pipeline, always leave this `true`. See [`ForceReKindle`](#forcerekindle) for the override that re-installs unconditionally.
 
+On MySQL and MariaDB the helper tables are created `ROW_FORMAT=DYNAMIC` whatever the server's `innodb_default_row_format`, because several of their keys index a column wider than the 767 bytes `COMPACT` and `REDUNDANT` allow. MySQL 5.7 and MariaDB 10.2 with `innodb_large_prefix` turned off hold `DYNAMIC` to 767 bytes too, and kindling stops with "Specified key was too long"; turn it back on (its default) before deploying.
+
 **When to set false:** Partial-package datafix deployments flip this off along with the rest of the datafix profile. See [Partial-Package Deployments (Data Fixes)](#partial-package-deployments-data-fixes) for the full profile and the reasoning behind each flag.
 
 ---
@@ -992,6 +1095,8 @@ SchemaQuench does its comparing and changing from inside the target: the procedu
 | `ExpressionMap` | For each check, computed or generated column, default or predicate SchemaSmith applied: the text you declared, the text the engine stored, and the engine version (and compatibility level) at the time. See [Expression change detection](#expression-change-detection). |
 | `ProductOwnership` | Which product owns a table, index, materialized view or event (and, on PostgreSQL, which template; on MySQL and MariaDB the template is recorded for a scheduled event and left empty for tables and indexes), and the table's sticky `PreventDrop` marker. On SQL Server only memory-optimized tables are recorded here, by product alone; everything else carries its ownership as an extended property. See [Table Ownership](#table-ownership). |
 | `ChangeAudit` | A working queue, not a history: each procedure writes a row per object it changed (or, under WhatIf, would change) tagged with its session id, and SchemaQuench reads and deletes its own session's rows at the end of each work unit to build the [deployment summary](deployment-summary-report.md). Rows a session that died left behind are discarded at the start of the next run that reuses its id. |
+| `DeploymentHistory` | One row per deployment of a template to the database: when, from what, by whom and how it ended. See [Deployment Record](#deployment-record). |
+| `RebuildSetAsideForeignKeys` | During a [table rebuild](configuration.md#rebuildpolicy), the foreign keys other tables hold against the table, set aside until the foreign-key pass puts them back. Empty between deployments. |
 | `StatusMessages` (MySQL and MariaDB only) | The progress lines the procedures write as they go, since a procedure on these engines cannot print to the client. SchemaQuench reads them during a step and deletes its session's rows afterwards; anything older than an hour is cleared whenever kindling re-installs the routines. |
 
 On MySQL and MariaDB the names are `SchemaSmith_KindleStamp`, `SchemaSmith_CompletedMigrationScripts`, and so on; the quench steps also create session temporary tables with a `_SchemaSmith_` prefix, which exist only for the connection and are dropped as each work unit ends.
@@ -1034,6 +1139,54 @@ On MySQL and MariaDB the names are `SchemaSmith_KindleStamp`, `SchemaSmith_Compl
 The deploy machine keeps its own traces: the log directories and the [checkpoint files](#checkpoint-and-resume) under the checkpoint directory, which a clean run removes for its own targets.
 
 ---
+
+## Deployment Record
+
+Every deployment leaves a row in the target's `SchemaSmith.DeploymentHistory` table (`SchemaSmith_DeploymentHistory` on MySQL and MariaDB): one row per template deployed to a database, or per schema for a schema template. It answers, with a query on the database itself, when it was last deployed, from which release, by whom and how that ended, when the deployment summary from that day is somewhere else.
+
+A row is written as `Started` before the first change, on its own connection, so a run that dies a moment later still leaves it. When the target finishes it becomes `Success`, `Failed`, or `Incomplete` (a feature the target could not take was downgraded), with the finish time and how many changes the run applied. `--WhatIf`, `--Drift`, `--Validate`, `--TestConnection` and `--PreviewTargets` write nothing. SchemaQuench never reads the table to decide anything, and writing it never fails a deployment: a write that does not go through is one warning.
+
+| Column | Holds |
+|---|---|
+| `RunId` | The deployment summary's `run.id`: the key that joins this row to a `Summary.json` |
+| `Product`, `Template`, `SchemaName` | What was deployed where; `SchemaName` only for a schema template |
+| `StartedUtc`, `FinishedUtc` | UTC, from the machine that ran SchemaQuench; `FinishedUtc` is null until the target finishes |
+| `Outcome`, `ChangesApplied` | `Started`, `Success`, `Failed` or `Incomplete`; the changes this run made to this target (`0`: it found nothing to do) |
+| `ToolVersion`, `PackageHash` | The SchemaQuench version and the package's content hash (`run.package.contentHash`) |
+| `SourceCommit`, `SourceBranch`, `RunLabel`, `PipelineUrl` | The [run identity](deployment-summary-report.md#run-identity) |
+| `Actor`, `DeployedAs` | Who ran it (the CI actor, or the operating-system user) and the login the database saw, asked of the engine. Names, never credentials |
+| `ResumedFromRunId` | On a `--ResumeQuench` run, the run whose checkpoint it took up; that run's own row stays `Started` |
+
+| Setting | Default | Effect |
+|---|---|---|
+| `DeploymentHistory` | `on` | `off` writes nothing. The table is there either way, as an empty helper table. |
+| `DeploymentHistoryRetentionDays` | `400` | After each deployment, this product's rows that started longer ago than this are removed. `0` keeps everything. |
+
+The last five deployments, the last 30 days, and runs that started and never finished (a `Started` row may also be a run still going):
+
+```sql
+-- SQL Server
+SELECT TOP (5) StartedUtc, FinishedUtc, Outcome, Template, SchemaName, ToolVersion, RunLabel, SourceCommit, DeployedAs
+  FROM SchemaSmith.DeploymentHistory ORDER BY StartedUtc DESC;
+SELECT * FROM SchemaSmith.DeploymentHistory WHERE StartedUtc >= DATEADD(DAY, -30, SYSUTCDATETIME()) ORDER BY StartedUtc DESC;
+SELECT RunId, StartedUtc, Template, SchemaName FROM SchemaSmith.DeploymentHistory WHERE Outcome = 'Started' ORDER BY StartedUtc DESC;
+```
+
+```sql
+-- PostgreSQL
+SELECT "StartedUtc", "FinishedUtc", "Outcome", "Template", "SchemaName", "ToolVersion", "RunLabel", "SourceCommit", "DeployedAs"
+  FROM "SchemaSmith"."DeploymentHistory" ORDER BY "StartedUtc" DESC LIMIT 5;
+SELECT * FROM "SchemaSmith"."DeploymentHistory" WHERE "StartedUtc" >= (now() AT TIME ZONE 'utc') - interval '30 days' ORDER BY "StartedUtc" DESC;
+SELECT "RunId", "StartedUtc", "Template", "SchemaName" FROM "SchemaSmith"."DeploymentHistory" WHERE "Outcome" = 'Started' ORDER BY "StartedUtc" DESC;
+```
+
+```sql
+-- MySQL and MariaDB
+SELECT StartedUtc, FinishedUtc, Outcome, Template, ToolVersion, RunLabel, SourceCommit, DeployedAs
+  FROM SchemaSmith_DeploymentHistory ORDER BY StartedUtc DESC LIMIT 5;
+SELECT * FROM SchemaSmith_DeploymentHistory WHERE StartedUtc >= UTC_TIMESTAMP() - INTERVAL 30 DAY ORDER BY StartedUtc DESC;
+SELECT RunId, StartedUtc, Template FROM SchemaSmith_DeploymentHistory WHERE Outcome = 'Started' ORDER BY StartedUtc DESC;
+```
 
 ## Permissions
 
@@ -1099,15 +1252,18 @@ Nothing needs migrating, and the table can be emptied at any time: the worst cas
 
 **A re-baseline is logged, not silent.** The deploy log says how many records were refreshed and for which
 version -- `Re-baselined 3 recorded expression(s) ... No object was changed.` -- so an engine upgrade is visible in
-the first deploy after it.
+the first deploy after it. On PostgreSQL a major upgrade can change how the engine renders an expression it already
+stores; such a record is checked on a copy like any unrecorded expression and logged as `Re-baselined ... recorded
+under an earlier PostgreSQL major version`, again without touching the object.
 
 **Covered surfaces:** check constraints, computed columns, column defaults, and filtered-index and
-filtered-statistic predicates (SQL Server); check constraints, generated columns, partial-index predicates,
+filtered-statistic predicates (SQL Server); check constraints, generated columns, column and domain defaults, index key
+expressions, partial-index predicates (on tables and materialized views), exclusion-constraint keys and predicates,
 extended-statistics expressions, row-level security `USING` / `WITH CHECK` expressions and materialized view
-bodies (PostgreSQL); check constraints, generated columns and expression defaults (MySQL, MariaDB). Index and statistic predicates
-are covered by `IndexOnlyTableQuenches` too, which compares indexes separately from the full table quench.
+bodies (PostgreSQL); check constraints, generated columns and expression defaults (MySQL, MariaDB). Index keys and predicates and statistic
+predicates are covered by `IndexOnlyTableQuenches` too, which compares indexes separately from the full table quench.
 The engine check on a copy covers the same surfaces except PostgreSQL's extended statistics, policies and
-materialized views, which are re-applied once and then recorded, as before.
+materialized view bodies, which are re-applied once and then recorded, as before.
 
 Some surfaces never had this problem and are unchanged: SQL Server indexed view bodies and literal column
 defaults already compared equal after the engine's own rewrite.
@@ -1144,6 +1300,7 @@ The table quench is broken into modular stored procedures, each handling a speci
 | **ConstraintStateQuench** | The `Enforced` and `Validated` state of declared foreign keys and check constraints, once they exist. |
 | **ExtendedPropertyQuench** | The declared extended properties and descriptions of tables, columns, indexes, foreign keys and check constraints, once they exist. |
 | **IndexedViewQuench** | Deploys indexed views with diff-based change detection. |
+| **SequenceQuench** | Declared sequences on SQL Server 2012 and later: created, and each attribute `ALTER SEQUENCE` can change converged in place; a changed data type is refused, `Start` applies at creation, and the current value is never touched. |
 
 **PostgreSQL:**
 
@@ -1438,7 +1595,7 @@ Changing a column that already holds data is where a declarative deploy earns it
 | Computed column expression | Drop and re-create the column | Indexes and statistics over it, as above. |
 | Identity removed, a definition change on a column declared `AnsiPadding: false` | Replace: a new column is added, the data copied, the old column dropped and the new one renamed into place | The dependents above; a CDC capture instance is rotated, since the change table cannot follow a replaced column. The column comes back last in column order, which only a rebuild can correct. |
 | Identity added, column set added or removed | Drop and re-add the column: its values are not copied, and an identity column is numbered afresh as it is added | The dependents above, and the CDC rotation and column order of a replaced column. |
-| New column | Added by the missing-column step | A CDC capture instance is rotated. |
+| New column | Added by the missing-column step | A CDC capture instance is rotated, unless the column is computed: SQL Server captures a computed column as NULL. |
 | Renamed (`OldName`) | `sp_rename`, before any other change | -- |
 | Removed from the package | Dropped under `DropColumnsRemovedFromProduct` | Foreign keys and indexes over it first. |
 | Column order | Only by a [rebuild](configuration.md#rebuildpolicy) | A rebuild is refused for a temporal, change-tracked, replicated, CDC-enabled, ledger or partitioned table (the table itself or any of its indexes), one with Always Encrypted columns, and one whose table or column rename has not landed yet. |
@@ -1647,7 +1804,7 @@ Because the marker is sticky, clearing it is a deliberate, reviewed step -- you 
 
 Per-table `PreventDrop` protects tables you name one at a time. Sometimes you want the opposite default: an entire environment where the deployment tool is simply not allowed to remove anything by omission -- production, a shared staging fleet, any target where an accidental drop is unacceptable. The **environment-level `PreventDrop`** setting is that blanket guardrail.
 
-Set `PreventDrop: true` in `SchemaQuench.settings.json` (or the `SmithySettings_PreventDrop` environment variable) and, for the whole run, SchemaQuench suppresses *every* drop-by-absence pass -- tables, columns, foreign keys, check and exclude constraints, statistics, product-owned indexes, unknown out-of-band indexes and scheduled events -- and none of those passes drops anything for being absent from the product, regardless of what any package, template, or table declares. It is off by default.
+Set `PreventDrop: true` in `SchemaQuench.settings.json` (or the `SmithySettings_PreventDrop` environment variable) and, for the whole run, SchemaQuench suppresses *every* drop-by-absence pass -- tables, columns, foreign keys, check and exclude constraints, statistics, product-owned indexes, unknown out-of-band indexes, application-time periods (MariaDB) and scheduled events -- and none of those passes drops anything for being absent from the product, regardless of what any package, template, or table declares. It is off by default.
 
 ```json
 {
@@ -1655,7 +1812,7 @@ Set `PreventDrop: true` in `SchemaQuench.settings.json` (or the `SmithySettings_
 }
 ```
 
-**It doesn't drop -- it doesn't explode.** A protected run still completes normally (exit code `0`). SchemaQuench applies every additive and modifying change as usual, skips the drops, and logs each table, column, foreign-key, constraint, statistic and index drop it withheld, recording them in the deployment summary under a `preventDrop` manifest -- so you get a precise list of what was *not* removed (`objectType` + `objectName`) without the run failing. The scheduled-event drop pass is simply off under protection, so an event is not listed. Read the manifest to see whether a package genuinely intends those removals; if it does, deploy that package to an unprotected environment, or clear protection deliberately.
+**It doesn't drop -- it doesn't explode.** A protected run still completes normally (exit code `0`). SchemaQuench applies every additive and modifying change as usual, skips the drops, and logs each table, column, foreign-key, constraint, statistic, index and period drop it withheld, recording them in the deployment summary under a `preventDrop` manifest -- so you get a precise list of what was *not* removed (`objectType` + `objectName`) without the run failing. The scheduled-event drop pass is simply off under protection, so an event is not listed. Read the manifest to see whether a package genuinely intends those removals; if it does, deploy that package to an unprotected environment, or clear protection deliberately.
 
 **Transient drops are untouched.** Protection suppresses only removal *by absence*. An object that is still declared but has to be dropped and recreated to apply a change -- modifying an index or a constraint, dropping an index to alter the column it covers and putting it back (SQL Server), recreating a computed column whose expression changed (SQL Server) or a generated column whose expression changed (PostgreSQL before 17) -- reconciles exactly as it always does. Those drops are part of applying your declared schema, not removing something you left out, so protected mode never blocks them.
 
@@ -1813,7 +1970,7 @@ When `PruneObsoleteMigrationTracking` is `true` (the default), SchemaQuench remo
 
 When `false`, existing tracking entries are left alone regardless of what scripts are in the current package. This setting is relevant for partial-package deployments -- see [Partial-Package Deployments (Data Fixes)](#partial-package-deployments-data-fixes) for the full profile.
 
-This setting is ignored when `TrackRunOnceMigrations` is `false` (no tracking means no pruning).
+This setting is ignored when `TrackRunOnceMigrations` is `false` (no tracking means no pruning), and when the package's `Product.json` sets `PruneObsoleteMigrationTracking` to `false`, as every SchemaShears patch does.
 
 ### With Target scope
 
@@ -1865,7 +2022,7 @@ Every gate is evaluated against a live connection, but not at the same moment or
 | A template folder | Once per database and schema, after the version is detected and before any slot runs. | The target database and schema. Script tokens were resolved when the package loaded; `{{SchemaName}}` and the version tokens are resolved for the target. |
 | A product folder | On each server it runs on: a `Before` folder before the `Before` scripts, an `After` folder at the `After Product` step. | The server's admin connection. Script tokens were resolved when the package loaded; `{{ServerMajorVersion}}` is the only token resolved for the server. |
 | A `DataDelivery` block | Once per database and schema, at the delivery step, before any content file is read. | The target database. See [Gated deliveries and variants](#gated-deliveries-and-variants). |
-| An indexed view, materialized view, domain type, enum type or sequence | Inside the procedure that deploys it, per target. | The target database. |
+| An indexed view, materialized view, event, domain type, enum type or sequence | Inside the procedure that deploys it, per target. | The target database. |
 
 A folder gate is run as a scalar query: write it as a `SELECT` that returns a number or boolean, or as a bare predicate, which SchemaQuench wraps in `SELECT CASE WHEN (…) THEN 1 ELSE 0 END`. No folder gate can use a query token: query tokens are kept out of the load-time pass and are only ever applied to scripts. A component gate is a bare predicate (a leading `SELECT` is stripped). The same test, on each engine:
 
@@ -1939,7 +2096,7 @@ A pipeline reads one number from SchemaQuench, so each code means one kind of ou
 | Code | Meaning |
 |------|---------|
 | 0 | Successful quench, or a passing `--TestConnection`, `--PreviewTargets` or `--Validate` (warnings alone from `--Validate` still exit `0`). All databases quenched, logs backed up. Also a run with no arguments on an install nobody has configured, which prints what to fill in and runs nothing. |
-| 1 | Finished, but not everything the package declares is in place: a feature the target lacks was downgraded under `UnsupportedFeaturePolicy: warn`, and the deployment summary lists each one. With `--ExitNonZeroOnWarning` (or the setting), also any run that would have exited `0` but logged a warning; the log then says so. |
+| 1 | Finished, but not everything the package declares is in place: a feature the target lacks was downgraded under `UnsupportedFeaturePolicy: warn`, and the deployment summary lists each one (`--ExitZeroOnDowngrade`, or the setting, makes that `0`). With `--ExitNonZeroOnWarning` (or the setting), also any run that would have exited `0` but logged a warning; the log then says so and lists them. |
 | 2 | Failed for a reason you can fix. A command-line argument was not recognized (nothing runs); a required setting is missing (the product has no `Platform`); the package could not be loaded; a validation script, product script or version check failed, a target was refused or a `TemplateTargets` rule was broken; one or more database quenches failed, in continue mode or not; the connection to the target was lost mid-deploy; a `--TestConnection` / `--PreviewTargets` pre-flight found a connection error, version violation or required-template target miss; or a `--Validate` pass found an Error-severity finding. |
 | 3 | Unhandled exception -- a defect in the tool. The exception is in both logs; please report it with them. |
 | 4 | Unable to back up log files. The quench itself finished; check permissions and disk space in the log directory. |
@@ -2035,7 +2192,7 @@ resumed run enters every template again and each database continues from its own
 | `ValidateBaseline` | Baseline validation script. |
 | `DomainTypeQuench` | PostgreSQL domain type deployment. |
 | `EnumTypeQuench` | PostgreSQL enum type deployment. |
-| `SequenceQuench` | PostgreSQL and MariaDB sequence deployment. |
+| `SequenceQuench` | PostgreSQL, SQL Server and MariaDB sequence deployment. |
 | `ModifiedTables` | Altering existing columns, computed / generated columns, dropping tables. |
 | `IndexesAndConstraints` | Creating missing indexes, check constraints, defaults, statistics. |
 | `TableFeatures` | SQL Server table features: Change Data Capture, Change Tracking, FILESTREAM. |
@@ -2061,7 +2218,9 @@ Resume is for finishing the run that failed, with the fix confined to what faile
 
 ### WhatIf and checkpoints
 
-A `--WhatIf` run checkpoints the same way a real run does: the baseline validation, the PostgreSQL type steps, the sequence step (PostgreSQL and MariaDB) and the three table steps (`ModifiedTables`, `IndexesAndConstraints`, `TableFeatures`) are recorded under the same names as they are previewed, and the scripts it lists are not. A preview that completes deletes its own checkpoints, as any clean run does. A preview that fails leaves them, and a later real run with `--ResumeQuench` reads them as completed work and skips those steps. Do not resume a real run from a failed preview's checkpoints: delete the files, or run without `--ResumeQuench`.
+A `--WhatIf` run does not touch the checkpoint files: it records no progress, and it neither reads nor removes the files a failed deploy left. So a deploy that fails can be previewed and then resumed with `--ResumeQuench`, and the resume continues where the deploy stopped. Combined with `--WhatIf`, `--ResumeQuench` is ignored and says so: the preview covers the whole deploy.
+
+A checkpoint written by SchemaQuench 2.8 or earlier may have been left by a preview, which then recorded steps it never applied. Such a file is still honoured, so a resume across the upgrade keeps its progress, but the resume warns once per database; if the file came from a preview, delete it and run without `--ResumeQuench`.
 
 ### Automatic cleanup after success
 

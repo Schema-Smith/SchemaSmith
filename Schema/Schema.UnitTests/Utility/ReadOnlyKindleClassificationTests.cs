@@ -77,4 +77,30 @@ public class ReadOnlyKindleClassificationTests
                 Is.EqualTo(ForgeKindler.ReadOnlyKindleState.Stale), "whitespace must not be trimmed away");
         });
     }
+
+    // H1: unlike a read-only extraction, a drift check refuses helpers that are missing or out of date -- an answer from
+    // mismatched helpers is worse than none -- and only warns when their version cannot be read.
+    [Test]
+    public void ForDrift_MissingHelpers_StopTheTargetSayingHowToGetThem()
+    {
+        var ex = Assert.Throws<RunFailedException>(() => ForgeKindler.DriftKindleCheck(ForgeKindler.ReadOnlyKindleState.NotKindled, null, Expected));
+        Assert.That(ex!.Message, Does.Contain("KindleTheForge false").And.Contain("Deploy once"));
+    }
+
+    [Test]
+    public void ForDrift_StaleHelpers_StopTheTargetNamingBothVersions()
+    {
+        var ex = Assert.Throws<RunFailedException>(() => ForgeKindler.DriftKindleCheck(ForgeKindler.ReadOnlyKindleState.Stale, "0123456789abcdef", Expected));
+        Assert.That(ex!.Message, Does.Contain("out of date").And.Contain("0123456789ab").And.Contain(Expected[..12]));
+    }
+
+    [Test]
+    public void ForDrift_CurrentOrUnverifiableHelpers_GoAhead()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(ForgeKindler.DriftKindleCheck(ForgeKindler.ReadOnlyKindleState.Current, Expected, Expected), Does.Contain("current"));
+            Assert.That(ForgeKindler.DriftKindleCheck(ForgeKindler.ReadOnlyKindleState.Unverifiable, null, Expected), Does.Contain("cannot be read"));
+        });
+    }
 }

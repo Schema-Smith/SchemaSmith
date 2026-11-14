@@ -28,13 +28,11 @@ LANGUAGE plpgsql
 STABLE
 AS $$
 DECLARE
-  v_version TEXT := current_setting('server_version');
   v_authored TEXT;
   v_canonical TEXT;
-  v_rowversion TEXT;
 BEGIN
-  SELECT em."AuthoredText", em."CanonicalText", em."EngineVersion"
-    INTO v_authored, v_canonical, v_rowversion
+  SELECT em."AuthoredText", em."CanonicalText"
+    INTO v_authored, v_canonical
     FROM "SchemaSmith"."ExpressionMap" em
    WHERE em."ObjectSchema" = p_ObjectSchema
      AND em."ObjectTable" = p_ObjectTable
@@ -53,8 +51,8 @@ BEGIN
   -- object's stored text (SQL Server freezes it, so in practice this is PostgreSQL major upgrades), and that
   -- re-apply restores the declared text -- which is the right answer anyway.
   IF v_canonical != COALESCE(p_LiveCanonical, '') THEN RETURN FALSE; END IF;  -- edited out of band
-  IF v_rowversion != v_version THEN RETURN TRUE; END IF;         -- stale context: re-baseline, do not re-apply
-
+  -- A stale context (the engine version moved since the row was recorded) still reads as unchanged: the recorder
+  -- re-baselines it rather than re-applying.
   RETURN TRUE;
 END;
 $$;

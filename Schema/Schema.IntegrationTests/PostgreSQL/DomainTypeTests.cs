@@ -30,28 +30,19 @@ namespace Schema.IntegrationTests.PostgreSQL;
 [NonParallelizable]
 public class DomainTypeTests
 {
-    private string _server = "", _user = "", _password = "", _port = "";
-    private Dictionary<string, string> _props = new();
     private string _db = "";
 
+    // A schema of its own in the suite's kindled database, not a database: nothing here is a database-level setting, and a
+    // database cost a CREATE DATABASE and a kindle per run. Every connection puts the schema first on its search_path.
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-        _server = config["PostgreSQL:Server"] ?? "127.0.0.1";
-        _user = config["PostgreSQL:User"];
-        _password = config["PostgreSQL:Password"];
-        _port = config["PostgreSQL:Port"];
-        _props = ConnectionString.ReadProperties(config, "PostgreSQL:ConnectionProperties");
-
         _db = $"ss_domain_{Guid.NewGuid():N}"[..28].ToLowerInvariant();
-        using var maint = Open("postgres");
-        Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
-        Exec(maint, $"CREATE DATABASE \"{_db}\"");
-
-        using var c = Open(_db);
-        using var cmd = c.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.PostgreSQL);
+        using (var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString()))
+        {
+            main.Open();
+            Exec(main, $"CREATE SCHEMA \"{_db}\"");
+        }
     }
 
     [OneTimeTearDown]
@@ -59,18 +50,18 @@ public class DomainTypeTests
     {
         try
         {
-            using var maint = Open("postgres");
-            Exec(maint, $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{_db}' AND pid <> pg_backend_pid()");
-            Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
+            using var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
+            main.Open();
+            Exec(main, $"DROP SCHEMA IF EXISTS \"{_db}\" CASCADE");
         }
         catch (DbException) { /* teardown must not mask an assertion */ }
     }
 
-    private IDbConnection Open(string database)
+    private IDbConnection Open(string schema)
     {
-        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL)
-            .GetDbConnection(ConnectionString.Build(Platform.PostgreSQL, _server, database, _user, _password, _port, _props));
+        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         c.Open();
+        Exec(c, $"SET search_path = \"{schema}\", public");
         return c;
     }
 
@@ -97,12 +88,12 @@ public class DomainTypeTests
     }
 
     /// <summary>One domain, optionally with a NOT NULL, a default, and any number of CHECK constraints.</summary>
-    private static string Package(string name, string dataType, bool notNull = false, string def = null,
+    private string Package(string name, string dataType, bool notNull = false, string def = null,
                                   params (string Name, string Expression)[] checks)
     {
         var checkJson = string.Join(", ", Array.ConvertAll(checks,
             c => "{ \"Name\": \"" + c.Name + "\", \"Expression\": \"" + c.Expression.Replace("\"", "\\\"") + "\" }"));
-        return "[{ \"Schema\": \"public\", \"Name\": \"" + name + "\", \"DataType\": \"" + dataType + "\""
+        return "[{ \"Schema\": \"" + _db + "\", \"Name\": \"" + name + "\", \"DataType\": \"" + dataType + "\""
                + ", \"NotNull\": " + (notNull ? "true" : "false")
                + (def is null ? "" : ", \"Default\": \"" + def + "\"")
                + ", \"CheckConstraints\": [" + checkJson + "] }]";
@@ -120,25 +111,25 @@ public class DomainTypeTests
     {
         cmd.CommandText =
             "SELECT COALESCE(STRING_AGG(c.conname, ',' ORDER BY c.conname), '') FROM pg_constraint c "
-            + "JOIN pg_type t ON t.oid = c.contypid WHERE t.typname = '" + name + "' AND c.contype = 'c'";
+            + "JOIN pg_type t ON t.oid = c.contypid WHERE t.typnamespace = current_schema()::regnamespace AND t.typname = '" + name + "' AND c.contype = 'c'";
         return Convert.ToString(cmd.ExecuteScalar());
     }
 
     private static string BaseType(IDbCommand cmd, string name)
     {
-        cmd.CommandText = "SELECT FORMAT_TYPE(t.typbasetype, t.typtypmod) FROM pg_type t WHERE t.typname = '" + name + "'";
+        cmd.CommandText = "SELECT FORMAT_TYPE(t.typbasetype, t.typtypmod) FROM pg_type t WHERE t.typnamespace = current_schema()::regnamespace AND t.typname = '" + name + "'";
         return Convert.ToString(cmd.ExecuteScalar());
     }
 
     private static bool NotNull(IDbCommand cmd, string name)
     {
-        cmd.CommandText = "SELECT t.typnotnull FROM pg_type t WHERE t.typname = '" + name + "'";
+        cmd.CommandText = "SELECT t.typnotnull FROM pg_type t WHERE t.typnamespace = current_schema()::regnamespace AND t.typname = '" + name + "'";
         return Convert.ToBoolean(cmd.ExecuteScalar());
     }
 
     private static string Default(IDbCommand cmd, string name)
     {
-        cmd.CommandText = "SELECT COALESCE(PG_GET_EXPR(t.typdefaultbin, 0), '') FROM pg_type t WHERE t.typname = '" + name + "'";
+        cmd.CommandText = "SELECT COALESCE(PG_GET_EXPR(t.typdefaultbin, 0), '') FROM pg_type t WHERE t.typnamespace = current_schema()::regnamespace AND t.typname = '" + name + "'";
         return Convert.ToString(cmd.ExecuteScalar());
     }
 
@@ -152,11 +143,11 @@ public class DomainTypeTests
         {
             Exec2(cmd, "DROP DOMAIN IF EXISTS scripted_d CASCADE");
             Exec2(cmd, "CREATE DOMAIN scripted_d AS int CHECK (VALUE > 0)");
-            Exec2(cmd, "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname='scripted_d') "
+            Exec2(cmd, "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typnamespace = current_schema()::regnamespace AND typname = 'scripted_d') "
                        + "THEN CREATE DOMAIN scripted_d AS int CHECK (VALUE > 100); END IF; END $$");
 
             cmd.CommandText = "SELECT pg_get_constraintdef(c.oid) FROM pg_constraint c "
-                              + "JOIN pg_type t ON t.oid = c.contypid WHERE t.typname = 'scripted_d' AND c.contype = 'c'";
+                              + "JOIN pg_type t ON t.oid = c.contypid WHERE t.typnamespace = current_schema()::regnamespace AND t.typname = 'scripted_d' AND c.contype = 'c'";
             Assert.That(Convert.ToString(cmd.ExecuteScalar()), Does.Contain("> 0"),
                 "the guarded re-create silently does nothing -- the edited CHECK never lands, and this is "
                 + "the failure the declarative form fixes");
@@ -303,7 +294,7 @@ public class DomainTypeTests
         {
             Deploy(cmd, Package("round_d", "integer", notNull: true, checks: ("round_chk", "VALUE > 0")));
 
-            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateDomainTypeJSON\"('public', 'round_d')";
+            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateDomainTypeJSON\"(current_schema()::text, 'round_d')";
             var json = cmd.ExecuteScalar() as string ?? "";
 
             Assert.Multiple(() =>
@@ -324,7 +315,7 @@ public class DomainTypeTests
         {
             Deploy(cmd, Package("whatif_d", "integer"), whatIf: true);
 
-            cmd.CommandText = "SELECT COUNT(*) FROM pg_type WHERE typname = 'whatif_d'";
+            cmd.CommandText = "SELECT COUNT(*) FROM pg_type WHERE typnamespace = current_schema()::regnamespace AND typname = 'whatif_d'";
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero,
                 "a preview with side effects is the worst of both");
         });
@@ -332,7 +323,7 @@ public class DomainTypeTests
 
     private static string Comment(IDbCommand cmd, string name)
     {
-        cmd.CommandText = "SELECT OBJ_DESCRIPTION(t.oid, 'pg_type') FROM pg_type t WHERE t.typname = '" + name + "' AND t.typtype = 'd'";
+        cmd.CommandText = "SELECT OBJ_DESCRIPTION(t.oid, 'pg_type') FROM pg_type t WHERE t.typnamespace = current_schema()::regnamespace AND t.typname = '" + name + "' AND t.typtype = 'd'";
         return cmd.ExecuteScalar() as string;
     }
 
@@ -341,16 +332,16 @@ public class DomainTypeTests
     {
         OnDb(cmd =>
         {
-            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"money_d\", \"DataType\": \"numeric(10,2)\", \"Description\": \"an amount\" }]");
+            Deploy(cmd, "[{ \"Schema\": \"" + _db + "\", \"Name\": \"money_d\", \"DataType\": \"numeric(10,2)\", \"Description\": \"an amount\" }]");
             Assert.That(Comment(cmd, "money_d"), Is.EqualTo("an amount"), "set on create");
 
-            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"money_d\", \"DataType\": \"numeric(10,2)\", \"Description\": \"an amount in dollars\" }]");
+            Deploy(cmd, "[{ \"Schema\": \"" + _db + "\", \"Name\": \"money_d\", \"DataType\": \"numeric(10,2)\", \"Description\": \"an amount in dollars\" }]");
             Assert.That(Comment(cmd, "money_d"), Is.EqualTo("an amount in dollars"), "a change converges in place");
 
             Deploy(cmd, Package("money_d", "numeric(10,2)"));
             Assert.That(Comment(cmd, "money_d"), Is.EqualTo("an amount in dollars"), "omitted means the comment is not managed, so the database's stays");
 
-            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"money_d\", \"DataType\": \"numeric(10,2)\", \"Description\": \"\" }]");
+            Deploy(cmd, "[{ \"Schema\": \"" + _db + "\", \"Name\": \"money_d\", \"DataType\": \"numeric(10,2)\", \"Description\": \"\" }]");
             Assert.That(Comment(cmd, "money_d"), Is.Null, "an empty string is the request to remove it");
         });
     }

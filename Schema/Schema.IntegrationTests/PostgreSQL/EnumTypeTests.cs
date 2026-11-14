@@ -30,28 +30,19 @@ namespace Schema.IntegrationTests.PostgreSQL;
 [NonParallelizable]
 public class EnumTypeTests
 {
-    private string _server = "", _user = "", _password = "", _port = "";
-    private Dictionary<string, string> _props = new();
     private string _db = "";
 
+    // A schema of its own in the suite's kindled database, not a database: nothing here is a database-level setting, and a
+    // database cost a CREATE DATABASE and a kindle per run. Every connection puts the schema first on its search_path.
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-        _server = config["PostgreSQL:Server"] ?? "127.0.0.1";
-        _user = config["PostgreSQL:User"];
-        _password = config["PostgreSQL:Password"];
-        _port = config["PostgreSQL:Port"];
-        _props = ConnectionString.ReadProperties(config, "PostgreSQL:ConnectionProperties");
-
         _db = $"ss_enum_{Guid.NewGuid():N}"[..28].ToLowerInvariant();
-        using var maint = Open("postgres");
-        Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
-        Exec(maint, $"CREATE DATABASE \"{_db}\"");
-
-        using var c = Open(_db);
-        using var cmd = c.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.PostgreSQL);
+        using (var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString()))
+        {
+            main.Open();
+            Exec(main, $"CREATE SCHEMA \"{_db}\"");
+        }
     }
 
     [OneTimeTearDown]
@@ -59,18 +50,18 @@ public class EnumTypeTests
     {
         try
         {
-            using var maint = Open("postgres");
-            Exec(maint, $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{_db}' AND pid <> pg_backend_pid()");
-            Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
+            using var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
+            main.Open();
+            Exec(main, $"DROP SCHEMA IF EXISTS \"{_db}\" CASCADE");
         }
         catch (DbException) { /* teardown must not mask an assertion */ }
     }
 
-    private IDbConnection Open(string database)
+    private IDbConnection Open(string schema)
     {
-        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL)
-            .GetDbConnection(ConnectionString.Build(Platform.PostgreSQL, _server, database, _user, _password, _port, _props));
+        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         c.Open();
+        Exec(c, $"SET search_path = \"{schema}\", public");
         return c;
     }
 
@@ -90,8 +81,8 @@ public class EnumTypeTests
         act(cmd);
     }
 
-    private static string Package(string name, params string[] values) =>
-        "[{ \"Schema\": \"public\", \"Name\": \"" + name + "\", \"Values\": ["
+    private string Package(string name, params string[] values) =>
+        "[{ \"Schema\": \"" + _db + "\", \"Name\": \"" + name + "\", \"Values\": ["
         + string.Join(", ", Array.ConvertAll(values, v => "\"" + v + "\"")) + "] }]";
 
     private static void Deploy(IDbCommand cmd, string json, bool whatIf = false)
@@ -105,7 +96,7 @@ public class EnumTypeTests
     private static string Values(IDbCommand cmd, string name)
     {
         cmd.CommandText = "SELECT COALESCE(STRING_AGG(e.enumlabel, ',' ORDER BY e.enumsortorder), '') "
-                          + "FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname = '" + name + "'";
+                          + "FROM pg_enum e JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typnamespace = current_schema()::regnamespace AND t.typname = '" + name + "'";
         return Convert.ToString(cmd.ExecuteScalar());
     }
 
@@ -119,7 +110,7 @@ public class EnumTypeTests
         {
             Exec2(cmd, "DROP TYPE IF EXISTS scripted_t CASCADE");
             Exec2(cmd, "CREATE TYPE scripted_t AS ENUM ('new','open')");
-            Exec2(cmd, "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname='scripted_t') "
+            Exec2(cmd, "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typnamespace = current_schema()::regnamespace AND typname='scripted_t') "
                        + "THEN CREATE TYPE scripted_t AS ENUM ('new','open','closed'); END IF; END $$");
 
             Assert.That(Values(cmd, "scripted_t"), Is.EqualTo("new,open"),
@@ -255,7 +246,7 @@ public class EnumTypeTests
         {
             Deploy(cmd, Package("round_t", "zulu", "alpha", "mike"));
 
-            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateEnumTypeJSON\"('public', 'round_t')";
+            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateEnumTypeJSON\"(current_schema()::text, 'round_t')";
             var json = cmd.ExecuteScalar() as string ?? "";
 
             Assert.Multiple(() =>
@@ -277,7 +268,7 @@ public class EnumTypeTests
         {
             Deploy(cmd, Package("whatif_t", "x"), whatIf: true);
 
-            cmd.CommandText = "SELECT COUNT(*) FROM pg_type WHERE typname = 'whatif_t'";
+            cmd.CommandText = "SELECT COUNT(*) FROM pg_type WHERE typnamespace = current_schema()::regnamespace AND typname = 'whatif_t'";
             Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.Zero,
                 "a preview with side effects is the worst of both");
         });
@@ -291,7 +282,7 @@ public class EnumTypeTests
 
     private static string Comment(IDbCommand cmd, string name)
     {
-        cmd.CommandText = "SELECT OBJ_DESCRIPTION(t.oid, 'pg_type') FROM pg_type t WHERE t.typname = '" + name + "'";
+        cmd.CommandText = "SELECT OBJ_DESCRIPTION(t.oid, 'pg_type') FROM pg_type t WHERE t.typnamespace = current_schema()::regnamespace AND t.typname = '" + name + "'";
         return cmd.ExecuteScalar() as string;
     }
 
@@ -300,16 +291,16 @@ public class EnumTypeTests
     {
         OnDb(cmd =>
         {
-            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"mood_t\", \"Values\": [\"sad\", \"happy\"], \"Description\": \"how it feels\" }]");
+            Deploy(cmd, "[{ \"Schema\": \"" + _db + "\", \"Name\": \"mood_t\", \"Values\": [\"sad\", \"happy\"], \"Description\": \"how it feels\" }]");
             Assert.That(Comment(cmd, "mood_t"), Is.EqualTo("how it feels"), "set on create");
 
-            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"mood_t\", \"Values\": [\"sad\", \"happy\"], \"Description\": \"how it feels today\" }]");
+            Deploy(cmd, "[{ \"Schema\": \"" + _db + "\", \"Name\": \"mood_t\", \"Values\": [\"sad\", \"happy\"], \"Description\": \"how it feels today\" }]");
             Assert.That(Comment(cmd, "mood_t"), Is.EqualTo("how it feels today"), "a change converges in place");
 
             Deploy(cmd, Package("mood_t", "sad", "happy"));
             Assert.That(Comment(cmd, "mood_t"), Is.EqualTo("how it feels today"), "omitted means the comment is not managed, so the database's stays");
 
-            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"mood_t\", \"Values\": [\"sad\", \"happy\"], \"Description\": \"\" }]");
+            Deploy(cmd, "[{ \"Schema\": \"" + _db + "\", \"Name\": \"mood_t\", \"Values\": [\"sad\", \"happy\"], \"Description\": \"\" }]");
             Assert.That(Comment(cmd, "mood_t"), Is.Null, "an empty string is the request to remove it");
         });
     }

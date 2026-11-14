@@ -32,7 +32,7 @@ public static class IncludeSetResolver
     private static void AddTemplateScaffolding(IDictionary<string, IncludeReason> set, string relPath, string sourcePath)
     {
         var parts = relPath.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        if (parts.Length < 2 || parts[0] != "Templates") return;
+        if (parts.Length < 2 || !parts[0].Equals("Templates", System.StringComparison.OrdinalIgnoreCase)) return;
 
         var templateJson = Path.Join("Templates", parts[1], "Template.json");
         if (FileWrapper.GetFromFactory().Exists(Path.Join(sourcePath, templateJson)))

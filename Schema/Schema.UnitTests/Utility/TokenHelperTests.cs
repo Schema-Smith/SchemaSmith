@@ -209,7 +209,7 @@ public class TokenHelperTests
         mockReader.Read().Returns(true, false);
         mockReader[0].Returns("MainDB");
 
-        TokenHelper.ResolveQueryTokens(queryTokens, tokens.ToList(), mockCmd, "BasePath", Platform.SqlServer);
+        TokenHelper.ResolveQueryTokens(queryTokens, tokens.ToList(), mockCmd, Platform.SqlServer);
         Assert.That(mockCmd.CommandText, Is.EqualTo("SELECT 'MainDB'"));
         Assert.That(queryTokens["MyQueryResult"], Is.EqualTo("MainDB"));
     }
@@ -753,8 +753,31 @@ public class TokenHelperTests
         mockCmd.ExecuteReader().Returns(_ => throw new Exception("SQL Error"));
 
         var ex = Assert.Throws<Exception>(() =>
-            TokenHelper.ResolveQueryTokens(queryTokens, nonQueryTokens, mockCmd, "BasePath", Platform.SqlServer));
+            TokenHelper.ResolveQueryTokens(queryTokens, nonQueryTokens, mockCmd, Platform.SqlServer));
         Assert.That(ex.Message, Does.Contain("Error resolving BadQuery"));
+    }
+
+    // The error carried the query as sent, every token substituted, and the callers log it: a token holding a secret
+    // landed in the progress log and the Failures log. SQL text with values in it lives only in opt-in debug files.
+    [Test]
+    public void ResolveQueryTokens_TheErrorNamesTheTokenWithoutTheResolvedQuery()
+    {
+        var queryTokens = new Dictionary<string, string>
+        {
+            {"BadQuery", TokenHelper.QueryTag + "SELECT secret FROM vault WHERE key = '{{ApiKey}}' AND BAD SYNTAX"}
+        };
+        var nonQueryTokens = new List<KeyValuePair<string, string>> { new("ApiKey", "s3cr3t-value") };
+
+        var mockCmd = Substitute.For<IDbCommand>();
+        mockCmd.ExecuteReader().Returns(_ => throw new Exception("Incorrect syntax near 'SYNTAX'."));
+
+        var ex = Assert.Throws<Exception>(() =>
+            TokenHelper.ResolveQueryTokens(queryTokens, nonQueryTokens, mockCmd, Platform.SqlServer));
+        Assert.Multiple(() =>
+        {
+            Assert.That(ex!.Message, Does.Contain("BadQuery").And.Contain("Incorrect syntax near 'SYNTAX'."));
+            Assert.That(ex.Message, Does.Not.Contain("s3cr3t-value"), "a substituted value never reaches the message");
+        });
     }
 
     [Test]
@@ -772,7 +795,7 @@ public class TokenHelperTests
         mockReader.Read().Returns(true, false);
         mockReader[0].Returns(DBNull.Value);
 
-        TokenHelper.ResolveQueryTokens(queryTokens, nonQueryTokens, mockCmd, "BasePath", Platform.PostgreSQL);
+        TokenHelper.ResolveQueryTokens(queryTokens, nonQueryTokens, mockCmd, Platform.PostgreSQL);
         Assert.That(queryTokens["NullResult"], Is.EqualTo(""));
     }
 
@@ -791,7 +814,7 @@ public class TokenHelperTests
         mockReader.Read().Returns(true, true, false);
         mockReader[Arg.Any<int>()].Returns("Row1", "Row2");
 
-        TokenHelper.ResolveQueryTokens(queryTokens, nonQueryTokens, mockCmd, "BasePath", Platform.SqlServer);
+        TokenHelper.ResolveQueryTokens(queryTokens, nonQueryTokens, mockCmd, Platform.SqlServer);
         // Result contains at least two lines (one per Read()==true)
         var lines = queryTokens["MultiRow"].Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
         Assert.That(lines.Length, Is.GreaterThanOrEqualTo(2));

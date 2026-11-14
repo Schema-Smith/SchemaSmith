@@ -192,6 +192,6 @@ public abstract class FoldedTableNameCollisionSharedTests
                           $"DROP TABLE IF EXISTS `{MainDb}`.`{BeforeMarker}`;";
         cmd.ExecuteNonQuery();
         cmd.CommandText = $"DELETE FROM `{MainDb}`.SchemaSmith_ProductOwnership WHERE LOWER(ObjectName) = '{Sibling}'";
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 }

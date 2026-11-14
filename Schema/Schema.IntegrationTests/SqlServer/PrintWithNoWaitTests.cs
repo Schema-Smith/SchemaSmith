@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System.Collections.Generic;
+using System.Linq;
 using Microsoft.Data.SqlClient;
 using NUnit.Framework;
 using Schema.DataAccess;
@@ -55,6 +56,20 @@ public class PrintWithNoWaitTests
         cmd.ExecuteNonQuery();
 
         return lines;
+    }
+
+    // Each line was RAISERROR's format string, so a % in generated SQL was read as a placeholder: a default '50%d'
+    // previewed as '50(null)' and a LIKE '%x%' check's line disappeared, while the real deploy ran them correctly.
+    [Test]
+    public void APercentSignIsPrintedAsWritten()
+    {
+        var lines = new[]
+        {
+            "ALTER TABLE [dbo].[T] ADD CONSTRAINT [DF_T_C] DEFAULT ('50%d') FOR [C];",
+            "ALTER TABLE [dbo].[T] ADD CONSTRAINT [CK_T_Code] CHECK ([Code] LIKE '%x%');",
+            "100% %s %% %"
+        };
+        Assert.That(Print(string.Join("\n", lines)), Is.EqualTo(lines));
     }
 
     [Test]
@@ -141,6 +156,22 @@ public class PrintWithNoWaitTests
         }
 
         Assert.That(Print(message.ToString()), Is.EqualTo(expected));
+    }
+
+    // A server message holds 2,047 characters, so one line of a wide statement past that reached the preview cut short.
+    [Test]
+    public void ALineLongerThanAServerMessageHolds_IsPrintedWhole()
+    {
+        var columns = string.Join(", ", Enumerable.Range(1, 250).Select(i => $"[Column{i:000}] INT NULL"));
+        var line = $"CREATE TABLE [dbo].[Wide] ({columns}); -- end";
+        Assert.That(line.Length, Is.GreaterThan(4500), "setup: the line is longer than two messages");
+
+        var printed = Print(line);
+        Assert.Multiple(() =>
+        {
+            Assert.That(printed, Has.All.Length.LessThanOrEqualTo(2047));
+            Assert.That(string.Join(" ", printed), Is.EqualTo(line));
+        });
     }
 
     [Test]

@@ -5,6 +5,7 @@ using System.Linq;
 using Newtonsoft.Json.Linq;
 using Schema.Domain;
 using Schema.Domain.MySQL;
+using Schema.Domain.SqlServer;
 
 namespace Schema.Validation.Checks;
 
@@ -69,6 +70,13 @@ public sealed class DescriptionCheck : ISchemaCheck
         if (table is MySqlTable mysql)
             foreach (var fullText in mysql.FullTextIndexes)
                 yield return ($"full-text index {fullText.Name}", fullText.Description, fullText.Comment);
+        if (table is not SqlServerTable sqlServer) yield break;
+        foreach (var index in sqlServer.XmlIndexes)
+            yield return ($"XML index {index.Name}", index.Description, LegacyMsDescription(index));
+        foreach (var index in sqlServer.SpatialIndexes)
+            yield return ($"spatial index {index.Name}", index.Description, LegacyMsDescription(index));
+        foreach (var index in sqlServer.JsonIndexes)
+            yield return ($"JSON index {index.Name}", index.Description, LegacyMsDescription(index));
     }
 
     private static string Aliased(DynamicBase component, Platform basePlatform) =>

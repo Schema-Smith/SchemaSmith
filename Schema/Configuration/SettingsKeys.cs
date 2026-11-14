@@ -65,7 +65,7 @@ public static class SettingsKeys
         public const string Name = "Product:Name";
         public const string Path = "Product:Path";
         public const string CheckConstraintStyle = "Product:CheckConstraintStyle";
-        /// <summary>Extraction ordering for a table's object lists: Name (default) or Physical.</summary>
+        /// <summary>Extraction ordering for a table's object lists: Name or Physical (default).</summary>
         public const string ObjectOrder = "Product:ObjectOrder";
         /// <summary>When true (default), a re-extract keeps the order the file being replaced already had.</summary>
         public const string PreserveExistingOrder = "Product:PreserveExistingOrder";
@@ -151,6 +151,18 @@ public static class SettingsKeys
         public const string ScriptDynamicDependencyRemovalForFunctions = "ShouldCast:ScriptDynamicDependencyRemovalForFunctions";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string Sequences = "ShouldCast:Sequences";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string ServerSettings = "ShouldCast:ServerSettings";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string DatabaseSettings = "ShouldCast:DatabaseSettings";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string SettingsDefaultPolicy = "ShouldCast:SettingsDefaultPolicy";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string SettingsAllowlist = "ShouldCast:SettingsAllowlist";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string SettingsOutput = "ShouldCast:SettingsOutput";
+        [ReadBy(SettingsTool.SchemaTongs)]
+        public const string ServerObjects = "ShouldCast:ServerObjects";
         [ReadBy(SettingsTool.SchemaTongs)]
         public const string StopLists = "ShouldCast:StopLists";
         [ReadBy(SettingsTool.SchemaTongs)]
@@ -242,13 +254,46 @@ public static class SettingsKeys
     public const string UnsupportedFeaturePolicy = "Target:UnsupportedFeaturePolicy";
     /// <summary>When true (default), an object script whose text and whose module the server still renders as last applied is not re-run.</summary>
     public const string SkipUnchangedObjects = "Target:SkipUnchangedObjects";
+    public const string CommandTimeoutSeconds = "Target:CommandTimeoutSeconds";
+    public const string LockTimeoutSeconds = "Target:LockTimeoutSeconds";
+    public const string ContentionRetryAttempts = "Target:ContentionRetryAttempts";
+    public const string DestructiveChangePolicy = "Target:DestructiveChangePolicy";
+    public const string AcceptDestructive = "Target:AcceptDestructive";
+    /// <summary>MySQL and MariaDB: the database a --Drift check kindles its helpers into, so the target is left untouched.</summary>
+    public const string DriftHelperDatabase = "Target:DriftHelperDatabase";
     public const string CompatEncoding = "Target:CompatEncoding";
     public const string SourceCompatEncoding = "Source:CompatEncoding";
+    public const string SourceCommandTimeoutSeconds = "Source:CommandTimeoutSeconds";
     public const string ArtifactPath = "ArtifactPath";
     // TRANSITIONAL (ScrubArtifacts, deprecated in 2.8, #576): read only to warn that it does nothing. Delete two releases
     // past 2.8 GA with its contract entry and warning (roadmap: the deprecated 2.8 settings).
     public const string ScrubArtifacts = "ScrubArtifacts";
     public const string WriteDebugSql = "WriteDebugSql";
+    /// <summary>All four tools: text (default) or json, one JSON object per log line.</summary>
+    public const string LogFormat = "LogFormat";
+    /// <summary>SchemaQuench: on (default) or off, the row each deployment writes in the target's deployment record.</summary>
+    public const string DeploymentHistory = "DeploymentHistory";
+    /// <summary>SchemaQuench: days the deployment record keeps a product's rows (default 400; 0 keeps all).</summary>
+    public const string DeploymentHistoryRetentionDays = "DeploymentHistoryRetentionDays";
+
+    /// <summary>
+    /// What a pipeline says about the run, written into the deployment summary. Flat keys, because a nested one
+    /// (<c>--Run:Label:x</c>) would reach the command-line parser as key <c>Run</c> with value <c>Label:x</c>.
+    /// </summary>
+    public static class Run
+    {
+        public const string Label = "RunLabel";
+        public const string Commit = "RunCommit";
+        public const string Branch = "RunBranch";
+        public const string Repository = "RunRepository";
+        public const string Pipeline = "RunPipeline";
+        public const string PipelineRunId = "RunPipelineRunId";
+        public const string Url = "RunUrl";
+        public const string Actor = "RunActor";
+        public const string Environment = "RunEnvironment";
+
+        public static readonly string[] All = [Label, Commit, Branch, Repository, Pipeline, PipelineRunId, Url, Actor, Environment];
+    }
 
     // ---- DataTongs -------------------------------------------------------------------------------
     public const string ContentPath = "ContentPath";
@@ -267,5 +312,7 @@ public static class SettingsKeys
     // Every tool: a run that would exit 0 but logged a warning exits 1 instead, for pipelines that treat warnings as
     // failures. Also accepted as the bare switch --ExitNonZeroOnWarning.
     public const string ExitNonZeroOnWarning = "ExitNonZeroOnWarning";
+    // SchemaQuench: a run that finished with a downgrade exits 0 instead of 1 (#616). Also the bare switch --ExitZeroOnDowngrade.
+    public const string ExitZeroOnDowngrade = "ExitZeroOnDowngrade";
 
 }

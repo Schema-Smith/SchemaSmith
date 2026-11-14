@@ -115,6 +115,24 @@ public class DataDeliveryConfiguratorImplTests
         _file.Received(1).WriteAllText(TableJsonPath, Arg.Is<string>(s => !s.Contains("TimeZone")));
     }
 
+    // B23: the extracted column list is recorded so a column NULL in every row is still delivered.
+    [Test]
+    public void Configure_ExtractedColumns_AreRecorded_AndAbsentRemovesThem()
+    {
+        _file.ReadAllText(TableJsonPath).Returns("""
+            { "Name": "TestTable", "Columns": [], "DataDelivery": { "ContentFile": "x", "Columns": "old" } }
+            """);
+        var context = MakeContext();
+        context.Columns = "Id,Note";
+        DataDeliveryConfiguratorImpl.GetFromFactory().Configure(context);
+        _file.Received(1).WriteAllText(TableJsonPath, Arg.Is<string>(s => s.Contains("\"Columns\": \"Id,Note\"")));
+
+        _file.ClearReceivedCalls();
+        context.Columns = null;
+        DataDeliveryConfiguratorImpl.GetFromFactory().Configure(context);
+        _file.Received(1).WriteAllText(TableJsonPath, Arg.Is<string>(s => !s.Contains("\"Columns\": \"")));
+    }
+
     [Test]
     public void Configure_JsonContentEncoding_DoesNotStampIt()
     {

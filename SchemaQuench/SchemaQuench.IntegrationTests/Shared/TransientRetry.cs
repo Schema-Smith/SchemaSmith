@@ -46,7 +46,8 @@ internal static class TransientRetry
                 var note = $"TransientRetry: attempt {attempt} of {TestContext.CurrentContext.Test.Name} failed: {e.Message}";
                 TestContext.Progress.WriteLine(note);
                 TestContext.Out.WriteLine(note);
-                Thread.Sleep(1000);
+                // Growing and jittered: a flat second ran all ten attempts into one stream of other workers' DDL (MariaDB 10.6, 1684).
+                Thread.Sleep(500 * attempt + Random.Shared.Next(500));
                 beforeRetry?.Invoke();
             }
         }

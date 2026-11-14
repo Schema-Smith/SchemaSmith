@@ -63,8 +63,8 @@ BEGIN
                                                     ' of its instant row versions; this change rebuilds it, which resets the count'));
                 ELSEIF p_Form = 'instant' THEN
                     SET @ss_row_versions = NULL;
-                    SET @ss_online_sql = CONCAT('SELECT MAX(TOTAL_ROW_VERSIONS) INTO @ss_row_versions FROM INFORMATION_SCHEMA.INNODB_TABLES WHERE LOWER(NAME) = LOWER(''',
-                                                REPLACE(CONCAT(p_DatabaseName, '/', p_TableName), '''', ''''''), ''')');
+                    SET @ss_online_sql = CONCAT('SELECT MAX(TOTAL_ROW_VERSIONS) INTO @ss_row_versions FROM INFORMATION_SCHEMA.INNODB_TABLES WHERE LOWER(NAME) = LOWER(',
+                                                QUOTE(CONCAT(p_DatabaseName, '/', p_TableName)), ')');
                     PREPARE ss_online_stmt FROM @ss_online_sql;
                     EXECUTE ss_online_stmt;
                     DEALLOCATE PREPARE ss_online_stmt;

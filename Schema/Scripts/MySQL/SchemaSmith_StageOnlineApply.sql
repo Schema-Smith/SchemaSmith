@@ -63,7 +63,7 @@ BEGIN
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
     INSERT INTO _SchemaSmith_OnlineColumnPositions (TableName, ColumnName, Clause)
     SELECT a.TableName, a.ColumnName,
-           COALESCE((SELECT CONCAT(' AFTER `', SchemaSmith_StripBacktickWrapping(b.ColumnName), '`')
+           COALESCE((SELECT CONCAT(' AFTER `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(b.ColumnName)), '`')
                        FROM _SchemaSmith_OnlineColumnOrderPeer b
                       WHERE b.TableName = a.TableName
                         AND b.Present = 1

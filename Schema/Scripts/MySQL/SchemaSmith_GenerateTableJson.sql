@@ -166,7 +166,9 @@ BEGIN
                 WHEN c.COLUMN_DEFAULT LIKE 'b''%' THEN CONVERT(c.COLUMN_DEFAULT USING utf8mb4)
                 WHEN c.COLUMN_DEFAULT LIKE '0x%' THEN CONVERT(c.COLUMN_DEFAULT USING utf8mb4)
                 -- String literals: normalize (strips MariaDB's outer quotes) then wrap consistently
-                ELSE CONVERT(CONCAT('''', REPLACE(CONVERT(SchemaSmith_NormalizeColumnDefault(c.COLUMN_DEFAULT) USING utf8mb4), '''', ''''''), '''') USING utf8mb4)
+                -- The value written back as a literal: quotes doubled, the established form in a package, and backslashes
+                -- doubled too, or a deploy reads them as escapes.
+                ELSE CONVERT(CONCAT('''', REPLACE(REPLACE(CONVERT(SchemaSmith_NormalizeColumnDefault(c.COLUMN_DEFAULT) USING utf8mb4), '\\', '\\\\'), '''', ''''''), '''') USING utf8mb4)
             END,
             -- ON UPDATE CURRENT_TIMESTAMP[(n)] -- deliberately independent of Default above: a column's
             -- DEFAULT CURRENT_TIMESTAMP governs INSERT-time initialization, this governs UPDATE-time
@@ -404,8 +406,9 @@ BEGIN
                 ELSE rc.UNIQUE_CONSTRAINT_SCHEMA
             END,
             'RelatedTable', SchemaSmith_QuoteIdentifier(rc.REFERENCED_TABLE_NAME),
+            -- MySQL below 8.0.14 gives a foreign key's referenced column in lowercase; its table's own column list keeps the declared spelling.
             'RelatedColumns', (
-                SELECT GROUP_CONCAT(SchemaSmith_QuoteIdentifier(kcu3.REFERENCED_COLUMN_NAME) ORDER BY kcu3.ORDINAL_POSITION SEPARATOR ',')
+                SELECT GROUP_CONCAT(SchemaSmith_QuoteIdentifier(COALESCE(CASE WHEN SchemaSmith_ServerVersionPatchNum() BETWEEN 80000 AND 80013 THEN (SELECT c.COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS c WHERE c.TABLE_SCHEMA = kcu3.REFERENCED_TABLE_SCHEMA AND c.TABLE_NAME = kcu3.REFERENCED_TABLE_NAME AND c.COLUMN_NAME = kcu3.REFERENCED_COLUMN_NAME LIMIT 1) END, kcu3.REFERENCED_COLUMN_NAME)) ORDER BY kcu3.ORDINAL_POSITION SEPARATOR ',')
                 FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE kcu3
                 WHERE kcu3.CONSTRAINT_SCHEMA = p_Schema
                   AND kcu3.CONSTRAINT_NAME = tc.CONSTRAINT_NAME
@@ -435,7 +438,7 @@ BEGIN
         SET @v_ccSql = CONCAT('SELECT CONCAT(''['', IFNULL(GROUP_CONCAT(
     JSON_OBJECT(
         ''Name'', cc.CONSTRAINT_NAME,
-        ''Expression'', SchemaSmith_CleanCheckClause(cc.CHECK_CLAUSE)', IF(VERSION() LIKE '%MariaDB%', '', ', ''Enforced'', CASE WHEN tc.ENFORCED = ''NO'' THEN FALSE END'), '
+        ''Expression'', SchemaSmith_CleanCheckClause(SchemaSmith_CheckClauseText(cc.CHECK_CLAUSE))', IF(VERSION() LIKE '%MariaDB%', '', ', ''Enforced'', CASE WHEN tc.ENFORCED = ''NO'' THEN FALSE END'), '
     )
     ORDER BY cc.CONSTRAINT_NAME SEPARATOR '',''
 ), ''''), '']'') INTO @v_ccResult

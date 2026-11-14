@@ -275,7 +275,9 @@ With `AllowParallel: false`, iterations run serially -- one tenant's lines compl
 
 If one tenant's iteration fails and `ContinueOnSchemaFailure: true` is set, the failed tenant surfaces a per-iteration error line and the rest of the tenants continue. The exit code for the quench reflects the failure, but the other tenants are unaffected.
 
-> **Known concern:** WhatIf output for large-N schema-template deployments is verbose -- one full diff section per tenant, in the tenant's schema. For a product with 50 or 100 tenants, the WhatIf log covers the same changes repeated across every iteration. WhatIf is most useful here during development and debugging of a new migration, where you want to confirm the generated SQL for one or two tenants before committing to the full fan-out. We'll iterate on summarization as real usage patterns emerge.
+> **WhatIf at scale:** WhatIf output for large-N schema-template deployments is verbose -- one full diff section per tenant, in the tenant's schema. It is most useful here while you develop a new migration, to confirm the generated SQL for one or two tenants before the full fan-out. To ask whether the fleet matches its package, run a [drift check](../reference/schemaquench.md#drift-checks) instead: tenants that need the same change share one line (`Tenant: drift, plan a41c… on 48 of 50 target(s)`), the two that differ are named, and the exit code says whether anything drifted.
+
+Each tenant also answers for itself afterwards. Its [deployment record](../reference/schemaquench.md#deployment-record) holds a row per deployment, with the schema for a schema template, so the question "why does this tenant differ from its neighbours" starts with a query on that tenant: when it was last deployed, from which commit, and how that run ended.
 
 ## Picking the pattern
 

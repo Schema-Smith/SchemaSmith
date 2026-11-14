@@ -33,7 +33,7 @@ BEGIN
                                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     DECLARE @v_FailMsg NVARCHAR(2048) = 'Selective XML index ' + @v_Reason + ' (detected major ' +
                                         CONVERT(NVARCHAR(10), SchemaSmith.fn_ServerMajorVersion()) + '); XML index(es): ' + LEFT(@v_List, 1500) + '.'
-    RAISERROR(@v_FailMsg, 16, 1)
+    RAISERROR('%s', 16, 1, @v_FailMsg)
     RETURN
   END
 

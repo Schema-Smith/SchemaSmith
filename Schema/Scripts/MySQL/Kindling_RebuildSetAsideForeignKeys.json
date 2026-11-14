@@ -1,0 +1,72 @@
+{
+  "Name": "SchemaSmith_RebuildSetAsideForeignKeys",
+  "Columns": [
+    {
+      "Name": "Id",
+      "DataType": "INT",
+      "Nullable": false,
+      "AutoIncrement": true,
+      "PrimaryKey": true
+    },
+    {
+      "Name": "ChildSchema",
+      "DataType": "VARCHAR(64)",
+      "Nullable": false,
+      "Collation": "utf8mb4_bin"
+    },
+    {
+      "Name": "ChildTable",
+      "DataType": "VARCHAR(64)",
+      "Nullable": false,
+      "Collation": "utf8mb4_bin"
+    },
+    {
+      "Name": "KeyName",
+      "DataType": "VARCHAR(64)",
+      "Nullable": false,
+      "Collation": "utf8mb4_bin"
+    },
+    {
+      "Name": "ParentSchema",
+      "DataType": "VARCHAR(64)",
+      "Nullable": false,
+      "Collation": "utf8mb4_bin"
+    },
+    {
+      "Name": "ParentTable",
+      "DataType": "VARCHAR(64)",
+      "Nullable": false,
+      "Collation": "utf8mb4_bin"
+    },
+    {
+      "Name": "ReferencedColumns",
+      "DataType": "TEXT",
+      "Nullable": false
+    },
+    {
+      "Name": "Definition",
+      "DataType": "TEXT",
+      "Nullable": false
+    },
+    {
+      "Name": "Declared",
+      "DataType": "TINYINT",
+      "Nullable": false,
+      "Default": "0"
+    },
+    {
+      "Name": "CapturedAt",
+      "DataType": "DATETIME",
+      "Nullable": false,
+      "Default": "CURRENT_TIMESTAMP"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "uk_key",
+      "PrimaryKey": false,
+      "Unique": true,
+      "IndexColumns": "ChildSchema,ChildTable,KeyName"
+    }
+  ]
+}

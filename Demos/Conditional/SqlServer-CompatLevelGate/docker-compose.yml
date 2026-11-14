@@ -50,7 +50,7 @@ services:
         condition: service_healthy
 
   quench:
-    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:2}
+    image: ${SCHEMAQUENCH_IMAGE:-ghcr.io/schema-smith/schemaquench:latest}
     environment:
       - SmithySettings_Target__Server=demoserver
       - SmithySettings_Target__User=sa

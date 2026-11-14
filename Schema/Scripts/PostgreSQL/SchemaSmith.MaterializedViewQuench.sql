@@ -44,7 +44,7 @@ BEGIN
   FROM my_views, JSON_ARRAY_ELEMENTS(arr) AS elem;
 
   -- Evaluate ShouldApplyExpression: remove views whose expression evaluates to false
-  SELECT STRING_AGG('DELETE FROM temp_materialized_views WHERE "Schema" = ''' || "Schema" || ''' AND "Name" = ''' || "Name" || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+  SELECT STRING_AGG('DELETE FROM temp_materialized_views WHERE "Schema" = ''' || REPLACE(("Schema")::TEXT, '''', '''''') || ''' AND "Name" = ''' || REPLACE(("Name")::TEXT, '''', '''''') || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
     INTO sql_script
     FROM temp_materialized_views
     WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
@@ -84,7 +84,7 @@ BEGIN
     CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS(COALESCE((elem ->> 'Indexes')::JSON, '[]'::JSON)) AS celem(value);
 
   -- Evaluate index ShouldApplyExpression
-  SELECT STRING_AGG('DELETE FROM temp_mv_indexes WHERE "ViewSchema" = ''' || "ViewSchema" || ''' AND "ViewName" = ''' || "ViewName" || ''' AND "Name" = ''' || "Name" || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+  SELECT STRING_AGG('DELETE FROM temp_mv_indexes WHERE "ViewSchema" = ''' || REPLACE(("ViewSchema")::TEXT, '''', '''''') || ''' AND "ViewName" = ''' || REPLACE(("ViewName")::TEXT, '''', '''''') || ''' AND "Name" = ''' || REPLACE(("Name")::TEXT, '''', '''''') || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
     INTO sql_script
     FROM temp_mv_indexes
     WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
@@ -171,7 +171,7 @@ BEGIN
 
   -- Drop changed/removed views
   sql_script = '';
-  SELECT STRING_AGG('RAISE NOTICE ''  Dropping materialized view ' || mv.schemaname || '.' || mv.matviewname || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Dropping materialized view %.%'', ''' || REPLACE((mv.schemaname)::TEXT, '''', '''''') || ''', ''' || REPLACE((mv.matviewname)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'DROP MATERIALIZED VIEW IF EXISTS ' || "SchemaSmith"."QuoteName"(mv.schemaname) || '.' || "SchemaSmith"."QuoteName"(mv.matviewname) || ';', CHR(10))
     INTO sql_script
     -- Fence to this iteration's schema (see the note on the index-drop query above): keeps
@@ -188,10 +188,10 @@ BEGIN
   RAISE NOTICE 'Materialized View Diff — Create Missing';
   sql_script = '';
   SELECT STRING_AGG(
-    'RAISE NOTICE ''  Creating materialized view ' || t."Schema" || '.' || t."Name" || CASE WHEN COALESCE(t."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(t."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
+    'RAISE NOTICE ''  Creating materialized view %.%'', ''' || REPLACE((t."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Name" || CASE WHEN COALESCE(t."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(t."VariantName", '''', '''''') || ')' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
     'CREATE MATERIALIZED VIEW ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name")
     || CASE WHEN NULLIF(t."AccessMethod", '') IS NOT NULL AND t."AccessMethod" != 'heap' THEN ' USING ' || t."AccessMethod" ELSE '' END
-    || CASE WHEN NULLIF(t."Tablespace", '') IS NOT NULL THEN ' TABLESPACE ' || t."Tablespace" ELSE '' END
+    || CASE WHEN NULLIF(t."Tablespace", '') IS NOT NULL THEN ' TABLESPACE ' || "SchemaSmith"."QuoteName"(t."Tablespace") ELSE '' END
     || ' AS ' || RTRIM(RTRIM(t."Definition"), ';')
     || CASE WHEN t."WithData" THEN ' WITH DATA' ELSE ' WITH NO DATA' END
     || ';',
@@ -256,8 +256,7 @@ BEGIN
 
   -- The declared description, once the object exists. '' removes the comment; an omitted one leaves whatever is there.
   RAISE NOTICE 'Fixup Materialized View Descriptions';
-  SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of materialized view ' ||
-                    REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  % the description of materialized view %'', ''' || REPLACE((CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Schema" || '.' || t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'COMMENT ON MATERIALIZED VIEW ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' IS ' ||
                     CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
@@ -276,8 +275,7 @@ BEGIN
 
   -- Each declared index's description, by the same rules, once the index exists.
   RAISE NOTICE 'Fixup Materialized View Index Descriptions';
-  SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN i."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of index ' ||
-                    REPLACE(REPLACE(i."ViewSchema" || '.' || i."ViewName" || '.' || i."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  % the description of index %'', ''' || REPLACE((CASE WHEN i."Description" = '' THEN 'Removing' ELSE 'Setting' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((i."ViewSchema" || '.' || i."ViewName" || '.' || i."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'COMMENT ON INDEX ' || "SchemaSmith"."QuoteName"(i."ViewSchema") || '.' || "SchemaSmith"."QuoteName"(i."Name") || ' IS ' ||
                     CASE WHEN i."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(i."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||

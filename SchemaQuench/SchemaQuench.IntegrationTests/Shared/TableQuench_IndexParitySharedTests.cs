@@ -262,9 +262,9 @@ public abstract class TableQuench_IndexParitySharedTests : BaseTableQuenchTests
             cmd.CommandText = $"DROP TABLE IF EXISTS `{_mainDb}`.`{table}`";
             cmd.ExecuteNonQuery();
             cmd.CommandText = $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}'";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
         catch (System.Data.Common.DbException)
         {

@@ -66,11 +66,15 @@ public class ZipFileWrapper : IFile, IDisposable
         }
     }
 
+    // The factory hands out one wrapper and asks it again for each file a load reads: the archive already open is kept, and
+    // one it replaces is closed, so the zip is never left locked behind the run.
     private void Initialize(string zipFileName)
     {
-        _zipFilePath = zipFileName;
         lock (_lockObject)
         {
+            if (_archive != null && _zipFilePath == zipFileName) return;
+            _archive?.Dispose();
+            _zipFilePath = zipFileName;
             _archive = ZipFile.OpenRead(zipFileName);
             ZipEntries = _archive.Entries.Select(e => (IZipEntry)new ZipEntryWrapper(e)).ToList();
         }
@@ -107,8 +111,12 @@ public class ZipFileWrapper : IFile, IDisposable
 
     public void Dispose()
     {
-        ZipEntries = null;
-        _archive?.Dispose();
+        lock (_lockObject)
+        {
+            ZipEntries = null;
+            _archive?.Dispose();
+            _archive = null;
+        }
     }
 
     // Other IFile methods not used for zip access

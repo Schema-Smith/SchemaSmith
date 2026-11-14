@@ -17,7 +17,4 @@ public class MergeScriptHelperIntegrationTests : MergeScriptHelperSharedTests
     protected override Platform Platform => Platform.MariaDb;
     protected override string MainDb => FixtureSetup.MainDb;
     protected override string MainConnectionString => FixtureSetup.GetMainDbConnectionString();
-
-    // MariaDB's JSON_TABLE coerces JSON numeric 0 to YEAR 2000 (MySQL yields 0).
-    protected override int ExpectedYearZeroValue => 2000;
 }

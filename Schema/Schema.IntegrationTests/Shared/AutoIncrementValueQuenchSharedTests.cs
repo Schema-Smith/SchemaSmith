@@ -317,6 +317,8 @@ public abstract class AutoIncrementValueQuenchSharedTests
         cmd.CommandText = $"INSERT INTO `{_testDb}`.`ai_quench_test` (name) VALUES ('test')";
         Assert.DoesNotThrow(() => cmd.ExecuteNonQuery(),
             "Insert into new table without AutoIncrementValue must work.");
+        cmd.CommandText = $"SELECT id FROM `{_testDb}`.`ai_quench_test` WHERE name = 'test'";
+        Assert.That(Convert.ToInt64(cmd.ExecuteScalar()), Is.EqualTo(1), "and the counter starts where the engine starts it");
     }
 
     [Test]

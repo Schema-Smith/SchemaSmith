@@ -119,7 +119,7 @@ BEGIN
 
             -- Strip existing backticks and re-wrap
             SET v_ColName = SchemaSmith_StripBacktickWrapping(v_Column);
-            SET v_Result = CONCAT(v_Result, '`', v_ColName, '`', v_Prefix);
+            SET v_Result = CONCAT(v_Result, '`', SchemaSmith_EscapeBackticks(v_ColName), '`', v_Prefix);
         END IF;
 
         IF v_IsDesc = 1 AND v_SupportsDesc = 1 THEN

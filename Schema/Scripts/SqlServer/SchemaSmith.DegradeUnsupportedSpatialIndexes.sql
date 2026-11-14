@@ -35,7 +35,7 @@ BEGIN
                                      FROM #SpatialIndexes s WITH (NOLOCK)
                                      WHERE s.[CompressionType] IN ('ROW', 'PAGE')
                                      FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, ''), 800) + '.'
-    RAISERROR(@v_FailMsg, 16, 1)
+    RAISERROR('%s', 16, 1, @v_FailMsg)
     RETURN
   END
 

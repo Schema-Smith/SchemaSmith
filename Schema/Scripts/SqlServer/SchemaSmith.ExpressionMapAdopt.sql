@@ -20,7 +20,9 @@ GO
 -- The copy is in the table's own database and schema, not tempdb: tempdb renders at its own compatibility level and
 -- resolves names there, so a database below the server's level (CONVERT renders differently at 100) or an expression
 -- calling the database's own function renders wrongly or not at all. Each probe is inside a transaction that is always
--- rolled back, so nothing is left behind -- which is also why it runs under WhatIf. Under WhatIf the rows it writes
+-- rolled back, so nothing is left behind -- which is also why it runs under WhatIf. Inside a caller's transaction (a
+-- drift check runs in one) each probe is a savepoint instead, rolled back to; a probe whose error dooms the caller's
+-- transaction fails the call, since nothing after it could run. Under WhatIf the rows it writes
 -- are put back by ExpressionMapRecord at the end of the run (#ExpressionMapAdoptUndo, created by the caller), so a
 -- preview shows what the real deploy would do and leaves the map as it found it.
 CREATE PROCEDURE SchemaSmith.ExpressionMapAdopt
@@ -28,8 +30,7 @@ CREATE PROCEDURE SchemaSmith.ExpressionMapAdopt
 AS
 BEGIN TRY
   SET NOCOUNT ON
-  -- A caller's open transaction cannot be rolled back for a probe without rolling back the caller's work.
-  IF @@TRANCOUNT > 0 RETURN
+  DECLARE @v_Nested BIT = CASE WHEN @@TRANCOUNT > 0 THEN 1 ELSE 0 END
   IF OBJECT_ID('tempdb..#Columns') IS NULL AND OBJECT_ID('tempdb..#CheckConstraints') IS NULL
      AND OBJECT_ID('tempdb..#Indexes') IS NULL AND OBJECT_ID('tempdb..#Statistics') IS NULL RETURN
 
@@ -161,7 +162,7 @@ BEGIN TRY
                             FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '') +
                   ' INTO ' + @v_Probe + ' FROM ' + QUOTENAME(@v_Schema) + '.' + QUOTENAME(@v_Table)
     SET @v_Rendered = NULL
-    BEGIN TRANSACTION
+    IF @v_Nested = 1 SAVE TRANSACTION SchemaSmithProbe ELSE BEGIN TRANSACTION
     BEGIN TRY
       EXEC(@v_Copy)
       SET @v_Render = REPLACE(@v_Render, '{probe}', @v_Probe)
@@ -180,7 +181,13 @@ BEGIN TRY
     BEGIN CATCH
       SET @v_Rendered = NULL
     END CATCH
-    IF XACT_STATE() <> 0 ROLLBACK TRANSACTION
+    IF @v_Nested = 0
+    BEGIN
+      IF XACT_STATE() <> 0 ROLLBACK TRANSACTION
+    END
+    ELSE IF XACT_STATE() = 1 ROLLBACK TRANSACTION SchemaSmithProbe
+    ELSE
+      RAISERROR('A scratch-copy probe of an expression on %s.%s failed in a way that ends the open transaction.', 16, 1, @v_Schema, @v_Table)
 
     -- Byte for byte: a binary collation, and the length too, because = ignores trailing spaces.
     IF @v_Rendered COLLATE Latin1_General_BIN2 = @v_Live COLLATE Latin1_General_BIN2 AND DATALENGTH(@v_Rendered) = DATALENGTH(@v_Live)
@@ -222,8 +229,9 @@ BEGIN TRY
   SET NOCOUNT OFF
 END TRY
 BEGIN CATCH
-  IF XACT_STATE() <> 0 ROLLBACK TRANSACTION
-  DECLARE @v_RethrowMsg NVARCHAR(4000) = ERROR_MESSAGE();
-  RAISERROR(@v_RethrowMsg, 16, 1);
+  -- A caller's transaction is the caller's to end.
+  IF XACT_STATE() <> 0 AND @v_Nested = 0 ROLLBACK TRANSACTION
+  DECLARE @v_RethrowMsg NVARCHAR(4000) = CASE WHEN ERROR_NUMBER() = 50000 THEN ERROR_MESSAGE() ELSE N'Msg ' + CAST(ERROR_NUMBER() AS NVARCHAR(10)) + N', Line ' + CAST(ERROR_LINE() AS NVARCHAR(10)) + ISNULL(N', Procedure ' + ERROR_PROCEDURE(), N'') + N': ' + ERROR_MESSAGE() END;
+  RAISERROR('%s', 16, 1, @v_RethrowMsg);
 END CATCH
 GO

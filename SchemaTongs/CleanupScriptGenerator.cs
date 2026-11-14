@@ -6,6 +6,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using Schema.Domain;
+using Schema.Utility;
 
 namespace SchemaTongs;
 
@@ -16,10 +17,9 @@ public static class CleanupScriptGenerator
         var dropKeyword = GetDropKeyword(objectType, folderName);
         if (dropKeyword == null) return null;
 
-        var objectName = ParseObjectName(fileName, platform);
-        if (objectName == null) return null;
+        var quotedName = ObjectReference(fileName, objectType, platform);
+        if (quotedName == null) return null;
 
-        var quotedName = QuoteIdentifier(objectName, platform);
         // Before MariaDB 11.4, PACKAGE is a keyword only under ORACLE mode.
         if (objectType == ScriptObjectType.Packages)
             return $"SET @ss_saved_sql_mode = @@SESSION.sql_mode; SET SESSION sql_mode = 'ORACLE'; {dropKeyword} IF EXISTS {quotedName}; SET SESSION sql_mode = @ss_saved_sql_mode;";
@@ -103,7 +103,11 @@ public static class CleanupScriptGenerator
         };
     }
 
-    private static (string Schema, string Name)? ParseObjectName(string fileName, Platform platform)
+    // The object a file was written for, as the drop names it. Each part of the file name is decoded (FileNameEncoder wrote
+    // it) and quoted with its delimiter escaped. A table trigger's file is schema.table.trigger, and PostgreSQL drops a
+    // trigger on its table; an overloaded routine's file ends with its argument types, which name the one to drop. A
+    // name that itself holds a dot cannot be told from the separator, so the first dot is taken as the schema's.
+    private static string ObjectReference(string fileName, ScriptObjectType objectType, Platform platform)
     {
         var ext = Path.GetExtension(fileName);
         if (!ext.Equals(".sql", StringComparison.OrdinalIgnoreCase)
@@ -114,28 +118,41 @@ public static class CleanupScriptGenerator
         var baseName = Path.GetFileNameWithoutExtension(fileName);
         if (string.IsNullOrEmpty(baseName)) return null;
 
-        if (platform.GetBasePlatform() == Platform.MySQL)
-            return (null, baseName);
-
-        var dotIndex = baseName.IndexOf('.');
-        if (dotIndex > 0 && dotIndex < baseName.Length - 1)
-            return (baseName[..dotIndex], baseName[(dotIndex + 1)..]);
-
-        // Single-part name (e.g., DDL triggers without schema prefix)
-        return (null, baseName);
-    }
-
-    private static string QuoteIdentifier((string Schema, string Name)? parsed, Platform platform)
-    {
-        if (parsed == null) return null;
-        var (schema, name) = parsed.Value;
-
-        return platform.GetBasePlatform() switch
+        var basePlatform = platform.GetBasePlatform();
+        if (basePlatform is not (Platform.SqlServer or Platform.PostgreSQL or Platform.MySQL))
+            throw new ArgumentException($"Unsupported platform: {platform}");
+        string Quote(string encoded)
         {
-            Platform.SqlServer => schema != null ? $"[{schema}].[{name}]" : $"[{name}]",
-            Platform.PostgreSQL => schema != null ? $"\"{schema}\".\"{name}\"" : $"\"{name}\"",
-            Platform.MySQL => $"`{name}`",
-            _ => throw new ArgumentException($"Unsupported platform: {platform}")
-        };
+            var name = Identifier.EscapeDelimited(FileNameEncoder.Decode(encoded), basePlatform);
+            return basePlatform switch
+            {
+                Platform.SqlServer => $"[{name}]",
+                Platform.PostgreSQL => $"\"{name}\"",
+                _ => $"`{name}`"
+            };
+        }
+
+        if (basePlatform == Platform.MySQL)
+            return Quote(baseName);
+
+        var arguments = "";
+        var paren = baseName.IndexOf('(');
+        if (paren > 0 && baseName.EndsWith(')'))
+        {
+            arguments = FileNameEncoder.Decode(baseName[paren..]);
+            baseName = baseName[..paren];
+        }
+
+        var parts = baseName.Split('.');
+        if (objectType == ScriptObjectType.Triggers && parts.Length == 3)
+            return basePlatform == Platform.PostgreSQL
+                ? $"{Quote(parts[2])} ON {Quote(parts[0])}.{Quote(parts[1])}"
+                : $"{Quote(parts[0])}.{Quote(parts[2])}";
+
+        var dot = baseName.IndexOf('.');
+        var reference = dot > 0 && dot < baseName.Length - 1
+            ? $"{Quote(baseName[..dot])}.{Quote(baseName[(dot + 1)..])}"
+            : Quote(baseName);
+        return reference + arguments;
     }
 }

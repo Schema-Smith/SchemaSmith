@@ -6,11 +6,11 @@ branding:
   color: 'blue'
 inputs:
   version:
-    description: 'SchemaSmith release to use (e.g. v2.3.0, or latest). Default: the pinned action tag if any, else latest.'
+    description: 'SchemaSmith release to use (e.g. v2026.12.0, or latest). Default: the pinned action tag if any, else latest.'
     required: false
     default: ''
   mode:
-    description: 'deploy | whatif | validate | test-connection | preview-targets'
+    description: 'deploy | whatif | drift | validate | test-connection | preview-targets'
     required: false
     default: 'deploy'
   product-path:
@@ -29,13 +29,21 @@ inputs:
     description: 'Target password (passed via env, never on the command line).'
     required: false
     default: ''
+  step-summary:
+    description: 'Write the run''s summary to the job page (true | false).'
+    required: false
+    default: 'true'
+  pr-comment:
+    description: 'On a pull request, post the summary as a comment and update it on later runs (true | false). Needs pull-requests: write.'
+    required: false
+    default: 'false'
   extra-args:
     description: 'Raw --Key:value overrides appended to SchemaQuench (port, filters, Drop* toggles, ConnectionProperties, MaxThreads, …).'
     required: false
     default: ''
 outputs:
   exit-code:
-    description: 'SchemaQuench exit code (0 success, 2 failed/partial).'
+    description: 'SchemaQuench exit code: 0 success; 1 finished with something not applied (or a warning under ExitNonZeroOnWarning); 2 failed or partial; 3 unexpected error; 4 logs could not be archived; 5 drift found (mode: drift).'
     value: ${{ steps.run.outputs.exit-code }}
   log-dir:
     description: 'Directory containing the run logs.'
@@ -43,6 +51,9 @@ outputs:
   summary-path:
     description: 'Path to SchemaQuench - Summary.md (empty if not produced).'
     value: ${{ steps.run.outputs.summary-path }}
+  summary-json-path:
+    description: 'Path to SchemaQuench - Summary.json (empty if not produced).'
+    value: ${{ steps.run.outputs.summary-json-path }}
 runs:
   using: composite
   steps:
@@ -58,4 +69,6 @@ runs:
         SS_USER: ${{ inputs.user }}
         SS_PASSWORD: ${{ inputs.password }}
         SS_EXTRA_ARGS: ${{ inputs.extra-args }}
+        SS_STEP_SUMMARY: ${{ inputs.step-summary }}
+        SS_PR_COMMENT: ${{ inputs.pr-comment }}
         GH_TOKEN: ${{ github.token }}

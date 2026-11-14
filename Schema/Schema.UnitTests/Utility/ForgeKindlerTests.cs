@@ -94,7 +94,6 @@ public class ForgeKindlerTests
         Assert.That(scripts, Does.Contain("SchemaSmith.QuoteColumnList.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.QuoteIndexColumnList.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.StripParenWrapping.sql"));
-        Assert.That(scripts, Does.Contain("SchemaSmith.StripTypeCast.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.ServerVersionNum.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.StripLeadingSelect.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith.RebuildBlockedReason.sql"));
@@ -169,6 +168,7 @@ public class ForgeKindlerTests
         Assert.That(scripts, Does.Contain("Kindling_ProductOwnership_Table.sql"));
         Assert.That(scripts, Does.Contain("Kindling_StatusMessages_Table.sql"));
         Assert.That(scripts, Does.Contain("Kindling_ChangeAudit_Table.sql"));
+        Assert.That(scripts, Does.Contain("Kindling_RebuildSetAsideForeignKeys_Table.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith_QuoteIdentifier.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith_StripBacktickWrapping.sql"));
         Assert.That(scripts, Does.Contain("SchemaSmith_SafeBacktickWrap.sql"));
@@ -353,7 +353,12 @@ public class ForgeKindlerTests
         // +1 on SQL Server = fn_FullTextInstalled (#594: without Full-Text Search a full-text index is skipped).
         // +1 on SQL Server = PrintDowngrade (each degrade line names what it applied to).
         // +1 on SQL Server = StampTableOwnership (a deploy whose tables are all new stamps them without the modify pass).
-        Assert.That(sqlServer.Length, Is.EqualTo(78));
+        // +1 on SQL Server = DropTablesRemovedFromProduct (called after the last refusal, so a refused deploy drops no table).
+        // +2 on SQL Server = fn_PartitionCompression and fn_PartitionCompressionDrift (a partitioned index read once, not once per partition).
+        // +1 on SQL Server = Kindling_RebuildSetAsideForeignKeys_Table (the inbound keys a rebuild sets aside until the foreign-key pass restores them).
+        // +1 = SchemaSmith.SequenceQuench (declared sequences; XML ingest on every tier).
+        // +1 on SQL Server = Kindling_DeploymentHistory_Table (the deployment record: one row per deployment of a template).
+        Assert.That(sqlServer.Length, Is.EqualTo(86));
         // PostgreSQL: 34 = 28 prior + Kindling_ChangeAudit_Table (#243 E5) + SchemaSmith.UnsupportedFeaturePolicy (version-adaptive
         // codegen policy helper) + SchemaSmith.IndexNullsNotDistinct (PG15-adaptive extraction read)
         // + SchemaSmith.ColumnCompression (PG14-adaptive attcompression read) + SchemaSmith.StatisticsExpressionColumns
@@ -405,7 +410,13 @@ public class ForgeKindlerTests
         //   the create pass; policy-routed below 13).
         // +1 = ExpressionMapAdopt (#508: an unrecorded expression checked on a scratch copy before it is re-applied).
         // +1 = IdentityOptionChanges (an identity column's declared sequence options, compared and applied).
-        Assert.That(postgres.Length, Is.EqualTo(71));
+        // +1 on PostgreSQL = Kindling_RebuildSetAsideForeignKeys_Table (inbound keys a rebuild sets aside).
+        // -1 on PostgreSQL = SchemaSmith.StripTypeCast (defaults compare raw, through the expression map).
+        // +1 on PostgreSQL = SchemaSmith.ExcludeKeyForms (an exclusion's keys, declared and live, read one way).
+        // +1 on PostgreSQL = SchemaSmith.DeclaredTypeCanonical (a declared type and modifier as format_type renders it).
+        // +1 on PostgreSQL = SchemaSmith.SerialSequenceName (the sequence a serial column gets, as the engine names it).
+        // +1 on PostgreSQL = Kindling_DeploymentHistory_Table (the deployment record: one row per deployment of a template).
+        Assert.That(postgres.Length, Is.EqualTo(79));
         // MySQL: 36 = 27 prior (22 base + five MariaDB-compat helpers, all #351: SchemaSmith_IndexIsVisible
         // (IS_VISIBLE/IGNORED), SchemaSmith_StripIntDisplayWidth, SchemaSmith_NormalizeColumnDefault,
         // SchemaSmith_DropCheckClause, SchemaSmith_IndexInvisibleClause) + eight MySQL-5.7/MariaDB-10.2 floor
@@ -554,7 +565,14 @@ public class ForgeKindlerTests
         // +1 = SchemaSmith_SupportsGeneratedColumnCollation (a generated column's COLLATE, refused by early MariaDB patches).
         // +1 = SchemaSmith_DegradeUnsupportedColumnFeatures (column degrades reported once ShouldApply has settled).
         // +1 = SchemaSmith_TypeChangeKeepsForeignKey (a widening the engine makes under a foreign key keeps the key).
-        Assert.That(mysql.Length, Is.EqualTo(112));
+        // +1 = SchemaSmith_ExpressionReadsColumn (a generated column's reads matched as whole identifiers).
+        // +1 = SchemaSmith_ColumnChangeLoss (H3: a type change that rounds or cuts values, for the destructive-change gate).
+        // +1 = SchemaSmith_EscapeBackticks (a bare name's backticks doubled, whatever collation it arrives in).
+        // +1 = SchemaSmith_CheckClauseText (MySQL's CHECK_CLAUSE read back as the SQL that was declared).
+        // +1 = SchemaSmith_DecodeStringLiteral (a default's literal compared as the value it stands for).
+        // +1 = Kindling_RebuildSetAsideForeignKeys_Table (inbound keys a rebuild sets aside).
+        // +1 on MySQL = Kindling_DeploymentHistory_Table (the deployment record: one row per deployment of a template).
+        Assert.That(mysql.Length, Is.EqualTo(120));
     }
 
     [Test]
@@ -1158,7 +1176,7 @@ public class ForgeKindlerTests
 
         ForgeKindler.DropSupersededPostgreSqlOverloads(mockCmd);
 
-        Assert.That(executed, Has.Count.EqualTo(14));
+        Assert.That(executed, Has.Count.EqualTo(15));
         Assert.That(executed, Has.All.StartsWith("DROP PROCEDURE IF EXISTS").Or.StartsWith("DROP FUNCTION IF EXISTS"));
         // The function took the column's schema, table and name in place of its sequence; the old one would sit unused.
         Assert.That(executed, Has.Some.Contains("\"IdentityOptionChanges\"(text, regclass)"));
@@ -1182,6 +1200,7 @@ public class ForgeKindlerTests
                      "\"MissingIndexesAndConstraintsQuench\"(boolean)",
                      "\"ForeignKeyQuench\"(boolean)",
                      "\"ConstraintStateQuench\"(boolean)",
+                     "\"MissingTableAndColumnQuench\"(boolean)",
                  })
             Assert.That(executed.Any(s => s.EndsWith(signature)), $"{signature} must be dropped, or its OnlineApply replacement is ambiguous with it.");
     }

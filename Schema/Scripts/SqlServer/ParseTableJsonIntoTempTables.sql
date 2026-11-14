@@ -271,6 +271,7 @@
     [XmlCompression] BIT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
     -- A selective XML index's declaration as JSON, and the path a secondary selective index is FOR; KindPrefix and
     -- KindSuffix are what every create and compare renders around the index's name, table and column.
     [Selective] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
@@ -304,7 +305,8 @@
     [FillFactor] TINYINT NULL,
     [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
-    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
   )
 
   DROP TABLE IF EXISTS #ForeignKeys
@@ -651,7 +653,7 @@
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(Columns) WITH (
       [ColumnName] NVARCHAR(500) '$.Name',
-      [DataType] NVARCHAR(100) '$.DataType',
+      [DataType] NVARCHAR(MAX) '$.DataType',
       [Nullable] BIT '$.Nullable',
       [Default] NVARCHAR(MAX) '$.Default',
       [CheckExpression] NVARCHAR(MAX) '$.CheckExpression',
@@ -739,9 +741,9 @@
                    -- time, so this is the one place the create-path emit is suppressed below the floor;
                    -- DegradeUnsupportedFeatures reports the downgrade and neutralizes the source columns for the
                    -- ALTER/detection passes. Kept gate-consistent with that proc's < 13 check.
-                   CASE WHEN RTRIM(ISNULL([DataMaskFunction], '')) <> '' AND SchemaSmith.fn_ServerMajorVersion() >= 13 THEN ' MASKED WITH (FUNCTION = ''' + [DataMaskFunction] + ''')' ELSE '' END +
+                   CASE WHEN RTRIM(ISNULL([DataMaskFunction], '')) <> '' AND SchemaSmith.fn_ServerMajorVersion() >= 13 THEN ' MASKED WITH (FUNCTION = N''' + REPLACE([DataMaskFunction], '''', '''''') + ''')' ELSE '' END +
                    CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE' AND SchemaSmith.fn_ServerMajorVersion() >= 13
-                        THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = ''' + [EncryptionAlgorithm] + ''')'
+                        THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = N''' + REPLACE([EncryptionAlgorithm], '''', '''''') + ''')'
                         ELSE '' END +
                    -- A ledger table's generated column (2022): the role, and HIDDEN when declared. Only ever in a CREATE TABLE.
                    ISNULL(CASE UPPER([GeneratedAlways]) WHEN 'TRANSACTIONIDSTART' THEN ' GENERATED ALWAYS AS TRANSACTION_ID START'
@@ -969,17 +971,17 @@
                                                            THEN SchemaSmith.fn_SafeBracketWrap(SUBSTRING(RTRIM([value]), 1, LEN(RTRIM([value])) - 5)) + ' DESC'
                                                            ELSE SchemaSmith.fn_SafeBracketWrap([value])
                                                            END AS NVARCHAR(MAX)), ',')
-                                 FROM STRING_SPLIT([IndexColumns], ',')
+                                 FROM SchemaSmith.fn_SplitList([IndexColumns], ',')
                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [IncludeColumns]   = (SELECT STRING_AGG(SchemaSmith.fn_SafeBracketWrap([value]), ',') WITHIN GROUP (ORDER BY SchemaSmith.fn_SafeBracketWrap([value]))
-                                 FROM STRING_SPLIT([IncludeColumns], ',')
+                                 FROM SchemaSmith.fn_SplitList([IncludeColumns], ',')
                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [IgnoreDuplicateKey] = ISNULL([IgnoreDuplicateKey], 0),
          [PadIndex]         = ISNULL([PadIndex], 0),
          [Disabled]         = ISNULL([Disabled], 0),
          -- The ordered-columnstore column list, in declared order (it is the sort order).
          [Order]            = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
-                                 FROM STRING_SPLIT([Order], ',')
+                                 FROM SchemaSmith.fn_SplitList([Order], ',')
                                 WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '');
 
   -- A nonclustered columnstore index has no key: its columns are included columns, which is how they are read back. Declared
@@ -998,12 +1000,12 @@
   EXEC(@v_SQL)
   
   RAISERROR('Parse XML Indexes from Json', 10, 100) WITH NOWAIT
-  INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [XmlCompression], [ShouldApplyExpression], [VariantName], [Selective], [ForPath])
+  INSERT INTO #XmlIndexes ([_RowId], [Schema], [TableName], [IndexName], [IsPrimary], [Column], [PrimaryIndex], [SecondaryIndexType], [XmlCompression], [ShouldApplyExpression], [VariantName], [Selective], [ForPath], [Description])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          -- INGEST ONLY -- NORMALIZE below owns the transforms.
          t.[Schema], t.[Name] AS [TableName], i.[IndexName], i.[IsPrimary],
          i.[Column], i.[PrimaryIndex],
-         i.[SecondaryIndexType], i.[XmlCompression], i.[ShouldApplyExpression], i.[VariantName], i.[Selective], i.[ForPath]
+         i.[SecondaryIndexType], i.[XmlCompression], i.[ShouldApplyExpression], i.[VariantName], i.[Selective], i.[ForPath], i.[Description]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(XmlIndexes) WITH (
       [IndexName] NVARCHAR(500) '$.Name',
@@ -1015,7 +1017,8 @@
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
       [VariantName] NVARCHAR(128) '$.VariantName',
       [Selective] NVARCHAR(MAX) '$.Selective' AS JSON,
-      [ForPath] NVARCHAR(200) '$.ForPath'
+      [ForPath] NVARCHAR(200) '$.ForPath',
+      [Description] NVARCHAR(MAX) '$.Description'
       ) i;
 
   -- NORMALIZE -- one definition, applied however the rows arrived.
@@ -1034,11 +1037,11 @@
   
   RAISERROR('Parse Spatial Indexes from Json', 10, 100) WITH NOWAIT
   INSERT INTO #SpatialIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Tessellation], [XMin], [YMin], [XMax], [YMax],
-                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])
+                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName], [Description])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          -- INGEST ONLY -- NORMALIZE below owns the transforms.
          t.[Schema], t.[Name] AS [TableName], s.[IndexName], s.[Column], s.[Tessellation], s.[XMin], s.[YMin], s.[XMax], s.[YMax],
-         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[CompressionType], s.[ShouldApplyExpression], s.[VariantName]
+         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[CompressionType], s.[ShouldApplyExpression], s.[VariantName], s.[Description]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY OPENJSON(SpatialIndexes) WITH (
       [IndexName] NVARCHAR(500) '$.Name',
@@ -1056,7 +1059,8 @@
       [FillFactor] TINYINT '$.FillFactor',
       [CompressionType] NVARCHAR(100) '$.CompressionType',
       [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression',
-      [VariantName] NVARCHAR(128) '$.VariantName'
+      [VariantName] NVARCHAR(128) '$.VariantName',
+      [Description] NVARCHAR(MAX) '$.Description'
       ) s;
 
   -- NORMALIZE -- names wrapped, the scheme and densities in upper case, however the rows arrived.
@@ -1132,10 +1136,10 @@
          [RelatedTableSchema] = SchemaSmith.fn_SafeBracketWrap([RelatedTableSchema]),
          [RelatedTable]      = SchemaSmith.fn_SafeBracketWrap([RelatedTable]),
          [Columns]           = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
-                                  FROM STRING_SPLIT([Columns], ',')
+                                  FROM SchemaSmith.fn_SplitList([Columns], ',')
                                  WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [RelatedColumns]    = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
-                                  FROM STRING_SPLIT([RelatedColumns], ',')
+                                  FROM SchemaSmith.fn_SplitList([RelatedColumns], ',')
                                  WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
          [DeleteAction]      = ISNULL(NULLIF(RTRIM([DeleteAction]), ''), 'NO ACTION'),
          [UpdateAction]      = ISNULL(NULLIF(RTRIM([UpdateAction]), ''), 'NO ACTION');
@@ -1206,6 +1210,24 @@
     CROSS APPLY OPENJSON(t.[CheckConstraints]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) cc
     CROSS APPLY OPENJSON(cc.[Eps]) ep
    WHERE cc.[Eps] IS NOT NULL
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], i.[Name], ep.[key], ep.[value]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(t.[XmlIndexes]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) i
+    CROSS APPLY OPENJSON(i.[Eps]) ep
+   WHERE i.[Eps] IS NOT NULL
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], i.[Name], ep.[key], ep.[value]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(t.[SpatialIndexes]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) i
+    CROSS APPLY OPENJSON(i.[Eps]) ep
+   WHERE i.[Eps] IS NOT NULL
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], i.[Name], ep.[key], ep.[value]
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY OPENJSON(t.[JsonIndexes]) WITH ([Name] NVARCHAR(500) '$.Name', [Eps] NVARCHAR(MAX) '$.Extensions.ExtendedProperties' AS JSON) i
+    CROSS APPLY OPENJSON(i.[Eps]) ep
+   WHERE i.[Eps] IS NOT NULL
 
   -- Identify CheckConstraints to skip based on ShouldApply expression (scoped by [_RowId])
   SELECT @v_SQL = STRING_AGG('DELETE FROM #CheckConstraints WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');', CHAR(13) + CHAR(10))
@@ -1260,7 +1282,7 @@
      SET [StatisticName] = SchemaSmith.fn_SafeBracketWrap([StatisticName]),
          [SampleSize]    = ISNULL([SampleSize], 0),
          [Columns]       = (SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap([value]) AS NVARCHAR(MAX)), ',')
-                              FROM STRING_SPLIT([Columns], ',')
+                              FROM SchemaSmith.fn_SplitList([Columns], ',')
                              WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '');
 
   -- Identify Statistics to skip based on ShouldApply expression (scoped by [_RowId])
@@ -1300,7 +1322,7 @@
          -- the C# default is AUTO, but an explicit "ChangeTracking": null in a table file overwrites it.
          -- 'AUTO' here matches that C# default, so omitted and explicitly-null behave the same.
          [ChangeTracking]  = COALESCE(NULLIF(RTRIM([ChangeTracking]), ''), 'AUTO'),
-         [StopList]        = SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM([StopList]), ''), 'SYSTEM')),
+         [StopList]        = CASE WHEN UPPER(SchemaSmith.fn_StripBracketWrapping(RTRIM([StopList]))) = 'OFF' THEN 'OFF' ELSE SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM([StopList]), ''), 'SYSTEM')) END,
          -- Full-text LANGUAGE churn: a per-column "LANGUAGE nnnn" suffix must round-trip byte-identical
          -- against the live-side build in ModifiedTableQuench.sql (drift compares these as strings). Peel
          -- it off before bracket-wrapping the column (+ optional TYPE COLUMN) part -- same shape as the
@@ -1318,7 +1340,7 @@
                                                              ' STATISTICAL_SEMANTICS'
                                                    ELSE SchemaSmith.fn_SafeBracketWrapFullTextColumn([value])
                                                    END AS NVARCHAR(MAX)), ',')
-                                FROM STRING_SPLIT([Columns], ',')
+                                FROM SchemaSmith.fn_SplitList([Columns], ',')
                                WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> '');
 
   -- Identify FullTextIndexes to skip based on ShouldApply expression (scoped by [_RowId])

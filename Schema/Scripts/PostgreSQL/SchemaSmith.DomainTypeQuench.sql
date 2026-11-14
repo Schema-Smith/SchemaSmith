@@ -17,6 +17,7 @@ DECLARE
   bad RECORD;
   declared_canonical TEXT;
   dom RECORD;
+  v_rendered TEXT;
 BEGIN
   -- Converges declared domain types.
   --
@@ -54,7 +55,7 @@ BEGIN
   -- Evaluate ShouldApplyExpression BEFORE the constraints are flattened below: drop domain types whose
   -- condition is false so a conditional variant is SKIPPED rather than silently always applied. Always
   -- executes, even under --WhatIf -- this filters the internal working set, it is not user-visible DDL.
-  SELECT STRING_AGG('DELETE FROM temp_domain_types WHERE "Schema" = ''' || "Schema" || ''' AND "Name" = ''' || "Name" || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+  SELECT STRING_AGG('DELETE FROM temp_domain_types WHERE "Schema" = ''' || REPLACE(("Schema")::TEXT, '''', '''''') || ''' AND "Name" = ''' || REPLACE(("Name")::TEXT, '''', '''''') || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
     INTO sql_script
     FROM temp_domain_types
     WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
@@ -74,7 +75,7 @@ BEGIN
   -- Create the ones that do not exist yet, with their constraints inline: a domain created with its checks
   -- in one statement never exists in a half-declared state, which a follow-up ALTER pass would allow.
   RAISE NOTICE 'Add Missing Domain Types';
-  SELECT STRING_AGG('RAISE NOTICE ''  Create domain type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Create domain type %.%'', ''' || REPLACE((t."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'CREATE DOMAIN ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' AS ' || t."DataType" ||
                     "SchemaSmith"."CollateClause"(t."Collation") ||
                     CASE WHEN t."Default" IS NOT NULL THEN ' DEFAULT ' || t."Default" ELSE '' END ||
@@ -83,7 +84,7 @@ BEGIN
                                 FROM temp_domain_checks ck
                                WHERE ck."Schema" = t."Schema" AND ck."Name" = t."Name"), '') || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-                    'VALUES (pg_backend_pid(), ''domain type'', ''' || t."Schema" || '.' || t."Name" || ''', ''created'');', CHR(10))
+                    'VALUES (pg_backend_pid(), ''domain type'', ''' || REPLACE((t."Schema" || '.' || t."Name")::TEXT, '''', '''''') || ''', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_domain_types t
    WHERE NOT EXISTS (SELECT 1 FROM pg_type ty
@@ -185,16 +186,49 @@ BEGIN
       bad."Schema", bad."Name", bad.declared, COALESCE(bad.deployed, 'the base type''s');
   END LOOP;
 
+  -- A domain default through the expression map, compare and verify both here: domains run before tables, whatever
+  -- UpdateTables says. PostgreSQL stores 'N' on a varchar domain as 'N'::character varying, so a declared default that
+  -- reads differently is left alone when the map vouches for the pair, or when the declared text set on a scratch
+  -- domain (in pg_temp, always rolled back) is stored as exactly the live text. Anything else is set.
+  DROP TABLE IF EXISTS temp_domain_default_vouched;
+  CREATE TEMPORARY TABLE temp_domain_default_vouched ("Schema" TEXT, "Name" TEXT);
+  FOR dom IN SELECT t."Schema", t."Name", t."Default", PG_GET_EXPR(ty.typdefaultbin, 0) AS "Live",
+                    FORMAT_TYPE(ty.typbasetype, ty.typtypmod) AS "Base"
+               FROM temp_domain_types t
+               JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
+               JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
+              WHERE COALESCE(t."Default", '') <> '' AND ty.typdefaultbin IS NOT NULL
+                AND t."Default" <> PG_GET_EXPR(ty.typdefaultbin, 0) LOOP
+    IF "SchemaSmith"."ExpressionMapUnchanged"(dom."Schema", dom."Name", 'DOMAIN', dom."Name", 'default', dom."Default", dom."Live") THEN
+      INSERT INTO temp_domain_default_vouched VALUES (dom."Schema", dom."Name");
+      CONTINUE;
+    END IF;
+    v_rendered := NULL;
+    BEGIN
+      EXECUTE 'CREATE DOMAIN pg_temp.schemasmith_probe_domain AS ' || dom."Base" || ' DEFAULT ' || dom."Default";
+      SELECT PG_GET_EXPR(typdefaultbin, 0) INTO v_rendered
+        FROM pg_type WHERE typname = 'schemasmith_probe_domain' AND typnamespace = pg_my_temp_schema();
+      RAISE EXCEPTION USING ERRCODE = 'SSPRB';
+    EXCEPTION
+      WHEN SQLSTATE 'SSPRB' THEN NULL;
+      WHEN OTHERS THEN v_rendered := NULL;
+    END;
+    IF v_rendered COLLATE "C" = dom."Live" COLLATE "C" THEN
+      INSERT INTO temp_domain_default_vouched VALUES (dom."Schema", dom."Name");
+      RAISE NOTICE '  Verified the default of domain %.% on a scratch copy: the declared text renders to exactly what the database holds.', dom."Schema", dom."Name";
+    END IF;
+  END LOOP;
+
   -- NOT NULL and DEFAULT, each emitted only when it actually differs so an unchanged domain produces no
   -- statement at all. Both are in-place and touch no dependent column.
   RAISE NOTICE 'Fixup Modified Domain Types';
   SELECT STRING_AGG(stmt, CHR(10))
     INTO sql_script
-    FROM (SELECT 'RAISE NOTICE ''  Altering domain type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
+    FROM (SELECT 'RAISE NOTICE ''  Altering domain type %.%'', ''' || REPLACE((t."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                  'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
                  CASE WHEN t."NotNull" THEN 'SET NOT NULL' ELSE 'DROP NOT NULL' END || ';' || CHR(10) ||
                  'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-                 'VALUES (pg_backend_pid(), ''domain type'', ''' || t."Schema" || '.' || t."Name" || ''', ''modified'');' AS stmt
+                 'VALUES (pg_backend_pid(), ''domain type'', ''' || REPLACE((t."Schema" || '.' || t."Name")::TEXT, '''', '''''') || ''', ''modified'');' AS stmt
             FROM temp_domain_types t
             JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
             JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
@@ -202,15 +236,16 @@ BEGIN
            UNION ALL
           -- A declared default replaces whatever is there; a cleared one drops it. Compared against
           -- pg_get_expr of the stored default, which is how the catalog renders it back.
-          SELECT 'RAISE NOTICE ''  Altering domain type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
+          SELECT 'RAISE NOTICE ''  Altering domain type %.%'', ''' || REPLACE((t."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                  'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
                  CASE WHEN t."Default" IS NOT NULL THEN 'SET DEFAULT ' || t."Default" ELSE 'DROP DEFAULT' END || ';' || CHR(10) ||
                  'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-                 'VALUES (pg_backend_pid(), ''domain type'', ''' || t."Schema" || '.' || t."Name" || ''', ''modified'');'
+                 'VALUES (pg_backend_pid(), ''domain type'', ''' || REPLACE((t."Schema" || '.' || t."Name")::TEXT, '''', '''''') || ''', ''modified'');'
             FROM temp_domain_types t
             JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
             JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
-           WHERE COALESCE(t."Default", '') <> COALESCE(PG_GET_EXPR(ty.typdefaultbin, 0), '')) s;
+           WHERE COALESCE(t."Default", '') <> COALESCE(PG_GET_EXPR(ty.typdefaultbin, 0), '')
+             AND NOT EXISTS (SELECT 1 FROM temp_domain_default_vouched v WHERE v."Schema" = t."Schema" AND v."Name" = t."Name")) s;
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
   IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
@@ -223,11 +258,11 @@ BEGIN
   -- constraint that cannot be created anywhere. NOT NULL is read from pg_type.typnotnull above instead,
   -- which both versions report identically.
   RAISE NOTICE 'Add Missing Domain Constraints';
-  SELECT STRING_AGG('RAISE NOTICE ''  Add constraint ' || ck."ConstraintName" || ' on domain type ' || ck."Schema" || '.' || ck."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Add constraint % on domain type %.%'', ''' || REPLACE((ck."ConstraintName")::TEXT, '''', '''''') || ''', ''' || REPLACE((ck."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((ck."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(ck."Schema") || '.' || "SchemaSmith"."QuoteName"(ck."Name") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(ck."ConstraintName") ||
                     ' CHECK (' || ck."Expression" || ')' || CASE WHEN NOT COALESCE(ck."Validated", true) THEN ' NOT VALID' ELSE '' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-                    'VALUES (pg_backend_pid(), ''domain constraint'', ''' || ck."Schema" || '.' || ck."Name" || '.' || ck."ConstraintName" || ''', ''created'');', CHR(10))
+                    'VALUES (pg_backend_pid(), ''domain constraint'', ''' || REPLACE((ck."Schema" || '.' || ck."Name" || '.' || ck."ConstraintName")::TEXT, '''', '''''') || ''', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_domain_checks ck
     JOIN pg_type ty ON ty.typname = ck."Name" AND ty.typtype = 'd'
@@ -241,10 +276,10 @@ BEGIN
   -- when one violates it -- the engine reporting the truth. The other direction changes nothing: a validated
   -- constraint cannot be un-validated.
   RAISE NOTICE 'Validate Domain Constraints';
-  SELECT STRING_AGG('RAISE NOTICE ''  Validate constraint ' || ck."ConstraintName" || ' on domain type ' || ck."Schema" || '.' || ck."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Validate constraint % on domain type %.%'', ''' || REPLACE((ck."ConstraintName")::TEXT, '''', '''''') || ''', ''' || REPLACE((ck."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((ck."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(ck."Schema") || '.' || "SchemaSmith"."QuoteName"(ck."Name") || ' VALIDATE CONSTRAINT ' || "SchemaSmith"."QuoteName"(ck."ConstraintName") || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-                    'VALUES (pg_backend_pid(), ''domain constraint'', ''' || ck."Schema" || '.' || ck."Name" || '.' || ck."ConstraintName" || ''', ''modified'');', CHR(10))
+                    'VALUES (pg_backend_pid(), ''domain constraint'', ''' || REPLACE((ck."Schema" || '.' || ck."Name" || '.' || ck."ConstraintName")::TEXT, '''', '''''') || ''', ''modified'');', CHR(10))
     INTO sql_script
     FROM temp_domain_checks ck
     JOIN pg_type ty ON ty.typname = ck."Name" AND ty.typtype = 'd'
@@ -307,11 +342,11 @@ BEGIN
 
     sql_script := sql_script || COALESCE((
       SELECT STRING_AGG(
-               'RAISE NOTICE ''  Altering constraint ' || probe.conname || ' on domain type ' || dom."Schema" || '.' || dom."Name" || ''';' || CHR(10) ||
+               'RAISE NOTICE ''  Altering constraint % on domain type %.%'', ''' || REPLACE((probe.conname)::TEXT, '''', '''''') || ''', ''' || REPLACE((dom."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((dom."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(dom."Schema") || '.' || "SchemaSmith"."QuoteName"(dom."Name") || ' DROP CONSTRAINT ' || "SchemaSmith"."QuoteName"(probe.conname) || ';' || CHR(10) ||
                'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(dom."Schema") || '.' || "SchemaSmith"."QuoteName"(dom."Name") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(probe.conname) || ' ' || probe.def || ';' || CHR(10) ||
                'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-               'VALUES (pg_backend_pid(), ''domain constraint'', ''' || dom."Schema" || '.' || dom."Name" || '.' || probe.conname || ''', ''modified'');', CHR(10))
+               'VALUES (pg_backend_pid(), ''domain constraint'', ''' || REPLACE((dom."Schema" || '.' || dom."Name" || '.' || probe.conname)::TEXT, '''', '''''') || ''', ''modified'');', CHR(10))
         FROM (SELECT pc.conname, PG_GET_CONSTRAINTDEF(pc.oid) AS def
                 FROM pg_constraint pc
                 JOIN pg_type pt ON pt.oid = pc.contypid
@@ -335,10 +370,10 @@ BEGIN
   -- A constraint the package no longer declares is DROPPED, which is the one place this type differs from
   -- the enum -- and safely so: it removes a rule, not data, and nothing depends on it.
   RAISE NOTICE 'Drop Domain Constraints Removed From Product';
-  SELECT STRING_AGG('RAISE NOTICE ''  Drop constraint ' || c.conname || ' from domain type ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Drop constraint % from domain type %.%'', ''' || REPLACE((c.conname)::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER DOMAIN ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' DROP CONSTRAINT ' || "SchemaSmith"."QuoteName"(c.conname) || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
-                    'VALUES (pg_backend_pid(), ''domain constraint'', ''' || t."Schema" || '.' || t."Name" || '.' || c.conname || ''', ''dropped'');', CHR(10))
+                    'VALUES (pg_backend_pid(), ''domain constraint'', ''' || REPLACE((t."Schema" || '.' || t."Name" || '.' || c.conname)::TEXT, '''', '''''') || ''', ''dropped'');', CHR(10))
     INTO sql_script
     FROM temp_domain_types t
     JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
@@ -351,8 +386,7 @@ BEGIN
 
   -- The declared description, once the object exists. '' removes the comment; an omitted one leaves whatever is there.
   RAISE NOTICE 'Fixup Domain Type Descriptions';
-  SELECT STRING_AGG('RAISE NOTICE ''  ' || CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END || ' the description of domain type ' ||
-                    REPLACE(REPLACE(t."Schema" || '.' || t."Name", '''', ''''''), '%', '%%') || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  % the description of domain type %'', ''' || REPLACE((CASE WHEN t."Description" = '' THEN 'Removing' ELSE 'Setting' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Schema" || '.' || t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'COMMENT ON DOMAIN ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' IS ' ||
                     CASE WHEN t."Description" = '' THEN 'NULL' ELSE '''' || REPLACE(t."Description", '''', '''''') || '''' END || ';' || CHR(10) ||
                     'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") ' ||
@@ -365,4 +399,23 @@ BEGIN
      AND COALESCE(OBJ_DESCRIPTION(ty.oid, 'pg_type'), '') IS DISTINCT FROM t."Description";
   CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
   IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
+
+  -- Record each declared default against what the domain now stores, as ExpressionMapRecord does for tables. Not in
+  -- a preview: it changed nothing, so there is nothing new to vouch for.
+  IF NOT p_WhatIf THEN
+    INSERT INTO "SchemaSmith"."ExpressionMap" AS em
+      ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot", "AuthoredText", "CanonicalText",
+       "PlatformName", "EngineVersion", "CompatLevel", "UpdatedUtc")
+    SELECT t."Schema", t."Name", 'DOMAIN', t."Name", 'default', t."Default", PG_GET_EXPR(ty.typdefaultbin, 0),
+           'PostgreSQL', current_setting('server_version'), NULL, now()
+      FROM temp_domain_types t
+      JOIN pg_type ty ON ty.typname = t."Name" AND ty.typtype = 'd'
+      JOIN pg_namespace n ON n.oid = ty.typnamespace AND n.nspname = t."Schema"
+     WHERE COALESCE(t."Default", '') <> '' AND ty.typdefaultbin IS NOT NULL
+    ON CONFLICT ("ObjectSchema", "ObjectTable", "ObjectKind", "ObjectName", "Slot")
+    DO UPDATE SET "AuthoredText" = EXCLUDED."AuthoredText", "CanonicalText" = EXCLUDED."CanonicalText",
+                  "EngineVersion" = EXCLUDED."EngineVersion", "UpdatedUtc" = now()
+      WHERE em."AuthoredText" IS DISTINCT FROM EXCLUDED."AuthoredText" OR em."CanonicalText" IS DISTINCT FROM EXCLUDED."CanonicalText"
+         OR em."EngineVersion" IS DISTINCT FROM EXCLUDED."EngineVersion";
+  END IF;
 END $$;

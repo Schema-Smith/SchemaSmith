@@ -186,13 +186,14 @@ public class ProductQuenchTests
     public void ReadSecondaryServers_AnArrayNamesEachServerWhole()
     {
         var json = """{ "Target": { "SecondaryServers": [ "replica-1,14330", "replica-2" ] } }""";
-        var config = new ConfigurationBuilder().AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json))).Build();
+        using var stream = new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json));
+        var config = new ConfigurationBuilder().AddJsonStream(stream).Build();
 
         Assert.That(ProductQuench.ReadSecondaryServers(config), Is.EqualTo(new[] { "replica-1,14330", "replica-2" }));
     }
 
     [Test]
-    public void QuenchProductScriptsWithCheckpoint_OpensCommandAgainstEachServerByName()
+    public void QuenchProductScripts_OpensCommandAgainstEachServerByName()
     {
         lock (FactoryContainer.SharedLockObject)
         {
@@ -233,7 +234,7 @@ public class ProductQuenchTests
                 var quench = new RecordingProductQuench();
                 var folders = new List<ProductFolder> { new() { ServerToQuench = ServerToQuench.Both } };
 
-                quench.QuenchProductScriptsWithCheckpoint(folders, "Before Product", true);
+                quench.QuenchProductScripts(folders, "Before Product", true);
 
                 // The SQL Server fan-out opens one command per server, each against its OWN server
                 // name — the secondary's command must target the secondary, not be re-routed to the
@@ -244,6 +245,138 @@ public class ProductQuenchTests
             {
                 FactoryContainer.Clear();
             }
+        }
+    }
+
+    // A product script that fails is logged where it fails, and the run is marked failed. Anything else that escapes the
+    // per-server step is a defect, and used to be swallowed by a bare catch: the run failed with nothing said.
+    [Test]
+    public void QuenchProductScripts_AnUnexpectedFailureIsNotSwallowed()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Clear();
+            var file = Substitute.For<IFile>();
+            var directory = Substitute.For<IDirectory>();
+            directory.Exists("Product").Returns(true);
+            file.Exists(Path.Join("Product", "Product.json")).Returns(true);
+            file.ReadAllText(Path.Join("Product", "Product.json")).Returns("""{ "Name": "TestProduct", "Platform": "SqlServer", "ScriptFolders": [] }""");
+            FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+            {
+                ["SchemaPackagePath"] = "Product", ["Target:Server"] = "primary-server", ["MaxThreads"] = "1", ["WhatIfONLY"] = "true"
+            }).Build());
+            FactoryContainer.Register<IFile>(file);
+            FactoryContainer.Register<IDirectory>(directory);
+            try
+            {
+                var quench = new RecordingProductQuench();
+                var folder = new ProductFolder { ServerToQuench = ServerToQuench.Primary };
+                folder.Scripts.Add(null);
+
+                // The defect itself, not the generic "scripts failed" the run ended with once it had been swallowed.
+                Assert.That(() => quench.QuenchProductScripts([folder], "Before Product", true), Throws.InstanceOf<NullReferenceException>());
+            }
+            finally
+            {
+                FactoryContainer.Clear();
+            }
+        }
+    }
+
+    // #616: a run that finished with a downgrade exits 1 unless the pipeline expects downgrades; a failure is 2 either way.
+    [TestCase(false, false, false, 0)]
+    [TestCase(false, true, false, 1)]
+    [TestCase(false, true, true, 0)]
+    [TestCase(true, true, true, 2)]
+    [TestCase(true, false, false, 2)]
+    public void RunExitCode_ADowngradeIsExitOneUnlessExitZeroOnDowngrade(bool failed, bool incomplete, bool exitZeroOnDowngrade, int expected)
+    {
+        Assert.That(ProductQuench.RunExitCode(failed, incomplete, exitZeroOnDowngrade), Is.EqualTo(expected));
+    }
+
+    // D12: the server settings step runs on every server the product deploys to, before the Before scripts, and only when
+    // the package has ServerSettings.json.
+    private static void ArrangeServerSettingsProduct(string serverSettingsJson)
+    {
+        var file = Substitute.For<IFile>();
+        var directory = Substitute.For<IDirectory>();
+        directory.Exists("Product").Returns(true);
+        file.Exists(Path.Join("Product", "Product.json")).Returns(true);
+        file.ReadAllText(Path.Join("Product", "Product.json")).Returns("""{ "Name": "TestProduct", "Platform": "SqlServer", "ScriptFolders": [] }""");
+        if (serverSettingsJson != null)
+        {
+            file.Exists(Path.Join("Product", "ServerSettings.json")).Returns(true);
+            file.ReadAllText(Path.Join("Product", "ServerSettings.json")).Returns(serverSettingsJson);
+        }
+        FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+        {
+            ["SchemaPackagePath"] = "Product", ["Target:Server"] = "primary-server", ["Target:SecondaryServers"] = "secondary-server", ["MaxThreads"] = "1"
+        }).Build());
+        FactoryContainer.Register<IFile>(file);
+        FactoryContainer.Register<IDirectory>(directory);
+    }
+
+    private const string OneServerSetting = """
+        { "Settings": [ { "Kind": "Configuration", "Name": "cost threshold for parallelism", "Value": "50", "Fix": true, "OnDrift": "Warn" } ] }
+        """;
+
+    [Test]
+    public void ServerSettings_AreReadOnEveryServerTheProductDeploysTo()
+    {
+        ArrangeServerSettingsProduct(OneServerSetting);
+        try
+        {
+            var quench = new RecordingProductQuench();
+
+            quench.QuenchServerSettings();
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(quench.CommandServers, Is.EquivalentTo(new[] { "primary-server", "secondary-server" }));
+                // The mocked servers have no such option, so each reports it cannot be fixed; one row per server.
+                Assert.That(quench.ChangeAudit.Snapshot().Where(r => r.ObjectType == "ServerSetting").Select(r => r.Target.Server),
+                    Is.EquivalentTo(new[] { "primary-server", "secondary-server" }));
+            });
+        }
+        finally
+        {
+            FactoryContainer.Clear();
+        }
+    }
+
+    [Test]
+    public void NoServerSettingsFile_NoServerIsContacted()
+    {
+        ArrangeServerSettingsProduct(null);
+        try
+        {
+            var quench = new RecordingProductQuench();
+
+            quench.QuenchServerSettings();
+
+            Assert.That(quench.CommandServers, Is.Empty);
+            Assert.That(quench.ChangeAudit.Snapshot(), Is.Empty);
+        }
+        finally
+        {
+            FactoryContainer.Clear();
+        }
+    }
+
+    [Test]
+    public void AServerSettingThatStops_FailsTheRunNamingTheServer()
+    {
+        ArrangeServerSettingsProduct(OneServerSetting.Replace("\"Fix\": true, \"OnDrift\": \"Warn\"", "\"Fix\": false, \"OnDrift\": \"Error\""));
+        try
+        {
+            var quench = new RecordingProductQuench();
+
+            Assert.That(() => quench.QuenchServerSettings(), Throws.InstanceOf<RunFailedException>()
+                .With.Message.Contains("Server settings stopped the deploy").And.Message.Contains("primary-server"));
+        }
+        finally
+        {
+            FactoryContainer.Clear();
         }
     }
 
@@ -665,6 +798,25 @@ public class ProductQuenchTests
                 Assert.That(units.All(u => u.Server == "primary"), Is.True);
                 Assert.That(units.All(u => u.TemplateName == "Core"), Is.True);
             });
+        });
+    }
+
+    // B19: a NULL or blank name from the identification script became a work unit for database "", which deployed the
+    // template into whatever database the connection defaults to (with --ConnectionString, the override's catalog).
+    [Test]
+    public void EnumerateWorkUnits_BlankNamesFromTheIdentificationScript_AreSkipped()
+    {
+        WithMinimalSqlServerProductQuench(quench =>
+        {
+            quench.IdentifiedDatabases["primary"] = new[] { "AppA", "", "   ", null! };
+            var template = new Template
+            {
+                Name = "Core",
+                Product = quench.LoadedProduct,
+                DatabaseIdentificationScript = "SELECT name FROM sys.databases"
+            };
+            var units = quench.EnumerateWorkUnitsForTemplate(template);
+            Assert.That(units.Select(u => u.DatabaseName), Is.EqualTo(new[] { "AppA" }));
         });
     }
 
@@ -2076,22 +2228,54 @@ public class ProductQuenchTests
     }
 
     [Test]
-    public void ComposeAdminDbConnectionString_OverrideOnSecondary_DoesNotApplyOverride()
+    public void ComposeAdminDbConnectionString_OverrideOnSecondary_TakesTheOverrideWithTheSecondarysServer()
     {
-        // The override branch is gated on (server == primary). A secondary server must NOT
-        // inherit the override — secondaries get their connection from Target:* config.
+        // B18: a secondary server shares the primary's credentials and port settings, so the override reaches it with
+        // the server substituted. It used to fall back to Target:* settings here, while each database work unit took
+        // the override unchanged and deployed the secondary's databases on the primary.
         var env = Substitute.For<IEnvironment>();
         env.CommandLine.Returns(
             "schemaquench.exe --ConnectionString=\"Server=primary;Database=tenant_a;User Id=sa;Password=secret\"");
         WithMinimalSqlServerProductQuench(quench =>
         {
-            var built = quench.InvokeComposeAdminDbConnectionString("secondary");
-
-            // Secondary did not inherit the override's User Id=sa marker; it came from the configured
-            // path which has no User/Password set in this minimal harness.
-            Assert.That(built, Does.Not.Contain("User Id=sa"),
-                $"Override must not bleed to secondary servers. Got: {built}");
+            var built = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(quench.InvokeComposeAdminDbConnectionString("secondary"));
+            Assert.Multiple(() =>
+            {
+                Assert.That(built.DataSource, Is.EqualTo("secondary"), "the secondary's own server");
+                Assert.That(built.UserID, Is.EqualTo("sa"), "with the override's credentials");
+                Assert.That(built.InitialCatalog, Is.EqualTo("master"), "on the init database");
+            });
         }, secondaryServers: "secondary", environment: env);
+    }
+
+    // B20: --PreviewTargets ran schema discovery against a database CreateIfMissing would create, which does not exist yet,
+    // and reported "Schema discovery FAILED" (exit 2 under RequireAtLeastOneTarget) for a target the deploy would serve.
+    [Test]
+    public void PreviewTargets_ASchemaTemplateDatabaseThatWouldBeCreated_IsPreviewedWithoutDiscovery()
+    {
+        WithMinimalSqlServerProductQuench(quench =>
+        {
+            var template = new Template
+            {
+                Name = "Tenants",
+                Product = quench.LoadedProduct,
+                DatabaseIdentificationScript = "SELECT name FROM sys.databases",
+                SchemaIdentificationScript = "SELECT name FROM sys.schemas"
+            };
+
+            var units = quench.EnumerateWorkUnitsForTemplate(template, previewOnly: true);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(quench.DiscoverSchemasCallCount, Is.EqualTo(0), "no discovery against a database that does not exist");
+                Assert.That(units, Has.Exactly(1).Matches<WorkUnit>(u => u.DatabaseName == "tenant_new" && u.WouldCreateDatabase));
+                Assert.That(quench.ProgressLogLines, Has.None.Contains("Schema discovery FAILED"));
+            });
+        }, extraConfig: new Dictionary<string, string>
+        {
+            ["Target:TemplateTargets:Tenants:Databases:0"] = "tenant_new",
+            ["Target:TemplateTargets:Tenants:CreateIfMissing"] = "true"
+        });
     }
 
     [Test]
@@ -2925,6 +3109,46 @@ public class ProductQuenchTests
             "composition is WITHIN a level -- an order-mismatch trigger does not cross the cascade");
     }
 
+    // Most drop settings default to true, so a value that is not true or false -- "flase" meant as false -- used to read as
+    // unset and fall through to dropping. It stops the run instead, naming the setting.
+    [TestCase("DropTablesRemovedFromProduct", "flase")]
+    [TestCase("DropColumnsRemovedFromProduct", "no")]
+    [TestCase("DropIndexesRemovedFromProduct", "0")]
+    [TestCase("DropUnknownIndexes", "yes")]
+    [TestCase("DropSchemaBoundDependents", "on")]
+    [TestCase("DropPeriodsRemovedFromProduct", "1")]
+    [TestCase("DropEventsRemovedFromProduct", "enabled")]
+    public void ADropSettingThatIsNotTrueOrFalse_StopsTheRun_NamingIt(string key, string value)
+    {
+        Assert.That(() => ProductQuench.RefuseNonBooleanDropSettings(Cfg((key, value))), Throws.InstanceOf<RunFailedException>()
+            .With.Message.Contains(key).And.Message.Contains($"'{value}'").And.Message.Contains("true or false"));
+    }
+
+    [Test]
+    public void ADropSettingThatIsNotTrueOrFalse_StopsTheRunBeforeAnyServerIsContacted()
+    {
+        ArrangeServerSettingsProduct(null);
+        FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string>
+        {
+            ["SchemaPackagePath"] = "Product", ["Target:Server"] = "primary-server", ["DropTablesRemovedFromProduct"] = "flase"
+        }).Build());
+        try
+        {
+            Assert.That(() => new RecordingProductQuench(), Throws.InstanceOf<RunFailedException>().With.Message.Contains("DropTablesRemovedFromProduct"));
+        }
+        finally
+        {
+            FactoryContainer.Clear();
+        }
+    }
+
+    [Test]
+    public void DropSettingsThatAreTrueFalseOrUnset_AreAccepted()
+    {
+        Assert.That(() => ProductQuench.RefuseNonBooleanDropSettings(Cfg(("DropTablesRemovedFromProduct", "False"), ("DropColumnsRemovedFromProduct", "true"),
+            ("DropIndexesRemovedFromProduct", " "))), Throws.Nothing);
+    }
+
     [Test]
     public void EnvRebuildPolicy_AbsentWhenNoKeyIsSet()
     {
@@ -2949,6 +3173,15 @@ public class ProductQuenchTests
         });
     }
 
+    // A threshold that is not a whole number read as unset, so the policy ran with its default and nothing said so -- the
+    // same trap a mistyped drop setting was.
+    [Test]
+    public void EnvRebuildPolicy_AThresholdThatIsNotANumber_StopsTheRunNamingTheSetting()
+    {
+        var e = Assert.Throws<RunFailedException>(() => ProductQuench.ReadEnvRebuildPolicy(Cfg(("RebuildPolicyThreshold", "1O"))));
+        Assert.That(e.Message, Does.Contain("RebuildPolicyThreshold").And.Contain("'1O'"));
+    }
+
     [Test]
     public void EnvRebuildPolicy_OnOrderMismatchAloneStillProducesAPolicy()
     {
@@ -2962,15 +3195,15 @@ public class ProductQuenchTests
         });
     }
 
+    // SS-TBL-001 checks the package's policies, never the environment's, so a THRESHOLD whose threshold does not parse used
+    // to deploy with no threshold and nothing said. The run stops instead, naming the setting.
     [Test]
-    public void EnvRebuildPolicy_UnparseableThresholdLeavesItUnset()
+    public void EnvRebuildPolicy_ThresholdModeWithAThresholdThatDoesNotParse_StopsTheRun()
     {
-        // Left null so SS-TBL-001's shape ("THRESHOLD with no threshold") is what surfaces, rather than
-        // a silently invented number.
-        var policy = ProductQuench.ReadEnvRebuildPolicy(Cfg(
-            ("RebuildPolicyMode", "THRESHOLD"), ("RebuildPolicyThreshold", "banana")));
+        var e = Assert.Throws<RunFailedException>(() => ProductQuench.ReadEnvRebuildPolicy(Cfg(
+            ("RebuildPolicyMode", "THRESHOLD"), ("RebuildPolicyThreshold", "banana"))));
 
-        Assert.That(policy.Threshold, Is.Null);
+        Assert.That(e.Message, Does.Contain("RebuildPolicyThreshold").And.Contain("'banana'"));
     }
 
     #endregion

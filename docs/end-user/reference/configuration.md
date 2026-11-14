@@ -71,7 +71,9 @@ Each tool adds its own switches on top of the common set. They are listed here s
 | `--CheckpointDirectory:<path>` | Directory for checkpoint files. Also the `CheckpointDirectory` setting. |
 | `--ForceReKindle` | Re-deploy SchemaSmith's helper procedures this run even when the in-database kindle stamp is current. Also the `ForceReKindle` setting. See [ForceReKindle](schemaquench.md#forcerekindle). |
 | `--WriteDebugSql` | Write the resolved SQL of each step to `ArtifactPath`. Also the `WriteDebugSql` setting. See [Debug SQL files](#debug-sql-files). |
-| `SkipKindlingForge` | Positional, as the first argument (no dashes): skip kindling for this run, as `KindleTheForge: false` does. See [KindleTheForge](schemaquench.md#kindletheforge). |
+| `--SkipKindlingForge` | Skip kindling for this run: the same as `KindleTheForge: false`. Also accepted as a bare word (`SkipKindlingForge`, no dashes). See [KindleTheForge](schemaquench.md#kindletheforge). |
+| `--verbose` | Log more of what the run does: the same as `VerboseLogging: true`. |
+| `--ExitZeroOnDowngrade` | Exit `0` instead of `1` when the run finished but downgraded a feature the target lacks; the summary still says `Incomplete` and lists each one. Also the `ExitZeroOnDowngrade` setting. See [Exit codes](#exit-codes). |
 
 **SchemaTongs** ([reference](schematongs.md))
 
@@ -161,7 +163,7 @@ Or override the entire connection from the command line:
 SchemaQuench --ConnectionString:"Host=prod-server;Database=mydb;Username=deploy;Password=s3cret;"
 ```
 
-The `--ConnectionString` switch bypasses all individual connection settings -- `Server`, `Port`, `User`, `Password`, and `ConnectionProperties` are all ignored when a full connection string is provided.
+The `--ConnectionString` switch bypasses all individual connection settings -- `Server`, `Port`, `User`, `Password`, and `ConnectionProperties` are all ignored when a full connection string is provided. SchemaQuench uses it for the primary server as given, and for each of the `SecondaryServers` with only the server changed, since a secondary shares the primary's credentials and port settings; the database is set per target in both cases.
 
 ### Overriding any setting
 
@@ -187,7 +189,7 @@ Three things to keep in mind:
 
 - The `=` is required for an override. Nest with `__` or with `:` -- `--Target__Server=prod-db` and `--Target:Server=prod-db` both set `Target:Server` -- but always end the key with `=`. `--Target:Server:prod-db` sets nothing: everything after the first `:` becomes the value of a top-level `Target` key, which no tool reads and none warns about. The named switches (`--LogPath`, `--ConfigFile`, `--ConnectionString`) accept either separator.
 - `--ConnectionString` still bypasses the individual connection settings. If you pass both `--ConnectionString` and a `--Source__Server=` / `--Target__Server=` override, the full connection string wins for connecting.
-- An override is not range-checked for you. `MaxThreads`, for one, accepts `1` to `20`: a value outside that range, or one that is not a whole number, silently falls back to the default of `10` -- no warning is logged. Check the startup configuration dump when a value looks ignored.
+- Few overrides are range-checked for you. `MaxThreads`, for one, accepts `1` to `20`: a value outside that range, or one that is not a whole number, falls back to the default of `10`, with a warning in the progress log naming the value.
 
 ---
 
@@ -422,11 +424,36 @@ Both log files are overwritten at the start of each run. Previous runs are prese
 
 ### Console output
 
-The console is a live mirror of the progress log, not a separate channel. Watching the console while a quench runs lets you follow startup, per-object progress, and completion in real time without tailing a file. Log4Net colorizes the console stream by level -- informational entries in green, warnings in yellow, errors in red -- so trouble catches your eye the moment it appears.
+The console is a live mirror of the progress log, not a separate channel. Watching the console while a quench runs lets you follow startup, per-object progress, and completion in real time without tailing a file. Log4Net colorizes the console stream by level -- informational entries in green, warnings in yellow, errors in red -- so trouble catches your eye the moment it appears. The colours go when the output is redirected (a CI agent, `docker logs`), so a warning line also starts with `WARNING: ` and an error line with `ERROR: `, on the console and in the progress log; every other line is unchanged. Search for those two words to find each line `--ExitNonZeroOnWarning` counts.
 
 When a script fails, you see a short error summary on the console and in the progress log (red, so it's hard to miss): `Unable to quench '<path>': <engine error>`, along with a pointer to the resolved SQL -- `Resolved SQL written to:` with [`WriteDebugSql`](#writedebugsql) on, or a `Rerun with --WriteDebugSql` hint with it off. That's enough to know what failed and where to look. The SQL itself never goes to a log: with `WriteDebugSql` on it is in the [debug file](#debug-sql-files), and the error log gets one line per failed script naming the error and that file. The error log also carries, on every engine, the failures that stop a run before or outside a script -- a refused argument or setting, a connection that could not be opened or was lost, a database or schema discovery that failed, a validation or version check -- each with its full exception. On SQL Server it additionally receives every error the engine raises on the deploy connection with its line number (`at Line: N`), which the progress log does not carry. The engine-by-engine split is in [Where errors are logged](error-codes-and-reporting.md#where-errors-are-logged).
 
 > **Tip:** CI agents that capture stdout get the progress stream for free. If your pipeline step only saves stdout, you still have a readable transcript of successes and error summaries; archive the error log separately to keep each failure's full exception and, on SQL Server, the engine's line-numbered errors.
+
+### Structured logs
+
+Set `LogFormat` to `json` and every tool writes one JSON object per line, to the console and to its log files, so a log platform (Datadog, New Relic, Sumo Logic, Splunk) ingests a run with no parse rules. The default, `text`, is the format described above. The setting applies to all four tools, and like any setting it can come from the settings file, `SmithySettings_LogFormat`, or the command line:
+
+```bash
+SchemaQuench --LogFormat:json
+```
+
+```json
+{"timestamp":"2026-11-09T14:03:22.123Z","level":"info","message":"Quenching tables","tool":"SchemaQuench","runId":"5d2c1a0e-7f3b-4a55-9a0c-1c2f6f0e8b11","logger":"progress","server":"sql01","database":"Billing_0042","schema":"tenant_0042","template":"Tenant"}
+```
+
+| Field | Present | Meaning |
+| --- | --- | --- |
+| `timestamp` | always | UTC, ISO 8601 with milliseconds. |
+| `level` | always | `debug`, `info`, `warn` or `error`. |
+| `message` | always | The line's text. A message several lines long is still one JSON line. The `[server].[database] [Schema: x]` prefix the text format starts a target's lines with is left out, because the fields below carry it. |
+| `tool` | always | `SchemaQuench`, `SchemaTongs`, `DataTongs` or `SchemaShears`. |
+| `runId` | always | The run's id. In SchemaQuench it is the deployment summary's `run.id`, so a summary and its log lines join on it. |
+| `logger` | always | `progress`, `error` or `failure`: the log file the line belongs to. |
+| `server`, `database`, `schema`, `template` | on a target's lines | The target the line is about. `schema` only for a schema template. |
+| `error` | on an exception | Its type, message and stack trace. |
+
+The files keep their names, so a collector already reading `SchemaQuench - Progress.log` keeps working when the format changes. Standard output carries nothing but these lines, in UTF-8; the few lines a tool prints outside its logs (a log backup that failed, `--WriteSchemasOnly`'s report) go to standard error. `--help`, `--version` and the first-run screen print as usual. The JSON lines say exactly what the text lines say, no more.
 
 ### Failure triage roll-up
 
@@ -545,6 +572,25 @@ SchemaSmith surfaces the database engine's informational output -- notices, prin
 
 ---
 
+## Run identity settings
+
+SchemaQuench writes the [run identity](deployment-summary-report.md#run-identity) into every deployment summary. On GitHub Actions, Azure DevOps, GitLab and Jenkins it is read from the pipeline's environment with no setup. These settings override what was detected, field by field, or supply it where nothing is detected. They usually change with every run, so they are passed as a switch or an environment variable more often than in a file:
+
+```bash
+SchemaQuench --RunLabel:2026.11.3 --RunEnvironment:production
+export SmithySettings_RunLabel=2026.11.3
+```
+
+| Setting | Fills |
+| --- | --- |
+| `RunLabel` | `run.label`: a release number, a ticket. |
+| `RunCommit`, `RunBranch`, `RunRepository` | `run.source`. |
+| `RunPipeline`, `RunPipelineRunId`, `RunUrl`, `RunActor`, `RunEnvironment` | `run.ci`. With no CI system detected, `run.ci.provider` is `Other`. |
+
+On Octopus Deploy, whose variables are not in the environment, pass them in the step's command line: `--RunLabel:#{Octopus.Release.Number} --RunEnvironment:#{Octopus.Environment.Name} --RunPipeline:#{Octopus.Project.Name}`.
+
+---
+
 ## Exit Codes
 
 | Code | Condition | Recommended action |
@@ -552,10 +598,11 @@ SchemaSmith surfaces the database engine's informational output -- notices, prin
 | `0` | Normal completion. Also: run with no arguments on an install nobody has configured, the tool prints which settings file it read and the settings to fill in, and runs nothing. That run exits `0` on purpose: a package manager checks a new install by launching the tool bare, and a fresh install has a settings file with every setting blank. It also means a pipeline step whose settings never arrived passes without deploying anything -- give a pipeline its settings through `SmithySettings_` environment variables or `--ConfigFile`, either of which skips this screen, so a missing value fails the run instead. | None -- the operation succeeded. |
 | `1` | Finished, but did not produce everything asked: SchemaQuench downgraded a feature the target lacks, under `UnsupportedFeaturePolicy: warn` (listed in the deployment summary); DataTongs skipped a table (it does not exist in the source, has no key columns, or its `KeyColumns` are malformed), left out a column whose type cannot be delivered, did not write a merge script because the MySQL source is older than 8.0, or could not wire a script's data token (see [DataTongs -- Exit code](datatongs.md#exit-code)); SchemaTongs left an object out of the package (invalid or skipped script, encrypted module, empty definition) | The skipped tables or objects and the reason for each are in the progress log (and, for DataTongs, the error log). Fix the cause and re-run. |
 | `2` | Failed, for a reason you can fix: a command-line argument was not recognized, a required setting is missing (such as the platform), the package cannot be loaded, a validation script, product script or version check failed, a target was refused, or a `TemplateTargets` rule was broken. Also: SchemaQuench -- one or more database quenches failed; SchemaTongs -- one or more tables failed to extract; DataTongs -- one or more tables failed to extract; SchemaShears -- the patch request cannot be built (missing source or manifest, output already exists, unknown drop category). And: run with no arguments, no `SmithySettings_` environment variables and no settings file in the current directory or the tool's folder, the tool names both places it looked and runs nothing | Check the progress and error logs for what failed and why. Fix the cause and re-run. |
+| `5` | SchemaQuench `--Drift`: a deploy would change at least one target -- it has drifted from its package. See [Drift Checks](schemaquench.md#drift-checks). | Read the summary's `drift` section for what differs; deploy, or update the package from the database. |
 | `3` | Unhandled exception -- a defect in the tool | An unexpected error occurred. The exception is logged to both the progress and error logs before exit. Please report it with the log contents. |
 | `4` | Log backup failure | The tool completed its main work but couldn't back up the log files. Check directory permissions and disk space in the log directory. The base log files may still be readable even though the backup failed. |
 
-`--ExitNonZeroOnWarning` (or the `ExitNonZeroOnWarning` setting) turns a `0` into a `1` when the run logged a warning; every other code is unchanged.
+`--ExitNonZeroOnWarning` (or the `ExitNonZeroOnWarning` setting) turns a `0` into a `1` when the run logged a warning, and the run's last lines list them: the first line of each, up to 50. Every other code is unchanged. When more than one applies, the order is `2`, then `5`, then `1`. SchemaQuench's `--ExitZeroOnDowngrade` (or the `ExitZeroOnDowngrade` setting) goes the other way for a run that finished with a downgrade: it exits `0`, while the deployment summary still says `Incomplete` and lists each one. `ExitNonZeroOnWarning` is applied after it, so with both set a run that logged a warning still exits `1`.
 
 ---
 
@@ -640,6 +687,55 @@ Indexed views are unaffected either way. Those are already dropped and recreated
 ```
 ---
 
+## DestructiveChangePolicy
+
+A package that stops declaring a table or a column has the deploy drop it -- and its rows or values with it.
+`Target:DestructiveChangePolicy` decides what a deploy does about that, per environment:
+
+| Value | Effect |
+|---|---|
+| `allow` | The table or column is dropped, with an information line in the log. |
+| `warn` (default) | The same, with a `WARN` line per change, and each one listed in the [deployment summary](deployment-summary-report.md#destructive) with its table's row count. The exit code is unchanged: a deliberate removal is not a failure. `--ExitNonZeroOnWarning` turns it into `1`. |
+| `fail` | The step is refused before anything in it is dropped, naming each change and its row count, and the database fails (exit code `2`) -- unless the change is named in `Target:AcceptDestructive`. |
+
+`Target:AcceptDestructive` names the changes that are intended, as `schema.table` (every change to the table) or
+`schema.table.column`, separated by `;` or `,` or as a JSON array; on MySQL and MariaDB the schema is the database.
+Names compare without case and without delimiters. A named change goes ahead under any policy and is recorded as
+accepted; an unnamed one is still refused, so the list is not a switch that lets everything through. Set it for the run
+that makes the change -- on the command line or in the pipeline -- not in the package: a package travels to every
+environment, and an acceptance in it would carry itself into production. An unknown policy value stops the run with
+exit code `2`, because a typo must not quietly disarm the setting.
+
+**What counts.**
+
+- A table dropped because the package no longer declares it (handed to a `CustomTableDrop` hook included).
+- A column dropped for the same reason -- including a column a rebuild leaves out.
+- A column type change that rounds or cuts the values already there without an error: a smaller decimal scale or
+  fractional-second precision, a timestamp or datetime into a date, a float or a decimal with a fraction into an
+  integer, a double into a single-precision float, a 64-bit integer into a double, PostgreSQL `json` into `jsonb`
+  (duplicate keys collapse). A pair SchemaQuench has no rule for counts too.
+- A column dropped and added again because its generated or computed status changes: a plain column's stored values
+  are replaced by the expression's, and a generated column turned plain comes back empty where the engine cannot keep
+  its values (MySQL and MariaDB always; PostgreSQL before 13). On SQL Server, a plain column declared computed or
+  `IDENTITY`.
+
+A drop the deploy does not make is not destructive: with `DropTablesRemovedFromProduct` or
+`DropColumnsRemovedFromProduct` off, or under `PreventDrop`, nothing is dropped and nothing is refused. A change the
+engine refuses when the data does not fit (a length cut, an integer narrowing, `NOT NULL` over existing nulls) fails the
+deploy on its own and is not listed -- except on MySQL and MariaDB without a strict `sql_mode` (`STRICT_TRANS_TABLES` for
+InnoDB, or `STRICT_ALL_TABLES`), where the engine clamps, cuts or zeroes the value instead, so every such narrowing is
+listed, and a nullable column made `NOT NULL` is too. A partitioned table removed from the product is refused by its own
+guard, whose message the deploy stops on. Name a type change or a replaced column in `Target:AcceptDestructive` as
+`schema.table.column`.
+
+**Row counts are the catalog's estimate**, never a count of the table: SQL Server `sys.partitions`, PostgreSQL
+`reltuples` (unknown until the table has been analyzed), MySQL and MariaDB `INFORMATION_SCHEMA.TABLES.TABLE_ROWS`.
+The summary says which with `rowSource`.
+
+**Under `fail`, what has already run stays.** The refusal comes before the step drops anything, but the steps before it
+-- new tables and columns, `Before` scripts -- have run; a re-run converges. To check a deploy without changing
+anything, preview it: `--WhatIf` under `fail` lists every change it would refuse and exits `2`, which makes it a CI gate.
+
 ## DropTablesRemovedFromProduct
 
 Controls whether SchemaQuench drops tables that exist in the database but no longer appear in the schema package. Three tiers compose to produce the effective value, resolved environment → product → template.
@@ -651,6 +747,8 @@ Controls whether SchemaQuench drops tables that exist in the database but no lon
 | Template | `DropTablesRemovedFromProduct` in `Template.json` | (inherit) |
 
 A `false` at any tier is sticky — it locks the effective value to `false` for all lower tiers and cannot be re-enabled by a more-specific setting. Absent (not set) inherits from the tier above. A `true` at a lower tier overrides an inherited `true` but never an ancestor's `false`.
+
+> **Note:** The environment value must be `true` or `false`. Anything else -- `flase`, `0`, `yes` -- stops the run before any server is contacted, naming the setting, rather than reading as unset and falling through to the default. The same holds for every drop setting: `DropColumnsRemovedFromProduct`, `DropForeignKeysRemovedFromProduct`, `DropCheckConstraintsRemovedFromProduct`, `DropExcludeConstraintsRemovedFromProduct`, `DropStatisticsRemovedFromProduct`, `DropIndexesRemovedFromProduct`, `DropPeriodsRemovedFromProduct`, `DropEventsRemovedFromProduct`, `DropUnknownIndexes` and `DropSchemaBoundDependents`.
 
 ```json
 // SchemaQuench.settings.json — turn off auto-drop for this environment
@@ -774,9 +872,25 @@ guessing:
 
 - It needs roughly **twice the table’s space** while the copy exists.
 - It **holds a lock for the duration of the copy**. On a large table that is not a short operation.
-- Objects SchemaSmith does not manage — manual grants, triggers you did not declare — live on the old
+- Objects SchemaSmith does not manage — triggers and indexes you did not declare — live on the old
   table and do **not** survive. An in-place alter would have preserved them. Declared objects are
-  rebuilt normally.
+  rebuilt normally. On SQL Server and PostgreSQL the table's grants, owner and comments or extended properties are carried across.
+- **Foreign keys other tables hold against it** come off for the swap. Each one is set aside and put back by
+  the same deploy's foreign-key step as it was — trusted or untrusted and enabled or disabled on SQL Server,
+  `NOT VALID` on PostgreSQL if it was, and over the rows it had on MySQL and MariaDB — including keys your
+  package does not declare, such as another product's, or one from another database on MySQL and MariaDB.
+  If a deploy stops before that step, the next one puts them back. A key your package does not declare can
+  only be put back when the rebuilt table still has what it references (the same columns, unchanged, under a
+  declared primary key or unique constraint); otherwise the rebuild is refused and names the key.
+- The rebuilt table is created with the table's storage, so it is written once. On SQL Server that is its
+  filegroup and large-object filegroup, declared or not, and its declared data compression. On PostgreSQL it
+  is its tablespace, `UNLOGGED` persistence, access method and storage parameters (its TOAST table's too) —
+  each as the package declares it or, where it does not, as it was. On MySQL and MariaDB it is the table's
+  options — row format, key block size, page compression, encryption, statistics settings and the rest — and its
+  tablespace and data directory, the same way; a declared `Compression` and `AutoIncrementValue` are applied
+  after, as they are in place. On PostgreSQL a declared tablespace the table is not on yet is where the rebuilt
+  table is created: the move SchemaQuench refuses in place costs nothing extra in a rebuild, which rewrites the
+  table anyway. On MySQL and MariaDB that move is still refused, before the rebuild.
 
 > **MySQL and MariaDB:** those engines cannot roll DDL back, so a rebuild there wants a quiesced table.
 > SchemaQuench makes the swap itself atomic and verifies the row count immediately before it, so the
@@ -795,10 +909,16 @@ scripts for these.
 
 | Engine | Refused when the table… |
 |---|---|
-| SQL Server | is system-versioned (temporal), is a ledger table, has Change Data Capture or Change Tracking, is published for replication, or is partitioned (the table itself or any of its indexes on a partition scheme) |
+| SQL Server | is system-versioned (temporal), is a ledger table, has Change Data Capture or Change Tracking, is published for replication, is partitioned (the table itself or any of its indexes on a partition scheme), is memory-optimized, is a graph node or edge table, stores FILESTREAM data or declares a FILESTREAM column, has an index on another filegroup whose `FileGroup` the package does not declare, or is referenced by a foreign key the package does not declare and the rebuild could not put back |
 | PostgreSQL | is a partitioned table or a partition of one, inherits from or is inherited by another table, or is a member of a logical replication publication |
 | MySQL | is partitioned |
 | MariaDB | is system-versioned, has an application-time period (seen from MariaDB 11.4, where the catalog first reports periods), or is partitioned |
+
+On every engine a rebuild is also refused when the table has an index the package does not declare and the deploy
+would keep: an unknown one with [`DropUnknownIndexes`](#dropunknownindexes) off, or one the product no longer declares
+with [`DropIndexesRemovedFromProduct`](#dropindexesremovedfromproduct) off. The rebuilt table has the declared
+indexes only, so it would lose that index. Declare it, turn the setting on, or change the table with Before/After
+migration scripts.
 
 The refusal fires under `WhatIfONLY` too, so a preview shows the impossibility rather than leaving it to the
 real run.
@@ -814,6 +934,47 @@ to keep.
 policy cannot be evaluated, so it is an error rather than a setting that quietly does nothing.
 
 ---
+
+## Timeouts and contention
+
+A deploy changes tables other sessions are using. By default nothing limits how long it waits for them: SQL Server and
+PostgreSQL wait for a lock forever, and MySQL and MariaDB wait up to a year for the lock DDL takes. On PostgreSQL a
+waiting `ALTER TABLE` is worse than slow -- every new query on that table queues behind it. Three settings, all under
+`Target`, bound the wait:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `Target:LockTimeoutSeconds` | _(engine default)_ | How long one statement waits for a lock another session holds, 1--86400. Set on every connection the deploy opens, so it covers SchemaSmith's procedures, your scripts and data delivery alike. |
+| `Target:ContentionRetryAttempts` | `20` | How many times a statement that timed out waiting for a lock, or lost a deadlock, is run, 1--100 (`1` = no retry). |
+| `Target:CommandTimeoutSeconds` | `0` | How long one command may run, `0` for no limit. The client stops a command that runs longer. |
+
+What each engine is told:
+
+| Engine | Statement on each connection |
+|---|---|
+| SQL Server | `SET LOCK_TIMEOUT <seconds x 1000>` |
+| PostgreSQL | `SET lock_timeout = '<seconds>s'` |
+| MySQL, MariaDB | `SET SESSION lock_wait_timeout = <seconds>, SESSION innodb_lock_wait_timeout = <seconds>` (the first bounds the metadata lock DDL waits for, the second a row lock) |
+
+**What is retried.** Only work that is safe to run again: SchemaSmith's own table, index, constraint, foreign-key and
+view steps, and the kindle. Each retry waits a little longer than the last (full jitter, at most 2 s), so the longest a
+statement can spend waiting is about `ContentionRetryAttempts x (LockTimeoutSeconds + 2)` seconds. Your scripts
+(object, migration, setup, product) and data delivery are never retried: they stop at the first timeout, and
+`--ResumeQuench` continues from there once the other session lets go.
+
+**When it gives up.** A target whose lock wait runs out fails like any other failed target -- exit code `2` -- with a
+first line that says what happened: which setting, which step, how many attempts. The [deployment summary](deployment-summary-report.md)
+records the failure with `kind: lockTimeout` (or `commandTimeout`), lists each statement that had to wait in
+`lockWaits[]`, and echoes the three settings in `run.settings`. A command stopped by `CommandTimeoutSeconds` is not
+retried: it would only run as long again.
+
+**SQL Server: a timed-out statement in your own script.** A lock timeout ends a DDL statement's whole batch, but ends
+a data statement (`UPDATE`, `INSERT`, `DELETE`) on its own and lets the batch go on to the next one. SchemaQuench sees
+the timeout either way and fails the script, so the deploy stops there, but statements of the same batch after the one
+that timed out may already have run. Make a script that must apply all or nothing a transaction with `XACT_ABORT ON`.
+
+Unset, `LockTimeoutSeconds` changes nothing about how a deploy waits, so a pipeline that ran before runs the same
+after upgrading. For a deploy into a database that is serving traffic, 5--30 seconds is a sensible start.
 
 ## OnlineApply
 
@@ -905,7 +1066,10 @@ its summary rows' `mode` is `notCovered`.
 A changed index is still dropped inside its step and built again after it, so the table is without that index between
 the two. A concurrent build that fails (a unique index over duplicate rows, a lock that timed out) leaves an invalid
 index behind: SchemaQuench drops it and builds once more, and a second failure fails the deploy with the invalid index
-removed. A validation the rows fail fails the deploy as a plain add would, and leaves the constraint `NOT VALID`; the
+removed. The drop waits for the same sessions the build did, so when another session still holds the table it cannot
+run either: the deploy says so and leaves the index invalid -- queries do not use it -- and the next deploy finds it
+invalid and builds it. With `OnlineApply` set, set [`Target:LockTimeoutSeconds`](#timeouts-and-contention) too, so a
+build blocked behind a long transaction gives up instead of holding up the deploy. A validation the rows fail fails the deploy as a plain add would, and leaves the constraint `NOT VALID`; the
 next deploy validates it again. A `Require` refusal rolls back the step it stops. `OnlineApplyMaxDuration` does not
 apply to PostgreSQL.
 

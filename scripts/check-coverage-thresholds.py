@@ -29,6 +29,7 @@ def main(path, report_only):
     results = {}
     sol_cov = sol_tot = 0
     seen = set()
+    unknown = set()
     for pkg in root.findall(".//package"):
         name = pkg.get("name")
         lines = pkg.findall(".//line")
@@ -40,9 +41,14 @@ def main(path, report_only):
             sol_cov += cov
             sol_tot += tot
         else:
-            print(f"NOTE: package '{name}' has no threshold (excluded from solution total)")
+            unknown.add(name)
 
-    failures = []
+    # Every product assembly has a threshold, so a package with none is a new assembly that would otherwise drop out of
+    # the solution total unnoticed (or one coverage.runsettings should exclude).
+    failures = [f"{name}: no threshold -- add one here (and in CONTRIBUTING.md), or exclude it in coverage.runsettings"
+                for name in sorted(unknown)]
+    for name in sorted(unknown):
+        print(f"{name}: in the coverage report with no threshold")
     print("\nProject               line%    covered/total   threshold")
     print("-" * 60)
     for name, thr in THRESHOLDS.items():

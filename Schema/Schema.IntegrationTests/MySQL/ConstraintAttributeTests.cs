@@ -169,6 +169,7 @@ public class ConstraintAttributeTests
     {
         Deploy(Package(", \"Enforced\": false"));
         Assert.DoesNotThrow(() => Exec($"INSERT INTO `{_db}`.`{Table}` (id, qty) VALUES (1, -5)"), "NOT ENFORCED means the engine does not check it");
+        Assert.That(Count($"SELECT COUNT(*) FROM `{_db}`.`{Table}` WHERE id = 1 AND qty = -5"), Is.EqualTo(1), "and the row is there");
     }
 
     [Test]

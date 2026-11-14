@@ -47,9 +47,9 @@ BEGIN TRY
    WHERE (e.[ConstraintName] IS NULL AND ISNULL(t.[DropForeignKeysRemovedFromProduct], 1) = 1)
       OR (e.[ConstraintName] IS NOT NULL AND (e.[DeleteAction] <> c.[DeleteAction] OR ISNULL(e.[ClauseSet], '') <> ISNULL(c.[ClauseSet], '')))
 
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping edge constraint ' + d.[Schema] + '.' + d.[TableName] + '.' + d.[ConstraintName] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Dropping edge constraint ' + REPLACE(REPLACE(d.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(d.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(d.[ConstraintName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE ' + d.[Schema] + '.' + d.[TableName] + ' DROP CONSTRAINT ' + d.[ConstraintName] + ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''edgeConstraint'', ''' + d.[Schema] + '.' + d.[TableName] + '.' + d.[ConstraintName] + ''', ''dropped'');' AS NVARCHAR(MAX))
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''edgeConstraint'', N''' + REPLACE((d.[Schema] + '.' + d.[TableName] + '.' + d.[ConstraintName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''dropped'');' AS NVARCHAR(MAX))
                            FROM #EdgeConstraintsToDrop d WITH (NOLOCK)
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL)
@@ -60,9 +60,9 @@ BEGIN TRY
 
   -- Create: declared and not live, or just dropped as changed.
   RAISERROR('Add Missing Edge Constraints', 10, 100) WITH NOWAIT
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding edge constraint ' + e.[Schema] + '.' + e.[TableName] + '.' + e.[ConstraintName] + CASE WHEN RTRIM(ISNULL(e.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(e.[VariantName]), '''', '''''') + ')' ELSE '' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Adding edge constraint ' + REPLACE(REPLACE(e.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(e.[TableName], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(e.[ConstraintName], '''', ''''''), '%', '%%') + REPLACE(CASE WHEN RTRIM(ISNULL(e.[VariantName], '')) <> '' THEN ' (variant: ' + REPLACE(RTRIM(e.[VariantName]), '''', '''''') + ')' ELSE '' END, '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                                   'ALTER TABLE ' + e.[Schema] + '.' + e.[TableName] + ' ADD CONSTRAINT ' + e.[ConstraintName] + ' CONNECTION (' + e.[ClauseSet] + ') ON DELETE ' + e.[DeleteAction] + ';' + CHAR(13) + CHAR(10) +
-                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''edgeConstraint'', ''' + e.[Schema] + '.' + e.[TableName] + '.' + e.[ConstraintName] + ''', ''created'');' AS NVARCHAR(MAX))
+                                  'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''edgeConstraint'', N''' + REPLACE((e.[Schema] + '.' + e.[TableName] + '.' + e.[ConstraintName]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''created'');' AS NVARCHAR(MAX))
                            FROM #EdgeConstraints e WITH (NOLOCK)
                            WHERE NOT EXISTS (SELECT 1 FROM #EdgeConstraintsCat c WITH (NOLOCK)
                                               WHERE c.[Schema] = e.[Schema] AND c.[TableName] = e.[TableName] AND c.[ConstraintName] = e.[ConstraintName])
@@ -84,7 +84,7 @@ BEGIN TRY
   SET NOCOUNT OFF
 END TRY
 BEGIN CATCH
-  DECLARE @v_RethrowMsg NVARCHAR(4000) = ERROR_MESSAGE();
-  RAISERROR(@v_RethrowMsg, 16, 1);
+  DECLARE @v_RethrowMsg NVARCHAR(4000) = CASE WHEN ERROR_NUMBER() = 50000 THEN ERROR_MESSAGE() ELSE N'Msg ' + CAST(ERROR_NUMBER() AS NVARCHAR(10)) + N', Line ' + CAST(ERROR_LINE() AS NVARCHAR(10)) + ISNULL(N', Procedure ' + ERROR_PROCEDURE(), N'') + N': ' + ERROR_MESSAGE() END;
+  RAISERROR('%s', 16, 1, @v_RethrowMsg);
 END CATCH
 GO

@@ -171,6 +171,31 @@ public class ConfigHelperTests
         }
     }
 
+    // The documented order: the command line over the environment over the settings file, each layer present or not.
+    [TestCase(true, true, "cli")]
+    [TestCase(true, false, "cli")]
+    [TestCase(false, true, "env")]
+    [TestCase(false, false, "file")]
+    public void ASettingInSeveralLayers_TakesTheHighestLayersValue(bool onCommandLine, bool inEnvironment, string expected)
+    {
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            File.WriteAllText(tempFile, """{"PrecedenceProbe": "file"}""");
+            _mockEnvironment.CommandLine.Returns($"app.exe --ConfigFile:{tempFile}" + (onCommandLine ? " --PrecedenceProbe=cli" : ""));
+            Environment.SetEnvironmentVariable("SmithySettings_PrecedenceProbe", inEnvironment ? "env" : null);
+
+            var config = ConfigHelper.GetAppSettingsAndUserSecrets("TestApp", _ => { });
+
+            Assert.That(config["PrecedenceProbe"], Is.EqualTo(expected));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("SmithySettings_PrecedenceProbe", null);
+            File.Delete(tempFile);
+        }
+    }
+
     [Test]
     public void GetAppSettingsAndUserSecrets_CommandLineNestedOverride_UsesColonPath()
     {

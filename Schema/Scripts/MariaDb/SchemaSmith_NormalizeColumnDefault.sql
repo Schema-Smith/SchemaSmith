@@ -33,7 +33,7 @@ BEGIN
     -- 2. Quoted string literal: strip the surrounding quotes and unescape doubled quotes, matching
     --    MySQL's unquoted COLUMN_DEFAULT and the comparison's desired-side quote stripping.
     IF CHAR_LENGTH(p_Default) >= 2 AND LEFT(p_Default, 1) = '''' AND RIGHT(p_Default, 1) = '''' THEN
-        RETURN REPLACE(SUBSTRING(p_Default, 2, CHAR_LENGTH(p_Default) - 2), '''''', '''');
+        RETURN SchemaSmith_DecodeStringLiteral(SUBSTRING(p_Default, 2, CHAR_LENGTH(p_Default) - 2));
     END IF;
 
     -- 3. Unquoted keyword/function/number: upper-case and drop an empty () argument list so

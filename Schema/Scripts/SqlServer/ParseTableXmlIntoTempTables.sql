@@ -30,7 +30,7 @@
       'Schema must be populated before reaching ParseTableXmlIntoTempTables — this is a programmer error. ' +
       'In production the SchemaDefaultResolver fills Schema with the platform default or the {{SchemaName}} token; ' +
       'a blank value here means a caller bypassed Template.Load or substituted the token away.';
-    RAISERROR(@v_Msg, 16, 1);
+    RAISERROR('%s', 16, 1, @v_Msg);
   END
 
   IF OBJECT_ID('tempdb..#TableDefinitions') IS NOT NULL DROP TABLE #TableDefinitions
@@ -74,9 +74,10 @@
          [RebuildPolicySpecified] = CONVERT(BIT, t.exist('RebuildPolicy/*/text()')),
          [PreventDrop] = ISNULL(CONVERT(BIT, CASE LOWER(t.value('(PreventDrop/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END), 0),
          [OnlineApply] = CONVERT(VARCHAR(10), UPPER(NULLIF(LTRIM(RTRIM(t.value('(OnlineApply/text())[1]', 'NVARCHAR(20)'))), ''))),
-         -- Omitted stays NULL (leave the database's description alone), '' stays '' (remove it); an MS_Description
+         -- Omitted stays NULL (leave the database's description alone), '' stays '' (remove it): an empty element has
+         -- no text node, so its presence is what says '', not its text. An MS_Description
          -- left inside Extensions.ExtendedProperties, where extraction used to put it, still counts.
-         [Description] = COALESCE(t.value('(Description/text())[1]', 'NVARCHAR(MAX)'), t.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)')),
+         [Description] = CASE WHEN t.exist('Description') = 1 THEN ISNULL(t.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') WHEN t.exist('Extensions/ExtendedProperties/p[@n="MS_Description"]') = 1 THEN ISNULL(t.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'), '') END,
          [LedgerViewSchema] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/Schema/text())[1]', 'NVARCHAR(500)')), '')),
          [LedgerViewName] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/Name/text())[1]', 'NVARCHAR(500)')), '')),
          [LedgerTransactionIdColumn] = SchemaSmith.fn_SafeBracketWrap(NULLIF(RTRIM(t.value('(LedgerView/TransactionIdColumn/text())[1]', 'NVARCHAR(500)')), '')),
@@ -148,9 +149,9 @@
                    -- time, so this is the one place the create-path emit is suppressed below the floor;
                    -- DegradeUnsupportedFeatures reports the downgrade and neutralizes the source columns for the
                    -- ALTER/detection passes. Kept gate-consistent with that proc's < 13 check.
-                   CASE WHEN RTRIM(ISNULL([DataMaskFunction], '')) <> '' AND SchemaSmith.fn_ServerMajorVersion() >= 13 THEN ' MASKED WITH (FUNCTION = ''' + [DataMaskFunction] + ''')' ELSE '' END +
+                   CASE WHEN RTRIM(ISNULL([DataMaskFunction], '')) <> '' AND SchemaSmith.fn_ServerMajorVersion() >= 13 THEN ' MASKED WITH (FUNCTION = N''' + REPLACE([DataMaskFunction], '''', '''''') + ''')' ELSE '' END +
                    CASE WHEN RTRIM(ISNULL([EncryptionType], 'NONE')) <> 'NONE' AND SchemaSmith.fn_ServerMajorVersion() >= 13
-                        THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = ''' + [EncryptionAlgorithm] + ''')'
+                        THEN ' ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = ' + [EncryptionKey] + ', ENCRYPTION_TYPE = ' + [EncryptionType] + ', ALGORITHM = N''' + REPLACE([EncryptionAlgorithm], '''', '''''') + ''')'
                         ELSE '' END +
                    -- A ledger table's generated column (2022): the role, and HIDDEN when declared. Only ever in a CREATE TABLE.
                    ISNULL(CASE UPPER(c.[GeneratedAlways]) WHEN 'TRANSACTIONIDSTART' THEN ' GENERATED ALWAYS AS TRANSACTION_ID START'
@@ -167,7 +168,7 @@
     CROSS APPLY t.[TableXml].nodes('/Table/Columns') AS Y(col)
     CROSS APPLY (SELECT
       [ColumnName] = col.value('(Name/text())[1]', 'NVARCHAR(500)'),
-      [DataType] = col.value('(DataType/text())[1]', 'NVARCHAR(100)'),
+      [DataType] = col.value('(DataType/text())[1]', 'NVARCHAR(MAX)'),
       [GeneratedAlways] = col.value('(GeneratedAlways/text())[1]', 'NVARCHAR(20)'),
       [Hidden] = CONVERT(BIT, CASE LOWER(col.value('(Hidden/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [Nullable] = CONVERT(BIT, CASE LOWER(col.value('(Nullable/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
@@ -188,7 +189,7 @@
       [ShouldApplyExpression] = col.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = col.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
       [OldName] = col.value('(OldName/text())[1]', 'NVARCHAR(500)'),
-      [Description] = COALESCE(col.value('(Description/text())[1]', 'NVARCHAR(MAX)'), col.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'))
+      [Description] = CASE WHEN col.exist('Description') = 1 THEN ISNULL(col.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') WHEN col.exist('Extensions/ExtendedProperties/p[@n="MS_Description"]') = 1 THEN ISNULL(col.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'), '') END
       ) c;
 
   -- Identify Columns to skip based on ShouldApply expression (scoped by [_RowId]) — identical to JSON twin.
@@ -271,7 +272,7 @@
       [UpdateFillFactor] = CONVERT(BIT, CASE LOWER(idx.value('(UpdateFillFactor/text())[1]', 'VARCHAR(8)')) WHEN 'true' THEN 1 WHEN 'false' THEN 0 END),
       [ShouldApplyExpression] = idx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = idx.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
-      [Description] = COALESCE(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), idx.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'))
+      [Description] = CASE WHEN idx.exist('Description') = 1 THEN ISNULL(idx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') WHEN idx.exist('Extensions/ExtendedProperties/p[@n="MS_Description"]') = 1 THEN ISNULL(idx.value('(Extensions/ExtendedProperties/p[@n="MS_Description"]/text())[1]', 'NVARCHAR(MAX)'), '') END
       ) i;
 
   -- A nonclustered columnstore index has no key: its columns are included columns, which is how they are read back. Declared
@@ -296,7 +297,7 @@
          t.[Schema], t.[Name] AS [TableName], [IndexName] = SchemaSmith.fn_SafeBracketWrap(i.[IndexName]), i.[IsPrimary],
          [Column] = SchemaSmith.fn_SafeBracketWrap(i.[Column]), [PrimaryIndex] = SchemaSmith.fn_SafeBracketWrap(i.[PrimaryIndex]),
          i.[SecondaryIndexType], [XmlCompression] = ISNULL(i.[XmlCompression], 0), i.[ShouldApplyExpression], i.[VariantName],
-         i.[Selective], i.[ForPath], [KindPrefix] = CAST(NULL AS NVARCHAR(20)), [KindSuffix] = CAST(NULL AS NVARCHAR(MAX))
+         i.[Description], i.[Selective], i.[ForPath], [KindPrefix] = CAST(NULL AS NVARCHAR(20)), [KindSuffix] = CAST(NULL AS NVARCHAR(MAX))
     INTO #XmlIndexes
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/XmlIndexes') AS Y(xi)
@@ -310,7 +311,8 @@
       [ShouldApplyExpression] = xi.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
       [VariantName] = xi.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
       [Selective] = CASE WHEN xi.exist('Selective') = 1 THEN xi.query('Selective') END,
-      [ForPath] = xi.value('(ForPath/text())[1]', 'NVARCHAR(200)')
+      [ForPath] = xi.value('(ForPath/text())[1]', 'NVARCHAR(200)'),
+      [Description] = CASE WHEN xi.exist('Description') = 1 THEN ISNULL(xi.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') END
       ) i;
 {{ParseSelectiveXmlIndexesXml}}
 
@@ -345,13 +347,14 @@
     [FillFactor] TINYINT NULL,
     [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL,
     [ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL,
-    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL
+    [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL,
+    [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL
   )
   INSERT INTO #SpatialIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Tessellation], [XMin], [YMin], [XMax], [YMax],
-                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])
+                               [Level1], [Level2], [Level3], [Level4], [CellsPerObject], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName], [Description])
   SELECT [_RowId] = ROW_NUMBER() OVER (ORDER BY (SELECT NULL)),
          t.[Schema], t.[Name] AS [TableName], s.[IndexName], s.[Column], s.[Tessellation], s.[XMin], s.[YMin], s.[XMax], s.[YMax],
-         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[CompressionType], s.[ShouldApplyExpression], s.[VariantName]
+         s.[Level1], s.[Level2], s.[Level3], s.[Level4], s.[CellsPerObject], s.[FillFactor], s.[CompressionType], s.[ShouldApplyExpression], s.[VariantName], s.[Description]
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/SpatialIndexes') AS Y(sx)
     CROSS APPLY (SELECT
@@ -370,7 +373,8 @@
       [FillFactor] = sx.value('(FillFactor/text())[1]', 'TINYINT'),
       [CompressionType] = sx.value('(CompressionType/text())[1]', 'NVARCHAR(100)'),
       [ShouldApplyExpression] = sx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'),
-      [VariantName] = sx.value('(VariantName/text())[1]', 'NVARCHAR(128)')
+      [VariantName] = sx.value('(VariantName/text())[1]', 'NVARCHAR(128)'),
+      [Description] = CASE WHEN sx.exist('Description') = 1 THEN ISNULL(sx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') END
       ) s;
 
   -- NORMALIZE -- names wrapped, the scheme and densities in upper case, however the rows arrived.
@@ -434,7 +438,7 @@
       'RelatedTableSchema must be populated before reaching ParseTableXmlIntoTempTables — this is a programmer error. ' +
       'In production the SchemaDefaultResolver fills RelatedTableSchema with the platform default for regular templates ' +
       'or {{SchemaName}} for schema templates; a blank value here means a caller bypassed Template.Load.';
-    RAISERROR(@v_FkMsg, 16, 1);
+    RAISERROR('%s', 16, 1, @v_FkMsg);
   END
 
   -- Identify ForeignKeys to skip based on ShouldApply expression (scoped by [_RowId]) — identical to JSON twin.
@@ -530,6 +534,21 @@
     FROM #TableDefinitions t WITH (NOLOCK)
     CROSS APPLY t.[TableXml].nodes('/Table/CheckConstraints') AS Y(cc)
     CROSS APPLY cc.nodes('Extensions/ExtendedProperties/p') AS P(p)
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], idx.value('(Name/text())[1]', 'NVARCHAR(500)'), p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/XmlIndexes') AS Y(idx)
+    CROSS APPLY idx.nodes('Extensions/ExtendedProperties/p') AS P(p)
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], idx.value('(Name/text())[1]', 'NVARCHAR(500)'), p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/SpatialIndexes') AS Y(idx)
+    CROSS APPLY idx.nodes('Extensions/ExtendedProperties/p') AS P(p)
+  UNION ALL
+  SELECT 'index', t.[Schema], t.[Name], idx.value('(Name/text())[1]', 'NVARCHAR(500)'), p.value('(@n)[1]', 'NVARCHAR(128)'), p.value('(text())[1]', 'NVARCHAR(MAX)')
+    FROM #TableDefinitions t WITH (NOLOCK)
+    CROSS APPLY t.[TableXml].nodes('/Table/JsonIndexes') AS Y(idx)
+    CROSS APPLY idx.nodes('Extensions/ExtendedProperties/p') AS P(p)
 
   -- Identify CheckConstraints to skip based on ShouldApply expression (scoped by [_RowId]) — identical to JSON twin.
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + 'DELETE FROM #CheckConstraints WHERE [_RowId] = ' + CAST([_RowId] AS NVARCHAR(20)) + ' AND NOT (' + SchemaSmith.fn_StripLeadingSelect([ShouldApplyExpression]) + ');'
@@ -573,7 +592,7 @@
          -- default is AUTO, but an explicit "ChangeTracking": null in a table file overwrites it. 'AUTO'
          -- here matches that C# default, so an omitted and an explicitly-null value behave the same.
          [ChangeTracking] = COALESCE(NULLIF(RTRIM(f.[ChangeTracking]), ''), 'AUTO'),
-         [StopList] = SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM(f.[StopList]), ''), 'SYSTEM')),
+         [StopList] = CASE WHEN UPPER(SchemaSmith.fn_StripBracketWrapping(RTRIM(f.[StopList]))) = 'OFF' THEN 'OFF' ELSE SchemaSmith.fn_SafeBracketWrap(COALESCE(NULLIF(RTRIM(f.[StopList]), ''), 'SYSTEM')) END,
          -- Full-text LANGUAGE churn: same round-trip contract as the JSON twin -- peel off a trailing
          -- "LANGUAGE nnnn" suffix before bracket-wrapping the column (+ optional TYPE COLUMN) part, then
          -- reattach it, so this matches the live-side build in ModifiedTableQuench.sql byte-for-byte.
@@ -617,5 +636,5 @@
       (SELECT TOP 1 [Schema] + '.' + [TableName] FROM #FullTextIndexes WITH (NOLOCK) GROUP BY [Schema], [TableName] HAVING COUNT(*) > 1 ORDER BY [Schema], [TableName]);
     DECLARE @v_FTDupMsg NVARCHAR(2000) = 'Multiple full-text index variants matched on this target for table ' + @v_FTDupTable +
       '. SQL Server allows one full-text index per table — ShouldApplyExpressions must be mutually exclusive.';
-    RAISERROR(@v_FTDupMsg, 16, 1);
+    RAISERROR('%s', 16, 1, @v_FTDupMsg);
   END

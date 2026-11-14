@@ -35,7 +35,7 @@ BEGIN
     END IF;
 
     RAISE NOTICE 'Validate Table Ownership';
-    SELECT STRING_AGG('RAISE NOTICE ''  Table ' || tp."Schema" || '.' || tp."TableName" || ' owned by different product. [' || tp."ProductName" || '] <> [' || p_ProductName || ']'';', CHR(10))
+    SELECT STRING_AGG('RAISE NOTICE ''  Table %.% owned by different product. [%] <> [%]'', ''' || REPLACE((tp."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tp."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tp."ProductName")::TEXT, '''', '''''') || ''', ''' || REPLACE((p_ProductName)::TEXT, '''', '''''') || ''';', CHR(10))
       INTO sql_script
       FROM temp_tables t
       JOIN "SchemaSmith"."ProductOwnership" tp ON tp."Schema" = t."Schema"
@@ -70,5 +70,18 @@ BEGIN
         WHERE "ProductName" = p_ProductName
           AND template_name = p_TemplateName
           AND (p_SchemaName = '' OR "Schema" = p_SchemaName);
+
+    -- A table replaced by a same-named view (or dropped) out of band is no longer the product's table: leaving its row
+    -- made drop-by-absence drop the view as a table. FixupTableOwnership prunes the persistent row by the same test.
+    DELETE FROM temp_product_ownership tp
+      WHERE tp."IndexName" IS NULL
+        AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                         WHERE n.nspname = tp."Schema" AND c.relname = tp."TableName" AND c.relkind IN ('r', 'p'))
+        AND NOT EXISTS (SELECT 1 FROM pg_matviews mv WHERE mv.schemaname = tp."Schema" AND mv.matviewname = tp."TableName");
+
+    -- A table this package now declares as a partition is owned through its parent, not as a table of its own: left
+    -- here it read as a table removed from the product, which the partition data-loss guard refuses on every deploy.
+    DELETE FROM temp_product_ownership tp
+      WHERE EXISTS (SELECT 1 FROM temp_partitions p WHERE p."TableSchema" = tp."Schema" AND p."Name" = tp."TableName");
 
 END $$;

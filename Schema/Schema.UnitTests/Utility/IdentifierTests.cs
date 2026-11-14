@@ -1,5 +1,6 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
+using System;
 using NUnit.Framework;
 using Schema.Domain;
 using Schema.Utility;
@@ -127,6 +128,22 @@ public class IdentifierTests
 
     // ---- SplitQualifiedName (#272: delimiter-aware schema/object split) ----
 
+    // A doubled closing delimiter is the delimiter inside the name, not its end: the dot after it is still in the name.
+    [TestCase("[a]]b.c]", "SqlServer", null, "a]b.c")]
+    [TestCase("[s]]x].[a]]b.c]", "SqlServer", "s]x", "a]b.c")]
+    [TestCase("\"a\"\"b.c\"", "PostgreSQL", null, "a\"b.c")]
+    [TestCase("`a``b.c`", "MySQL", null, "a`b.c")]
+    public void SplitQualifiedName_ADoubledDelimiterStaysInTheName(string value, string platform, string schema, string name)
+    {
+        var split = Identifier.SplitQualifiedName(value, Enum.Parse<Platform>(platform));
+        Assert.Multiple(() =>
+        {
+            Assert.That(split.Schema, Is.EqualTo(schema));
+            Assert.That(split.Name, Is.EqualTo(name));
+        });
+    }
+
+
     [Test]
     public void Split_SqlServer_FullyBracketed()
     {
@@ -181,5 +198,18 @@ public class IdentifierTests
         var (schema, name) = Identifier.SplitQualifiedName("Orders", Platform.SqlServer);
         Assert.That(schema, Is.Null);
         Assert.That(name, Is.EqualTo("Orders"));
+    }
+
+    [TestCase(Platform.SqlServer, "[a],[b]", new[] { "[a]", "[b]" })]
+    [TestCase(Platform.SqlServer, "[a,b] , [c]]d,e]", new[] { "[a,b]", "[c]]d,e]" })]
+    [TestCase(Platform.SqlServer, "*[k,1],G[g],[x] DESC", new[] { "*[k,1]", "G[g]", "[x] DESC" })]
+    [TestCase(Platform.SqlServer, "CAST([a] AS DECIMAL(10,2)),'x,y',[b]", new[] { "CAST([a] AS DECIMAL(10,2))", "'x,y'", "[b]" })]
+    [TestCase(Platform.PostgreSQL, "\"a,\"\"b\",\"c\"", new[] { "\"a,\"\"b\"", "\"c\"" })]
+    [TestCase(Platform.MySQL, "`a,``b`,`c`", new[] { "`a,``b`", "`c`" })]
+    [TestCase(Platform.SqlServer, "a, b,,", new[] { "a", "b" })]
+    [TestCase(Platform.SqlServer, "", new string[0])]
+    public void SplitDelimitedList_SplitsOnlyAtTheCommasBetweenItems(Platform platform, string list, string[] expected)
+    {
+        Assert.That(Identifier.SplitDelimitedList(list, platform), Is.EqualTo(expected));
     }
 }

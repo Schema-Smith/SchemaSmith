@@ -11,6 +11,7 @@ using Newtonsoft.Json.Converters;
 using Schema.Isolators;
 using Schema.Utility;
 using Schema.Configuration;
+using Schema.Domain.Settings;
 
 namespace Schema.Domain
 {
@@ -45,6 +46,10 @@ namespace Schema.Domain
 
         [JsonProperty(Order = 5)]
         public List<ProductFolder> ScriptFolders { get; set; } = [];
+
+        // ServerSettings.json beside Product.json; null when the package has none, and then no server setting is read.
+        [JsonIgnore]
+        public SettingsFile ServerSettings { get; set; }
 
         [JsonProperty(Order = 6)]
         [DefaultValue("{{repo_path}}/.git/HEAD")]
@@ -113,6 +118,11 @@ namespace Schema.Domain
         /// </summary>
         [JsonProperty(Order = 22)]
         public RebuildPolicy RebuildPolicy { get; set; }
+
+        [JsonProperty(Order = 23)]
+        [SchemaProperty(Description = "Optional. false keeps the run-once record of a migration script the package does not carry, " +
+                                      "even when the PruneObsoleteMigrationTracking setting is on. SchemaShears writes it into every patch.")]
+        public bool? PruneObsoleteMigrationTracking { get; set; }
 
         [JsonIgnore]
         public List<ProductFolder> BeforeFolders => ScriptFolders?.FindAll(f => f.QuenchSlot == ProductQuenchSlot.Before) ?? [];
@@ -197,6 +207,9 @@ namespace Schema.Domain
             product.ScriptTokens.Add("ProductName", product.Name);
 
             product.InstanceLoad();
+            product.ServerSettings = SettingsFile.LoadIfPresent(Path.Join(schemaPackagePath, SettingsFile.ServerFileName), product.Platform,
+                SettingScope.Server, missingMemberHandling, tolerateDeclarationErrors: tolerateFileTokenErrors);
+            product.ServerSettings?.ResolveTokens(product.ScriptTokens.ToList(), product.Platform);
 
             return product;
         }

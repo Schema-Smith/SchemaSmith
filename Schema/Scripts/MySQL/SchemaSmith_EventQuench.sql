@@ -95,6 +95,16 @@ BEGIN
                         SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].Comment')))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].TimeZone'))),
                SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].SqlMode')));
+        -- An event whose ShouldApplyExpression is false is left out of this deploy, as every other declared type is.
+        SET @ss_ev_apply_expr = SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_EventDefinitions, CONCAT('$[', v_idx, '].ShouldApplyExpression')));
+        IF @ss_ev_apply_expr IS NOT NULL AND TRIM(@ss_ev_apply_expr) <> '' THEN
+            SET @ss_ev_apply = 1;
+            SET @ss_ev_apply_sql = CONCAT('SELECT CASE WHEN (', @ss_ev_apply_expr, ') THEN 1 ELSE 0 END INTO @ss_ev_apply');
+            PREPARE ss_ev_apply FROM @ss_ev_apply_sql;
+            EXECUTE ss_ev_apply;
+            DEALLOCATE PREPARE ss_ev_apply;
+            UPDATE _SchemaSmith_Events SET ShouldApply = @ss_ev_apply WHERE Id = LAST_INSERT_ID();
+        END IF;
         SET v_idx = v_idx + 1;
     END WHILE;
 
@@ -107,7 +117,7 @@ BEGIN
     IF EXISTS (SELECT 1 FROM _SchemaSmith_Events
                 WHERE ScheduleType NOT IN ('EVERY', 'AT')
                    OR Status NOT IN ('ENABLE', 'DISABLE', 'DISABLE ON SLAVE')) THEN
-        SELECT CONCAT('`', Name, '` ScheduleType=''', ScheduleType, ''' Status=''', Status, '''')
+        SELECT CONCAT('`', SchemaSmith_EscapeBackticks(Name), '` ScheduleType=''', ScheduleType, ''' Status=''', Status, '''')
           INTO @ss_bad_event
           FROM _SchemaSmith_Events
          WHERE ScheduleType NOT IN ('EVERY', 'AT')
@@ -130,7 +140,7 @@ BEGIN
     -- Rebuilding the string separately in two places is how an object ends up churning forever.
     UPDATE _SchemaSmith_Events
     SET DdlScript = CONCAT(
-        'CREATE EVENT `', p_DatabaseName, '`.`', Name, '` ON SCHEDULE ',
+        'CREATE EVENT `', SchemaSmith_EscapeBackticks(p_DatabaseName), '`.`', SchemaSmith_EscapeBackticks(Name), '` ON SCHEDULE ',
         CASE WHEN ScheduleType = 'AT'
              THEN CONCAT('AT ''', COALESCE(ExecuteAt, ''), '''')
              ELSE CONCAT('EVERY ', COALESCE(`Interval`, '1 DAY'),
@@ -145,7 +155,7 @@ BEGIN
                                                          'DISABLE ON REPLICA', 'DISABLE ON SLAVE')
                          ELSE 'ENABLE' END,
         CASE WHEN NULLIF(Comment, '') IS NOT NULL
-             THEN CONCAT(' COMMENT ''', REPLACE(LEFT(Comment, COALESCE(v_comment_kept, 2048)), '''', ''''''), '''') ELSE '' END,
+             THEN CONCAT(' COMMENT ', QUOTE(LEFT(Comment, COALESCE(v_comment_kept, 2048))), '') ELSE '' END,
         ' DO ', COALESCE(Definition, ''));
 
     -- A combination mode (TRADITIONAL, ANSI) is stored as the flags it stands for, so the declared mode is compared as
@@ -211,17 +221,17 @@ BEGIN
             SELECT Id * 100 + 20, 'SET @ss_saved_time_zone = @@SESSION.time_zone'
               FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND NULLIF(TimeZone, '') IS NOT NULL;
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
-            SELECT Id * 100 + 21, CONCAT('SET SESSION time_zone = ''', REPLACE(TimeZone, '''', ''''''), '''')
+            SELECT Id * 100 + 21, CONCAT('SET SESSION time_zone = ', QUOTE(TimeZone), '')
               FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND NULLIF(TimeZone, '') IS NOT NULL;
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
             SELECT Id * 100 + 22, 'SET @ss_saved_sql_mode = @@SESSION.sql_mode'
               FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND SqlMode IS NOT NULL;
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
-            SELECT Id * 100 + 23, CONCAT('SET SESSION sql_mode = ''', REPLACE(SqlMode, '''', ''''''), '''')
+            SELECT Id * 100 + 23, CONCAT('SET SESSION sql_mode = ', QUOTE(SqlMode), '')
               FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1 AND SqlMode IS NOT NULL;
 
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
-            SELECT Id * 100 + 25, CONCAT('DROP EVENT IF EXISTS `', p_DatabaseName, '`.`', Name, '`')
+            SELECT Id * 100 + 25, CONCAT('DROP EVENT IF EXISTS `', SchemaSmith_EscapeBackticks(p_DatabaseName), '`.`', SchemaSmith_EscapeBackticks(Name), '`')
               FROM _SchemaSmith_Events WHERE ShouldApply = 1 AND Changed = 1;
 
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
@@ -244,10 +254,10 @@ BEGIN
             -- otherwise break -- or inject into -- this generated INSERT.
             SELECT Id * 100 + 50,
                    CONCAT('INSERT INTO SchemaSmith_ProductOwnership (ObjectType, ObjectSchema, ObjectName, ProductName, TemplateName) ',
-                          'SELECT ''EVENT'', ''', REPLACE(p_DatabaseName, '''', ''''''), ''', ''', REPLACE(Name, '''', ''''''), ''', ''', REPLACE(p_ProductName, '''', ''''''), ''', ''', REPLACE(COALESCE(p_TemplateName, ''), '''', ''''''), ''' ',
+                          'SELECT ''EVENT'', ', QUOTE(p_DatabaseName), ', ', QUOTE(Name), ', ', QUOTE(p_ProductName), ', ', QUOTE(COALESCE(p_TemplateName, '')), ' ',
                           'FROM DUAL WHERE NOT EXISTS (SELECT 1 FROM SchemaSmith_ProductOwnership po WHERE po.ObjectType = ''EVENT'' ',
-                          'AND CONVERT(po.ObjectSchema USING utf8mb4) COLLATE utf8mb4_general_ci = ''', REPLACE(p_DatabaseName, '''', ''''''), ''' ',
-                          'AND CONVERT(po.ObjectName USING utf8mb4) COLLATE utf8mb4_general_ci = ''', REPLACE(Name, '''', ''''''), ''')')
+                          'AND CONVERT(po.ObjectSchema USING utf8mb4) COLLATE utf8mb4_general_ci = ', QUOTE(p_DatabaseName), ' ',
+                          'AND CONVERT(po.ObjectName USING utf8mb4) COLLATE utf8mb4_general_ci = ', QUOTE(Name), ')')
               FROM _SchemaSmith_Events WHERE ShouldApply = 1;
 
         INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
@@ -286,7 +296,7 @@ BEGIN
                                   AND e.ShouldApply = 1);
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('  Drop event `', Name, '` (removed from product)') FROM _SchemaSmith_EventsToDrop ORDER BY Id;
+            SELECT CONNECTION_ID(), CONCAT('  Drop event `', SchemaSmith_EscapeBackticks(Name), '` (removed from product)') FROM _SchemaSmith_EventsToDrop ORDER BY Id;
 
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -297,7 +307,7 @@ BEGIN
             -- past the create range so drops always follow creates.
             SET @ss_ev_base = 100000000;
             INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)
-                SELECT @ss_ev_base + Id * 10 + 1, CONCAT('DROP EVENT IF EXISTS `', p_DatabaseName, '`.`', Name, '`')
+                SELECT @ss_ev_base + Id * 10 + 1, CONCAT('DROP EVENT IF EXISTS `', SchemaSmith_EscapeBackticks(p_DatabaseName), '`.`', SchemaSmith_EscapeBackticks(Name), '`')
                   FROM _SchemaSmith_EventsToDrop;
 
             INSERT INTO _SchemaSmith_EventStatements (Seq, Statement)

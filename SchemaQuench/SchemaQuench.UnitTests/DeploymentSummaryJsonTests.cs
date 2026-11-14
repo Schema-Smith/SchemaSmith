@@ -19,7 +19,7 @@ namespace SchemaQuench.UnitTests;
 [TestFixture]
 public class DeploymentSummaryJsonTests
 {
-    private static DeploymentSummary BuildFullyPopulatedSummary()
+    internal static DeploymentSummary BuildFullyPopulatedSummary()
     {
         var run = new RunInfo(
             Product: "MyProduct",
@@ -91,7 +91,7 @@ public class DeploymentSummaryJsonTests
             Instrumented: false,
             Created: new CreatedCounts(0, 0, 0, 0, 0, 0, 0, 0),
             Modified: new ModifiedCounts(0, 0),
-            Dropped: new DroppedCounts(0, 0, 0, 0),
+            Dropped: new DroppedCounts(0, 0, 0, 0, 0),
             ScriptsRan: 0,
             Details: new List<ObjectChangeDetail>());
 
@@ -106,6 +106,38 @@ public class DeploymentSummaryJsonTests
             Failures: failures,
             WhatIf: whatIf,
             ObjectChanges: objectChanges);
+    }
+
+    // 1.4: the names a consumer reads the run identity by.
+    [Test]
+    public void Serialize_WritesTheRunIdentity_InCamelCase()
+    {
+        var summary = BuildFullyPopulatedSummary();
+        summary = summary with
+        {
+            Run = summary.Run with
+            {
+                Id = Guid.Parse("5d2c1a0e-7f3b-4a55-9a0c-1c2f6f0e8b11"), Label = "2026.11.3",
+                Package = new PackageIdentity("sha256:9b1f", 412), Source = new RunSource("acme/billing-db", "4f2a9c1e", "main", "ci"),
+                Ci = new CiInfo("GitHubActions", "Deploy production", "9912345678", "1", "https://x/runs/9912345678", "octocat", "production"),
+                Host = new RunHost("BUILD01", "svc-deploy")
+            }
+        };
+
+        var run = JObject.Parse(DeploymentSummaryJson.Serialize(summary))["run"]!;
+
+        Assert.That((string)run["id"], Is.EqualTo("5d2c1a0e-7f3b-4a55-9a0c-1c2f6f0e8b11"));
+        Assert.That((string)run["label"], Is.EqualTo("2026.11.3"));
+        Assert.That(run["resumesRunId"]!.Type, Is.EqualTo(JTokenType.Null));
+        Assert.That((string)run.SelectToken("package.contentHash"), Is.EqualTo("sha256:9b1f"));
+        Assert.That((int)run.SelectToken("package.fileCount")!, Is.EqualTo(412));
+        Assert.That((string)run.SelectToken("source.repository"), Is.EqualTo("acme/billing-db"));
+        Assert.That((string)run.SelectToken("source.from"), Is.EqualTo("ci"));
+        Assert.That((string)run.SelectToken("ci.provider"), Is.EqualTo("GitHubActions"));
+        Assert.That((string)run.SelectToken("ci.runAttempt"), Is.EqualTo("1"));
+        Assert.That((string)run.SelectToken("ci.environment"), Is.EqualTo("production"));
+        Assert.That((string)run.SelectToken("host.machine"), Is.EqualTo("BUILD01"));
+        Assert.That((string)run.SelectToken("host.user"), Is.EqualTo("svc-deploy"));
     }
 
     [Test]
@@ -328,7 +360,7 @@ public class DeploymentSummaryJsonTests
         var summary = BuildFullyPopulatedSummary() with
         {
             ObjectChanges = new ObjectChangeSummary(true, new CreatedCounts(0, 0, 2, 0, 0, 0, 0, 0), new ModifiedCounts(0, 0),
-                new DroppedCounts(0, 0, 0, 0), 0,
+                new DroppedCounts(0, 0, 0, 0, 0), 0,
                 [new ObjectChangeDetail("index", "[dbo].[T].[IX_A]", "created", "online"), new ObjectChangeDetail("index", "[dbo].[T].[IX_B]", "created")])
         };
         var details = (JArray)JObject.Parse(DeploymentSummaryJson.Serialize(summary)).SelectToken("objectChanges.details")!;
@@ -345,7 +377,7 @@ public class DeploymentSummaryJsonTests
         var summary = BuildFullyPopulatedSummary() with
         {
             ObjectChanges = new ObjectChangeSummary(true, new CreatedCounts(1, 0, 0, 0, 0, 0, 0, 0), new ModifiedCounts(0, 0),
-                new DroppedCounts(0, 0, 0, 0), 0,
+                new DroppedCounts(0, 0, 0, 0, 0), 0,
                 [new ObjectChangeDetail("table", "[dbo].[T]", "created", Server: "srv", Database: "tenant_003", Schema: "sales"),
                  new ObjectChangeDetail("table", "[dbo].[U]", "created")])
         };

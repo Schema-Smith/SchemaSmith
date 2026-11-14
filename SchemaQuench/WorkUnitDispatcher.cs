@@ -163,7 +163,8 @@ public sealed class WorkUnitDispatcher
         var tasks = new List<Task>(_maxThreads);
         for (var i = 0; i < _maxThreads; i++)
         {
-            tasks.Add(Task.Run(WorkerLoop));
+            // Each worker blocks on a database for the whole run; the pool would add such threads one per ~500 ms.
+            tasks.Add(Task.Factory.StartNew(WorkerLoop, CancellationToken.None, TaskCreationOptions.LongRunning, TaskScheduler.Default));
         }
 
         Task.WaitAll(tasks.ToArray());

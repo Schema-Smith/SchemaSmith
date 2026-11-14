@@ -41,7 +41,7 @@ END LOOP;
 FOR skipped_fk IN SELECT con.conname
                     FROM pg_catalog.pg_constraint con
                    WHERE con.conrelid = ("SchemaSmith"."QuoteName"(p_Schema) || '.' || "SchemaSmith"."QuoteName"(p_Table))::regclass
-                     AND con.contype = 'f'
+                     AND con.contype = 'f' AND con.conparentid = 0
                      AND "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid)
                    ORDER BY con.conname LOOP
   RAISE WARNING 'Foreign key %.%.% uses PERIOD (a temporal foreign key), which is not modelled: left out of the package rather than written as a plain key.',
@@ -61,7 +61,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                     ELSE "SchemaSmith"."ColumnDataType"(c.data_type, c.udt_schema, c.udt_name, c.domain_schema, c.domain_name, c.character_maximum_length, c.numeric_precision, c.numeric_scale, c.datetime_precision, a.atttypid, a.atttypmod) END AS "DataType",
                                CASE WHEN c.is_nullable = 'YES' THEN TRUE ELSE FALSE END AS "Nullable",
                                CASE WHEN ser.objid IS NOT NULL AND a.attidentity = '' AND c.column_default LIKE 'nextval(%' THEN NULL
-                                    ELSE "SchemaSmith"."StripParenWrapping"(c.column_default) END AS "Default",
+                                    -- Raw, as the compare reads it: a re-extracted package is then exactly what PostgreSQL stores.
+                                    ELSE c.column_default END AS "Default",
                                "SchemaSmith"."ColumnCollation"(c.collation_schema, c.collation_name) AS "Collation",
                                -- ALWAYS has always carried its START WITH and INCREMENT BY; BY DEFAULT writes options only when
                                -- one differs from the default, so a plain one stays as it was. The rest of a sequence's options
@@ -144,7 +145,7 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                     AND idx > idx.indnkeyatts
                                     AND a.attnum = element) AS "IncludeColumns",
                                CASE WHEN "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid) THEN NULL
-                                    ELSE (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') END AS "AccessMethod",
+                                    ELSE (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind IN ('i', 'I')) END AS "AccessMethod",
                                "SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)) AS "FilterExpression",
                                -- Only a fill factor someone set is declared; an index without the option is on the
                                -- engine's default for its access method, which is not an authored value and would
@@ -201,12 +202,13 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                     WHEN 'p' THEN 'PARTIAL'
                                     WHEN 's' THEN 'SIMPLE'
                                     ELSE 'UNKNOWN'
-                                    END AS "MatchType"
+                                    END AS "MatchType",
+                               OBJ_DESCRIPTION(con.oid, 'pg_constraint') AS "Description"
                           FROM pg_catalog.pg_constraint con
                           JOIN pg_catalog.pg_class frel ON frel.oid = con.confrelid
                           JOIN pg_catalog.pg_namespace fnsp ON fnsp.oid = frel.relnamespace
                           WHERE con.conrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
-                            AND con.contype = 'f'
+                            AND con.contype = 'f' AND con.conparentid = 0
                             AND NOT "SchemaSmith"."ConstraintWithoutOverlaps"(con.oid)
                           ORDER BY con.conname) sub) AS "ForeignKeys",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))
@@ -216,7 +218,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                "SchemaSmith"."CheckPredicate"(con.oid) AS "Expression",
                                CASE WHEN NOT COALESCE(con.convalidated, TRUE) THEN FALSE END AS "Validated",
                                CASE WHEN con.connoinherit THEN TRUE END AS "NoInherit",
-                               CASE WHEN NOT "SchemaSmith"."ConstraintEnforced"(con.oid) THEN FALSE END AS "Enforced"
+                               CASE WHEN NOT "SchemaSmith"."ConstraintEnforced"(con.oid) THEN FALSE END AS "Enforced",
+                               OBJ_DESCRIPTION(con.oid, 'pg_constraint') AS "Description"
                         FROM pg_catalog.pg_constraint con
                           WHERE con.conrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
                             AND con.contype = 'c'
@@ -238,14 +241,15 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                                                               JOIN pg_attribute a ON a.attrelid = se.stxrelid AND a.attnum = t.attnum
                                                                               WHERE a.attnum > 0),
                                                                            ARRAY[]::text[]),
-                                                                  "SchemaSmith"."StatisticsExpressionColumns"(sn.nspname, se.stxname)), ','), '') AS "StatisticsColumns"
+                                                                  "SchemaSmith"."StatisticsExpressionColumns"(sn.nspname, se.stxname)), ','), '') AS "StatisticsColumns",
+                               OBJ_DESCRIPTION(se.oid, 'pg_statistic_ext') AS "Description"
                           FROM pg_statistic_ext se
                           JOIN pg_namespace sn ON sn.oid = se.stxnamespace
                           WHERE se.stxrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass
                           ORDER BY se.stxname) sub) AS "Statistics",
                (SELECT JSON_AGG(ROW_TO_JSON(sub))
                   FROM (SELECT i.relname AS "Name",
-                               (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') AS "AccessMethod",
+                               (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind IN ('i', 'I')) AS "AccessMethod",
                                -- Each key as the engine writes it (operator class, COLLATE, parameters; IndexKeyForms)
                                -- paired with its exclusion operator by position.
                                (SELECT JSON_AGG(ROW_TO_JSON(cols))
@@ -269,7 +273,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                     AND a.attnum = u.element) AS "IncludeColumns",
                                (SELECT JSON_OBJECT_AGG(SPLIT_PART(opt, '=', 1), SPLIT_PART(opt, '=', 2))
                                   FROM UNNEST(i.reloptions) AS o(opt)) AS "StorageParameters",
-                               (SELECT its.spcname FROM pg_tablespace its WHERE its.oid = i.reltablespace AND i.reltablespace <> 0) AS "Tablespace"
+                               (SELECT its.spcname FROM pg_tablespace its WHERE its.oid = i.reltablespace AND i.reltablespace <> 0) AS "Tablespace",
+                               OBJ_DESCRIPTION(con.oid, 'pg_constraint') AS "Description"
                           FROM pg_index idx
                           JOIN pg_class i ON i.oid = idx.indexrelid
                           JOIN pg_catalog.pg_constraint con ON con.conrelid = idx.indrelid AND con.conname = i.relname AND con.contype = 'x'
@@ -282,9 +287,13 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                   FROM (SELECT pol.policyname AS "Name",
                                pol.permissive AS "Permissive",
                                pol.cmd AS "Command",
-                               ARRAY_TO_STRING(pol.roles, ',') AS "Roles",
+                               -- Quoted where a name needs it, so a mixed-case role deploys as itself rather than folded to lower case.
+                               (SELECT STRING_AGG(QUOTE_IDENT(r), ',' ORDER BY o) FROM UNNEST(pol.roles) WITH ORDINALITY AS u(r, o)) AS "Roles",
                                COALESCE(pol.qual, '') AS "UsingExpression",
-                               COALESCE(pol.with_check, '') AS "WithCheckExpression"
+                               COALESCE(pol.with_check, '') AS "WithCheckExpression",
+                               OBJ_DESCRIPTION((SELECT p.oid FROM pg_policy p
+                                                 WHERE p.polname = pol.policyname
+                                                   AND p.polrelid = ("SchemaSmith"."QuoteName"(t.table_schema) || '.' || "SchemaSmith"."QuoteName"(t.table_name))::regclass), 'pg_policy') AS "Description"
                           FROM pg_policies pol
                           WHERE pol.schemaname = t.table_schema
                             AND pol.tablename = t.table_name) sub) AS "Policies",
@@ -298,11 +307,14 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
                                        AND po."TableName" = t.table_name
                                        AND po."IndexName" IS NULL), FALSE)
                     THEN TRUE END AS "PreventDrop",
+               -- A partitioned table has no access method of its own before 17 (relam 0), and its persistence and fill factor
+               -- are inert, so they are left out for one.
                am.amname AS "AccessMethod",
-               CASE rls.relpersistence WHEN 'p' THEN 'Logged' WHEN 'u' THEN 'Unlogged' WHEN 't' THEN 'Temporary' END AS "PersistenceType",
-               COALESCE((SELECT SPLIT_PART(opt, '=', 2)
+               CASE WHEN rls.relkind = 'r' THEN CASE rls.relpersistence WHEN 'p' THEN 'Logged' WHEN 'u' THEN 'Unlogged' WHEN 't' THEN 'Temporary' END END AS "PersistenceType",
+               CASE WHEN rls.relkind = 'r' THEN COALESCE((SELECT SPLIT_PART(opt, '=', 2)
                            FROM UNNEST(rls.reloptions) AS opts(opt)
-                           WHERE opt LIKE 'fillfactor=%'), '100')::INT2 AS "FillFactor",
+                           WHERE opt LIKE 'fillfactor=%'), '100')::INT2 END AS "FillFactor",
+               "SchemaSmith"."PartitionTreeJson"(rls.oid) AS "Partitioning",
                -- 'd' (the default) deliberately yields NULL so FormatJson strips the key: a table that
                -- never touched replica identity extracts exactly as it did before this shipped. #407
                CASE rls.relreplident WHEN 'f' THEN 'FULL' WHEN 'n' THEN 'NOTHING' WHEN 'i' THEN 'INDEX' END AS "ReplicaIdentity",
@@ -320,8 +332,8 @@ SELECT "SchemaSmith"."FormatJson"(ROW_TO_JSON(tbl))
           FROM information_schema.tables t
           JOIN pg_class rls ON rls.relname = t.table_name
                            AND rls.relnamespace IN (SELECT oid FROM pg_namespace WHERE nspname = t.table_schema)
-                           AND rls.relkind = 'r'
-          JOIN pg_am am ON rls.relam = am.oid
+                           AND rls.relkind IN ('r', 'p') AND NOT rls.relispartition
+          LEFT JOIN pg_am am ON rls.relam = am.oid
           WHERE t.table_type = 'BASE TABLE'
             AND t.table_schema NOT IN ('pg_catalog', 'information_schema', 'pg_toast', 'SchemaSmith')
             AND p_Schema = t.table_schema

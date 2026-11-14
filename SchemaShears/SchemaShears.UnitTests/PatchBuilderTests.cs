@@ -51,6 +51,22 @@ public class PatchBuilderTests
         });
     }
 
+    // A patch carries only the templates its manifest touches; an order entry with no folder stopped --Validate and the deploy.
+    [Test]
+    public void Build_OrdersOnlyTheTemplatesThePatchCarries()
+    {
+        Directory.CreateDirectory(Path.Join(_source, "Templates", "Initialize"));
+        File.WriteAllText(Path.Join(_source, "Templates", "Initialize", "Template.json"), "{}");
+        File.WriteAllText(Path.Join(_source, "Product.json"), "{ \"Name\": \"Acme\", \"TemplateOrder\": [ \"Initialize\", \"Main\" ] }");
+        var manifest = Path.Join(_root, "m.txt");
+        File.WriteAllText(manifest, "Templates/Main/Tables/dbo.Orders.json\n");
+
+        new PatchBuilder().Build(new PatchBuildRequest { SourcePath = _source, ManifestPath = manifest, OutputPath = _output });
+
+        var order = JObject.Parse(File.ReadAllText(Path.Join(_output, "Product.json")))["TemplateOrder"]!.Values<string>();
+        Assert.That(order, Is.EqualTo(new[] { "Main" }));
+    }
+
     [Test]
     public void Build_SourceMissingProductJson_Throws()
     {

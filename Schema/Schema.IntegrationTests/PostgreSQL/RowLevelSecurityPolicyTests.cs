@@ -33,28 +33,19 @@ namespace Schema.IntegrationTests.PostgreSQL;
 [NonParallelizable]
 public class RowLevelSecurityPolicyTests
 {
-    private string _server = "", _user = "", _password = "", _port = "";
-    private Dictionary<string, string> _props = new();
     private string _db = "";
 
+    // A schema of its own in the suite's kindled database, not a database: nothing here is a database-level setting, and a
+    // database cost a CREATE DATABASE and a kindle per run. Every connection puts the schema first on its search_path.
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-        _server = config["PostgreSQL:Server"] ?? "127.0.0.1";
-        _user = config["PostgreSQL:User"];
-        _password = config["PostgreSQL:Password"];
-        _port = config["PostgreSQL:Port"];
-        _props = ConnectionString.ReadProperties(config, "PostgreSQL:ConnectionProperties");
-
         _db = $"ss_rls_{Guid.NewGuid():N}"[..28].ToLowerInvariant();
-        using var maint = Open("postgres");
-        Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
-        Exec(maint, $"CREATE DATABASE \"{_db}\"");
-
-        using var c = Open(_db);
-        using var cmd = c.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.PostgreSQL);
+        using (var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString()))
+        {
+            main.Open();
+            Exec(main, $"CREATE SCHEMA \"{_db}\"");
+        }
     }
 
     [OneTimeTearDown]
@@ -62,18 +53,18 @@ public class RowLevelSecurityPolicyTests
     {
         try
         {
-            using var maint = Open("postgres");
-            Exec(maint, $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{_db}' AND pid <> pg_backend_pid()");
-            Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
+            using var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
+            main.Open();
+            Exec(main, $"DROP SCHEMA IF EXISTS \"{_db}\" CASCADE");
         }
         catch (DbException) { /* teardown must not mask an assertion */ }
     }
 
-    private IDbConnection Open(string database)
+    private IDbConnection Open(string schema)
     {
-        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL)
-            .GetDbConnection(ConnectionString.Build(Platform.PostgreSQL, _server, database, _user, _password, _port, _props));
+        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         c.Open();
+        Exec(c, $"SET search_path = \"{schema}\", public");
         return c;
     }
 
@@ -93,8 +84,8 @@ public class RowLevelSecurityPolicyTests
         act(cmd);
     }
 
-    private static string Package(string table, string policies) =>
-        "[{ \"Schema\": \"public\", \"Name\": \"" + table + "\", \"RowLevelSecurity\": true,"
+    private string Package(string table, string policies) =>
+        "[{ \"Schema\": \"" + _db + "\", \"Name\": \"" + table + "\", \"RowLevelSecurity\": true,"
         + " \"Columns\": [ { \"Name\": \"id\", \"DataType\": \"integer\", \"Nullable\": false },"
         + " { \"Name\": \"tenant\", \"DataType\": \"text\", \"Nullable\": true } ],"
         + " \"Indexes\": [ { \"Name\": \"pk_" + table + "\", \"IndexColumns\": \"id\", \"PrimaryKey\": true, \"Unique\": true } ],"
@@ -106,7 +97,7 @@ public class RowLevelSecurityPolicyTests
 
     private static string PolicyAttr(IDbCommand cmd, string table, string policy, string column)
     {
-        cmd.CommandText = "SELECT COALESCE(" + column + ", '(null)') FROM pg_policies WHERE schemaname = 'public'"
+        cmd.CommandText = "SELECT COALESCE(" + column + ", '(null)') FROM pg_policies WHERE schemaname = current_schema()"
                           + " AND tablename = '" + table + "' AND policyname = '" + policy + "'";
         return cmd.ExecuteScalar() as string;
     }
@@ -114,21 +105,21 @@ public class RowLevelSecurityPolicyTests
     private static long PolicyOid(IDbCommand cmd, string table, string policy)
     {
         cmd.CommandText = "SELECT COALESCE((SELECT p.oid::bigint FROM pg_policy p JOIN pg_class c ON c.oid = p.polrelid"
-                          + " WHERE c.relname = '" + table + "' AND p.polname = '" + policy + "'), 0)";
+                          + " WHERE c.relnamespace = current_schema()::regnamespace AND c.relname = '" + table + "' AND p.polname = '" + policy + "'), 0)";
         return Convert.ToInt64(cmd.ExecuteScalar());
     }
 
     private static int PolicyAuditRows(IDbCommand cmd, string table)
     {
         cmd.CommandText = "SELECT COUNT(*) FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"ObjectType\" = 'policy'"
-                          + " AND \"ObjectName\" LIKE 'public." + table + ".%'";
+                          + " AND \"ObjectName\" LIKE current_schema() || '." + table + ".%'";
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
 
     private static void ClearPolicyAudit(IDbCommand cmd, string table)
     {
         cmd.CommandText = "DELETE FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"ObjectType\" = 'policy'"
-                          + " AND \"ObjectName\" LIKE 'public." + table + ".%'";
+                          + " AND \"ObjectName\" LIKE current_schema() || '." + table + ".%'";
         cmd.ExecuteNonQuery();
     }
 
@@ -140,7 +131,7 @@ public class RowLevelSecurityPolicyTests
 
     private static int PolicyCount(IDbCommand cmd, string table, string policy = null)
     {
-        cmd.CommandText = "SELECT COUNT(*) FROM pg_policies WHERE schemaname = 'public' AND tablename = '" + table + "'"
+        cmd.CommandText = "SELECT COUNT(*) FROM pg_policies WHERE schemaname = current_schema() AND tablename = '" + table + "'"
                           + (policy == null ? "" : " AND policyname = '" + policy + "'");
         return Convert.ToInt32(cmd.ExecuteScalar());
     }
@@ -157,7 +148,7 @@ public class RowLevelSecurityPolicyTests
                 Assert.That(PolicyCount(cmd, "rls_create", "p_all"), Is.EqualTo(1),
                     "without this the table has RLS on and no policy, which returns no rows to anyone but "
                     + "the owner -- the exact hazard this item exists to close");
-                cmd.CommandText = "SELECT relrowsecurity FROM pg_class WHERE relname = 'rls_create'";
+                cmd.CommandText = "SELECT relrowsecurity FROM pg_class WHERE relnamespace = current_schema()::regnamespace AND relname = 'rls_create'";
                 Assert.That(cmd.ExecuteScalar(), Is.True, "and RLS itself is still enabled");
             });
         });
@@ -180,8 +171,8 @@ public class RowLevelSecurityPolicyTests
 
         Assert.Multiple(() =>
         {
-            Assert.That(created, Has.Some.EqualTo("  Creating policy public.rls_log.p_log"), string.Join(" | ", created));
-            Assert.That(notices, Has.Some.EqualTo("  Re-creating policy public.rls_log.p_log"), string.Join(" | ", notices));
+            Assert.That(created, Has.Some.EqualTo("  Creating policy " + _db + ".rls_log.p_log"), string.Join(" | ", created));
+            Assert.That(notices, Has.Some.EqualTo("  Re-creating policy " + _db + ".rls_log.p_log"), string.Join(" | ", notices));
         });
     }
 
@@ -228,7 +219,7 @@ public class RowLevelSecurityPolicyTests
         {
             Deploy(cmd, Package("rls_round", Policy("p_round", "SELECT")));
 
-            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateTableJSON\"('public', 'rls_round')";
+            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateTableJSON\"(current_schema()::text, 'rls_round')";
             var json = cmd.ExecuteScalar() as string ?? "";
 
             Assert.Multiple(() =>
@@ -276,7 +267,7 @@ public class RowLevelSecurityPolicyTests
         // every package, which on an RLS-enabled table changes who can read it.
         OnDb(cmd =>
         {
-            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"rls_none\","
+            Deploy(cmd, "[{ \"Schema\": \"" + _db + "\", \"Name\": \"rls_none\","
                         + " \"Columns\": [ { \"Name\": \"id\", \"DataType\": \"integer\", \"Nullable\": false } ],"
                         + " \"Indexes\": [ { \"Name\": \"pk_rls_none\", \"IndexColumns\": \"id\", \"PrimaryKey\": true, \"Unique\": true } ] }]");
 
@@ -345,7 +336,7 @@ public class RowLevelSecurityPolicyTests
         {
             Deploy(cmd, Package("rls_drift", Policy("p_tenant", usingExpr: "tenant = 'a'")));
 
-            cmd.CommandText = "ALTER POLICY p_tenant ON public.rls_drift USING (true)";
+            cmd.CommandText = "ALTER POLICY p_tenant ON rls_drift USING (true)";
             cmd.ExecuteNonQuery();
 
             Deploy(cmd, Package("rls_drift", Policy("p_tenant", usingExpr: "tenant = 'a'")));

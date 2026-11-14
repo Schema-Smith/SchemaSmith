@@ -66,7 +66,7 @@ BEGIN
            idx.indisprimary AS "PrimaryKey",
            idx.indisclustered AS "Clustered",
            COALESCE(PG_GET_EXPR(idx.indpred, idx.indrelid), '') AS "FilterExpression",
-           (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind = 'i') AS "AccessMethod",
+           (SELECT am.amname FROM pg_am am WHERE i.relam = am.oid AND i.relkind IN ('i', 'I')) AS "AccessMethod",
            -- The option when set, else the engine's default for the access method (NULL where it has none), which
            -- is what the declared side resolves an undeclared FillFactor to.
            COALESCE((regexp_match(array_to_string(i.reloptions, ','), 'fillfactor=(\d+)'))[1]::int2,
@@ -88,5 +88,8 @@ BEGIN
       JOIN pg_index idx ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(t."Schema") ||  '.' || "SchemaSmith"."QuoteName"(t."Name"))
       JOIN pg_class i ON i.oid = idx.indexrelid
       LEFT JOIN pg_catalog.pg_constraint con ON con.contype IN ('p','u') AND con.conrelid = idx.indrelid AND con.conname = i.relname
+     -- An exclusion constraint's index belongs to the constraint, which ExcludeConstraints manages. Listed here it read
+     -- as an unknown index, and DropUnknownIndexes failed: "constraint ... requires it".
+     WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint x WHERE x.contype = 'x' AND x.conindid = idx.indexrelid)
   $snapshot$, v_nnd_expr, v_wo_expr);
 END $$;

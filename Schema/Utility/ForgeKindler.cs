@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
@@ -72,18 +73,20 @@ public static class ForgeKindler
             // i.e. the prior behaviour, so this can only ever improve correctness, never regress it. The
             // detected value flows into ComputeKindleStamp below and KindleScripts, keeping the stamp and
             // the resolved helpers consistent (a disagreement between them was the original 2025 defect).
-            if (platform == Platform.SqlServer && serverMajorVersion == 0)
-                serverMajorVersion = TargetVersionDetector.TryDetect(command, Platform.SqlServer)?.ServerComparable ?? 0;
-
-            bool? xmlCompressionReadable = platform == Platform.SqlServer ? ReportsXmlCompression(command) : null;
-            bool? checkConstraintsReadable = platform == Platform.MariaDb ? ReportsCheckConstraints(command) : null;
-            var expected = ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode?.Mode, xmlCompressionReadable,
-                checkConstraintsReadable);
+            var (expected, xmlCompressionReadable, checkConstraintsReadable) =
+                ExpectedStamp(command, platform, encoding, ref serverMajorVersion, policy, sqlMode?.Mode);
             var current = ReadStamp(command, platform);
             if (!forceReKindle && string.Equals(current, expected, StringComparison.Ordinal))
             {
-                Log.Info($"  Kindle stamp current ({expected[..12]}…) — skipping kindle");
-                return;
+                // A MySQL-family dump made without --routines (the default) restores the stamp table and no routine, so a
+                // current stamp alone left every later deploy failing on a missing helper until --ForceReKindle.
+                var missing = platform.GetBasePlatform() == Platform.MySQL ? MissingMySqlHelperCount(command, platform, encoding) : 0;
+                if (missing <= 0)
+                {
+                    Log.Info($"  Kindle stamp current ({expected[..12]}…) — skipping kindle");
+                    return;
+                }
+                Log.Info($"  Kindle stamp current, but {missing} SchemaSmith helper routine(s) are missing — re-kindling");
             }
 
             // Only now is a WRITE about to happen, which is the only thing a read-only target rules out.
@@ -115,6 +118,50 @@ public static class ForgeKindler
         }
     }
 
+    private static (string Stamp, bool? XmlCompressionReadable, bool? CheckConstraintsReadable) ExpectedStamp(IDbCommand command,
+        Platform platform, IngestEncoding encoding, ref int serverMajorVersion, string policy, string sqlMode)
+    {
+        if (platform == Platform.SqlServer && serverMajorVersion == 0)
+            serverMajorVersion = TargetVersionDetector.TryDetect(command, Platform.SqlServer)?.ServerComparable ?? 0;
+        bool? xmlCompressionReadable = platform == Platform.SqlServer ? ReportsXmlCompression(command) : null;
+        bool? checkConstraintsReadable = platform == Platform.MariaDb ? ReportsCheckConstraints(command) : null;
+        return (ComputeKindleStamp(platform, encoding, serverMajorVersion, policy, sqlMode, xmlCompressionReadable, checkConstraintsReadable),
+            xmlCompressionReadable, checkConstraintsReadable);
+    }
+
+    /// <summary>
+    /// H1 drift without kindling: the helpers already on the target answer the question, so they must be the ones this build
+    /// would kindle. Missing or out of date stops the target -- the C# passes parameters older procedures may not declare, and
+    /// a drift answer from mismatched helpers is worse than none. Present but unverifiable is a warning.
+    /// </summary>
+    public static void VerifyForDrift(IDbCommand command, Platform platform, IngestEncoding encoding = IngestEncoding.Json,
+        int serverMajorVersion = 0, string policy = "warn")
+    {
+        using var sqlMode = platform.GetBasePlatform() == Platform.MySQL ? MySqlSessionSettings.UseParseNeutralSqlMode(command) : null;
+        var (expected, _, _) = ExpectedStamp(command, platform, encoding, ref serverMajorVersion, policy, sqlMode?.Mode);
+        var exists = KindleStampStoreExists(command, platform);
+        var current = exists ? ReadStamp(command, platform) : null;
+        var state = ClassifyReadOnlyKindle(exists, () => current, expected);
+        var line = DriftKindleCheck(state, current, expected);
+        if (state == ReadOnlyKindleState.Unverifiable) Log.Warn(line);
+        else Log.Info(line);
+    }
+
+    /// <summary>The line a drift check logs for the helpers' state; throws for missing or out of date.</summary>
+    internal static string DriftKindleCheck(ReadOnlyKindleState state, string currentStamp, string expectedStamp) => state switch
+    {
+        ReadOnlyKindleState.NotKindled => throw new RunFailedException(
+            "Drift with KindleTheForge false reads the SchemaSmith helpers already on the target, and there are none here. Deploy "
+            + "once (or run a drift check with kindling on, on SQL Server and PostgreSQL) so the helpers are in place."),
+        ReadOnlyKindleState.Stale => throw new RunFailedException(
+            $"Drift with KindleTheForge false needs the SchemaSmith helpers this build kindles, and the ones here are out of date "
+            + $"(found {Abbreviate(currentStamp)}, this build expects {Abbreviate(expectedStamp)}): an answer from them could be wrong. "
+            + "Deploy with this version to bring them up to date, then check again."),
+        ReadOnlyKindleState.Unverifiable => "  Drift: the SchemaSmith helpers are present but their version cannot be read; the answer "
+                                            + "assumes they are the ones this build kindles.",
+        _ => $"  Drift: SchemaSmith helpers are current ({Abbreviate(expectedStamp)})",
+    };
+
     private static void KindleScripts(IDbCommand command, Platform platform, IngestEncoding encoding,
         int serverMajorVersion, string policy, bool? xmlCompressionReadable, bool? checkConstraintsReadable)
     {
@@ -123,6 +170,24 @@ public static class ForgeKindler
             KindleOneFile(command, s.FileName, platform, s.ReplaceParseJson, s.ReplaceTableDef, encoding,
                 serverMajorVersion, policy, xmlCompressionReadable, checkConstraintsReadable, existingRoutines);
     }
+
+    // One scalar on the skip path: how many of the routines this build kindles the database lacks.
+    internal static int MissingMySqlHelperCount(IDbCommand command, Platform platform, IngestEncoding encoding)
+    {
+        var expected = KindledMySqlRoutines(platform, encoding);
+        command.CommandText = "SELECT COUNT(DISTINCT ROUTINE_NAME) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE() AND ROUTINE_NAME IN ("
+                              + string.Join(", ", expected.Select(r => "'" + r + "'")) + ")";
+        return expected.Length - Convert.ToInt32(command.ExecuteScalar(), CultureInfo.InvariantCulture);
+    }
+
+    private static readonly ConcurrentDictionary<(Platform, IngestEncoding), string[]> KindledRoutineNames = new();
+
+    /// <summary>The routines a MySQL-family kindle creates, read from the scripts it runs.</summary>
+    internal static string[] KindledMySqlRoutines(Platform platform, IngestEncoding encoding) =>
+        KindledRoutineNames.GetOrAdd((platform, encoding), key => GetKindlingScripts(key.Item1, key.Item2)
+            .SelectMany(s => MySqlCreateRoutine.Matches(ResourceLoader.Load(s.FileName, key.Item1)).Select(m => m.Groups["name"].Value))
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray());
 
     // Every MySQL-family routine script drops before it creates. On a fresh database none of them exists, and those
     // drops were a round trip each, a third of the kindle; a drop is skipped only for a routine the database lacks.
@@ -596,7 +661,7 @@ public static class ForgeKindler
         "CREATE TABLE #JsonIndexes ([_RowId] BIGINT NULL, [Schema] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [TableName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, " +
         "[IndexName] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Column] NVARCHAR(200) COLLATE DATABASE_DEFAULT NULL, [Paths] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, " +
         "[ForClause] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, [OptimizeForArraySearch] BIT NULL, [FillFactor] TINYINT NULL, [CompressionType] NVARCHAR(100) COLLATE DATABASE_DEFAULT NULL, " +
-        "[ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL)\n";
+        "[ShouldApplyExpression] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL, [VariantName] NVARCHAR(128) COLLATE DATABASE_DEFAULT NULL, [Description] NVARCHAR(MAX) COLLATE DATABASE_DEFAULT NULL)\n";
 
     // NORMALIZE, then the ShouldApplyExpression filter, for either tier's rows.
     private const string SqlServerNormalizeJsonIndexes =
@@ -610,22 +675,23 @@ public static class ForgeKindler
 
     internal static readonly string SqlServerParseJsonIndexesJson =
         "RAISERROR('Parse JSON Indexes from Json', 10, 100) WITH NOWAIT\n" +
-        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Paths], [OptimizeForArraySearch], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])\n" +
-        "SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), t.[Schema], t.[Name], j.[IndexName], j.[Column], j.[Paths], j.[OptimizeForArraySearch], j.[FillFactor], j.[CompressionType], j.[ShouldApplyExpression], j.[VariantName]\n" +
+        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [Paths], [OptimizeForArraySearch], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName], [Description])\n" +
+        "SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), t.[Schema], t.[Name], j.[IndexName], j.[Column], j.[Paths], j.[OptimizeForArraySearch], j.[FillFactor], j.[CompressionType], j.[ShouldApplyExpression], j.[VariantName], j.[Description]\n" +
         "  FROM #TableDefinitions t WITH (NOLOCK)\n" +
         "  CROSS APPLY OPENJSON(t.[JsonIndexes]) WITH ([IndexName] NVARCHAR(500) '$.Name', [Column] NVARCHAR(500) '$.Column', [Paths] NVARCHAR(MAX) '$.Paths' AS JSON, " +
         "[OptimizeForArraySearch] BIT '$.OptimizeForArraySearch', [FillFactor] TINYINT '$.FillFactor', [CompressionType] NVARCHAR(100) '$.CompressionType', [ShouldApplyExpression] NVARCHAR(MAX) '$.ShouldApplyExpression', " +
-        "[VariantName] NVARCHAR(128) '$.VariantName') j\n" +
+        "[VariantName] NVARCHAR(128) '$.VariantName', [Description] NVARCHAR(MAX) '$.Description') j\n" +
         "UPDATE j SET [ForClause] = " + JsonIndexForClause("OPENJSON(j.[Paths]) WITH ([Path] NVARCHAR(MAX) '$') p WHERE 1 = 1") + ", [Paths] = NULL FROM #JsonIndexes j\n" +
         SqlServerNormalizeJsonIndexes;
 
     internal static readonly string SqlServerParseJsonIndexesXml =
         "RAISERROR('Parse JSON Indexes from Xml', 10, 100) WITH NOWAIT\n" +
-        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [ForClause], [OptimizeForArraySearch], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName])\n" +
+        "INSERT INTO #JsonIndexes ([_RowId], [Schema], [TableName], [IndexName], [Column], [ForClause], [OptimizeForArraySearch], [FillFactor], [CompressionType], [ShouldApplyExpression], [VariantName], [Description])\n" +
         "SELECT ROW_NUMBER() OVER (ORDER BY (SELECT NULL)), t.[Schema], t.[Name], jx.value('(Name/text())[1]', 'NVARCHAR(500)'), jx.value('(Column/text())[1]', 'NVARCHAR(500)'),\n" +
         "       " + JsonIndexForClause("(SELECT n.value('.', 'NVARCHAR(MAX)') AS [Path] FROM jx.nodes('Paths') AS P(n)) p WHERE 1 = 1") + ",\n" +
         "       jx.value('(OptimizeForArraySearch/text())[1]', 'BIT'), jx.value('(FillFactor/text())[1]', 'TINYINT'), jx.value('(CompressionType/text())[1]', 'NVARCHAR(100)'),\n" +
-        "       jx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'), jx.value('(VariantName/text())[1]', 'NVARCHAR(128)')\n" +
+        "       jx.value('(ShouldApplyExpression/text())[1]', 'NVARCHAR(MAX)'), jx.value('(VariantName/text())[1]', 'NVARCHAR(128)'),\n" +
+        "       CASE WHEN jx.exist('Description') = 1 THEN ISNULL(jx.value('(Description/text())[1]', 'NVARCHAR(MAX)'), '') END\n" +
         "  FROM #TableDefinitions t WITH (NOLOCK)\n" +
         "  CROSS APPLY t.[TableXml].nodes('/Table/JsonIndexes') AS Y(jx)\n" +
         SqlServerNormalizeJsonIndexes;
@@ -686,6 +752,8 @@ public static class ForgeKindler
                 new("Kindling_ProductOwnership_Table.sql", ReplaceTableDef: true),
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
+                new("Kindling_RebuildSetAsideForeignKeys_Table.sql", ReplaceTableDef: true),
+                new("Kindling_DeploymentHistory_Table.sql", ReplaceTableDef: true),
                 // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
                 // expression stops reading as a change. Kindled like the other bootstrap tables.
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
@@ -707,6 +775,8 @@ public static class ForgeKindler
                 new("SchemaSmith.fn_SafeBracketWrapFullTextColumn.sql"),
                 new("SchemaSmith.fn_SplitList.sql"),
                 new("SchemaSmith.fn_ServerMajorVersion.sql"),
+                new("SchemaSmith.fn_PartitionCompression.sql"),
+                new("SchemaSmith.fn_PartitionCompressionDrift.sql"),
                 new("SchemaSmith.fn_NormalizeTemporalRetentionPeriod.sql"),
                 // Must follow fn_ServerMajorVersion: its CREATE is version-gated at kindle time and calls it.
                 new("SchemaSmith.fn_RebuildBlockedReason.sql"),
@@ -759,6 +829,10 @@ public static class ForgeKindler
                 new("SchemaSmith.CdcIndexGuard.sql"),
                 // Must precede ModifiedTableQuench, which CALLs it, also on a deploy whose tables are all new.
                 new("SchemaSmith.StampTableOwnership.sql"),
+                // Must precede ModifiedTableQuench, which CALLs it after the last refusal of its step.
+                new("SchemaSmith.DropTablesRemovedFromProduct.sql"),
+                new("SchemaSmith.fn_ColumnChangeLoss.sql"),
+                new("SchemaSmith.DestructiveChangeGate.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 // A temporal table's period columns; MissingIndexesAndConstraintsQuench CALLs it before its index pass.
                 new("SchemaSmith.PeriodColumnQuench.sql"),
@@ -786,6 +860,8 @@ public static class ForgeKindler
                 new("SchemaSmith.ValidateIndexedViewOwnership.sql"),
                 new("SchemaSmith.FixupIndexedViewOwnership.sql"),
                 new("SchemaSmith.IndexedViewQuench.sql"),
+                // Declared sequences (2012+). XML ingest on every tier, so one script and no XML twin.
+                new("SchemaSmith.SequenceQuench.sql"),
                 new("SchemaSmith.GenerateIndexedViewJson.sql"),
             ],
             Platform.PostgreSQL =>
@@ -797,21 +873,27 @@ public static class ForgeKindler
                 new("Kindling_ProductOwnership_Table.sql", ReplaceTableDef: true),
                 new("Kindling_CompletedMigrationScripts_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
+                new("Kindling_RebuildSetAsideForeignKeys_Table.sql", ReplaceTableDef: true),
+                new("Kindling_DeploymentHistory_Table.sql", ReplaceTableDef: true),
                 // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
                 // expression stops reading as a change. Kindled like the other bootstrap tables.
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith.ExecuteOrDebug.sql"),
                 new("SchemaSmith.RecordWouldChanges.sql"),
+                // The column-list helpers split with it, keeping a comma inside a quoted name.
+                new("SchemaSmith.SplitTopLevelList.sql"),
                 new("SchemaSmith.QuoteColumnList.sql"),
                 new("SchemaSmith.QuoteIndexColumnList.sql"),
                 new("SchemaSmith.QuoteName.sql"),
                 // #242: declared index and statistics definitions compared in the form the catalog reads back.
-                // SQL-language functions are validated at creation, so the splitter and StripParenWrapping
+                // SQL-language functions are validated at creation, so the splitter (above) and StripParenWrapping
                 // must be kindled before the statistics forms that call them.
-                new("SchemaSmith.SplitTopLevelList.sql"),
                 // One reading of an index key's expression, COLLATE, operator class and parameters, behind the
                 // declared-side normaliser and quoter and the live-side rendering.
                 new("SchemaSmith.IndexKeyForms.sql"),
+                new("SchemaSmith.ExcludeKeyForms.sql"),
+                new("SchemaSmith.DeclaredTypeCanonical.sql"),
+                new("SchemaSmith.SerialSequenceName.sql"),
                 new("SchemaSmith.NormalizeIndexColumnList.sql"),
                 new("SchemaSmith.StripParenWrapping.sql"),
                 new("SchemaSmith.StatisticsDefinitionForms.sql"),
@@ -823,12 +905,13 @@ public static class ForgeKindler
                 new("SchemaSmith.ExpressionMapRecord.sql"),
                 // #508: an unrecorded expression is checked on a scratch copy before it is re-applied.
                 new("SchemaSmith.ExpressionMapAdopt.sql"),
+                // Declared partitioning, verified before any DDL by TableQuench.
+                new("SchemaSmith.PartitionVerify.sql"),
                 // Read by ModifiedTableQuench: a declared identity sequence option that differs from the live sequence.
                 new("SchemaSmith.IdentityOptionChanges.sql"),
                 new("SchemaSmith.ColumnTypeArguments.sql"),
                 // Calls ColumnTypeArguments and QuoteName, and is called by extraction and the table quench.
                 new("SchemaSmith.ColumnDataType.sql"),
-                new("SchemaSmith.StripTypeCast.sql"),
                 new("SchemaSmith.ServerVersionNum.sql"),
                 new("SchemaSmith.UnsupportedFeaturePolicy.sql"),
                 new("SchemaSmith.IndexNullsNotDistinct.sql"),
@@ -863,6 +946,8 @@ public static class ForgeKindler
                 new("SchemaSmith.RefuseUnmetOnlineRequire.sql"),
                 new("SchemaSmith.MissingTableAndColumnQuench.sql"),
                 new("SchemaSmith.BuildExistingIndexesSnapshot.sql"),
+                new("SchemaSmith.ColumnChangeLoss.sql"),
+                new("SchemaSmith.DestructiveChangeGate.sql"),
                 new("SchemaSmith.ModifiedTableQuench.sql"),
                 new("SchemaSmith.MissingIndexesAndConstraintsQuench.sql"),
                 // Declared descriptions (COMMENT ON), converged once every table, column and index exists.
@@ -879,6 +964,8 @@ public static class ForgeKindler
                 new("SchemaSmith.ParseTableJson.sql", ReplaceParseJson: true),
                 new("SchemaSmith.IndexOnlyQuench.sql"),
                 new("SchemaSmith.FormatJson.sql"),
+                // A partitioned table's tree, written by GenerateTableJson.
+                new("SchemaSmith.PartitionTreeJson.sql"),
                 new("SchemaSmith.GenerateTableJson.sql"),
                 new("SchemaSmith.ValidateMaterializedViewOwnership.sql"),
                 new("SchemaSmith.FixupMaterializedViewOwnership.sql"),
@@ -915,10 +1002,13 @@ public static class ForgeKindler
                 new("Kindling_ProductOwnership_Table.sql", ReplaceTableDef: true),
                 new("Kindling_StatusMessages_Table.sql", ReplaceTableDef: true),
                 new("Kindling_ChangeAudit_Table.sql", ReplaceTableDef: true),
+                new("Kindling_RebuildSetAsideForeignKeys_Table.sql", ReplaceTableDef: true),
+                new("Kindling_DeploymentHistory_Table.sql", ReplaceTableDef: true),
                 // #242: authored-vs-canonical expression mapping, so a re-read of an engine-rewritten
                 // expression stops reading as a change. Kindled like the other bootstrap tables.
                 new("Kindling_ExpressionMap_Table.sql", ReplaceTableDef: true),
                 new("SchemaSmith_QuoteIdentifier.sql"),
+                new("SchemaSmith_EscapeBackticks.sql"),
                 new("SchemaSmith_StripBacktickWrapping.sql"),
                 new("SchemaSmith_SafeBacktickWrap.sql"),
                 new("SchemaSmith_StripLeadingSelect.sql"),
@@ -972,6 +1062,8 @@ public static class ForgeKindler
                 // (#partitioning, K3) -- MySQL 5.7 echoes the text the user wrote while every other
                 // supported engine rewrites it, so a literal compare would be engine-specific.
                 new("SchemaSmith_NormalizePartitionExpression.sql"),
+                // Read by ParseTableJson: which generated columns another one reads, for their creation order.
+                new("SchemaSmith_ExpressionReadsColumn.sql"),
                 new("SchemaSmith_UpperDataType.sql"),
                 // Read by ParseTableJson: ENUM/SET members lose trailing spaces at CREATE.
                 new("SchemaSmith_TrimEnumMembers.sql"),
@@ -986,6 +1078,8 @@ public static class ForgeKindler
                 new("SchemaSmith_IsExpressionDefault.sql"),
                 new("SchemaSmith_ExpressionDefaultText.sql"),
                 new("SchemaSmith_CleanCheckClause.sql"),
+                new("SchemaSmith_DecodeStringLiteral.sql"),
+                new("SchemaSmith_CheckClauseText.sql"),
                 new("SchemaSmith_ExpressionDefaultsEqual.sql"),
                 new("SchemaSmith_ColumnOnUpdateClause.sql"),
                 new("SchemaSmith_IndexIsVisible.sql"),
@@ -1072,6 +1166,8 @@ public static class ForgeKindler
                 // #530: a table's FullTextIndexes, created and re-created by both index paths, not only the index-only one.
                 new("SchemaSmith_DropModifiedFullTextIndexes.sql"),
                 new("SchemaSmith_CreateMissingFullTextIndexes.sql"),
+                new("SchemaSmith_ColumnChangeLoss.sql"),
+                new("SchemaSmith_DestructiveChangeGate.sql"),
                 new("SchemaSmith_ModifiedTableQuench.sql"),
                 // An existing table's declared primary key, added or replaced; both index paths call it.
                 new("SchemaSmith_ConvergePrimaryKeys.sql"),
@@ -1386,6 +1482,8 @@ public static class ForgeKindler
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"MissingIndexesAndConstraintsQuench\"(boolean)",
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ForeignKeyQuench\"(boolean)",
             "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"ConstraintStateQuench\"(boolean)",
+            // Took no OnlineApply before declared partitioning, which adding a partition is subject to.
+            "DROP PROCEDURE IF EXISTS \"SchemaSmith\".\"MissingTableAndColumnQuench\"(boolean)",
             // Took the column's sequence; it now takes the column's schema, table and name, and the old one is left unused.
             "DROP FUNCTION IF EXISTS \"SchemaSmith\".\"IdentityOptionChanges\"(text, regclass)",
         ];

@@ -42,7 +42,9 @@ BEGIN
   DECLARE @t NVARCHAR(MAX)
 
   SET @t = CASE
-    WHEN @upper = 'INTEGER' THEN 'INT'
+    -- INTEGER followed by anything (INTEGER IDENTITY(1, 1)) as well as alone: only the bare word was folded, so the
+    -- column read as changed on every deploy, and with it the primary key and every foreign key that references it.
+    WHEN @upper = 'INTEGER' OR @upper LIKE 'INTEGER[ (]%' THEN 'INT' + SUBSTRING(@trimmed, LEN('INTEGER') + 1, LEN(@trimmed))
     WHEN @upper = 'ROWVERSION' THEN 'TIMESTAMP'
     WHEN @upper = 'DOUBLE PRECISION' THEN 'FLOAT'
     WHEN @upper LIKE 'NATIONAL CHARACTER VARYING%'
@@ -83,6 +85,20 @@ BEGIN
                                      THEN LTRIM(RTRIM(SUBSTRING(@rest, 2, CHARINDEX(')', @rest) - 2))) END
   DECLARE @after NVARCHAR(MAX) = CASE WHEN @args IS NULL THEN @rest ELSE SUBSTRING(@rest, CHARINDEX(')', @rest) + 1, LEN(@rest)) END
   SET @after = CASE WHEN @after = '' THEN '' ELSE ' ' + LTRIM(@after) END
+
+  -- IDENTITY as the catalog reports it: IDENTITY(seed, increment). A bare IDENTITY is (1, 1), and the arguments are
+  -- spaced as the live side writes them, so INT IDENTITY and INT IDENTITY(1,1) compare equal to the deployed column.
+  IF UPPER(@after) LIKE ' IDENTITY' OR UPPER(@after) LIKE ' IDENTITY[ (]%'
+  BEGIN
+    DECLARE @identityRest NVARCHAR(MAX) = LTRIM(SUBSTRING(@after, LEN(' IDENTITY') + 1, LEN(@after)))
+    IF LEFT(@identityRest, 1) = '(' AND CHARINDEX(')', @identityRest) > 0
+      SET @after = ' IDENTITY(' + REPLACE(REPLACE(SUBSTRING(@identityRest, 2, CHARINDEX(')', @identityRest) - 2), ' ', ''), ',', ', ') + ')'
+                   + SUBSTRING(@identityRest, CHARINDEX(')', @identityRest) + 1, LEN(@identityRest))
+    ELSE
+      SET @after = ' IDENTITY(1, 1)' + CASE WHEN @identityRest = '' THEN '' ELSE ' ' + @identityRest END
+    -- The branches below rebuild only the types they change; every other type is @t, so it takes the clause here.
+    IF @name <> '' SET @t = @name + ISNULL('(' + @args + ')', '') + @after
+  END
 
   DECLARE @r NVARCHAR(MAX) = CASE
     WHEN UPPER(@name) IN ('CHAR', 'VARCHAR', 'NCHAR', 'NVARCHAR', 'BINARY', 'VARBINARY') AND @args IS NULL

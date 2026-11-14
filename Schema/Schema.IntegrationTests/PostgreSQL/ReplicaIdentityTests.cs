@@ -31,28 +31,19 @@ namespace Schema.IntegrationTests.PostgreSQL;
 [NonParallelizable]
 public class ReplicaIdentityTests
 {
-    private string _server = "", _user = "", _password = "", _port = "";
-    private Dictionary<string, string> _props = new();
     private string _db = "";
 
+    // A schema of its own in the suite's kindled database, not a database: nothing here is a database-level setting, and a
+    // database cost a CREATE DATABASE and a kindle per run. Every connection puts the schema first on its search_path.
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-        _server = config["PostgreSQL:Server"] ?? "127.0.0.1";
-        _user = config["PostgreSQL:User"];
-        _password = config["PostgreSQL:Password"];
-        _port = config["PostgreSQL:Port"];
-        _props = ConnectionString.ReadProperties(config, "PostgreSQL:ConnectionProperties");
-
-        _db = $"ss_ri_{Guid.NewGuid():N}"[..28].ToLowerInvariant();
-        using var maint = Open("postgres");
-        Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
-        Exec(maint, $"CREATE DATABASE \"{_db}\"");
-
-        using var c = Open(_db);
-        using var cmd = c.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.PostgreSQL);
+        _db = $"ss_repl_{Guid.NewGuid():N}"[..28].ToLowerInvariant();
+        using (var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString()))
+        {
+            main.Open();
+            Exec(main, $"CREATE SCHEMA \"{_db}\"");
+        }
     }
 
     [OneTimeTearDown]
@@ -60,18 +51,18 @@ public class ReplicaIdentityTests
     {
         try
         {
-            using var maint = Open("postgres");
-            Exec(maint, $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{_db}' AND pid <> pg_backend_pid()");
-            Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
+            using var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
+            main.Open();
+            Exec(main, $"DROP SCHEMA IF EXISTS \"{_db}\" CASCADE");
         }
         catch (DbException) { /* teardown must not mask an assertion */ }
     }
 
-    private IDbConnection Open(string database)
+    private IDbConnection Open(string schema)
     {
-        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL)
-            .GetDbConnection(ConnectionString.Build(Platform.PostgreSQL, _server, database, _user, _password, _port, _props));
+        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         c.Open();
+        Exec(c, $"SET search_path = \"{schema}\", public");
         return c;
     }
 
@@ -92,8 +83,8 @@ public class ReplicaIdentityTests
     }
 
     /// <summary>A table with a unique index over a NOT NULL column — the shape REPLICA IDENTITY USING INDEX requires.</summary>
-    private static string Package(string table, string replicaIdentity = null, string replicaIndex = null) =>
-        "[{ \"Schema\": \"public\", \"Name\": \"" + table + "\","
+    private string Package(string table, string replicaIdentity = null, string replicaIndex = null) =>
+        "[{ \"Schema\": \"" + _db + "\", \"Name\": \"" + table + "\","
         + (replicaIdentity == null ? "" : " \"ReplicaIdentity\": \"" + replicaIdentity + "\",")
         + (replicaIndex == null ? "" : " \"ReplicaIdentityIndex\": \"" + replicaIndex + "\",")
         + " \"Columns\": [ { \"Name\": \"id\", \"DataType\": \"integer\", \"Nullable\": false },"
@@ -110,7 +101,7 @@ public class ReplicaIdentityTests
     /// <summary>The catalog's own spelling of the mode: d/f/n/i.</summary>
     private static string Mode(IDbCommand cmd, string table)
     {
-        cmd.CommandText = "SELECT relreplident FROM pg_class WHERE relname = '" + table + "' AND relkind = 'r'";
+        cmd.CommandText = "SELECT relreplident FROM pg_class WHERE relnamespace = current_schema()::regnamespace AND relname = '" + table + "' AND relkind = 'r'";
         return Convert.ToString(cmd.ExecuteScalar());
     }
 
@@ -119,7 +110,7 @@ public class ReplicaIdentityTests
         cmd.CommandText = "SELECT ic.relname FROM pg_index ix "
                           + "JOIN pg_class ic ON ic.oid = ix.indexrelid "
                           + "JOIN pg_class tc ON tc.oid = ix.indrelid "
-                          + "WHERE tc.relname = '" + table + "' AND ix.indisreplident";
+                          + "WHERE tc.relnamespace = current_schema()::regnamespace AND tc.relname = '" + table + "' AND ix.indisreplident";
         return Convert.ToString(cmd.ExecuteScalar());
     }
 
@@ -172,7 +163,7 @@ public class ReplicaIdentityTests
         OnDb(cmd =>
         {
             Deploy(cmd, Package("ri_untouched"));
-            Exec2(cmd, "ALTER TABLE public.ri_untouched REPLICA IDENTITY FULL");
+            Exec2(cmd, "ALTER TABLE ri_untouched REPLICA IDENTITY FULL");
 
             Deploy(cmd, Package("ri_untouched"));
 
@@ -194,8 +185,8 @@ public class ReplicaIdentityTests
             + " \"Indexes\": [ { \"Name\": \"uq_ri_switch\", \"IndexColumns\": \"id\", \"Unique\": true },"
             + " { \"Name\": \"uq_ri_switch_alt\", \"IndexColumns\": \"code\", \"Unique\": true } ] }]";
 
-        static string Pkg(string identityIndex) =>
-            "[{ \"Schema\": \"public\", \"Name\": \"ri_switch\", \"ReplicaIdentity\": \"INDEX\","
+        string Pkg(string identityIndex) =>
+            "[{ \"Schema\": \"" + _db + "\", \"Name\": \"ri_switch\", \"ReplicaIdentity\": \"INDEX\","
             + " \"ReplicaIdentityIndex\": \"" + identityIndex + "\","
             + twoIndexes;
 
@@ -235,7 +226,7 @@ public class ReplicaIdentityTests
         {
             Deploy(cmd, Package("ri_round", "INDEX", "uq_ri_round"));
 
-            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateTableJSON\"('public', 'ri_round')";
+            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateTableJSON\"(current_schema()::text, 'ri_round')";
             var json = cmd.ExecuteScalar() as string ?? "";
 
             Assert.Multiple(() =>
@@ -258,7 +249,7 @@ public class ReplicaIdentityTests
         {
             Deploy(cmd, Package("ri_default"));
 
-            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateTableJSON\"('public', 'ri_default')";
+            cmd.CommandText = "SELECT \"SchemaSmith\".\"GenerateTableJSON\"(current_schema()::text, 'ri_default')";
             var json = cmd.ExecuteScalar() as string ?? "";
 
             Assert.That(json, Does.Not.Contain("ReplicaIdentity"), json);
@@ -273,18 +264,18 @@ public class ReplicaIdentityTests
         OnDb(cmd =>
         {
             Deploy(cmd, Package("ri_pub_tbl"));
-            Exec2(cmd, "INSERT INTO public.ri_pub_tbl VALUES (1, 'a')");
+            Exec2(cmd, "INSERT INTO ri_pub_tbl VALUES (1, 'a')");
             Exec2(cmd, "DROP PUBLICATION IF EXISTS ri_pub");
-            Exec2(cmd, "CREATE PUBLICATION ri_pub FOR TABLE public.ri_pub_tbl");
+            Exec2(cmd, "CREATE PUBLICATION ri_pub FOR TABLE ri_pub_tbl");
 
             // Precondition: at DEFAULT with no primary key, PostgreSQL refuses the write outright.
-            var refused = Assert.Catch(() => Exec2(cmd, "UPDATE public.ri_pub_tbl SET val = 'b' WHERE id = 1"));
+            var refused = Assert.Catch(() => Exec2(cmd, "UPDATE ri_pub_tbl SET val = 'b' WHERE id = 1"));
             Assert.That(refused, Is.Not.Null, "precondition: the published table must reject UPDATE at DEFAULT");
             Assert.That(refused.Message, Does.Contain("replica identity"), refused.Message);
 
             Deploy(cmd, Package("ri_pub_tbl", "INDEX", "uq_ri_pub_tbl"));
 
-            Assert.DoesNotThrow(() => Exec2(cmd, "UPDATE public.ri_pub_tbl SET val = 'b' WHERE id = 1"),
+            Assert.DoesNotThrow(() => Exec2(cmd, "UPDATE ri_pub_tbl SET val = 'b' WHERE id = 1"),
                 "deploying the declared replica identity is what makes the application's UPDATE legal again");
 
             Exec2(cmd, "DROP PUBLICATION IF EXISTS ri_pub");

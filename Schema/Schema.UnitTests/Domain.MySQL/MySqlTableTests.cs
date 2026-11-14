@@ -23,7 +23,7 @@ namespace Schema.UnitTests.Domain.MySQL
         {
             var table = new MySqlTable();
 
-            Assert.That(table.Engine, Is.EqualTo("InnoDB"));
+            Assert.That(table.Engine, Is.Null, "omitted is unmanaged on an existing table; the CREATE supplies InnoDB");
             Assert.That(table.RowFormat, Is.Null);
             Assert.That(table.CharacterSet, Is.Null);
             Assert.That(table.Collation, Is.Null);

@@ -109,7 +109,8 @@ for leg in "${legs[@]}"; do
   engines+=("$engine")
   out="$results/$leg"; mkdir -p "$out"
   echo "== $leg ($image)"
-  docker run -d --name "$engine" --memory 2g --memory-swap 2g "${dbenv[@]}" "$image" "${args[@]}" >/dev/null || { overall=1; continue; }
+  # 4g: MySQL 8.0 was killed for memory at 2g partway through the suite (CI's service containers are not capped).
+  docker run -d --name "$engine" --memory 4g --memory-swap 4g "${dbenv[@]}" "$image" "${args[@]}" >/dev/null || { overall=1; continue; }
 
   # CI's own setup step, through CI's client, inside the engine's network namespace.
   if ! setup_out=$(ci_mysql_family_setup "container:$engine" 127.0.0.1 3306 "$image" ${args:+lctn1} 2>&1); then
@@ -128,6 +129,11 @@ for leg in "${legs[@]}"; do
   echo "  LEG $leg: $([ $rc -eq 0 ] && echo PASS || echo "FAIL (exit $rc)")"
   [ $rc -eq 0 ] || overall=1
 
+  # The server's own log, and whether it was killed for memory: a leg whose server dies mid-run otherwise leaves only
+  # the connection errors of the tests that came after.
+  docker logs "$engine" > "$out/engine.log" 2>&1
+  oom=$(docker inspect -f '{{.State.OOMKilled}} exit={{.State.ExitCode}} running={{.State.Running}}' "$engine" 2>/dev/null)
+  echo "  engine: $oom"
   docker rm -fv "$engine" >/dev/null 2>&1
 done
 

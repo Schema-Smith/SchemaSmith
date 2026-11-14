@@ -139,6 +139,44 @@ public class SchemaBoundModuleChangeTests : ObjectScriptDeployFixture
         });
     }
 
+    // The policy is dropped so its predicate can change, and the table has no row-level security until it is back. When
+    // it cannot come back -- here the predicate's new parameter list no longer fits the policy script -- the table must
+    // not be left unprotected: the drop, the change and the re-create are one transaction, rolled back together.
+    [Test]
+    public void APredicateChangeWhosePolicyCannotComeBack_LeavesTheOldPolicyAndPredicateInForce()
+    {
+        const string policy = "IF OBJECT_ID(N'dbo.sb_filter') IS NULL\r\n" +
+                              "  EXEC(N'CREATE SECURITY POLICY [dbo].[sb_filter] ADD FILTER PREDICATE dbo.fn_sb_rep(qty) ON dbo.sb_orders WITH (STATE = ON, SCHEMABINDING = ON)')\r\n";
+        void Package(string parameters, string body)
+        {
+            WritePackage("""
+                { "FolderPath": "Functions", "QuenchSlot": "Objects", "ObjectType": "Functions" },
+                { "FolderPath": "Security Policies", "QuenchSlot": "AfterTablesObjects", "ObjectType": "SecurityPolicies" }
+                """, "Functions", "Security Policies");
+            WriteFile("Functions", "fn_sb_price.sql", FunctionScript(2));
+            WriteFile("Functions", "fn_sb_rep.sql", "SET ANSI_NULLS ON\r\nSET QUOTED_IDENTIFIER ON\r\nGO\r\n\r\n" +
+                $"CREATE OR ALTER FUNCTION [dbo].[fn_sb_rep]({parameters}) RETURNS TABLE WITH SCHEMABINDING AS RETURN SELECT 1 AS ok WHERE {body}\r\nGO\r\n");
+            WriteFile("Tables", "sb_orders.json", TableJson);
+            WriteFile("Security Policies", "sb_filter.sql", policy);
+        }
+
+        Package("@qty INT", "@qty >= 0");
+        Deploy();
+        Assert.That(Count("SELECT COUNT(*) FROM sys.security_policies WHERE name = 'sb_filter'"), Is.EqualTo(1), "setup: the policy is in place");
+
+        Package("@qty INT, @floor INT", "@qty >= @floor");
+        var second = Deploy(expectSuccess: false);
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(second.Log, Has.Some.Contains("Rolled back").And.Contains("dbo.sb_filter"), "the run says what it rolled back and why");
+            Assert.That(Count("SELECT COUNT(*) FROM sys.security_policies WHERE name = 'sb_filter' AND is_schema_bound = 1 AND is_enabled = 1"), Is.EqualTo(1),
+                "the table keeps its row-level security: " + second.Describe());
+            Assert.That(Scalar("SELECT OBJECT_DEFINITION(OBJECT_ID('dbo.fn_sb_rep'))")?.ToString(), Does.Contain("@qty >= 0").And.Not.Contain("@floor"),
+                "and the predicate it binds is the one it was created with");
+        });
+    }
+
     [Test]
     public void AChangedFunction_UnderADeclaredSchemaBoundView_PutsTheViewBackWithItsGrant()
     {

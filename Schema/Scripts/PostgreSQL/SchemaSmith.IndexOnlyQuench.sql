@@ -23,6 +23,7 @@ DECLARE
   table_json TEXT = CASE WHEN LEFT(p_TableDefinitions, 1) = '[' THEN p_TableDefinitions ELSE '[' || p_TableDefinitions || ']' END;
   sql_script TEXT = '';
   missing_tablespaces TEXT;
+  attached_changed TEXT;
 BEGIN
     -- Dropped first like every other temp table in this procedure. A PostgreSQL TEMPORARY table lives for
     -- the SESSION, not the call, so without this a second IndexOnlyQuench on the same connection dies with
@@ -33,7 +34,8 @@ BEGIN
     DROP TABLE IF EXISTS temp_tables;
     CREATE TEMPORARY TABLE temp_tables AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
-    SELECT elem ->> 'Schema' AS "Schema",
+    SELECT te.ord AS "_RowId",
+           elem ->> 'Schema' AS "Schema",
            elem ->> 'Name' AS "Name",
            COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(elem ->> 'OldName', '') AS "OldName",
@@ -53,9 +55,9 @@ BEGIN
            CASE WHEN p_UpdateFillFactor THEN true ELSE COALESCE((elem ->> 'UpdateFillFactor')::BOOLEAN, false) END AS "UpdateFillFactor",
            (elem ->> 'DropIndexesRemovedFromProduct')::BOOLEAN AS "DropIndexesRemovedFromProduct",
            UPPER(NULLIF(TRIM(elem ->> 'OnlineApply'), '')) AS "OnlineApply"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem;
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord);
 
-    SELECT STRING_AGG('DELETE FROM temp_tables WHERE "Schema" = ''' || "Schema" || ''' AND "Name" = ''' || "Name" || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+    SELECT STRING_AGG('DELETE FROM temp_tables WHERE "_RowId" = ' || "_RowId"::TEXT || ' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
       INTO sql_script
       FROM temp_tables
       WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
@@ -110,8 +112,9 @@ BEGIN
            COALESCE((SELECT STRING_AGG(sp.k || '=' || sp.v, ',' ORDER BY sp.k)
                        FROM JSON_EACH_TEXT(COALESCE(celem -> 'StorageParameters', '{}'::JSON)) AS sp(k, v)
                       WHERE sp.k <> 'fillfactor'), '') AS "StorageParameters"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
-      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Indexes')::JSON) AS celem(value);
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Indexes')::JSON) AS celem(value)
+     WHERE te.ord IN (SELECT "_RowId" FROM temp_tables);
 
     UPDATE temp_indexes -- Table-level setting overrides index-level setting when true
        SET "UpdateFillFactor" = true
@@ -122,7 +125,7 @@ BEGIN
                          AND t."Name" = "TableName"
                          AND t."UpdateFillFactor" = true);
 
-    SELECT STRING_AGG('DELETE FROM temp_indexes WHERE "TableSchema" = ''' || "TableSchema" || ''' AND "TableName" = ''' || "TableName" || ''' AND "Name" = ''' || "Name" || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+    SELECT STRING_AGG('DELETE FROM temp_indexes WHERE "TableSchema" = ''' || REPLACE(("TableSchema")::TEXT, '''', '''''') || ''' AND "TableName" = ''' || REPLACE(("TableName")::TEXT, '''', '''''') || ''' AND "Name" = ''' || REPLACE(("Name")::TEXT, '''', '''''') || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
       INTO sql_script
       FROM temp_indexes
       WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
@@ -177,7 +180,8 @@ BEGIN
     DROP TABLE IF EXISTS temp_statistics;
     CREATE TEMPORARY TABLE temp_statistics AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
-    SELECT elem ->> 'Schema' AS "TableSchema",
+    SELECT celem ->> 'Description' AS "Description",
+           elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
            NULLIF(celem ->> 'Schema', '') AS "StatisticsSchema",
@@ -187,10 +191,11 @@ BEGIN
            COALESCE(celem ->> 'StatisticsColumns', '') AS "StatisticsColumns",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
-      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Statistics')::JSON) AS celem(value);
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Statistics')::JSON) AS celem(value)
+     WHERE te.ord IN (SELECT "_RowId" FROM temp_tables);
 
-    SELECT STRING_AGG('DELETE FROM temp_statistics WHERE "TableSchema" = ''' || "TableSchema" || ''' AND "TableName" = ''' || "TableName" || ''' AND "Name" = ''' || "Name" || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
+    SELECT STRING_AGG('DELETE FROM temp_statistics WHERE "TableSchema" = ''' || REPLACE(("TableSchema")::TEXT, '''', '''''') || ''' AND "TableName" = ''' || REPLACE(("TableName")::TEXT, '''', '''''') || ''' AND "Name" = ''' || REPLACE(("Name")::TEXT, '''', '''''') || ''' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
       INTO sql_script
       FROM temp_statistics
       WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
@@ -217,6 +222,19 @@ BEGIN
        AND "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX', i."Name", 'filter',
              i."FilterExpression", COALESCE(ei."FilterExpression", ''));
 
+    -- Expression index keys, the same way: PostgreSQL stores lower(email) on a varchar column as lower((email)::text),
+    -- so the declared list (as NormalizeIndexColumnList gives it) is taken where the map vouches for the pair.
+    UPDATE temp_existing_indexes ei
+       SET "IndexColumns" = "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns")
+      FROM temp_indexes i
+     WHERE i."TableSchema" = ei."TableSchema"
+       AND i."TableName" = ei."TableName"
+       AND i."Name" = ei."IndexName"
+       AND i."IndexColumns" LIKE '%(%'
+       AND "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") != COALESCE(ei."IndexColumns", '')
+       AND "SchemaSmith"."ExpressionMapUnchanged"(i."TableSchema", i."TableName", 'INDEX', i."Name", 'keys',
+             "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"), COALESCE(ei."IndexColumns", ''));
+
     RAISE NOTICE 'Handle Renamed Indexes And Unique Constraints';
     -- The rename pairs are materialised, not just rendered to SQL: the drop election below starts from the
     -- PRE-rename snapshot, where a renamed index still carries its old name and is absent from the package --
@@ -233,7 +251,10 @@ BEGIN
                          -- The declared lists are compared through NormalizeIndexColumnList: the snapshot reads
                          -- columns back unquoted with only non-default sort options, so "status" or status ASC
                          -- never matched and the index was rebuilt on every deploy.
-                         AND "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") = ei."IndexColumns"
+                         AND ("SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns") = ei."IndexColumns"
+                              -- Keyed on the OLD name, as the predicate is below: the snapshot substitution matches by name.
+                              OR "SchemaSmith"."ExpressionMapUnchanged"(ei."TableSchema", ei."TableName", 'INDEX', ei."IndexName", 'keys',
+                                   "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"), ei."IndexColumns"))
                          AND "SchemaSmith"."NormalizeIndexColumnList"(i."IncludeColumns") = COALESCE(ei."IncludeColumns", '')
                          -- #285: a PRIMARY KEY is unique in the catalog whether or not the package
                          -- says so, so a naturally-authored PK (PrimaryKey: true, no Unique) failed
@@ -260,7 +281,7 @@ BEGIN
                           WHERE i."TableSchema" = ei."TableSchema"
                             AND i."TableName" = ei."TableName"
                             AND i."Name" = ei."IndexName");
-    SELECT STRING_AGG('RAISE NOTICE ''  Renaming ' || CASE WHEN rn."PrimaryKey" OR rn."UniqueConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || rn."TableSchema" || '.' || rn."TableName" || '.' || rn."OldName" || ' to ' || rn."NewName" || ''';' || CHR(10) ||
+    SELECT STRING_AGG('RAISE NOTICE ''  Renaming % %.%.% to %'', ''' || REPLACE((CASE WHEN rn."PrimaryKey" OR rn."UniqueConstraint" THEN 'Constraint' ELSE 'Index' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((rn."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((rn."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((rn."OldName")::TEXT, '''', '''''') || ''', ''' || REPLACE((rn."NewName")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                       CASE WHEN NOT (rn."PrimaryKey" OR rn."UniqueConstraint")
                            THEN 'ALTER INDEX IF EXISTS ' || "SchemaSmith"."QuoteName"(rn."TableSchema") || '.' || "SchemaSmith"."QuoteName"(rn."OldName") || ' RENAME TO ' || "SchemaSmith"."QuoteName"(rn."NewName") || ';'
                            ELSE 'ALTER TABLE ' || "SchemaSmith"."QuoteName"(rn."TableSchema") || '.' || "SchemaSmith"."QuoteName"(rn."TableName") || ' RENAME CONSTRAINT ' || "SchemaSmith"."QuoteName"(rn."OldName") || ' TO ' || "SchemaSmith"."QuoteName"(rn."NewName") || ';' END, CHR(10))
@@ -323,6 +344,31 @@ BEGIN
                                               AND i."TableName" = ei."TableName"
                                               AND i."Name" = ei."IndexName"))));
 
+    -- A partition's index attached to its parent's index belongs to that one ("cannot drop index ... because index ...
+    -- requires it"), so it is never a drop candidate here, whatever the package says about the partition. One the package
+    -- declares differently cannot be changed on the partition alone, so it is refused by name rather than left as it was.
+    SELECT STRING_AGG(d."TableSchema" || '.' || d."IndexName" || ' (attached to ' || pn.nspname || '.' || pc.relname || ')', ', '
+                      ORDER BY d."TableSchema", d."IndexName")
+      INTO attached_changed
+      FROM temp_indexes_to_drop d
+      JOIN pg_catalog.pg_namespace n ON n.nspname = d."TableSchema"
+      JOIN pg_catalog.pg_class ic ON ic.relnamespace = n.oid AND ic.relname = d."IndexName" AND ic.relkind = 'i'
+      JOIN pg_catalog.pg_inherits ih ON ih.inhrelid = ic.oid
+      JOIN pg_catalog.pg_class pc ON pc.oid = ih.inhparent
+      JOIN pg_catalog.pg_namespace pn ON pn.oid = pc.relnamespace
+     WHERE EXISTS (SELECT 1 FROM temp_indexes i
+                    WHERE i."TableSchema" = d."TableSchema" AND i."TableName" = d."TableName" AND i."Name" = d."IndexName");
+    IF attached_changed IS NOT NULL THEN
+      RAISE EXCEPTION 'A partition''s index that belongs to its parent''s index is declared differently: %. It can change only through the parent''s index: change the parent''s declaration, or declare the partition''s as it is.',
+        attached_changed;
+    END IF;
+
+    DELETE FROM temp_indexes_to_drop d
+      WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_inherits ih
+                      JOIN pg_catalog.pg_class ic ON ic.oid = ih.inhrelid
+                      JOIN pg_catalog.pg_namespace n ON n.oid = ic.relnamespace
+                     WHERE n.nspname = d."TableSchema" AND ic.relname = d."IndexName" AND ic.relkind = 'i');
+
     -- No-drop protection tier (#270): under protected mode the caller forces p_DropUnknownIndexes and
     -- p_DropIndexesRemovedFromProduct to FALSE, so the by-absence branches of temp_indexes_to_drop above
     -- stay empty and the drop pass below skips them. Record the indexes that WOULD be dropped by absence
@@ -369,7 +415,7 @@ BEGIN
              fkn.nspname || '.' || fkr.relname || '.' || fkc.conname AS "KeyName"
         FROM temp_indexes_to_drop ti
         JOIN pg_namespace icn ON icn.nspname = ti."TableSchema"
-        JOIN pg_class ic ON ic.relnamespace = icn.oid AND ic.relname = ti."IndexName" AND ic.relkind = 'i'
+        JOIN pg_class ic ON ic.relnamespace = icn.oid AND ic.relname = ti."IndexName" AND ic.relkind IN ('i', 'I')
         JOIN pg_constraint fkc ON fkc.contype = 'f' AND fkc.conindid = ic.oid
         JOIN pg_class fkr ON fkr.oid = fkc.conrelid
         JOIN pg_namespace fkn ON fkn.oid = fkr.relnamespace
@@ -404,22 +450,22 @@ BEGIN
                         WHERE i."TableSchema" = ti."TableSchema" AND i."Name" = ti."IndexName")
        AND "SchemaSmith"."OnlineApplyForm"(p_OnlineApply, ti."TableSchema", ti."TableName", 'index') = 'online';
     SELECT STRING_AGG(CASE WHEN ti."Online"
-                           THEN 'RAISE NOTICE ''  Dropping Index ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ' (online, after this pass)'';' || CHR(10) ||
+                           THEN 'RAISE NOTICE ''  Dropping Index %.%.% (online, after this pass)'', ''' || REPLACE((ti."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."IndexName")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                                 CASE WHEN p_WhatIf THEN d."Statement" || CHR(10) || d."Audit"
                                      ELSE 'CALL "SchemaSmith"."DeferOnlineWork"(' || quote_literal('Dropping Index ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ' concurrently') || ', ' ||
                                           quote_literal(d."Statement") || ', NULL, ' || quote_literal(d."Audit") || ');' END
-                           ELSE 'RAISE NOTICE ''  Dropping ' || CASE WHEN "IsConstraint" THEN 'Constraint' ELSE 'Index' END || ' ' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''';' || CHR(10) ||
+                           ELSE 'RAISE NOTICE ''  Dropping % %.%.%'', ''' || REPLACE((CASE WHEN "IsConstraint" THEN 'Constraint' ELSE 'Index' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."IndexName")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                                 CASE WHEN "IsConstraint"
                                      THEN 'ALTER TABLE ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."TableName") || ' DROP CONSTRAINT IF EXISTS ' || "SchemaSmith"."QuoteName"(ti."IndexName") || ' CASCADE;'
                                      ELSE 'DROP INDEX IF EXISTS ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."IndexName") || ';' END || CHR(10) ||
-                                'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN "IsConstraint" THEN 'constraint' ELSE 'index' END || ''', ''' ||
-                                ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''', ''dropped'');'
+                                'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || REPLACE((CASE WHEN "IsConstraint" THEN 'constraint' ELSE 'index' END)::TEXT, '''', '''''') || ''', ''' ||
+                                REPLACE((ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName")::TEXT, '''', '''''') || ''', ''dropped'');'
                       END, CHR(10))
       INTO sql_script
       FROM temp_indexes_to_drop ti
       CROSS JOIN LATERAL (SELECT 'DROP INDEX CONCURRENTLY IF EXISTS ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."IndexName") || ';' AS "Statement",
                                  'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''index'', ''' ||
-                                 ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName" || ''', ''dropped'', ''online'');' AS "Audit") d;
+                                 REPLACE((ti."TableSchema" || '.' || ti."TableName" || '.' || ti."IndexName")::TEXT, '''', '''''') || ''', ''dropped'', ''online'');' AS "Audit") d;
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
     IF p_WhatIf THEN CALL "SchemaSmith"."RecordWouldChanges"(sql_script); END IF;
 
@@ -427,7 +473,7 @@ BEGIN
     CALL "SchemaSmith"."RefuseUnmetOnlineRequire"(p_OnlineApply, p_WhatIf, TRUE);
 
     RAISE NOTICE 'Fixup Any Modified Index Fill Factors';
-    SELECT STRING_AGG('RAISE NOTICE ''  Modify Fillfactor for ' || ti."TableSchema" || '.' || ti."Name" || ''';' || CHR(10) ||
+    SELECT STRING_AGG('RAISE NOTICE ''  Modify Fillfactor for %.%'', ''' || REPLACE((ti."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                       'ALTER INDEX ' || "SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."Name") || ' SET (fillfactor = ' || ti."FillFactor" || ');', CHR(10))
       INTO sql_script
       FROM temp_indexes ti
@@ -445,10 +491,10 @@ BEGIN
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, p_WhatIf);
 
     RAISE NOTICE 'Add Missing Indexes'; -- Includes Primary Keys and Unique Constraints
-    SELECT STRING_AGG('RAISE NOTICE ''  Add missing ' || CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'Constraint ' ELSE 'Index ' END || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || CASE WHEN COALESCE(ti."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ti."VariantName", '''', '''''') || ')' ELSE '' END ||
+    SELECT STRING_AGG('RAISE NOTICE ''  Add missing %.%.%'', ''' || REPLACE((CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'Constraint ' ELSE 'Index ' END || ti."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."Name" || CASE WHEN COALESCE(ti."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ti."VariantName", '''', '''''') || ')' ELSE '' END ||
                     CASE f."Form" WHEN 'online' THEN ' (online, after this pass)'
                                   WHEN 'unavailable' THEN ' (online unavailable: ' || "SchemaSmith"."OnlineUnavailableReason"(ti."TableSchema", ti."TableName", k."Kind") || ')'
-                                  ELSE '' END || ''';' || CHR(10) ||
+                                  ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     CASE WHEN f."Form" = 'online' AND NOT p_WhatIf
                          THEN 'CALL "SchemaSmith"."DeferOnlineWork"(' || quote_literal('Building ' || CASE WHEN k."Kind" = 'index' THEN 'Index ' ELSE 'Constraint ' END || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || ' concurrently') || ', ' ||
                               quote_literal(o."Statement") || ', ' || quote_literal("SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."Name")) || ', ' ||
@@ -456,8 +502,8 @@ BEGIN
                          WHEN f."Form" = 'online' THEN o."Statement" || CHR(10) || o."FollowUp"
                          ELSE x."Statement" || CHR(10) ||
                               CASE WHEN f."Form" IS NULL
-                                   THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'constraint' ELSE 'index' END || ''', ''' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || ''', ''created'');'
-                                   ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''' || CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'constraint' ELSE 'index' END || ''', ''' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || ''', ''created'', ''' || f."Form" || ''');' END
+                                   THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || REPLACE((CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'constraint' ELSE 'index' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name")::TEXT, '''', '''''') || ''', ''created'');'
+                                   ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''' || REPLACE((CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'constraint' ELSE 'index' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name")::TEXT, '''', '''''') || ''', ''created'', ''' || REPLACE((f."Form")::TEXT, '''', '''''') || ''');' END
                     END, CHR(10))
       INTO sql_script
       FROM temp_indexes ti
@@ -511,11 +557,11 @@ BEGIN
                                          CASE WHEN ti."Deferrable" THEN ' DEFERRABLE' ELSE '' END ||
                                          CASE WHEN ti."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE '' END || ';' || CHR(10) END ||
                                'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''' ||
-                               CASE WHEN k."Kind" = 'index' THEN 'index' ELSE 'constraint' END || ''', ''' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || ''', ''created'', ''online'');' AS "FollowUp") o
+                               REPLACE((CASE WHEN k."Kind" = 'index' THEN 'index' ELSE 'constraint' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name")::TEXT, '''', '''''') || ''', ''created'', ''online'');' AS "FollowUp") o
       WHERE NOT EXISTS (SELECT *
                           FROM pg_index idx
                           JOIN pg_class tc ON tc.oid = idx.indrelid
-                                          AND tc.relkind = 'r'
+                                          AND tc.relkind IN ('r', 'p')
                                           AND tc.relname = ti."TableName"
                                           AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                           JOIN pg_class i ON i.oid = idx.indexrelid
@@ -530,7 +576,7 @@ BEGIN
 
 
     RAISE NOTICE 'Fixup Table Cluster';
-    SELECT STRING_AGG('RAISE NOTICE ''  Fixing up attributes for ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
+    SELECT STRING_AGG('RAISE NOTICE ''  Fixing up attributes for %.%'', ''' || REPLACE((t."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                       "SchemaSmith"."AfterOnlineBuild"(t."Schema", new_clust."NewCluster", 'Clustering ' || t."Schema" || '.' || t."Name" || ' on ' || new_clust."NewCluster",
                         'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
                         CASE WHEN new_clust."NewCluster" IS NOT NULL
@@ -583,7 +629,7 @@ BEGIN
              ts."StatisticsColumns", es."StatisticsColumns");
 
     RAISE NOTICE 'Drop Modified Statistics';
-    SELECT STRING_AGG('RAISE NOTICE ''  Statistics ' || es."TableSchema" || '.' || es."StatisticsName" || ' modified'';' || CHR(10) ||
+    SELECT STRING_AGG('RAISE NOTICE ''  Statistics %.% modified'', ''' || REPLACE((es."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((es."StatisticsName")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                       'DROP STATISTICS IF EXISTS ' || "SchemaSmith"."QuoteName"(es."StatisticsSchema") || '.' || "SchemaSmith"."QuoteName"(es."StatisticsName") || ' CASCADE;', CHR(10))
       INTO sql_script
       FROM temp_existing_statistics es
@@ -615,7 +661,7 @@ BEGIN
   END IF;
 
   RAISE NOTICE 'Add Missing Statistics';
-  SELECT STRING_AGG('RAISE NOTICE ''  Add missing statistics ' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || CASE WHEN COALESCE(ts."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ts."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Add missing statistics %.%.%'', ''' || REPLACE((ts."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((ts."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((ts."Name" || CASE WHEN COALESCE(ts."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ts."VariantName", '''', '''''') || ')' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'CREATE STATISTICS ' || "SchemaSmith"."QuoteName"(COALESCE(ts."StatisticsSchema", ts."TableSchema")) || '.' || "SchemaSmith"."QuoteName"(ts."Name") ||
                     -- EXPRESSIONS is not a kind CREATE STATISTICS accepts; an extracted package carries it.
                     "SchemaSmith"."StatisticsKindClause"(ts."Kind") ||

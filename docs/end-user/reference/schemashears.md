@@ -125,7 +125,7 @@ The patch package includes exactly:
 2. **Always-include entries** -- every file (or directory of files) listed in the always-include file.
 3. **Scaffolding** -- `Product.json` from the source product root, plus the `Template.json` for every template that contains at least one manifest or always-include file.
 
-Scaffolding is always included automatically. You do not need to list `Product.json` or `Template.json` in your manifest.
+Scaffolding is always included automatically. You do not need to list `Product.json` or `Template.json` in your manifest. The patch's `TemplateOrder` lists only the templates it carries, in the source's order, so a patch that touches one template of several validates and deploys.
 
 ---
 
@@ -158,11 +158,14 @@ By default, SchemaShears suppresses all recognized drop categories. The emitted 
   "DropForeignKeysRemovedFromProduct": false,
   "DropCheckConstraintsRemovedFromProduct": false,
   "DropExcludeConstraintsRemovedFromProduct": false,
-  "DropStatisticsRemovedFromProduct": false
+  "DropStatisticsRemovedFromProduct": false,
+  "PruneObsoleteMigrationTracking": false
 }
 ```
 
 That is the PostgreSQL form. `DropExcludeConstraintsRemovedFromProduct` is written only for PostgreSQL products and `DropStatisticsRemovedFromProduct` only for SQL Server and PostgreSQL products, because those are the only engines that accept them -- stamping either one elsewhere would make the patch fail `--Validate`, and those engines have no such objects to drop anyway. `--Validate` on the patch exits 0; a foreign key into a table the patch omits is reported as an `SS-FK-002` warning, which here is expected -- the table is already on the target.
+
+`PruneObsoleteMigrationTracking: false` is written into every patch, whatever `--AllowDrops` says: a patch carries only some of the product's migration scripts, and pruning the run-once record of every script it leaves out would make the next full deploy run them all again.
 
 This is the correct posture for a patch: deploy what's in scope, leave every other object in place.
 

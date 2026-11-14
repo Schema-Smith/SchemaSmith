@@ -281,6 +281,42 @@ CREATE TABLE public.""TestExclExtras"" (""id"" INT NOT NULL, ""room"" INT NOT NU
 
     // An omitted state attribute leaves a constraint as it is, so extraction writes one only where it is not the default:
     // a constraint in its ordinary state carries none, and the package does not take over its state.
+    // G4: a foreign key's, check's, exclusion constraint's, policy's and extended statistics' comment is its Description.
+    [Test]
+    public void ShouldExtractEachComponentsComment_AsItsDescription()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_testConnectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE public.""TestCompDesc"" (""id"" INT PRIMARY KEY, ""parent"" INT, ""code"" INT);
+ALTER TABLE public.""TestCompDesc"" ADD CONSTRAINT ""fk_d"" FOREIGN KEY (""parent"") REFERENCES public.""TestCompDesc"" (""id"");
+ALTER TABLE public.""TestCompDesc"" ADD CONSTRAINT ""ck_d"" CHECK (""id"" > 0);
+ALTER TABLE public.""TestCompDesc"" ADD CONSTRAINT ""ck_plain"" CHECK (""id"" > -1);
+ALTER TABLE public.""TestCompDesc"" ADD CONSTRAINT ""ex_d"" EXCLUDE USING btree (""code"" WITH =);
+CREATE POLICY ""pol_d"" ON public.""TestCompDesc"" FOR SELECT USING (""id"" > 0);
+CREATE STATISTICS public.""st_d"" ON ""id"", ""parent"" FROM public.""TestCompDesc"";
+COMMENT ON CONSTRAINT ""fk_d"" ON public.""TestCompDesc"" IS 'The parent''s key';
+COMMENT ON CONSTRAINT ""ck_d"" ON public.""TestCompDesc"" IS 'Positive ids';
+COMMENT ON CONSTRAINT ""ex_d"" ON public.""TestCompDesc"" IS 'One row per code';
+COMMENT ON POLICY ""pol_d"" ON public.""TestCompDesc"" IS 'Readers see positive ids';
+COMMENT ON STATISTICS public.""st_d"" IS 'id and parent move together';
+";
+        cmd.ExecuteNonQuery();
+        var result = GenerateTable(cmd, "public", "TestCompDesc");
+        var checks = result.CheckConstraints.Cast<Schema.Domain.PostgreSQL.PostgreSqlCheckConstraint>().ToDictionary(c => c.Name);
+        Assert.Multiple(() =>
+        {
+            Assert.That(((Schema.Domain.PostgreSQL.PostgreSqlForeignKey)result.ForeignKeys.Single()).Description, Is.EqualTo("The parent's key"));
+            Assert.That(checks["ck_d"].Description, Is.EqualTo("Positive ids"));
+            Assert.That(checks["ck_plain"].Description, Is.Null, "no comment, no Description");
+            Assert.That(result.ExcludeConstraints.Single().Description, Is.EqualTo("One row per code"));
+            Assert.That(result.Policies.Single().Description, Is.EqualTo("Readers see positive ids"));
+            Assert.That(result.Statistics.Single().Description, Is.EqualTo("id and parent move together"));
+        });
+        conn.Close();
+    }
+
     [Test]
     public void ShouldExtractConstraintState_OnlyWhereItIsNotTheDefault()
     {

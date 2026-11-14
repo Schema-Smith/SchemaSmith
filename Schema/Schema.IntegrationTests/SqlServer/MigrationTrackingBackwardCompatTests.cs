@@ -91,6 +91,28 @@ public class MigrationTrackingBackwardCompatTests
     }
 
     [Test]
+    public void KindleTheForge_LegacyVarcharTable_KeepsItsRows_AndStoresANameOutsideTheCodePage()
+    {
+        _command.CommandText = @"
+            INSERT INTO SchemaSmith.CompletedMigrationScripts (ScriptPath, ProductName, QuenchSlot)
+            VALUES ('Before Scripts/Migration_001.sql', 'Demo', 'Before');";
+        _command.ExecuteNonQuery();
+
+        // force: version-gated kindle would otherwise skip after the fixture's initial kindle
+        ForgeKindler.KindleTheForge(_command, Platform.SqlServer, forceReKindle: true);
+
+        _command.CommandText = @"
+            INSERT INTO SchemaSmith.CompletedMigrationScripts (ScriptPath, ProductName, QuenchSlot, template_name, schema_name)
+            VALUES (N'Before Scripts/Ω.sql', N'Ω Product', 'Before', N'Main', N'');
+            SELECT CONCAT(COUNT(*), '|',
+                          SUM(CASE WHEN ScriptPath = N'Before Scripts/Ω.sql' AND ProductName = N'Ω Product' THEN 1 ELSE 0 END), '|',
+                          SUM(CASE WHEN ScriptPath = 'Before Scripts/Migration_001.sql' AND ProductName = 'Demo' THEN 1 ELSE 0 END))
+            FROM SchemaSmith.CompletedMigrationScripts;";
+        Assert.That(_command.ExecuteScalar()?.ToString(), Is.EqualTo("2|1|1"),
+            "rows | the name outside the code page, stored whole | the legacy row, kept");
+    }
+
+    [Test]
     public void KindleTheForge_LegacyRow_HasBlankTemplateNameAndSchemaName_AfterUpgrade()
     {
         _command.CommandText = @"

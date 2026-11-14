@@ -203,10 +203,10 @@ VALUES ('{_productName}', '', '{_mainDb}', 'CHECK CONSTRAINT', '{table}.{ck}');"
         {
             cmd.CommandText = $"DROP TABLE IF EXISTS `{_mainDb}`.`{table}`";
             cmd.ExecuteNonQuery();
-            cmd.CommandText = $"DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectSchema = '{_mainDb}' AND ObjectName LIKE '{table}%'";
-            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectType IN ('TABLE', 'INDEX', 'EVENT') AND ObjectSchema = '{_mainDb}' AND ObjectName LIKE '{table}%'";
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             cmd.CommandText = "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
         catch (System.Data.Common.DbException) { /* best-effort cleanup */ }
     }

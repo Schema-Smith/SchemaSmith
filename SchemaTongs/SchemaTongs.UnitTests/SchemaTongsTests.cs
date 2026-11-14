@@ -838,18 +838,25 @@ public class SchemaTongsTests
             reader.GetString(0).Returns("dbo");
             reader.GetString(1).Returns("MySeq");
             reader.GetString(2).Returns("bigint");
-            reader.GetValue(3).Returns((object)"1");
-            reader.GetValue(4).Returns((object)"1");
-            reader.GetValue(5).Returns((object)"1");
-            reader.GetValue(6).Returns((object)"9223372036854775807");
+            reader.GetString(3).Returns("1");
+            reader.GetString(4).Returns("1");
+            reader.GetString(5).Returns("-9223372036854775808");
+            reader.GetString(6).Returns("9223372036854775807");
             reader.GetBoolean(7).Returns(false);
+            reader.GetBoolean(8).Returns(true);
+            reader.IsDBNull(9).Returns(true);
+            reader.GetInt32(10).Returns(1);
+            reader.GetInt32(11).Returns(1);
+            reader.IsDBNull(12).Returns(true);
             _command.StubReaders(reader);
 
             var tongs = new SchemaTongs(Platform.SqlServer);
             Assert.DoesNotThrow(() => tongs.CastTemplate());
 
             _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("Casting Sequences")));
-            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("dbo.MySeq.sql")), Arg.Any<string>());
+            // The declared form, with neither bound: both are the type's.
+            _fileWrapper.Received().WriteAllText(Arg.Is<string>(s => s.Contains("dbo.MySeq.json")),
+                Arg.Is<string>(t => t.Contains("\"MySeq\"") && !t.Contains("MinValue") && !t.Contains("MaxValue")));
 
             FactoryContainer.Clear();
             LogFactory.Clear();
@@ -2006,6 +2013,8 @@ public class SchemaTongsTests
             _command.ExecuteScalar().Returns(_ =>
             {
                 var sql = _command.CommandText ?? string.Empty;
+                // The kindle's routine count names every helper, GenerateEventJSON among them, so it is answered first.
+                if (sql.Contains("information_schema.ROUTINES")) return (object)100_000L;
                 if (sql.Contains("GenerateEventJSON")) return (object)eventJson;
                 if (KindleGateTestHelpers.IsReadOnlyProbe(sql)) return (object)0;
                 if (sql.Contains("GET_LOCK")) return (object)1L;

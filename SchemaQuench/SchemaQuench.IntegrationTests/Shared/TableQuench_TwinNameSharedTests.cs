@@ -42,11 +42,11 @@ public abstract class TableQuench_TwinNameSharedTests : BaseTableQuenchTests
         CleanUp(cmd, product, table);
         try
         {
-            RunTableQuenchProc(cmd, json, productName: product);
+            RunTableQuenchProc(cmd, json, productName: product, beforeRetry: () => ClearStatusMessages(cmd));
             Exec(cmd, $"INSERT INTO `{table}` VALUES (1, 7, 'cv')");
 
             ClearStatusMessages(cmd);
-            RunTableQuenchProc(cmd, json, productName: product);
+            RunTableQuenchProc(cmd, json, productName: product, beforeRetry: () => ClearStatusMessages(cmd));
 
             Assert.Multiple(() =>
             {
@@ -86,13 +86,13 @@ public abstract class TableQuench_TwinNameSharedTests : BaseTableQuenchTests
         CleanUp(cmd, product, kept, renamed, renamedTo);
         try
         {
-            RunTableQuenchProc(cmd, $"[{Table(kept, "INT")}, {Table(renamed, "VARCHAR(20)")}]", productName: product);
-            RunTableQuenchProc(cmd, $"[{Table(kept, "INT")}, {Table(renamedTo, "VARCHAR(20)", oldName: renamed)}]", productName: product);
+            RunTableQuenchProc(cmd, $"[{Table(kept, "INT")}, {Table(renamed, "VARCHAR(20)")}]", productName: product, beforeRetry: () => ClearStatusMessages(cmd));
+            RunTableQuenchProc(cmd, $"[{Table(kept, "INT")}, {Table(renamedTo, "VARCHAR(20)", oldName: renamed)}]", productName: product, beforeRetry: () => ClearStatusMessages(cmd));
 
             Assert.That(Owned(cmd, product), Is.EqualTo($"{renamedTo},{kept}"),
                 "only the renamed twin's ownership moves to the new name");
 
-            RunTableQuenchProc(cmd, $"[{Table(renamedTo, "VARCHAR(20)")}]", productName: product, dropTablesRemovedFromProduct: true);
+            RunTableQuenchProc(cmd, $"[{Table(renamedTo, "VARCHAR(20)")}]", productName: product, beforeRetry: () => ClearStatusMessages(cmd), dropTablesRemovedFromProduct: true);
 
             Assert.Multiple(() =>
             {
@@ -141,12 +141,12 @@ public abstract class TableQuench_TwinNameSharedTests : BaseTableQuenchTests
         try
         {
             var both = $"[{Table(first, "INT")}, {Table(second, "VARCHAR(20)")}]";
-            RunTableQuenchProc(cmd, both, productName: product);
+            RunTableQuenchProc(cmd, both, productName: product, beforeRetry: () => ClearStatusMessages(cmd));
             Exec(cmd, $"INSERT INTO `{first}` VALUES (1, 7)");
             Exec(cmd, $"INSERT INTO `{second}` VALUES (1, 'cv')");
 
             ClearStatusMessages(cmd);
-            RunTableQuenchProc(cmd, both, productName: product);
+            RunTableQuenchProc(cmd, both, productName: product, beforeRetry: () => ClearStatusMessages(cmd));
             Assert.Multiple(() =>
             {
                 Assert.That(ColumnType(cmd, first, "val"), Is.EqualTo("int"));
@@ -154,7 +154,7 @@ public abstract class TableQuench_TwinNameSharedTests : BaseTableQuenchTests
                 Assert.That(Messages(cmd), Is.Empty, "a redeploy of an unchanged package changes nothing");
             });
 
-            RunTableQuenchProc(cmd, $"[{Table(first, "INT")}]", productName: product, dropTablesRemovedFromProduct: true);
+            RunTableQuenchProc(cmd, $"[{Table(first, "INT")}]", productName: product, beforeRetry: () => ClearStatusMessages(cmd), dropTablesRemovedFromProduct: true);
             Assert.Multiple(() =>
             {
                 Assert.That(Scalar(cmd, $"SELECT `val` FROM `{first}`"), Is.EqualTo("7"), "the twin still declared keeps its rows");
@@ -218,7 +218,7 @@ public abstract class TableQuench_TwinNameSharedTests : BaseTableQuenchTests
     {
         foreach (var table in tables)
             TryExec(cmd, $"DROP TABLE IF EXISTS `{table}`");
-        TryExec(cmd, $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}'");
+        Exec(cmd, $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}'");
     }
 
     private static void Exec(IDbCommand cmd, string sql)

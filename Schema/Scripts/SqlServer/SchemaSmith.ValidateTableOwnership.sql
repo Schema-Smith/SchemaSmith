@@ -41,7 +41,7 @@ BEGIN
 
   IF NOT EXISTS (SELECT * FROM #ForeignOwners) RETURN
 
-  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Table ' + REPLACE(f.[Schema] + '.' + f.[Name], '''', '''''') + ' owned by different product. [' + REPLACE(f.[Owner], '''', '''''') + ']'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
+  SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST('RAISERROR(''  Table ' + REPLACE(REPLACE((f.[Schema] + '.' + f.[Name]) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') + ' owned by different product. [' + REPLACE(REPLACE(f.[Owner], '''', ''''''), '%', '%%') + ']'', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
                            FROM #ForeignOwners f
                            FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
   IF @WhatIf = 1 EXEC SchemaSmith.PrintWithNoWait @v_SQL ELSE EXEC(@v_SQL);

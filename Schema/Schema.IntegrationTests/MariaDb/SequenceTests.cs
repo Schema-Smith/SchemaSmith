@@ -165,6 +165,46 @@ public class SequenceTests
         }
     }
 
+    private string Comment(string name) =>
+        Scalar($"SELECT TABLE_COMMENT FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = '{_db}' AND TABLE_NAME = '{name}'")?.ToString();
+
+    // G7: a sequence's Description is its COMMENT, as on PostgreSQL: set at creation, converged after, left alone when
+    // omitted and removed by "".
+    [Test]
+    public void ADeclaredDescription_IsSetConvergedAndRemoved_AndAnOmittedOneIsLeftAlone()
+    {
+        var name = "seq_desc_" + Uid();
+        try
+        {
+            Deploy($$"""[{ "Name": "{{name}}", "Description": "Order numbers" }]""");
+            Assert.That(Comment(name), Is.EqualTo("Order numbers"), "created with its comment");
+
+            Deploy($$"""[{ "Name": "{{name}}", "Description": "The customer's order numbers" }]""", whatIf: true);
+            Assert.Multiple(() =>
+            {
+                Assert.That(Comment(name), Is.EqualTo("Order numbers"), "WhatIf changes nothing");
+                Assert.That(Audits(name, "wouldModify"), Is.EqualTo(1), "the preview reports the change");
+            });
+
+            Deploy($$"""[{ "Name": "{{name}}", "Description": "The customer's order numbers" }]""");
+            Assert.That(Comment(name), Is.EqualTo("The customer's order numbers"), "a changed description converges");
+
+            Deploy($$"""[{ "Name": "{{name}}" }]""");
+            Assert.That(Comment(name), Is.EqualTo("The customer's order numbers"), "an omitted description leaves the comment alone");
+
+            Deploy($$"""[{ "Name": "{{name}}", "Description": "" }]""");
+            Assert.Multiple(() =>
+            {
+                Assert.That(Comment(name), Is.Empty, "\"\" removes it");
+                Assert.That(Audits(name, "modified"), Is.EqualTo(2), "one alteration per changed deploy, none for the omitted one");
+            });
+        }
+        finally
+        {
+            Exec($"DROP SEQUENCE IF EXISTS `{name}`");
+        }
+    }
+
     [Test]
     public void WhatIf_ReportsAndChangesNothing()
     {

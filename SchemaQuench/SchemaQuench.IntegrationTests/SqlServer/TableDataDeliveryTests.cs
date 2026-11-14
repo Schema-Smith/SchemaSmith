@@ -172,6 +172,81 @@ public class TableDataDeliveryTests
         Assert.That(reader.GetDecimal(1), Is.EqualTo(5.00m));
     }
 
+    // The data literal was emitted without N, so on a database whose collation is not UTF-8 every character outside its
+    // code page arrived as '?'. The JSON-below-130 test compared the two encodings with each other, and both lost them.
+    [TestCase("Json", false)]
+    [TestCase("Xml", false)]
+    [TestCase("Json", true)]
+    [TestCase("Xml", true)]
+    public void DeliveredText_ArrivesAsWritten_OutsideTheDatabaseCodePage(string encoding, bool deferred)
+    {
+        const string text = "Zoë 名 Привет مرحبا 🙂";
+        var table = $"_test_unicode_{Guid.NewGuid():N}".Substring(0, 30);
+        using var command = _connection.CreateCommand();
+        try
+        {
+            command.CommandText = $"CREATE TABLE [{SchemaName}].[{table}] ([id] INT NOT NULL PRIMARY KEY, [ParentId] INT NULL, [name] NVARCHAR(100) NOT NULL)";
+            command.ExecuteNonQuery();
+            var data = encoding == "Xml"
+                ? $"<rows><row><c n=\"id\">1</c><c n=\"ParentId\">1</c><c n=\"name\">{text}</c></row></rows>"
+                : $"[{{\"id\":1,\"ParentId\":1,\"name\":\"{text}\"}}]";
+            var script = deferred
+                ? DeferredMergeBuilder.Build(new MergeScriptHelperAdapter(Platform.SqlServer), command, "SqlServer", SchemaName, table,
+                    data, "[id]", false, new List<string> { "ParentId" }, contentEncoding: encoding)
+                : MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, SchemaName, table,
+                    data, "[id]", mergeUpdate: true, mergeDelete: false, disableTriggers: false,
+                    tokenizeScripts: false, mergeFilter: null, contentEncoding: encoding);
+            command.CommandText = script;
+            command.ExecuteNonQuery();
+
+            command.CommandText = $"SELECT [name] FROM [{SchemaName}].[{table}] WHERE [id] = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo(text));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [{SchemaName}].[{table}]";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // B23: SQL Server's FOR JSON leaves out a column that is NULL in every extracted row, and delivery took its columns
+    // from the keys present in the data, so that column was never written and an update kept the target's old values.
+    // DataTongs now records the extracted columns, and a listed column is delivered as NULL.
+    [Test]
+    public void DeliverTableData_AColumnNullInEveryRow_IsDeliveredWhenListed()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"INSERT INTO [{SchemaName}].[{_testTableName}] ([code], [name], [value]) VALUES ('A001', 'Old', 5.00)";
+        command.ExecuteNonQuery();
+
+        var script = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, SchemaName, _testTableName,
+            @"[{""code"":""A001"",""name"":""New""}]", "[code]", mergeUpdate: true, mergeDelete: false, disableTriggers: false,
+            tokenizeScripts: false, mergeFilter: null, declaredColumns: "code,name,value");
+        command.CommandText = script;
+        command.ExecuteNonQuery();
+
+        command.CommandText = $"SELECT CONCAT([name], '|', ISNULL(CAST([value] AS VARCHAR(20)), 'NULL')) FROM [{SchemaName}].[{_testTableName}] WHERE [code] = 'A001'";
+        Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("New|NULL"), "the listed column absent from every row is written NULL");
+    }
+
+    // FOR XML leaves out a NULL column the same way; the listed column is delivered NULL from XML content too.
+    [Test]
+    public void DeliverTableData_AColumnNullInEveryRow_IsDeliveredWhenListed_FromXmlContent()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"INSERT INTO [{SchemaName}].[{_testTableName}] ([code], [name], [value]) VALUES ('A001', 'Old', 5.00)";
+        command.ExecuteNonQuery();
+
+        var script = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command, SchemaName, _testTableName,
+            @"<rows><row><c n=""code"">A001</c><c n=""name"">New</c></row></rows>", "[code]", mergeUpdate: true, mergeDelete: false, disableTriggers: false,
+            tokenizeScripts: false, mergeFilter: null, contentEncoding: "Xml", declaredColumns: "code,name,value");
+        command.CommandText = script;
+        command.ExecuteNonQuery();
+
+        command.CommandText = $"SELECT CONCAT([name], '|', ISNULL(CAST([value] AS VARCHAR(20)), 'NULL')) FROM [{SchemaName}].[{_testTableName}] WHERE [code] = 'A001'";
+        Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("New|NULL"), "the listed column absent from every row is written NULL");
+    }
+
     [Test]
     public void DeliverTableData_XmlEncoding_InsertsAndUpdatesRows()
     {
@@ -335,13 +410,16 @@ public class TableDataDeliveryTests
             using (var c = _connection.CreateCommand())
             {
                 c.CommandText = $@"SELECT CONCAT_WS(',',
-                        IIF(j.name = x.name, NULL, 'name'), IIF(j.amt = x.amt AND j.amt = {amount}, NULL, 'amt'),
-                        IIF(j.dt = x.dt, NULL, 'dt'), IIF(CAST(j.dto AS NVARCHAR(40)) = CAST(x.dto AS NVARCHAR(40)), NULL, 'dto'),
-                        IIF(j.bin = x.bin, NULL, 'bin'), IIF(j.flag = x.flag, NULL, 'flag'),
-                        IIF(j.shape.STEquals(x.shape) = 1 AND j.shape.STSrid = x.shape.STSrid, NULL, 'shape'),
-                        IIF(j.uid = x.uid, NULL, 'uid'), IIF(j.notes = x.notes, NULL, 'notes'))
+                        IIF(j.name = x.name AND j.name = N'Zoë 名', NULL, 'name'), IIF(j.amt = x.amt AND j.amt = {amount}, NULL, 'amt'),
+                        IIF(j.dt = x.dt AND j.dt = '2024-03-05T10:11:12.1234567', NULL, 'dt'),
+                        IIF(CAST(j.dto AS NVARCHAR(40)) = CAST(x.dto AS NVARCHAR(40)) AND CAST(j.dto AS NVARCHAR(40)) = N'2024-03-05 10:11:12.1234567 +05:30', NULL, 'dto'),
+                        IIF(j.bin = x.bin AND j.bin = 0xDEADBEEF00, NULL, 'bin'), IIF(j.flag = x.flag AND j.flag = 1, NULL, 'flag'),
+                        IIF(j.shape.STEquals(x.shape) = 1 AND j.shape.STSrid = x.shape.STSrid
+                            AND j.shape.STEquals(geometry::STGeomFromText('POINT (1 2)', 4326)) = 1 AND j.shape.STSrid = 4326, NULL, 'shape'),
+                        IIF(j.uid = x.uid AND j.uid = '6F9619FF-8B86-D011-B42D-00C04FC964FF', NULL, 'uid'),
+                        IIF(j.notes = x.notes AND j.notes = N'[{{""a"":1}},{{""b"":2}}]', NULL, 'notes'))
                     FROM [dbo].[{_testTableName}] j JOIN [dbo].[{_testTableName}] x ON j.code = 'J001' AND x.code = 'X001'";
-                Assert.That(c.ExecuteScalar()?.ToString(), Is.Empty, "the list names each column where the JSON delivery differs from the XML one");
+                Assert.That(c.ExecuteScalar()?.ToString(), Is.Empty, "the list names each column where the JSON delivery differs from the XML one or from the source value");
             }
             Assert.That(downgrades, Is.Empty, "nothing was skipped, so nothing is downgraded");
             Assert.That(logs, Has.None.Contains("SKIPPED"));
@@ -684,10 +762,7 @@ public class TableDataDeliveryTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
-                var quench = new DatabaseQuench(FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);
@@ -775,10 +850,7 @@ public class TableDataDeliveryTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
-                var quench = new DatabaseQuench(FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 // "Continues" now means "delivers what it can, then fails the run" (#334):
@@ -844,10 +916,7 @@ public class TableDataDeliveryTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
-                var quench = new DatabaseQuench(FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.False, "a failed DataDelivery must fail the quench");
@@ -972,10 +1041,7 @@ public class TableDataDeliveryTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
-                var quench = new DatabaseQuench(FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);
@@ -1078,10 +1144,7 @@ public class TableDataDeliveryTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
-                var quench = new DatabaseQuench(FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "false", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.False, "Should fail due to Insert/Update/Delete+CASCADE");
@@ -1145,10 +1208,7 @@ public class TableDataDeliveryTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
-                var quench = new DatabaseQuench(FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);
@@ -1205,10 +1265,7 @@ public class TableDataDeliveryTests
                 LogFactory.Register("ProgressLog", progressLog);
 
                 var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
-                var quench = new DatabaseQuench(FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);
@@ -1277,10 +1334,7 @@ public class TableDataDeliveryTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
-                var quench = new DatabaseQuench(FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);
@@ -1360,10 +1414,7 @@ public class TableDataDeliveryTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform.SqlServer };
-                var quench = new DatabaseQuench(FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = FactoryContainer.Resolve<IConfigurationRoot>()["Target:Server"], DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);

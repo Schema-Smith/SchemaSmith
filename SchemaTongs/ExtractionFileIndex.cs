@@ -64,6 +64,8 @@ public class ExtractionFileIndex
         _writtenFiles.Add(filePath);
     }
 
+    public bool WasWritten(string filePath) => _writtenFiles.Contains(filePath);
+
     public void ExcludeFromOrphans(string fileName)
     {
         _excludedFromOrphans.Add(fileName);

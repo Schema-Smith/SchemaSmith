@@ -1,0 +1,63 @@
+// Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
+
+using System.Collections.Generic;
+using System.Data;
+using NUnit.Framework;
+using Schema.Domain;
+using SchemaTongs.IntegrationTests.Shared;
+
+namespace SchemaTongs.IntegrationTests.MariaDb;
+
+[Category("MariaDb")]
+[TestFixture]
+[Category("Integration")]
+public class SettingsExtractionTests : SettingsExtractionSharedTests
+{
+    private string _collation = "";
+
+    protected override Platform Platform => Platform.MariaDb;
+    protected override string ConfigPrefix => "MariaDB";
+    protected override string AdminDatabase => "mysql";
+    protected override (string Kind, string Name, string Value) ChangedSetting => ("Option", "COLLATE", _collation);
+    protected override (string Kind, string Name) DefaultSetting => ("Option", "CHARACTER SET");
+    // Paths and sizes the server picks, and COMPILE-TIME values that differ from DEFAULT_VALUE only because they are derived.
+    protected override string[] NotAChoice => ["innodb_undo_directory", "log_slow_query_file", "relay_log_info_file", "report_port", "back_log", "open_files_limit",
+        "thread_cache_size", "binlog_expire_logs_seconds", "innodb_open_files", "character_set_collations", "innodb_log_write_ahead_size"];
+    protected override (string Kind, string Name) MachineIdentitySetting => ("Variable", "datadir");
+
+    protected override IEnumerable<string> SetInConfig(IDbCommand cmd)
+    {
+        cmd.CommandText = "SELECT VARIABLE_NAME FROM information_schema.SYSTEM_VARIABLES WHERE GLOBAL_VALUE_ORIGIN = 'CONFIG'";
+        using var reader = cmd.ExecuteReader();
+        var names = new List<string>();
+        while (reader.Read()) names.Add(reader.GetString(0));
+        return names;
+    }
+
+    // The server's own character set, with a collation of it that is not the server's default.
+    protected override void CreateSourceDatabase(IDbCommand cmd, string name)
+    {
+        cmd.CommandText = "SELECT COLLATION_NAME FROM information_schema.COLLATIONS WHERE CHARACTER_SET_NAME = @@character_set_server " +
+                          "AND COLLATION_NAME <> @@collation_server ORDER BY COLLATION_NAME LIMIT 1";
+        _collation = cmd.ExecuteScalar()?.ToString();
+        cmd.CommandText = $"CREATE DATABASE `{name}` CHARACTER SET @@character_set_server COLLATE {_collation}";
+        try
+        {
+            cmd.ExecuteNonQuery();
+        }
+        catch (System.Data.Common.DbException)
+        {
+            // CHARACTER SET takes a name, not a variable, on some versions: read it first.
+            cmd.CommandText = "SELECT @@character_set_server";
+            var charset = cmd.ExecuteScalar()?.ToString();
+            cmd.CommandText = $"CREATE DATABASE `{name}` CHARACTER SET {charset} COLLATE {_collation}";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    protected override void DropSourceDatabase(IDbCommand cmd, string name)
+    {
+        cmd.CommandText = $"DROP DATABASE IF EXISTS `{name}`";
+        cmd.ExecuteNonQuery();
+    }
+}

@@ -29,9 +29,11 @@ namespace Schema.Domain.MySQL
             }
         }
 
+        // Omitted means InnoDB for a new table and the table's own engine for an existing one. No default here: one
+        // would be written for every table and convert a MEMORY, Aria or MyISAM table nobody asked to convert.
+        [SchemaProperty(Description = "Storage engine. Omitted, a new table is created InnoDB and an existing table keeps its engine.")]
         [JsonProperty(Order = 100)]
-        [DefaultValue("InnoDB")]
-        public string Engine { get; set; } = "InnoDB";
+        public string Engine { get; set; }
 
         // The deploy compares UPPER() to UPPER(), so any casing deploys. Page is MariaDB's Aria format, which extraction writes.
         [SchemaProperty(Pattern = "Dynamic|Compact|Compressed|Redundant|Fixed|Page", PatternIgnoreCase = true)]

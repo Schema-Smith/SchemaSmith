@@ -56,14 +56,12 @@ BEGIN
   END IF;
 
   RAISE NOTICE 'Add New Computed Columns';
-  SELECT STRING_AGG('RAISE NOTICE ''  Add new computed columns to ' || tt."Schema" || '.' || tt."Name" || ' (' ||
-                    (SELECT STRING_AGG(tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END, ', ')
+  SELECT STRING_AGG('RAISE NOTICE ''  Add new computed columns to %.% (%)'', ''' || REPLACE((tt."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tt."Name")::TEXT, '''', '''''') || ''', ''' || REPLACE(((SELECT STRING_AGG(tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END, ', ')
                      FROM temp_columns tc
                      WHERE tc."TableSchema" = tt."Schema" AND tc."TableName" = tt."Name"
                        AND tc."Generated" = 'ALWAYS' AND COALESCE(tc."GenerationExpression", '') <> ''
                        AND NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class rc ON rc.oid = a.attrelid JOIN pg_namespace nn ON nn.oid = rc.relnamespace WHERE nn.nspname = tc."TableSchema" AND rc.relname = tc."TableName" AND a.attname = tc."Name" AND a.attnum > 0 AND NOT a.attisdropped)
-                       AND NOT (tc."Virtual" AND "SchemaSmith"."ServerVersionNum"() < 18)) ||
-                    ')'';' || CHR(10) ||
+                       AND NOT (tc."Virtual" AND "SchemaSmith"."ServerVersionNum"() < 18)))::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER TABLE ' || "SchemaSmith"."QuoteName"(tt."Schema") || '.' || "SchemaSmith"."QuoteName"(tt."Name") || ' ' ||
                     -- Nullability belongs in the ADD: leaving it out built every generated column nullable, and a declared
                     -- NOT NULL then arrived one deploy late as a SET NOT NULL. PostgreSQL 18 accepts it on VIRTUAL too.
@@ -75,7 +73,7 @@ BEGIN
                          AND NOT EXISTS (SELECT 1 FROM pg_attribute a JOIN pg_class rc ON rc.oid = a.attrelid JOIN pg_namespace nn ON nn.oid = rc.relnamespace WHERE nn.nspname = tc."TableSchema" AND rc.relname = tc."TableName" AND a.attname = tc."Name" AND a.attnum > 0 AND NOT a.attisdropped)
                          AND NOT (tc."Virtual" AND "SchemaSmith"."ServerVersionNum"() < 18)) || ';' || CHR(10) ||
                     -- Object-change audit (#243 E5): one row per computed column added (folded ALTER above).
-                    COALESCE((SELECT STRING_AGG('INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''column'', ''' || tt."Schema" || '.' || tt."Name" || '.' || tc."Name" || ''', ''created'');', CHR(10))
+                    COALESCE((SELECT STRING_AGG('INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''column'', ''' || REPLACE((tt."Schema" || '.' || tt."Name" || '.' || tc."Name")::TEXT, '''', '''''') || ''', ''created'');', CHR(10))
                                 FROM temp_columns tc
                                 WHERE tc."TableSchema" = tt."Schema" AND tc."TableName" = tt."Name"
                                   AND tc."Generated" = 'ALWAYS' AND COALESCE(tc."GenerationExpression", '') <> ''
@@ -141,10 +139,10 @@ BEGIN
   END IF;
 
   RAISE NOTICE 'Add Missing Indexes'; -- Includes Primary Keys and Unique Constraints
-  SELECT STRING_AGG('RAISE NOTICE ''  Add missing ' || CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'Constraint ' ELSE 'Index ' END || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || CASE WHEN COALESCE(ti."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ti."VariantName", '''', '''''') || ')' ELSE '' END ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Add missing %.%.%'', ''' || REPLACE((CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'Constraint ' ELSE 'Index ' END || ti."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."Name" || CASE WHEN COALESCE(ti."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ti."VariantName", '''', '''''') || ')' ELSE '' END ||
                     CASE f."Form" WHEN 'online' THEN ' (online, after this pass)'
                                   WHEN 'unavailable' THEN ' (online unavailable: ' || "SchemaSmith"."OnlineUnavailableReason"(ti."TableSchema", ti."TableName", k."Kind") || ')'
-                                  ELSE '' END || ''';' || CHR(10) ||
+                                  ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     CASE WHEN f."Form" = 'online' AND NOT p_WhatIf
                          THEN 'CALL "SchemaSmith"."DeferOnlineWork"(' || quote_literal('Building ' || CASE WHEN k."Kind" = 'index' THEN 'Index ' ELSE 'Constraint ' END || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || ' concurrently') || ', ' ||
                               quote_literal(o."Statement") || ', ' || quote_literal("SchemaSmith"."QuoteName"(ti."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ti."Name")) || ', ' ||
@@ -152,8 +150,8 @@ BEGIN
                          WHEN f."Form" = 'online' THEN o."Statement" || CHR(10) || o."FollowUp"
                          ELSE x."Statement" || CHR(10) ||
                               CASE WHEN f."Form" IS NULL
-                                   THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'constraint' ELSE 'index' END || ''', ''' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || ''', ''created'');'
-                                   ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''' || CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'constraint' ELSE 'index' END || ''', ''' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || ''', ''created'', ''' || f."Form" || ''');' END
+                                   THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''' || REPLACE((CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'constraint' ELSE 'index' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name")::TEXT, '''', '''''') || ''', ''created'');'
+                                   ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''' || REPLACE((CASE WHEN ti."UniqueConstraint" OR ti."PrimaryKey" THEN 'constraint' ELSE 'index' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name")::TEXT, '''', '''''') || ''', ''created'', ''' || REPLACE((f."Form")::TEXT, '''', '''''') || ''');' END
                     END, CHR(10))
     INTO sql_script
     FROM temp_indexes ti
@@ -206,11 +204,11 @@ BEGIN
                                          CASE WHEN ti."Deferrable" THEN ' DEFERRABLE' ELSE '' END ||
                                          CASE WHEN ti."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE '' END || ';' || CHR(10) END ||
                                'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''' ||
-                               CASE WHEN k."Kind" = 'index' THEN 'index' ELSE 'constraint' END || ''', ''' || ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name" || ''', ''created'', ''online'');' AS "FollowUp") o
+                               REPLACE((CASE WHEN k."Kind" = 'index' THEN 'index' ELSE 'constraint' END)::TEXT, '''', '''''') || ''', ''' || REPLACE((ti."TableSchema" || '.' || ti."TableName" || '.' || ti."Name")::TEXT, '''', '''''') || ''', ''created'', ''online'');' AS "FollowUp") o
     WHERE NOT EXISTS (SELECT * 
                         FROM pg_index idx
                         JOIN pg_class tc ON tc.oid = idx.indrelid
-                                        AND tc.relkind = 'r'
+                                        AND tc.relkind IN ('r', 'p')
                                         AND tc.relname = ti."TableName"
                                         AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                         JOIN pg_class i ON i.oid = idx.indexrelid
@@ -233,7 +231,7 @@ BEGIN
         WHERE NOT EXISTS (SELECT *
                             FROM pg_index idx
                             JOIN pg_class tc ON tc.oid = idx.indrelid
-                                            AND tc.relkind = 'r'
+                                            AND tc.relkind IN ('r', 'p')
                                             AND tc.relname = ti."TableName"
                                             AND tc.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = ti."TableSchema")
                             JOIN pg_class i ON i.oid = idx.indexrelid
@@ -246,7 +244,7 @@ BEGIN
   END IF;
 
   RAISE NOTICE 'Fixup Table Cluster';
-  SELECT STRING_AGG('RAISE NOTICE ''  Fixing up attributes for ' || t."Schema" || '.' || t."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Fixing up attributes for %.%'', ''' || REPLACE((t."Schema")::TEXT, '''', '''''') || ''', ''' || REPLACE((t."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     "SchemaSmith"."AfterOnlineBuild"(t."Schema", new_clust."NewCluster", 'Clustering ' || t."Schema" || '.' || t."Name" || ' on ' || new_clust."NewCluster",
                       'ALTER TABLE ' || "SchemaSmith"."QuoteName"(t."Schema") || '.' || "SchemaSmith"."QuoteName"(t."Name") || ' ' ||
                       CASE WHEN new_clust."NewCluster" IS NOT NULL
@@ -290,13 +288,13 @@ BEGIN
   END IF;
 
   RAISE NOTICE 'Add Missing Statistics';
-  SELECT STRING_AGG('RAISE NOTICE ''  Add missing statistics ' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || CASE WHEN COALESCE(ts."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ts."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Add missing statistics %.%.%'', ''' || REPLACE((ts."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((ts."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((ts."Name" || CASE WHEN COALESCE(ts."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(ts."VariantName", '''', '''''') || ')' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'CREATE STATISTICS ' || "SchemaSmith"."QuoteName"(COALESCE(ts."StatisticsSchema", ts."TableSchema")) || '.' || "SchemaSmith"."QuoteName"(ts."Name") ||
                     -- EXPRESSIONS is not a kind CREATE STATISTICS accepts; an extracted package carries it.
                     "SchemaSmith"."StatisticsKindClause"(ts."Kind") ||
                     ' ON ' || "SchemaSmith"."QuoteIndexColumnList"(ts."StatisticsColumns") ||
                     ' FROM ' || "SchemaSmith"."QuoteName"(ts."TableSchema") || '.' || "SchemaSmith"."QuoteName"(ts."TableName") || ';' || CHR(10) ||
-                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''statistic'', ''' || ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name" || ''', ''created'');', CHR(10))
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''statistic'', ''' || REPLACE((ts."TableSchema" || '.' || ts."TableName" || '.' || ts."Name")::TEXT, '''', '''''') || ''', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_statistics ts
     WHERE NOT EXISTS (SELECT 1
@@ -328,8 +326,8 @@ BEGIN
   END IF;
 
   RAISE NOTICE 'Add Missing Exclude Constraints';
-  SELECT STRING_AGG('RAISE NOTICE ''  Add missing exclude constraint ' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END ||
-                    CASE WHEN f."Form" IS NOT NULL THEN ' (online unavailable: ' || "SchemaSmith"."OnlineUnavailableReason"(tc."TableSchema", tc."TableName", 'exclusion') || ')' ELSE '' END || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Add missing exclude constraint %.%.%'', ''' || REPLACE((tc."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END ||
+                    CASE WHEN f."Form" IS NOT NULL THEN ' (online unavailable: ' || "SchemaSmith"."OnlineUnavailableReason"(tc."TableSchema", tc."TableName", 'exclusion') || ')' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER TABLE  ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"(tc."Name") || ' EXCLUDE' || 
                     CASE WHEN NULLIF(TRIM(tc."AccessMethod"), '') IS NOT NULL THEN ' USING ' || tc."AccessMethod" ELSE '' END ||
                     ' (' || (SELECT STRING_AGG("SchemaSmith"."QuoteIndexColumnList"((celem ->> 'Column')::TEXT) || ' WITH ' || (celem ->> 'Operator')::TEXT, ',')
@@ -342,8 +340,8 @@ BEGIN
                     CASE WHEN tc."Deferrable" THEN ' DEFERRABLE' ELSE '' END ||
                     CASE WHEN tc."InitiallyDeferred" THEN ' INITIALLY DEFERRED' ELSE '' END || ';' || CHR(10) ||
                     CASE WHEN f."Form" IS NULL
-                         THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || ''', ''created'');'
-                         ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''constraint'', ''' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || ''', ''created'', ''unavailable'');' END, CHR(10))
+                         THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || REPLACE((tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name")::TEXT, '''', '''''') || ''', ''created'');'
+                         ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''constraint'', ''' || REPLACE((tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name")::TEXT, '''', '''''') || ''', ''created'', ''unavailable'');' END, CHR(10))
     INTO sql_script
     FROM temp_excludes tc
     CROSS JOIN LATERAL (SELECT "SchemaSmith"."OnlineApplyForm"(p_OnlineApply, tc."TableSchema", tc."TableName", 'exclusion') AS "Form") f
@@ -384,21 +382,21 @@ BEGIN
   -- and one authored in a form PostgreSQL rewrites is ALTERed once and then recorded. That is a one-time
   -- re-application of the SAME rule, not a behaviour change to it.
   RAISE NOTICE 'Alter Row Level Security Policies Whose Expressions Changed';
-  SELECT STRING_AGG('RAISE NOTICE ''  Altering policy ' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Altering policy %.%.%'', ''' || REPLACE((tp."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tp."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tp."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER POLICY ' || QUOTE_IDENT(tp."Name") ||
                     ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") ||
                     CASE WHEN NULLIF(TRIM(tp."UsingExpression"), '') IS NOT NULL
                          THEN ' USING (' || tp."UsingExpression" || ')' ELSE '' END ||
                     CASE WHEN NULLIF(TRIM(tp."WithCheckExpression"), '') IS NOT NULL
                          THEN ' WITH CHECK (' || tp."WithCheckExpression" || ')' ELSE '' END || ';' || CHR(10) ||
-                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''policy'', ''' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''', ''modified'');', CHR(10))
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''policy'', ''' || REPLACE((tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name")::TEXT, '''', '''''') || ''', ''modified'');', CHR(10))
     INTO sql_script
     FROM temp_policies tp
     JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
    WHERE UPPER(pol.permissive) = tp."Permissive"
        AND UPPER(pol.cmd) = tp."Command"
-       AND (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
-           = (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+       AND (SELECT CASE WHEN 'public' = ANY(d.a) THEN ARRAY['public'] ELSE d.a END FROM (SELECT ARRAY(SELECT CASE WHEN TRIM(x) LIKE '"%"' THEN REPLACE(SUBSTRING(TRIM(x) FROM 2 FOR LENGTH(TRIM(x)) - 2), '""', '"') ELSE LOWER(TRIM(x)) END FROM UNNEST("SchemaSmith"."SplitTopLevelList"(tp."Roles")) AS x ORDER BY 1) AS a) d)
+           = (SELECT ARRAY(SELECT r::TEXT FROM UNNEST(pol.roles) AS r ORDER BY 1))
        AND (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) = (pol.qual IS NULL)
        AND (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) = (pol.with_check IS NULL)
      AND ((NULLIF(TRIM(tp."UsingExpression"), '') IS NOT NULL AND pol.qual IS NOT NULL
@@ -418,8 +416,8 @@ BEGIN
         JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
        WHERE UPPER(pol.permissive) = tp."Permissive"
        AND UPPER(pol.cmd) = tp."Command"
-       AND (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
-           = (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+       AND (SELECT CASE WHEN 'public' = ANY(d.a) THEN ARRAY['public'] ELSE d.a END FROM (SELECT ARRAY(SELECT CASE WHEN TRIM(x) LIKE '"%"' THEN REPLACE(SUBSTRING(TRIM(x) FROM 2 FOR LENGTH(TRIM(x)) - 2), '""', '"') ELSE LOWER(TRIM(x)) END FROM UNNEST("SchemaSmith"."SplitTopLevelList"(tp."Roles")) AS x ORDER BY 1) AS a) d)
+           = (SELECT ARRAY(SELECT r::TEXT FROM UNNEST(pol.roles) AS r ORDER BY 1))
        AND (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) = (pol.qual IS NULL)
        AND (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) = (pol.with_check IS NULL)
          AND ((NULLIF(TRIM(tp."UsingExpression"), '') IS NOT NULL AND pol.qual IS NOT NULL
@@ -439,7 +437,7 @@ BEGIN
   -- ALTER POLICY (the pass immediately above), compared through the expression map so PostgreSQL's rewrite of
   -- the text is not mistaken for a change.
   RAISE NOTICE 'Add Missing Row Level Security Policies';
-  SELECT STRING_AGG('RAISE NOTICE ''  Creating policy ' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Creating policy %.%.%'', ''' || REPLACE((tp."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tp."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tp."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'CREATE POLICY ' || QUOTE_IDENT(tp."Name") ||
                     ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") ||
                     ' AS ' || tp."Permissive" ||
@@ -449,7 +447,7 @@ BEGIN
                          THEN ' USING (' || tp."UsingExpression" || ')' ELSE '' END ||
                     CASE WHEN NULLIF(TRIM(tp."WithCheckExpression"), '') IS NOT NULL
                          THEN ' WITH CHECK (' || tp."WithCheckExpression" || ')' ELSE '' END || ';' || CHR(10) ||
-                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''policy'', ''' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''', ''created'');', CHR(10))
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''policy'', ''' || REPLACE((tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name")::TEXT, '''', '''''') || ''', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_policies tp
     WHERE NOT EXISTS (SELECT 1 FROM pg_policies pol
@@ -473,9 +471,10 @@ BEGIN
   -- security-relevant changes that previously no-op'd silently. PostgreSQL has no ALTER for them, so it is
   -- DROP + CREATE -- which also reapplies the declared USING / WITH CHECK expressions -- and so is adding or
   -- removing a clause. An expression-only change is the ALTER POLICY pass above. Roles is compared as a
-  -- normalised, order-insensitive, lower-cased set.
+  -- normalised, order-insensitive set of identifiers (quoted keeps its case); a list holding PUBLIC is PUBLIC alone,
+  -- as PostgreSQL stores it.
   RAISE NOTICE 'Re-converge Changed Row Level Security Policies';
-  SELECT STRING_AGG('RAISE NOTICE ''  Re-creating policy ' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Re-creating policy %.%.%'', ''' || REPLACE((tp."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tp."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tp."Name")::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'DROP POLICY ' || QUOTE_IDENT(tp."Name") || ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") || ';' || CHR(10) ||
                     'CREATE POLICY ' || QUOTE_IDENT(tp."Name") ||
                     ' ON ' || QUOTE_IDENT(tp."TableSchema") || '.' || QUOTE_IDENT(tp."TableName") ||
@@ -486,14 +485,14 @@ BEGIN
                          THEN ' USING (' || tp."UsingExpression" || ')' ELSE '' END ||
                     CASE WHEN NULLIF(TRIM(tp."WithCheckExpression"), '') IS NOT NULL
                          THEN ' WITH CHECK (' || tp."WithCheckExpression" || ')' ELSE '' END || ';' || CHR(10) ||
-                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''policy'', ''' || tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name" || ''', ''modified'');', CHR(10))
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''policy'', ''' || REPLACE((tp."TableSchema" || '.' || tp."TableName" || '.' || tp."Name")::TEXT, '''', '''''') || ''', ''modified'');', CHR(10))
     INTO sql_script
     FROM temp_policies tp
     JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
     WHERE UPPER(pol.permissive) <> tp."Permissive"
        OR UPPER(pol.cmd) <> tp."Command"
-       OR (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
-          <> (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+       OR (SELECT CASE WHEN 'public' = ANY(d.a) THEN ARRAY['public'] ELSE d.a END FROM (SELECT ARRAY(SELECT CASE WHEN TRIM(x) LIKE '"%"' THEN REPLACE(SUBSTRING(TRIM(x) FROM 2 FOR LENGTH(TRIM(x)) - 2), '""', '"') ELSE LOWER(TRIM(x)) END FROM UNNEST("SchemaSmith"."SplitTopLevelList"(tp."Roles")) AS x ORDER BY 1) AS a) d)
+          <> (SELECT ARRAY(SELECT r::TEXT FROM UNNEST(pol.roles) AS r ORDER BY 1))
        -- A clause added or removed: ALTER POLICY can set a clause but never remove one.
        OR (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) <> (pol.qual IS NULL)
        OR (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) <> (pol.with_check IS NULL);
@@ -506,8 +505,8 @@ BEGIN
         JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
         WHERE UPPER(pol.permissive) <> tp."Permissive"
            OR UPPER(pol.cmd) <> tp."Command"
-           OR (SELECT ARRAY(SELECT LOWER(TRIM(x)) FROM UNNEST(string_to_array(tp."Roles", ',')) AS x ORDER BY 1))
-              <> (SELECT ARRAY(SELECT LOWER(r::TEXT) FROM UNNEST(pol.roles) AS r ORDER BY 1))
+           OR (SELECT CASE WHEN 'public' = ANY(d.a) THEN ARRAY['public'] ELSE d.a END FROM (SELECT ARRAY(SELECT CASE WHEN TRIM(x) LIKE '"%"' THEN REPLACE(SUBSTRING(TRIM(x) FROM 2 FOR LENGTH(TRIM(x)) - 2), '""', '"') ELSE LOWER(TRIM(x)) END FROM UNNEST("SchemaSmith"."SplitTopLevelList"(tp."Roles")) AS x ORDER BY 1) AS a) d)
+              <> (SELECT ARRAY(SELECT r::TEXT FROM UNNEST(pol.roles) AS r ORDER BY 1))
            OR (NULLIF(TRIM(tp."UsingExpression"), '') IS NULL) <> (pol.qual IS NULL)
            OR (NULLIF(TRIM(tp."WithCheckExpression"), '') IS NULL) <> (pol.with_check IS NULL);
   END IF;
@@ -518,7 +517,7 @@ BEGIN
   RAISE NOTICE 'Drop Removed Row Level Security Policies';
   SELECT STRING_AGG('DROP POLICY ' || QUOTE_IDENT(pol.policyname) ||
                     ' ON ' || QUOTE_IDENT(pol.schemaname) || '.' || QUOTE_IDENT(pol.tablename) || ';' || CHR(10) ||
-                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''policy'', ''' || pol.schemaname || '.' || pol.tablename || '.' || pol.policyname || ''', ''dropped'');', CHR(10))
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''policy'', ''' || REPLACE((pol.schemaname || '.' || pol.tablename || '.' || pol.policyname)::TEXT, '''', '''''') || ''', ''dropped'');', CHR(10))
     INTO sql_script
     FROM pg_policies pol
     JOIN temp_tables tt ON tt."Schema" = pol.schemaname AND tt."Name" = pol.tablename
@@ -540,9 +539,9 @@ BEGIN
   END IF;
 
   RAISE NOTICE 'Add Missing Defaults';
-  SELECT STRING_AGG('RAISE NOTICE ''  Add missing default for ' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Add missing default for %.%.%'', ''' || REPLACE((tc."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER TABLE  ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || ' ALTER COLUMN ' || "SchemaSmith"."QuoteName"(tc."Name") || ' SET DEFAULT ' || tc."Default" ||';' || CHR(10) ||
-                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || ' (default)'', ''created'');', CHR(10))
+                    'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || REPLACE((tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name")::TEXT, '''', '''''') || ' (default)'', ''created'');', CHR(10))
     INTO sql_script
     FROM temp_columns tc
     WHERE NULLIF(tc."Default", '') IS NOT NULL
@@ -572,8 +571,8 @@ BEGIN
   END IF;
 
   RAISE NOTICE 'Add Missing Check Constraints';
-  SELECT STRING_AGG('RAISE NOTICE ''  Add missing check constraint ' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END ||
-                    CASE WHEN v."Online" THEN ' (online, validated after this pass)' ELSE '' END || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Add missing check constraint %.%.%'', ''' || REPLACE((tc."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END ||
+                    CASE WHEN v."Online" THEN ' (online, validated after this pass)' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     -- NO INHERIT and NOT ENFORCED are part of the definition; NOT VALID is the ADD option that leaves the
                     -- existing rows unchecked. A NOT ENFORCED constraint is not validated by definition, so NOT VALID is
                     -- left off it. PostgreSQL rejects DEFERRABLE on a CHECK, so the deprecated keys are never emitted.
@@ -588,8 +587,8 @@ BEGIN
                          WHEN v."Online" THEN 'CALL "SchemaSmith"."DeferOnlineWork"(' || quote_literal('Validating constraint ' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name") || ', ' || quote_literal(v."Validate") || ', NULL, NULL);' || CHR(10)
                          ELSE '' END ||
                     CASE WHEN v."Form" IS NOT NULL
-                         THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''constraint'', ''' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || ''', ''created'', ''' || v."Form" || ''');'
-                         ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || ''', ''created'');' END, CHR(10))
+                         THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''constraint'', ''' || REPLACE((tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name")::TEXT, '''', '''''') || ''', ''created'', ''' || REPLACE((v."Form")::TEXT, '''', '''''') || ''');'
+                         ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || REPLACE((tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name")::TEXT, '''', '''''') || ''', ''created'');' END, CHR(10))
     INTO sql_script
     FROM temp_checks tc
     CROSS JOIN LATERAL (SELECT f."Form", tc."Validated" AND tc."Enforced" AND f."Form" = 'online' AS "Online",
@@ -625,8 +624,8 @@ BEGIN
   -- Column-level checks get a deterministic name (CK_<table>_<column>) so create-idempotency
   -- and modify-detection (in ModifiedTableQuench) can both key on it.
   RAISE NOTICE 'Add Missing Column Check Constraints';
-  SELECT STRING_AGG('RAISE NOTICE ''  Add missing column check constraint ' || tc."TableSchema" || '.' || tc."TableName" || '.' || tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END ||
-                    CASE WHEN v."Online" THEN ' (online, validated after this pass)' ELSE '' END || ''';' || CHR(10) ||
+  SELECT STRING_AGG('RAISE NOTICE ''  Add missing column check constraint %.%.%'', ''' || REPLACE((tc."TableSchema")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."TableName")::TEXT, '''', '''''') || ''', ''' || REPLACE((tc."Name" || CASE WHEN COALESCE(tc."VariantName", '') <> '' THEN ' (variant: ' || REPLACE(tc."VariantName", '''', '''''') || ')' ELSE '' END ||
+                    CASE WHEN v."Online" THEN ' (online, validated after this pass)' ELSE '' END)::TEXT, '''', '''''') || ''';' || CHR(10) ||
                     'ALTER TABLE  ' || "SchemaSmith"."QuoteName"(tc."TableSchema") || '.' || "SchemaSmith"."QuoteName"(tc."TableName") || ' ADD CONSTRAINT ' || "SchemaSmith"."QuoteName"('CK_' || tc."TableName" || '_' || tc."Name") || ' CHECK (' || tc."CheckExpression" || ')' ||
                     CASE WHEN v."Online" THEN ' NOT VALID' ELSE '' END || ';' || CHR(10) ||
                     -- OnlineApply: the check is added NOT VALID, which holds its lock for an instant, and validated after this
@@ -635,8 +634,8 @@ BEGIN
                          WHEN v."Online" THEN 'CALL "SchemaSmith"."DeferOnlineWork"(' || quote_literal('Validating constraint ' || tc."TableSchema" || '.' || tc."TableName" || '.CK_' || tc."TableName" || '_' || tc."Name") || ', ' || quote_literal(v."Validate") || ', NULL, NULL);' || CHR(10)
                          ELSE '' END ||
                     CASE WHEN v."Form" IS NOT NULL
-                         THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''constraint'', ''' || tc."TableSchema" || '.' || tc."TableName" || '.CK_' || tc."TableName" || '_' || tc."Name" || ''', ''created'', ''' || v."Form" || ''');'
-                         ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || tc."TableSchema" || '.' || tc."TableName" || '.CK_' || tc."TableName" || '_' || tc."Name" || ''', ''created'');' END, CHR(10))
+                         THEN 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType", "Mode") VALUES (pg_backend_pid(), ''constraint'', ''' || REPLACE((tc."TableSchema" || '.' || tc."TableName" || '.CK_' || tc."TableName" || '_' || tc."Name")::TEXT, '''', '''''') || ''', ''created'', ''' || REPLACE((v."Form")::TEXT, '''', '''''') || ''');'
+                         ELSE 'INSERT INTO "SchemaSmith"."ChangeAudit" ("SessionId", "ObjectType", "ObjectName", "ActionType") VALUES (pg_backend_pid(), ''constraint'', ''' || REPLACE((tc."TableSchema" || '.' || tc."TableName" || '.CK_' || tc."TableName" || '_' || tc."Name")::TEXT, '''', '''''') || ''', ''created'');' END, CHR(10))
     INTO sql_script
     FROM temp_columns tc
     CROSS JOIN LATERAL (SELECT f."Form", f."Form" = 'online' AS "Online",

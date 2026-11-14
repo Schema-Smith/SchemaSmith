@@ -114,10 +114,10 @@ BEGIN
         INSERT INTO _SchemaSmith_GenColStmts (LogMsg, Stmt, AuditName)
         SELECT
             CONCAT('  Add generated column: ',
-                   CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+                   CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                           ' ADD COLUMN ', c.ColumnScript),
                    CASE WHEN COALESCE(c.VariantName, '') <> '' THEN CONCAT(' (variant: ', c.VariantName, ')') ELSE '' END),
-            CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+            CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                    ' ADD COLUMN ', c.ColumnScript),
             CONCAT(SchemaSmith_StripBacktickWrapping(c.TableName), '.', SchemaSmith_StripBacktickWrapping(c.ColumnName))
         FROM _SchemaSmith_Columns c
@@ -127,7 +127,7 @@ BEGIN
           AND c.NewColumn = 1
         ORDER BY c.TableName, c.DependencyLevel, c.OrdinalPosition;
 
-        SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenColStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_GenColStmts) INTO @ss_id;
         WHILE @ss_id IS NOT NULL DO
             SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_GenColStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
@@ -136,7 +136,7 @@ BEGIN
             -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'column', @ss_auditname, 'created');
             DEALLOCATE PREPARE stmt;
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_GenColStmts WHERE RowId > @ss_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_GenColStmts WHERE RowId > @ss_id) INTO @ss_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_GenColStmts;
     END IF;
@@ -201,14 +201,14 @@ BEGIN
                            WHEN i.IsUnique = 1 AND i.IsPrimaryKey = 0 THEN 'UNIQUE '
                            ELSE '' END,
                       'INDEX ', i.IndexName,
-                      ' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
+                      ' ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
                       ' (', i.EmitColumns, ')',
                       CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                            WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                            ELSE '' END,
-                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
+                      CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=', QUOTE(i.VectorDistance), ''))) ELSE '' END,
                       CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
-                           THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
+                           THEN CONCAT(' COMMENT ', QUOTE(i.Comment), '')
                            ELSE '' END)
         FROM _SchemaSmith_Indexes i
         WHERE i.IsPrimaryKey = 0
@@ -261,7 +261,7 @@ BEGIN
                 CASE WHEN COALESCE(i.VariantName, '') <> '' THEN CONCAT(' (variant: ', i.VariantName, ')') ELSE '' END),
             CONCAT(
                 CASE WHEN d.IndexName IS NOT NULL
-                     THEN CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
+                     THEN CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', i.TableName,
                                  ' DROP INDEX ', i.IndexName, ', ADD ')
                      ELSE 'CREATE ' END,
                 CASE WHEN UPPER(i.IndexType) = 'SPATIAL' THEN 'SPATIAL '
@@ -270,14 +270,14 @@ BEGIN
                      ELSE '' END,
                 'INDEX ', i.IndexName,
                 CASE WHEN d.IndexName IS NOT NULL THEN ''
-                     ELSE CONCAT(' ON `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', i.TableName) END,
+                     ELSE CONCAT(' ON `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', i.TableName) END,
                 ' (', i.EmitColumns, ')',
                 CASE WHEN UPPER(i.IndexType) = 'HASH' THEN ' USING HASH'
                      WHEN UPPER(i.IndexType) = 'BTREE' AND (SELECT UPPER(et.Engine) FROM _SchemaSmith_Tables et WHERE et.TableName = i.TableName LIMIT 1) = 'MEMORY' THEN ' USING BTREE' /* elsewhere BTREE is the default, and saying it blocks the SPATIAL or long-unique HASH the engine picks */
                      ELSE '' END,
-                CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=''', REPLACE(i.VectorDistance, '''', ''''''), ''''))) ELSE '' END,
+                CASE WHEN UPPER(i.IndexType) = 'VECTOR' THEN CONCAT(IF(i.VectorM IS NULL, '', CONCAT(' M=', i.VectorM)), IF(i.VectorDistance IS NULL, '', CONCAT(' DISTANCE=', QUOTE(i.VectorDistance), ''))) ELSE '' END,
                 CASE WHEN i.Comment IS NOT NULL AND i.Comment != ''
-                     THEN CONCAT(' COMMENT ''', REPLACE(i.Comment, '''', ''''''), '''')
+                     THEN CONCAT(' COMMENT ', QUOTE(i.Comment), '')
                      ELSE '' END,
                 CASE WHEN i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1 THEN SchemaSmith_IndexInvisibleClause() ELSE '' END
             ),
@@ -311,7 +311,7 @@ BEGIN
                                   WHEN t.IsSystemVersioned = 1 THEN 2 ELSE 0 END,
                s.OnlineMode = t.OnlineMode;
 
-        SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts) INTO @ss_id;
         WHILE @ss_id IS NOT NULL DO
             SELECT LogMsg, Stmt, AuditName, IsSwap, Versioned, OnlineMode INTO @ss_log, @exec_sql, @ss_auditname, @ss_swap, @ss_versioned, @ss_online_mode
               FROM _SchemaSmith_CreateIdxStmts WHERE RowId = @ss_id;
@@ -358,7 +358,7 @@ BEGIN
                 INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType, Mode) VALUES (CONNECTION_ID(), 'index', @ss_auditname, 'created', @ss_online_form);
             END IF;
             DEALLOCATE PREPARE stmt;
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts WHERE RowId > @ss_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CreateIdxStmts WHERE RowId > @ss_id) INTO @ss_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateIdxStmts;
     END IF;
@@ -429,7 +429,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
     IF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop modified check constraints');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`')
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ', SchemaSmith_DropCheckClause(), ' `', SchemaSmith_EscapeBackticks(ConstraintName), '`')
         FROM _SchemaSmith_ModifiedChecks;
         -- WhatIf twin of the 'constraint'/'dropped' audit in the ELSE branch; same source.
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
@@ -444,11 +444,11 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
         INSERT INTO _SchemaSmith_DropModChkStmts (LogMsg, Stmt, AuditName)
         SELECT
             CONCAT('  Drop modified check constraint: ', TableName, '.', ConstraintName),
-            CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`'),
+            CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ', SchemaSmith_DropCheckClause(), ' `', SchemaSmith_EscapeBackticks(ConstraintName), '`'),
             CONCAT(TableName, '.', ConstraintName)
         FROM _SchemaSmith_ModifiedChecks;
 
-        SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts) INTO @ss_id;
         WHILE @ss_id IS NOT NULL DO
             SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_DropModChkStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
@@ -456,7 +456,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'constraint', @ss_auditname, 'dropped');
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts WHERE RowId > @ss_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropModChkStmts WHERE RowId > @ss_id) INTO @ss_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropModChkStmts;
     END IF;
@@ -605,7 +605,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
         IF p_WhatIf = 1 THEN
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Drop check constraints removed from product');
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-            SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`')
+            SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ', SchemaSmith_DropCheckClause(), ' `', SchemaSmith_EscapeBackticks(ConstraintName), '`')
             FROM _SchemaSmith_ChecksToDropByAbsence;
 
             -- #363: WhatIf twin of the ELSE-branch 'constraint'/'dropped' audit; same source, wouldDrop.
@@ -619,11 +619,11 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
             CREATE TEMPORARY TABLE _SchemaSmith_DropAbsChkStmts (RowId INT AUTO_INCREMENT PRIMARY KEY, Stmt TEXT, AuditName TEXT)
                 ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
             INSERT INTO _SchemaSmith_DropAbsChkStmts (Stmt, AuditName)
-            SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', TableName, '` ', SchemaSmith_DropCheckClause(), ' `', ConstraintName, '`'),
+            SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(TableName), '` ', SchemaSmith_DropCheckClause(), ' `', SchemaSmith_EscapeBackticks(ConstraintName), '`'),
                    CONCAT(TableName, '.', ConstraintName)
             FROM _SchemaSmith_ChecksToDropByAbsence;
 
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropAbsChkStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropAbsChkStmts) INTO @ss_id;
             WHILE @ss_id IS NOT NULL DO
                 SELECT Stmt, AuditName INTO @exec_sql, @ss_auditname FROM _SchemaSmith_DropAbsChkStmts WHERE RowId = @ss_id;
                 PREPARE stmt FROM @exec_sql;
@@ -631,7 +631,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
                 -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
                 INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'constraint', @ss_auditname, 'dropped');
                 DEALLOCATE PREPARE stmt;
-                SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_DropAbsChkStmts WHERE RowId > @ss_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_DropAbsChkStmts WHERE RowId > @ss_id) INTO @ss_id;
             END WHILE;
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_DropAbsChkStmts;
         END IF;
@@ -662,6 +662,36 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
         FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc
         WHERE tc.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(tc.TABLE_SCHEMA) = v_DbKey
           AND tc.CONSTRAINT_TYPE = 'CHECK';
+    END IF;
+
+    -- MySQL names CHECK constraints per schema, not per table (MariaDB per table), so a check name another table
+    -- already holds, or that two declared tables share, failed mid-deploy as a bare 3822 naming neither table.
+    -- Refused here, before any check is created.
+    IF SchemaSmith_SupportsCheckConstraints() = 1 AND VERSION() NOT LIKE '%MariaDB%' THEN
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkDeclared;
+        CREATE TEMPORARY TABLE _SchemaSmith_ChkDeclared (RowId INT AUTO_INCREMENT PRIMARY KEY) ENGINE=InnoDB
+            SELECT c.TableName, c.ConstraintName, c.TableKey, c.ConstraintKey FROM _SchemaSmith_CheckConstraints c;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkCollisions;
+        CREATE TEMPORARY TABLE _SchemaSmith_ChkCollisions (RowId INT AUTO_INCREMENT PRIMARY KEY, Message TEXT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+        INSERT INTO _SchemaSmith_ChkCollisions (Message)
+        SELECT DISTINCT CONCAT('  CHECK constraint ', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ' declared on ',
+                               SchemaSmith_StripBacktickWrapping(c.TableName), ' is already the name of a check on ', e.TableName)
+          FROM _SchemaSmith_CheckConstraints c
+          JOIN _SchemaSmith_ChkExist e ON e.ConstraintKey = c.ConstraintKey AND e.TableKey <> c.TableKey;
+        INSERT INTO _SchemaSmith_ChkCollisions (Message)
+        SELECT DISTINCT CONCAT('  CHECK constraint ', SchemaSmith_StripBacktickWrapping(c.ConstraintName), ' is declared on both ',
+                               SchemaSmith_StripBacktickWrapping(c.TableName), ' and ', SchemaSmith_StripBacktickWrapping(d.TableName))
+          FROM _SchemaSmith_CheckConstraints c
+          JOIN _SchemaSmith_ChkDeclared d ON d.ConstraintKey = c.ConstraintKey AND d.TableKey > c.TableKey;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkDeclared;
+        IF EXISTS (SELECT 1 FROM _SchemaSmith_ChkCollisions) THEN
+            INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+            SELECT CONNECTION_ID(), Message FROM _SchemaSmith_ChkCollisions;
+            DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkCollisions;
+            -- Keep < 128 chars: MySQL refuses an over-long MESSAGE_TEXT.
+            SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = 'CHECK constraint names must be unique per schema on MySQL; see the deploy log for the names in conflict.';
+        END IF;
+        DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ChkCollisions;
     END IF;
 
     -- =========================================================================
@@ -714,7 +744,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
     ELSEIF p_WhatIf = 1 THEN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing check constraints');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' ADD CONSTRAINT ', c.ConstraintName,
                       ' CHECK (', c.Expression, ')', IF(c.Enforced = 0 AND VERSION() NOT LIKE '%MariaDB%', ' NOT ENFORCED', ''))
         FROM _SchemaSmith_CheckConstraints c
@@ -746,7 +776,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
             CONCAT('  Create check constraint: ', c.TableName, '.', c.ConstraintName,
                 CASE WHEN COALESCE(c.VariantName, '') <> '' THEN CONCAT(' (variant: ', c.VariantName, ')') ELSE '' END),
             CONCAT(
-                'ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+                'ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                 ' ADD CONSTRAINT ', c.ConstraintName,
                 ' CHECK (', c.Expression, ')',
                 -- NOT ENFORCED is part of the definition (MySQL 8.0.16+, the CHECK gate itself); a change re-creates.
@@ -760,7 +790,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
               AND tc.ConstraintKey = c.ConstraintKey
         );
 
-        SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateChkStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CreateChkStmts) INTO @ss_id;
         WHILE @ss_id IS NOT NULL DO
             SELECT LogMsg, Stmt, AuditName INTO @ss_log, @exec_sql, @ss_auditname FROM _SchemaSmith_CreateChkStmts WHERE RowId = @ss_id;
             INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), @ss_log);
@@ -769,7 +799,7 @@ WHERE (CAST(SchemaSmith_NormalizeCheckExpression(CONVERT(cc.CHECK_CLAUSE USING u
             -- Object-change audit (#243 E5): after EXECUTE, before DEALLOCATE (crash-safe #337 point).
             INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (CONNECTION_ID(), 'constraint', @ss_auditname, 'created');
             DEALLOCATE PREPARE stmt;
-            SET @ss_id := (SELECT MIN(RowId) FROM _SchemaSmith_CreateChkStmts WHERE RowId > @ss_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_CreateChkStmts WHERE RowId > @ss_id) INTO @ss_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_CreateChkStmts;
     END IF;

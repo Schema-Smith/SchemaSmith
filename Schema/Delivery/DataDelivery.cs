@@ -77,4 +77,11 @@ public class DataDelivery
         Description = "The session time zone (an offset such as +00:00) the ContentFile's TIMESTAMP values were extracted in. Delivery uses the same zone so the values arrive unchanged. DataTongs sets it; leave it unset for data written in the target server's own zone.")]
     [JsonProperty(Order = 11)]
     public string TimeZone { get; set; }
+
+    // The columns the content file was extracted with. SQL Server's FOR JSON leaves out a column that is NULL in every
+    // row, and delivery takes its columns from the keys present in the data, so such a column was never written: an
+    // update left the target's old values in it. Listed here, it is delivered (as NULL) whatever the rows hold.
+    [SchemaProperty(Description = "Optional. The comma-separated columns the ContentFile was extracted with. A column listed here is delivered even when no row carries it (written NULL), so a column that was NULL in every extracted row still updates the target. DataTongs writes it for SQL Server. Omitted, the columns are the ones present in the data.")]
+    [JsonProperty(Order = 12)]
+    public string Columns { get; set; }
 }

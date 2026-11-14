@@ -1,13 +1,9 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
-using System.Collections.Generic;
-using System.Data;
-using System.Data.Common;
 using NUnit.Framework;
 using Schema.DataAccess;
 using Schema.Domain;
-using Schema.Utility;
 
 namespace Schema.IntegrationTests.PostgreSQL;
 
@@ -27,61 +23,12 @@ namespace Schema.IntegrationTests.PostgreSQL;
 [TestFixture]
 public class FormatJsonTests
 {
-    private string _server = "", _user = "", _password = "", _port = "";
-    private Dictionary<string, string> _props = new();
-    private string _db = "";
-
-    [OneTimeSetUp]
-    public void OneTimeSetUp()
-    {
-        var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-        _server = config["PostgreSQL:Server"] ?? "127.0.0.1";
-        _user = config["PostgreSQL:User"];
-        _password = config["PostgreSQL:Password"];
-        _port = config["PostgreSQL:Port"];
-        _props = ConnectionString.ReadProperties(config, "PostgreSQL:ConnectionProperties");
-
-        _db = $"ss_fj_{Guid.NewGuid():N}"[..28].ToLowerInvariant();
-        using var maint = Open("postgres");
-        Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
-        Exec(maint, $"CREATE DATABASE \"{_db}\"");
-
-        using var c = Open(_db);
-        using var cmd = c.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.PostgreSQL);
-    }
-
-    [OneTimeTearDown]
-    public void OneTimeTearDown()
-    {
-        try
-        {
-            using var maint = Open("postgres");
-            Exec(maint, $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{_db}' AND pid <> pg_backend_pid()");
-            Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
-        }
-        catch (DbException) { /* teardown must not mask an assertion */ }
-    }
-
-    private IDbConnection Open(string database)
-    {
-        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL)
-            .GetDbConnection(ConnectionString.Build(Platform.PostgreSQL, _server, database, _user, _password, _port, _props));
-        c.Open();
-        return c;
-    }
-
-    private static void Exec(IDbConnection c, string sql)
-    {
-        using var cmd = c.CreateCommand();
-        cmd.CommandText = sql;
-        cmd.CommandTimeout = 300;
-        cmd.ExecuteNonQuery();
-    }
-
+    // FormatJson is a pure function, so the suite's already-kindled database serves; a database of its own cost a
+    // CREATE DATABASE and a kindle for nothing under test.
     private string Format(string json)
     {
-        using var c = Open(_db);
+        using var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
+        c.Open();
         using var cmd = c.CreateCommand();
         cmd.CommandTimeout = 300;
         cmd.CommandText = "SELECT \"SchemaSmith\".\"FormatJson\"($ss$" + json + "$ss$::JSON)::TEXT";

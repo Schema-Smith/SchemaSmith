@@ -67,7 +67,7 @@ Source SqlServer version 16.0.4260.1 (compatibility level 160)
 
 The compatibility level is appended on SQL Server only; the other engines have no such concept. The version string is whatever the engine itself publishes — see [SchemaQuench — The detected version is reported in each engine's own form](schemaquench.md#the-detected-version-is-reported-in-each-engines-own-form) for why the four differ.
 
-**The floor is structural, not opt-in.** You declare nothing. It is the version below which the engine scripts do not run at all — SQL Server 2008, PostgreSQL 12, MySQL 5.7.22 (8.0.23 on the 8.0 line), MariaDB 10.2.13. A below-floor source aborts before extraction starts:
+**The floor is structural, not opt-in.** You declare nothing. It is the version below which the engine scripts do not run at all — SQL Server 2008, PostgreSQL 12, MySQL 5.7.16 (8.0.11 on the 8.0 line), MariaDB 10.2.13. A below-floor source aborts before extraction starts:
 
 ```
 srv01: detected SqlServer version 9.00.5000.00 is below the minimum supported version
@@ -142,6 +142,7 @@ For the full explanation of configuration loading, environment variable mapping,
     "Schema": "",                      // SQL Server / PostgreSQL: set to extract a schema template
     "Platform": "",
     "CompatEncoding": "",              // auto (blank), legacy or modern
+    "CommandTimeoutSeconds": 0,        // how long one extraction command may run; 0 (default) = no limit
     "ConnectionProperties": {
       "TrustServerCertificate": "True"
     }
@@ -196,7 +197,14 @@ For the full explanation of configuration loading, environment variable mapping,
     "EventTriggers": true,
 
     "Events": true,
-    "Packages": true
+    "Packages": true,
+
+    "ServerSettings": false,
+    "DatabaseSettings": false,
+    "SettingsDefaultPolicy": "Report",
+    "SettingsAllowlist": "",
+    "SettingsOutput": "Json",
+    "ServerObjects": false
   },
   "OrphanHandling": {
     "Mode": "Detect"
@@ -211,7 +219,7 @@ For the full explanation of configuration loading, environment variable mapping,
 }
 ```
 
-The platform-specific `ShouldCast` flags are simply ignored when they don't apply to the configured `Source:Platform`. You can leave the full set in place across all your environments. Every `ShouldCast` object flag defaults to `true` when it is left out; `ValidateScripts` and the deprecated `ScriptDynamicDependencyRemovalForFunctions` default to `false`. In the MySQL family, `Sequences` and `Packages` act on MariaDB only -- MySQL has neither object, so the flags mean nothing there whatever they say. `Source:CompatEncoding` takes `auto` (the default when blank), `legacy` or `modern`, choosing the payload encoding SchemaTongs uses against a SQL Server source; `auto` picks the legacy form when the database's compatibility level is below 130 or the server is older than SQL Server 2017.
+The platform-specific `ShouldCast` flags are simply ignored when they don't apply to the configured `Source:Platform`. You can leave the full set in place across all your environments. Every `ShouldCast` object flag defaults to `true` when it is left out; `ValidateScripts`, the deprecated `ScriptDynamicDependencyRemovalForFunctions` and the [settings and server-object switches](#server-and-database-settings) default to `false`. In the MySQL family, `Sequences` and `Packages` act on MariaDB only -- MySQL has neither object, so the flags mean nothing there whatever they say. `Source:CompatEncoding` takes `auto` (the default when blank), `legacy` or `modern`, choosing the payload encoding SchemaTongs uses against a SQL Server source; `auto` picks the legacy form when the database's compatibility level is below 130 or the server is older than SQL Server 2017. `Source:CommandTimeoutSeconds` is how long one extraction command may run, `0` (the default) for no limit; a command timeout set in `ConnectionProperties` or a `--ConnectionString` takes precedence.
 
 ### Source connection
 
@@ -281,9 +289,11 @@ Control exactly what gets cast from the database. Each object type can be indivi
 | `ModuleSyntax` | `CreateOrAlter` | The statement form module scripts are written in: `CreateOrAlter` (SQL Server 2016 SP1 and later) or `Legacy` (every supported version). See [ModuleSyntax](#modulesyntax). |
 | `ScriptDynamicDependencyRemovalForFunctions` | `false` | Deprecated and ignored; SchemaTongs warns when it is `true`. See [ScriptDynamicDependencyRemovalForFunctions](#scriptdynamicdependencyremovalforfunctions). |
 
-**What the SQL Server scripts carry.** A table type is written with its identity, computed columns, defaults, a `COLLATE` that differs from the database's, its named indexes (`HASH`, `INCLUDE` and filter forms included), `IGNORE_DUP_KEY` and `MEMORY_OPTIMIZED` (2014+). A sequence keeps its type's precision, an alias type's name and an explicit `CACHE` or `NO CACHE`. A full-text catalog keeps `ACCENT_SENSITIVITY` and `AS DEFAULT`. A module renamed with `sp_rename` still carries its old name in its stored text; SchemaTongs writes it under the current name and logs a warning naming the old one, so review the body for references to it. A table trigger script ends with a `DISABLE TRIGGER` batch when the trigger is disabled and an `sp_settriggerorder` batch for each statement it is set first or last for; a database DDL trigger script ends with `DISABLE TRIGGER ... ON DATABASE` when it is disabled. Neither is part of the trigger's definition, so without the tail a redeploy would enable and unorder it.
+**What the SQL Server scripts carry.** A table type is written with its identity, computed columns, defaults, a `COLLATE` that differs from the database's, its named indexes (`HASH`, `INCLUDE` and filter forms included), `IGNORE_DUP_KEY` and `MEMORY_OPTIMIZED` (2014+). A sequence keeps its type's precision, an alias type's name and an explicit `CACHE` or `NO CACHE`. A full-text catalog keeps `ACCENT_SENSITIVITY` and `AS DEFAULT`. A module renamed with `sp_rename` still carries its old name in its stored text; SchemaTongs writes it under the current name and logs a warning naming the old one, so review the body for references to it. A table trigger script ends with a `DISABLE TRIGGER` batch when the trigger is disabled and an `sp_settriggerorder` batch for each statement it is set first or last for; a database DDL trigger script ends with `DISABLE TRIGGER ... ON DATABASE` when it is disabled. Neither is part of the trigger's definition, so without the tail a redeploy would enable and unorder it. Every script whose object can carry extended properties -- schemas, modules, user-defined and table types, synonyms, XML schema collections, DDL triggers, and the partition functions and schemes in the prerequisite script -- ends with them, `MS_Description` included, each added or updated by name, so a deploy to a database that never had them carries them.
 
-**Created once, not converged.** Schemas, user-defined and table types, sequences, synonyms, full-text catalogs and stop lists, and XML schema collections are written as a `CREATE` inside an existence check (`IF NOT EXISTS (...)`). SQL Server cannot alter most of them in place, and a type cannot be dropped while a column or parameter uses it, so the script never replaces what is there. A redeploy is therefore safe, and an edited script changes nothing once the object exists. To change one, write the change as a [migration script](schemaquench.md#migration-script-tracking): an `ALTER` where SQL Server has one (`ALTER SEQUENCE`, `ALTER XML SCHEMA COLLECTION ... ADD`, `ALTER FULLTEXT CATALOG`), otherwise a drop and re-create in an order its dependents allow. Module scripts (views, functions, procedures, triggers) are different: they are written as `CREATE OR ALTER` (or the `Legacy` stub and `ALTER`), so an edit deploys.
+**Created once, not converged.** Schemas, user-defined and table types, synonyms, full-text catalogs and stop lists, and XML schema collections are written as a `CREATE` inside an existence check (`IF NOT EXISTS (...)`). SQL Server cannot alter most of them in place, and a type cannot be dropped while a column or parameter uses it, so the script never replaces what is there. A redeploy is therefore safe, and an edited script changes nothing once the object exists. To change one, write the change as a [migration script](schemaquench.md#migration-script-tracking): an `ALTER` where SQL Server has one (`ALTER XML SCHEMA COLLECTION ... ADD`, `ALTER FULLTEXT CATALOG`), otherwise a drop and re-create in an order its dependents allow. Module scripts (views, functions, procedures, triggers) are different: they are written as `CREATE OR ALTER` (or the `Legacy` stub and `ALTER`), so an edit deploys.
+
+**A sequence is written as declared JSON** in `Sequences/` (SQL Server 2012 and later), its current value never, so the deploy converges each attribute `ALTER SEQUENCE` can change and never resets it (see [Sequence JSON Format](schema-packages.md#sequence-json-format-postgresql-sql-server-mariadb)). A re-extraction that writes `X.json` beside the `X.sql` an earlier version wrote treats the script as superseded, not orphaned: it is reported, deleted under `DetectDeleteAndCleanup`, and never dropped by a cleanup script.
 
 ### PostgreSQL
 
@@ -306,7 +316,7 @@ Control exactly what gets cast from the database. Each object type can be indivi
 
 The last five folders are added to `Template.json` the first time something is extracted into them, so a package with none of them stays loadable by releases before 2.8.
 
-**What the PostgreSQL scripts carry.** A trigger script is `DROP TRIGGER IF EXISTS` followed by the engine's own definition (`pg_get_triggerdef`), with an `ALTER TABLE ... DISABLE TRIGGER`, `ENABLE REPLICA TRIGGER` or `ENABLE ALWAYS TRIGGER` line when the trigger is in that state, so it deploys on every version from 12 and a constraint trigger deploys again. A view is `CREATE OR REPLACE VIEW` with its options (`security_barrier`, `security_invoker`, `check_option`) in the `WITH` clause. An aggregate is written in the shape `pg_dump` uses, with every support function schema-qualified and the initial condition quoted. Composite-type attributes are quoted and carry a `COLLATE` that differs from the type's default. Collations and publications are written from the columns the server version has: a collation's locale and provider, as `PROVIDER = icu` (with `RULES` on 16+) or `PROVIDER = builtin` (17+), or for `libc` as `LC_COLLATE` and `LC_CTYPE` with no `PROVIDER` clause; a publication's `publish_via_partition_root` (13+), row filter, column list and `TABLES IN SCHEMA` (15+), and `publish_generated_columns` (18+). A package extracted from a newer server deploys to an older one only where those clauses exist there. A publication script creates the publication if it is missing and then sets its tables and options with `ALTER PUBLICATION ... SET`, so editing the script changes a publication that already exists: a table added to its list is published, and one removed stops being published. A `FOR ALL TABLES` publication keeps that form, which `ALTER` cannot change, and a publication left with no tables keeps the ones it has. A script extracted before 2.8 creates only; extract again to get the converging form.
+**What the PostgreSQL scripts carry.** A trigger script is `DROP TRIGGER IF EXISTS` followed by the engine's own definition (`pg_get_triggerdef`), with an `ALTER TABLE ... DISABLE TRIGGER`, `ENABLE REPLICA TRIGGER` or `ENABLE ALWAYS TRIGGER` line when the trigger is in that state, so it deploys on every version from 12 and a constraint trigger deploys again. A view is `CREATE OR REPLACE VIEW` with its options (`security_barrier`, `security_invoker`, `check_option`) in the `WITH` clause. An aggregate is written in the shape `pg_dump` uses, with every support function schema-qualified and the initial condition quoted. Composite-type attributes are quoted and carry a `COLLATE` that differs from the type's default. Collations and publications are written from the columns the server version has: a collation's locale and provider, as `PROVIDER = icu` (with `RULES` on 16+) or `PROVIDER = builtin` (17+), or for `libc` as `LC_COLLATE` and `LC_CTYPE` with no `PROVIDER` clause; a publication's `publish_via_partition_root` (13+), row filter, column list and `TABLES IN SCHEMA` (15+), and `publish_generated_columns` (18+). A package extracted from a newer server deploys to an older one only where those clauses exist there. A publication script creates the publication if it is missing and then sets its tables and options with `ALTER PUBLICATION ... SET`, so editing the script changes a publication that already exists: a table added to its list is published, and one removed stops being published. A `FOR ALL TABLES` publication keeps that form, which `ALTER` cannot change, and a publication left with no tables keeps the ones it has. A script extracted before 2.8 creates only; extract again to get the converging form. An object with a comment ends with its `COMMENT ON` statement -- schemas, functions, procedures, aggregates, views, triggers, rules, composite and range types, collations, publications, text search configurations, operators, casts and event triggers -- so a deploy to a database that never had it carries it.
 
 **Range types, text search configurations, operators, casts and event triggers.** Each is written in the shape `pg_dump` uses:
 
@@ -331,13 +341,65 @@ Range types, operators and casts are created where they are missing and left alo
 - **A routine or trigger script sets the object's own `sql_mode` around its `CREATE`** and restores the session's mode afterwards. The server renders the text in that mode (double-quoted identifiers under `ANSI_QUOTES`, Oracle syntax under `ORACLE`) and runs the body under it, so the deployed object keeps it whatever mode the target server runs.
 - **A trigger's `FOLLOWS` is rebuilt from the catalog's `ACTION_ORDER`.** `SHOW CREATE TRIGGER` returns the statement as it was written, which never carries the order. A follower whose file sorts before its predecessor fails on the deploy's first pass and is created on the retry pass.
 - **A MariaDB package and its body are one file in `Packages/`**: `DROP PACKAGE IF EXISTS`, then each half under the `sql_mode` it was created in (`ORACLE`, or from 11.4 any mode), so a redeploy replaces both. A package with no body is written without one. The folder is added to `Template.json` the first time a package is extracted.
-- **A MariaDB sequence is written as declared JSON in `Sequences/`**, its options read from `SHOW CREATE SEQUENCE` and its current value never, so the deploy converges each attribute in place and never resets it (see [Sequence JSON Format](schema-packages.md#sequence-json-format-postgresql-mariadb)). A column default of `nextval(`db`.`s`)` is written with the bare sequence name, so the package deploys to any database.
+- **A MariaDB sequence is written as declared JSON in `Sequences/`**, its options read from `SHOW CREATE SEQUENCE` and its current value never, so the deploy converges each attribute in place and never resets it (see [Sequence JSON Format](schema-packages.md#sequence-json-format-postgresql-sql-server-mariadb)). A column default of `nextval(`db`.`s`)` is written with the bare sequence name, so the package deploys to any database.
 
 A view is written as `CREATE OR REPLACE VIEW`, so a view that fails to deploy leaves the previous view in place. A reference to a table in the same database is written unqualified, and a reference to another database keeps its qualifier, so the package deploys to a database of any name.
 
 **Extraction privileges.** The account needs `SELECT` on the database, `SHOW VIEW` for views, `TRIGGER` for triggers, `EVENT` for events, and, for the body of a routine it did not create, global `SELECT` (MySQL 8.0.20+: `SHOW_ROUTINE`; MariaDB: `SELECT` on `mysql.proc`). An object whose definition the server will not return is logged as skipped and counted in the run's skipped objects; without the `TRIGGER` privilege the catalog lists no triggers at all, and SchemaTongs says so once.
 
 ---
+
+## Server and Database Settings
+
+SchemaTongs can capture how a reference server is configured, so a package brings every server of its class into line -- or reports how each one differs -- with the differences visible in source control. It writes the [settings files SchemaQuench reads](schema-packages.md#server-and-database-settings), and on SQL Server it can also script the server's own objects: Agent jobs, audits, server triggers and Extended Events sessions. Every switch is off by default, so an extraction without them reads nothing new and writes nothing new.
+
+| Switch | Default | What it writes |
+|---|---|---|
+| `ShouldCast:ServerSettings` | `false` | `ServerSettings.json` beside `Product.json` |
+| `ShouldCast:DatabaseSettings` | `false` | `DatabaseSettings.json` in the template folder. Skipped, with a warning, for a [schema template](#schema-only-mode): a database setting runs once per database. |
+| `ShouldCast:SettingsDefaultPolicy` | `Report` | The `Fix` and `OnDrift` written on every setting: `Report` (`false`, `Warn`), `EnforceWarn` (`true`, `Warn`) or `EnforceError` (`true`, `Error`). Edit any of them afterwards. |
+| `ShouldCast:SettingsAllowlist` | _(empty)_ | A file naming exactly the settings to capture (format below). |
+| `ShouldCast:SettingsOutput` | `Json` | `Json`, `Script` or `Both` (below). |
+| `ShouldCast:ServerObjects` | `false` | SQL Server's server-level objects, as product `After` folders (below). |
+
+**What gets captured.** Without an allowlist, only settings that differ from what the engine starts with, and none that names this machine -- a file path, the host, the port, a server id, or a size the server picks from the machine's memory and CPUs when nothing sets it. What counts as the default:
+
+- **SQL Server:** a configuration option that differs from its documented default (an option outside that list is captured only when allowlisted), each trace flag that is on globally, a database option that differs from the `model` database, and a database-scoped configuration that is not at its default.
+- **PostgreSQL:** a server parameter whose value in the configuration files (where `ALTER SYSTEM` writes) or on the command line differs from the built-in one -- so the values `initdb` writes at their defaults are left out, and a change waiting for a restart is captured at its new value -- and every setting the database carries itself. The locale and time-zone parameters `initdb` takes from the machine count as machine-specific.
+- **MySQL 8.0 and later:** a variable whose value did not come from the build. A variable a session can also set counts only when it was persisted or set in an option file or on the command line, because MySQL reports a session's own `SET` as a runtime change. **MariaDB:** a variable set in an option file, on the command line or with `SET GLOBAL` that differs from its default; a value the build derives or the server sizes itself is left out. **MySQL 5.7** cannot say which variables were changed, so it captures server variables only from an allowlist, and SchemaTongs says so. On either engine, a database's character set and collation are captured when they differ from the server's.
+
+**Allowlists are exact.** An allowlist captures exactly its settings, at their default or not, machine-specific or not. An allowlisted setting the server does not have is warned about. A scope the file leaves out captures nothing.
+
+```json
+{
+  "Server":   [ { "Kind": "Configuration", "Name": "max server memory (MB)" } ],
+  "Database": [ { "Kind": "Option", "Name": "COMPATIBILITY_LEVEL" } ]
+}
+```
+
+**Three output forms.** `Json` writes the settings files. `Script` writes one compare-then-set script per setting instead -- into a `ServerSettings` folder registered as a product `Before` folder, or a `DatabaseSettings` folder registered as the template's `Setup` folder -- for a team that would rather review SQL. `Both` writes the JSON, which deploys, and the scripts into `ServerSettingsScripts` / `DatabaseSettingsScripts`, which no slot runs, as a copy to read; nothing is applied twice.
+
+### Server objects (SQL Server)
+
+With `ShouldCast:ServerObjects`, each of the server's own objects is written as one script that is safe to run on every deploy, into product `After` folders that run on every server the product deploys to -- each instance carries its own. The folders are added to `Product.json` in the order the objects depend on each other:
+
+| Folder | Holds |
+|---|---|
+| `ServerTriggers` | Server DDL and logon triggers, with their enabled state |
+| `AgentOperators` | SQL Server Agent operators |
+| `AgentJobs` | Agent jobs, with their steps and schedules |
+| `AgentAlerts` | Agent alerts and the operators they notify |
+| `ServerAudits` | Server audits (to a file, the security log or the application log), then their specifications |
+| `EventSessions` | Extended Events sessions, except the ones SQL Server ships with |
+
+- **Jobs update in place.** A job's `job_id`, and with it the job's history, stays attached. A job that is running when the deploy reaches it is left as it is, and the run says so; the next deploy brings it into line.
+- **Unchanged, untouched.** A job, audit, specification or session script changes the object only when the target's differs from it. A running session is not restarted; an audit is not switched off and on.
+- **Edit a job in the package.** A job script declares the job's settings, its steps and its schedules as values at the top, and compares the server's job with them. Edit a value -- a step's command, a schedule's time -- and the next deploy applies it, keeping the job's id and history, and the deploy after that leaves it alone. Audit, specification and session scripts carry a fingerprint of the object as captured instead, so an edit to one of those does not reach a server that still matches it: change the object on the reference server and extract again, as each script's header says.
+- **No credentials.** Linked servers, credentials, proxies and Database Mail accounts are left out. A job step that runs under a proxy is written without it, with a warning.
+- **No drop by absence.** An object removed from the package stays on the server, as with every scripted object.
+
+An audit's file path is written as the source has it, so servers of one class should share their audit paths.
+
 
 ## Folder Mapping
 
@@ -457,6 +519,8 @@ SchemaTongs writes each table file under a canonical name derived from the table
 The optional `VariantName` segment comes after the schema and table, so a table's [conditional variants](schema-packages.md#conditional-application) sort together in source control and in a file listing. The schema segment is omitted whenever the table's content carries no `Schema` (`<table>[.<VariantName>].json`): MySQL and MariaDB, which have no per-table schema; schema-template packages, where the schema is the iteration variable; and PostgreSQL tables in the default `public` schema, which SchemaTongs omits from the written content so the deploy re-resolves it. A PostgreSQL table in a *named* schema keeps both the content `Schema` and the filename prefix (`sales.order_lines.json`). In a schema template the variant follows a `~` instead of a dot (`<table>[~<VariantName>].json`, as in `Customers~eu.json`), because a schema template refuses a dot in a table's file name.
 
 A table's identity lives in its file *content* -- `Schema`, `Name`, and `VariantName` -- not in its filename. SchemaTongs matches an existing file to an extracted table by that content identity, so a file you renamed by hand is still found and refreshed in place rather than duplicated. On PostgreSQL, `"Schema": "public"` and an absent `Schema` are the same identity: extraction omits the default schema, and a file that declares it is refreshed in place and keeps declaring it. The canonical name is a convention, not a contract: if a file's name drifts from canonical, the deploy still works and [`--Validate`](validate.md#file-naming) emits an `SS-FILE-NAME-003` warning pointing at the canonical name.
+
+**Case in a table name.** A file named for its table in another case (`Widget.json` for `widget`) is renamed to the table's own spelling, since Windows and macOS would otherwise keep the old name. Two tables whose names differ only in case cannot both have a file -- on Windows and macOS the two files cannot exist side by side -- so extraction stops before writing anything and names them: rename one of each pair, or extract them separately with `ObjectList`.
 
 ## Routine File Naming (PostgreSQL)
 
@@ -740,7 +804,7 @@ SchemaTongs automatically excludes the platform's system schemas and internal in
 - **Extension members** (PostgreSQL) -- Every object an installed extension owns (`pg_trgm`'s functions, PostGIS's `spatial_ref_sys`, an extension's types, operators and views). They belong to the extension, which is a prerequisite of the target database, not to the package. The run log says how many were skipped per extension.
 - **Base types, operator classes and families, text search parsers and templates** (PostgreSQL) -- each needs support functions compiled into a server library, so a package cannot create one on an empty database; they normally come with an extension (above). Each is named in a warning and counted as skipped. An operator class's own family is not named twice.
 - **Inheritance children and typed tables** (PostgreSQL) -- table inheritance (`INHERITS`) and typed tables (`OF type`) are not modelled, so each is skipped at extraction with a warning naming it, and its triggers and rules are left out with it; the rest of the database extracts and the run exits `1`, as for any skipped object. Written as a plain table, a child would lose the columns it inherits and a typed table its type. The parent is extracted, and DataTongs reads only its own rows (`FROM ONLY`).
-- **Triggers on partitioned tables and their partitions** (PostgreSQL) -- PostgreSQL declarative partitioning is not modelled, so the partitioned table and its partitions are refused at extraction, and a trigger on either (including the copies the engine clones onto each partition) is left out with them rather than written against a table the package does not contain.
+- **What a PostgreSQL partition has of its own** -- a partitioned table is extracted with its partitions under `Partitioning` (see [Partitioning (PostgreSQL)](schema-packages.md#partitioning-postgresql)), and a partition gets no file of its own. An index a partition has of its own (not attached to one of the parent's) is named in a warning and left out. A trigger on the partitioned table is extracted; the copies PostgreSQL clones onto each partition are not. A partitioned table with a partition in another schema, or a foreign-table partition, cannot be declared, so it is skipped with a warning.
 
 ---
 

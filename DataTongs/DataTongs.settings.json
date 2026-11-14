@@ -11,7 +11,8 @@
                                        // User/Password above — for when a credential is present
                                        // but should not be used.
         // "CompatEncoding": "", // Override the payload encoding chosen for the source server
-                                 // (Json | Xml). Blank = choose automatically.
+                                 // auto | legacy (XML) | modern (JSON). Blank = auto.
+        // "CommandTimeoutSeconds": 0, // How long one extraction command may run. 0 (default) = no limit.
         "ConnectionProperties": {
             // Extra connection-string properties, and they are PER ENGINE -- a key one engine does not know
             // is rejected outright, so this ships empty rather than pre-filled. SQL Server against a
@@ -28,12 +29,12 @@
         // { "Name": "", "KeyColumns": "", "SelectColumns": "", "Filter": "", "MergeType": "" }
     ],
     "ShouldCast": {
-        "OutputContentFiles": false, // Write raw data to content files
+        "OutputContentFiles": false, // Write raw data to content files (omitted = true)
         "OutputScripts": true, // Generate merge scripts
         // "DeliveryEncoding": "Json", // Json (default) | Xml — how the content payload is encoded.
                                        // Xml is what makes data delivery work on the legacy SQL Server
                                        // tier, where the JSON functions do not exist.
-        "TokenizeScripts": false, // SQL Server only — replace database name with script tokens in output
+        "TokenizeScripts": false, // Replace the database name with a script token in output, every engine (omitted = true)
         "DisableTriggers": false, // Wrap data delivery in trigger disable/enable
         "MergeUpdate": true, // Include UPDATE clause in merge scripts
         "MergeDelete": false, // Include DELETE clause in merge scripts
@@ -42,8 +43,8 @@
         // PostgreSQL only
         "DisableRules": false, // Disable rules during data delivery
         "UpdateDescendents": true // Update child/dependent tables
-    },
-    "ScriptTokens": {} // Token values substituted into generated scripts, e.g. { "MainDB": "AppDb" }.
+    }
     // "LogHygiene": { "ScrubTokens": [ "ApiKey" ] }, // Extra setting names whose values are masked in the log, beyond the built-in sensitive-name list.
     // "ExitNonZeroOnWarning": false // Exit 1 instead of 0 when the run logged a warning, for pipelines that treat warnings as failures. Also the --ExitNonZeroOnWarning switch.
+    // "LogFormat": "text" // text, or json: one JSON object per line on the console and in the log files, for a log platform to read with no parse rules. Also --LogFormat:json.
 }

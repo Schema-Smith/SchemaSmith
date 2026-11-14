@@ -363,6 +363,65 @@ public class TableQuench_ExpressionSurfaceMeasurementTests : BaseTableQuenchTest
         });
     }
 
+    // B7: the rename pairing blanked the old name with a REPLACE over the whole CREATE INDEX script, so an index named
+    // like its own key column also blanked the column list, never matched, and the rename became a drop and rebuild.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void RenamingAnIndexNamedLikeItsKeyColumn_IsARename(bool indexOnly)
+    {
+        var table = $"ExprSurfRk_{Guid.NewGuid():N}"[..20];
+        WithTable(table, $"CREATE TABLE dbo.[{table}] ([Id] INT NOT NULL, [Status] INT NULL)", cmd =>
+        {
+            var json = FilteredIndexJson(table, "").Replace(@", ""FilterExpression"": """"", "").Replace($"[IX_{table}_Status]", "[Status]");
+            RunTableQuenchProc(cmd, json, indexOnly: indexOnly);
+
+            _messages.Clear();
+            RunTableQuenchProc(cmd, json.Replace("\"Name\": \"[Status]\", \"IndexColumns\"", $"\"Name\": \"[IX_{table}_Renamed]\", \"IndexColumns\""), indexOnly: indexOnly);
+
+            Assert.That(DropMessages(table), Is.Zero,
+                $"a rename must not drop the index (indexOnly={indexOnly}); messages: {string.Join(" | ", _messages)}");
+            cmd.CommandText = $@"SELECT COUNT(*) FROM sys.indexes WHERE [object_id] = OBJECT_ID('dbo.{table}') AND [name] = 'IX_{table}_Renamed'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the index must exist under its new name");
+        });
+    }
+
+    // B7: the XML-index rename pairing compared the live script, name blanked to [IndexName], against the declared
+    // script carrying the declared name, so the two never matched and every XML index rename was a drop and rebuild.
+    [TestCase(false)]
+    [TestCase(true)]
+    public void RenamingAnXmlIndex_IsARename(bool indexOnly)
+    {
+        var table = $"ExprSurfRx_{Guid.NewGuid():N}"[..20];
+        string Json(string xmlName) => $$"""
+            {
+                "Schema": "[dbo]",
+                "Name": "[{{table}}]",
+                "Columns": [
+                    {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+                    {"Name": "[Doc]", "DataType": "XML", "Nullable": true}
+                ],
+                "Indexes": [
+                    {"Name": "[PK_{{table}}]", "IndexColumns": "[Id]", "Clustered": true, "PrimaryKey": true, "Unique": true}
+                ],
+                "XmlIndexes": [
+                    {"Name": "[{{xmlName}}]", "Column": "[Doc]", "IsPrimary": true}
+                ]
+            }
+            """;
+        WithTable(table, $"CREATE TABLE dbo.[{table}] ([Id] INT NOT NULL CONSTRAINT [PK_{table}] PRIMARY KEY CLUSTERED, [Doc] XML NULL)", cmd =>
+        {
+            RunTableQuenchProc(cmd, Json($"XI_{table}"), indexOnly: indexOnly);
+
+            _messages.Clear();
+            RunTableQuenchProc(cmd, Json($"XI_{table}_Renamed"), indexOnly: indexOnly);
+
+            Assert.That(DropMessages(table), Is.Zero,
+                $"a rename must not drop the XML index (indexOnly={indexOnly}); messages: {string.Join(" | ", _messages)}");
+            cmd.CommandText = $@"SELECT COUNT(*) FROM sys.xml_indexes WHERE [object_id] = OBJECT_ID('dbo.{table}') AND [name] = 'XI_{table}_Renamed'";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the XML index must exist under its new name");
+        });
+    }
+
     // Found by the version-band fixture (GenuineOldBinary/ExpressionChurnAcrossVersionsTests), on every version from
     // 2008 R2 to 2025: a computed column authored without "Nullable" was dropped and re-added on every deploy. The
     // create path read an omitted Nullable as nullable while the comparison read it as NOT NULL, and a

@@ -19,5 +19,5 @@ public class OwnershipRefusalTests : OwnershipRefusalSharedTests
     protected override string TableSchema => MainDb;
 
     protected override void ClearOwnership(string first, string second) =>
-        Exec($"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName IN ('{first}', '{second}')");
+        TransientRetry.Run(() => Exec($"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName IN ('{first}', '{second}')"));
 }

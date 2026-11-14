@@ -34,11 +34,9 @@ BEGIN
     --   no row         -> no opinion; the caller's text comparison decides, exactly as before.
     DECLARE v_authored TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
     DECLARE v_canonical TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
-    DECLARE v_rowversion VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT NULL;
-    DECLARE v_version VARCHAR(50) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci DEFAULT VERSION();
 
-    SELECT em.AuthoredText, em.CanonicalText, em.EngineVersion
-      INTO v_authored, v_canonical, v_rowversion
+    SELECT em.AuthoredText, em.CanonicalText
+      INTO v_authored, v_canonical
       FROM SchemaSmith_ExpressionMap em
      -- Explicit collation on every key comparison: a routine parameter carries the server default
      -- (utf8mb4_0900_ai_ci on MySQL 8, utf8mb4_uca1400_ai_ci on MariaDB 11), and mixing that with the
@@ -67,8 +65,8 @@ BEGIN
     -- object's stored text (SQL Server freezes it, so in practice this is PostgreSQL major upgrades), and that
     -- re-apply restores the declared text -- which is the right answer anyway.
     IF CAST(v_canonical AS BINARY) != CAST(IFNULL(p_LiveCanonical, '') AS BINARY) THEN RETURN 0; END IF;
-    IF v_rowversion != v_version THEN RETURN 1; END IF;
-
+    -- A stale context (the engine version moved since the row was recorded) still reads as unchanged: the recorder
+    -- re-baselines it rather than re-applying.
     RETURN 1;
 END//
 

@@ -97,13 +97,14 @@ public class TaskQueueManagerTests
     public void WaitForAll_InvokesActionWhileWaiting()
     {
         using var manager = new TaskQueueManager<string>(maxTasks: 1);
-        var actionCalled = false;
+        using var actionCalled = new ManualResetEventSlim(false);
 
-        manager.AddToQueue("item1", _ => Thread.Sleep(200));
+        // The item finishes only once the action has run, so the action can only have run while WaitForAll waited.
+        manager.AddToQueue("item1", _ => actionCalled.Wait(System.TimeSpan.FromSeconds(10)));
 
-        manager.WaitForAll(() => actionCalled = true);
+        manager.WaitForAll(() => actionCalled.Set());
 
-        Assert.That(actionCalled, Is.True);
+        Assert.That(actionCalled.IsSet, Is.True);
     }
 
     [Test]
@@ -111,23 +112,28 @@ public class TaskQueueManagerTests
     {
         using var manager = new TaskQueueManager<string>(maxTasks: 5);
 
-        // Should complete immediately without hanging
-        manager.WaitForAll();
+        var returned = System.Threading.Tasks.Task.Run(() => manager.WaitForAll()).Wait(System.TimeSpan.FromSeconds(10));
 
-        Assert.Pass();
+        Assert.That(returned, Is.True, "with nothing queued it returns rather than waiting");
     }
 
     [Test]
-    public void Dispose_ClearsQueues()
+    public void Dispose_ClearsQueues_SoQueuedWorkNeverRuns()
     {
+        using var gate = new ManualResetEventSlim(false);
+        var ran = new System.Collections.Concurrent.ConcurrentQueue<string>();
         var manager = new TaskQueueManager<string>(maxTasks: 1);
+        manager.AddToQueue("running", item => { gate.Wait(System.TimeSpan.FromSeconds(10)); ran.Enqueue(item); });
+        manager.AddToQueue("queued", ran.Enqueue);
 
-        // Add an item and dispose
-        manager.AddToQueue("item1", _ => Thread.Sleep(50));
         manager.Dispose();
+        gate.Set();
 
-        // Should not throw
-        Assert.Pass();
+        Assert.Multiple(() =>
+        {
+            Assert.That(SpinWait.SpinUntil(() => System.Linq.Enumerable.Contains(ran, "running"), 5000), Is.True, "the started item finishes");
+            Assert.That(SpinWait.SpinUntil(() => System.Linq.Enumerable.Contains(ran, "queued"), 500), Is.False, "the queued one was dropped");
+        });
     }
 
     [Test]

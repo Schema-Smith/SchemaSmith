@@ -175,17 +175,18 @@ BEGIN
         DECLARE @ncDropSql NVARCHAR(MAX);
         SELECT @ncDropSql = STRING_AGG('DROP INDEX ' + QUOTENAME(i.name) + ' ON ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName), '; ')
         FROM sys.indexes i WHERE i.object_id = @objectId AND i.type > 1;
-        IF @ncDropSql IS NOT NULL AND @WhatIf = 0 EXEC sp_executesql @ncDropSql;
+        IF @ncDropSql IS NOT NULL BEGIN IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @ncDropSql ELSE EXEC sp_executesql @ncDropSql END;
 
         -- Drop clustered index
         DECLARE @clDropSql NVARCHAR(MAX);
         SELECT @clDropSql = 'DROP INDEX ' + QUOTENAME(i.name) + ' ON ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName)
         FROM sys.indexes i WHERE i.object_id = @objectId AND i.type = 1;
-        IF @clDropSql IS NOT NULL AND @WhatIf = 0 EXEC sp_executesql @clDropSql;
+        IF @clDropSql IS NOT NULL BEGIN IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @clDropSql ELSE EXEC sp_executesql @clDropSql END;
 
         -- Drop view
         SET @sql = 'DROP VIEW ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName);
-        IF @WhatIf = 0 EXEC sp_executesql @sql;
+        IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @sql ELSE EXEC sp_executesql @sql;
+        INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldDrop' ELSE 'dropped' END);
 
         FETCH NEXT FROM remove_cursor INTO @objectId, @ivSchema, @ivName;
     END;
@@ -195,7 +196,7 @@ BEGIN
     -- Process new and changed views
     DECLARE @defn NVARCHAR(MAX), @indexJson NVARCHAR(MAX), @variantName NVARCHAR(128), @description NVARCHAR(MAX);
     DECLARE @existingDef NVARCHAR(MAX), @existingObjectId INT;
-    DECLARE @needsRecreate BIT, @needsIndexUpdate BIT;
+    DECLARE @needsRecreate BIT, @needsIndexUpdate BIT, @ivIndexesChanged BIT;
     -- What DROP VIEW takes with it and the package does not carry: permissions and extended properties, put back
     -- once the view is created again.
     DECLARE @preserveSql NVARCHAR(MAX), @ivQualified NVARCHAR(300);
@@ -209,6 +210,7 @@ BEGIN
     BEGIN
         SET @needsRecreate = 0;
         SET @needsIndexUpdate = 0;
+        SET @ivIndexesChanged = 0;
         SET @preserveSql = NULL;
         SET @ivQualified = QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName);
         SET @existingObjectId = NULL;
@@ -248,15 +250,16 @@ BEGIN
 
                 SELECT @ncDropSql = STRING_AGG('DROP INDEX ' + QUOTENAME(i.name) + ' ON ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName), '; ')
                 FROM sys.indexes i WHERE i.object_id = @existingObjectId AND i.type > 1;
-                IF @ncDropSql IS NOT NULL AND @WhatIf = 0 EXEC sp_executesql @ncDropSql;
+                IF @ncDropSql IS NOT NULL BEGIN IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @ncDropSql ELSE EXEC sp_executesql @ncDropSql END;
 
                 SELECT @clDropSql = 'DROP INDEX ' + QUOTENAME(i.name) + ' ON ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName)
                 FROM sys.indexes i WHERE i.object_id = @existingObjectId AND i.type = 1;
-                IF @clDropSql IS NOT NULL AND @WhatIf = 0 EXEC sp_executesql @clDropSql;
+                IF @clDropSql IS NOT NULL BEGIN IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @clDropSql ELSE EXEC sp_executesql @clDropSql END;
 
                 EXEC SchemaSmith.CapturePermissions @Schema = @ivSchema, @Name = @ivName, @Script = @preserveSql OUTPUT;
                 SET @sql = 'DROP VIEW ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName);
-                IF @WhatIf = 0 EXEC sp_executesql @sql;
+                IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @sql ELSE EXEC sp_executesql @sql;
+                INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldDrop' ELSE 'dropped' END);
             END
             ELSE
                 SET @needsIndexUpdate = 1; -- Definition unchanged, check indexes
@@ -267,10 +270,35 @@ BEGIN
         -- Create view if needed
         IF @needsRecreate = 1
         BEGIN
+            -- Only indexed views are read as existing, so an object already holding the name reaches CREATE VIEW. A
+            -- view this product made that lost its index (a deploy failed between the two) is rebuilt; anything else
+            -- is refused by name rather than left to fail as "There is already an object named ...".
+            IF @existingObjectId IS NULL AND OBJECT_ID(@ivQualified) IS NOT NULL
+            BEGIN
+                IF OBJECTPROPERTY(OBJECT_ID(@ivQualified), 'IsView') = 1
+                   AND EXISTS (SELECT 1 FROM sys.extended_properties ep
+                                WHERE ep.class = 1 AND ep.major_id = OBJECT_ID(@ivQualified) AND ep.minor_id = 0
+                                  AND ep.name = 'SchemaSmith_Product' AND CAST(ep.value AS NVARCHAR(200)) = @ProductName)
+                BEGIN
+                    SET @msg = N'Indexed view ' + @ivSchema + N'.' + @ivName + N' has no clustered index — dropping for recreation';
+                    EXEC [SchemaSmith].[PrintWithNoWait] @msg;
+                    EXEC SchemaSmith.CapturePermissions @Schema = @ivSchema, @Name = @ivName, @Script = @preserveSql OUTPUT;
+                    SET @sql = 'DROP VIEW ' + @ivQualified;
+                    IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @sql ELSE EXEC sp_executesql @sql;
+                    INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldDrop' ELSE 'dropped' END);
+                END
+                ELSE
+                BEGIN
+                    DECLARE @ivCollisionMsg NVARCHAR(2048) = N'Indexed view ' + @ivSchema + N'.' + @ivName + N' cannot be created: an object of that name already exists and is not owned by product ' + @ProductName + N'. Drop or rename it, or set its SchemaSmith_Product extended property to this product.';
+                    THROW 50001, @ivCollisionMsg, 1;
+                END;
+            END;
+
             SET @sql = 'CREATE VIEW ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName) + ' WITH SCHEMABINDING AS ' + @defn;
             SET @msg = N'Creating indexed view ' + @ivSchema + N'.' + @ivName + CASE WHEN ISNULL(@variantName, N'') <> N'' THEN N' (variant: ' + @variantName + N')' ELSE N'' END;
             EXEC [SchemaSmith].[PrintWithNoWait] @msg;
-            IF @WhatIf = 0 EXEC sp_executesql @sql;
+            IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @sql ELSE EXEC sp_executesql @sql;
+            INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldCreate' ELSE 'created' END);
 
             -- Tag ownership
             IF @WhatIf = 0
@@ -308,7 +336,7 @@ BEGIN
                     i.is_unique,
                     CAST(CASE WHEN i.type = 1 THEN 1 ELSE 0 END AS BIT),
                     STRING_AGG(
-                        CASE WHEN ic.is_included_column = 0
+                        CASE WHEN ic.is_included_column = 0 AND (ic.key_ordinal > 0 OR i.[type] NOT IN (1, 2))
                             THEN QUOTENAME(c.name) + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                             ELSE NULL END, ','
                     ) WITHIN GROUP (ORDER BY ic.key_ordinal),
@@ -322,7 +350,8 @@ BEGIN
                 FROM sys.indexes i
                 INNER JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
                 INNER JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-                LEFT JOIN sys.partitions p ON i.object_id = p.object_id AND i.index_id = p.index_id AND p.partition_number = 1
+                -- Every partition, not the first: MIXED when they differ.
+                CROSS APPLY (SELECT [data_compression_desc] = SchemaSmith.fn_PartitionCompression(i.object_id, i.index_id)) p
                 WHERE i.object_id = @existingObjectId AND i.type > 0
                 GROUP BY i.name, i.index_id, i.is_unique, i.type, i.fill_factor, i.is_padded, p.data_compression_desc, i.object_id;
 
@@ -344,8 +373,17 @@ BEGIN
                     [SchemaSmith].[fn_StripBracketWrapping](JSON_VALUE(idx.value, '$.Name')),
                     CAST(ISNULL(JSON_VALUE(idx.value, '$.Unique'), 'false') AS BIT),
                     CAST(ISNULL(JSON_VALUE(idx.value, '$.Clustered'), 'false') AS BIT),
-                    REPLACE(JSON_VALUE(idx.value, '$.IndexColumns'), ', ', ','),
-                    REPLACE(ISNULL(JSON_VALUE(idx.value, '$.IncludeColumns'), ''), ', ', ','),
+                    -- Each name bracketed as the live side's QUOTENAME writes it, as the table path does: written unbracketed,
+                    -- or with a space after a comma, the index was dropped and re-created on every deploy.
+                    (SELECT STRING_AGG(CAST(CASE WHEN RTRIM(LTRIM([value])) LIKE '% DESC'
+                                                 THEN SchemaSmith.fn_SafeBracketWrap(SUBSTRING(RTRIM(LTRIM([value])), 1, LEN(RTRIM(LTRIM([value]))) - 5)) + ' DESC'
+                                                 ELSE SchemaSmith.fn_SafeBracketWrap(LTRIM(RTRIM([value])))
+                                                 END AS NVARCHAR(MAX)), ',')
+                       FROM SchemaSmith.fn_SplitList(JSON_VALUE(idx.value, '$.IndexColumns'), ',')
+                      WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''),
+                    ISNULL((SELECT STRING_AGG(CAST(SchemaSmith.fn_SafeBracketWrap(LTRIM(RTRIM([value]))) AS NVARCHAR(MAX)), ',')
+                              FROM SchemaSmith.fn_SplitList(JSON_VALUE(idx.value, '$.IncludeColumns'), ',')
+                             WHERE SchemaSmith.fn_StripBracketWrapping(RTRIM(LTRIM([value]))) <> ''), ''),
                     ISNULL(JSON_VALUE(idx.value, '$.CompressionType'), 'NONE'),
                     CAST(ISNULL(JSON_VALUE(idx.value, '$.FillFactor'), '0') AS INT),
                     CAST(ISNULL(JSON_VALUE(idx.value, '$.PadIndex'), 'false') AS BIT)
@@ -379,16 +417,17 @@ BEGIN
                     -- Clustered index changing — must drop all indexes (nonclustered → clustered)
                     SET @msg = N'Clustered index changed on ' + @ivSchema + N'.' + @ivName + N' — dropping all indexes for recreation';
                     EXEC [SchemaSmith].[PrintWithNoWait] @msg;
+                    SET @ivIndexesChanged = 1;
 
                     SET @ncDropSql = NULL;
                     SELECT @ncDropSql = STRING_AGG('DROP INDEX ' + QUOTENAME(i.name) + ' ON ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName), '; ')
                     FROM sys.indexes i WHERE i.object_id = @existingObjectId AND i.type > 1;
-                    IF @ncDropSql IS NOT NULL AND @WhatIf = 0 EXEC sp_executesql @ncDropSql;
+                    IF @ncDropSql IS NOT NULL BEGIN IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @ncDropSql ELSE EXEC sp_executesql @ncDropSql END;
 
                     SET @clDropSql = NULL;
                     SELECT @clDropSql = 'DROP INDEX ' + QUOTENAME(i.name) + ' ON ' + QUOTENAME(@ivSchema) + '.' + QUOTENAME(@ivName)
                     FROM sys.indexes i WHERE i.object_id = @existingObjectId AND i.type = 1;
-                    IF @clDropSql IS NOT NULL AND @WhatIf = 0 EXEC sp_executesql @clDropSql;
+                    IF @clDropSql IS NOT NULL BEGIN IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @clDropSql ELSE EXEC sp_executesql @clDropSql END;
                 END
                 ELSE
                 BEGIN
@@ -412,7 +451,8 @@ BEGIN
                     BEGIN
                         SET @msg = N'Dropping changed nonclustered indexes on ' + @ivSchema + N'.' + @ivName;
                         EXEC [SchemaSmith].[PrintWithNoWait] @msg;
-                        IF @WhatIf = 0 EXEC sp_executesql @dropSql;
+                        SET @ivIndexesChanged = 1;
+                        IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @dropSql ELSE EXEC sp_executesql @dropSql;
                     END;
 
                     -- Drop removed nonclustered indexes (in DB but not in spec)
@@ -426,7 +466,8 @@ BEGIN
                     BEGIN
                         SET @msg = N'Dropping removed nonclustered indexes on ' + @ivSchema + N'.' + @ivName;
                         EXEC [SchemaSmith].[PrintWithNoWait] @msg;
-                        IF @WhatIf = 0 EXEC sp_executesql @dropSql;
+                        SET @ivIndexesChanged = 1;
+                        IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @dropSql ELSE EXEC sp_executesql @dropSql;
                     END;
                 END;
             END;
@@ -477,7 +518,10 @@ BEGIN
             BEGIN
                 EXEC [SchemaSmith].[PrintWithNoWait] @createIdxSql;
                 IF @WhatIf = 0 EXEC sp_executesql @createIdxSql;
+                SET @ivIndexesChanged = 1;
             END;
+            IF @needsIndexUpdate = 1 AND @ivIndexesChanged = 1
+                INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldModify' ELSE 'modified' END);
         END;
 
         -- The declared description, once the view exists. '' removes it; an omitted one leaves whatever is there.
@@ -498,7 +542,7 @@ BEGIN
                            '@level0type = N''SCHEMA'', @level0name = N''' + REPLACE(@ivSchema, '''', '''''') + ''', @level1type = N''VIEW'', @level1name = N''' + REPLACE(@ivName, '''', '''''') + '''';
                 SET @msg = N'  ' + CASE WHEN @description = '' THEN N'Removing' ELSE N'Setting' END + N' the description of indexed view ' + @ivSchema + N'.' + @ivName;
                 EXEC [SchemaSmith].[PrintWithNoWait] @msg;
-                IF @WhatIf = 0 EXEC sp_executesql @sql;
+                IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @sql ELSE EXEC sp_executesql @sql;
                 INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
                   VALUES (@@SPID, 'indexedView', @ivSchema + '.' + @ivName, CASE WHEN @WhatIf = 1 THEN 'wouldModify' ELSE 'modified' END);
             END;
@@ -530,7 +574,7 @@ BEGIN
                            ''', @level2type = N''INDEX'', @level2name = N''' + REPLACE(@ivIndexName, '''', '''''') + '''';
                 SET @msg = N'  ' + CASE WHEN @ivIndexDescription = '' THEN N'Removing' ELSE N'Setting' END + N' the description of index ' + @ivSchema + N'.' + @ivName + N'.' + @ivIndexName;
                 EXEC [SchemaSmith].[PrintWithNoWait] @msg;
-                IF @WhatIf = 0 EXEC sp_executesql @sql;
+                IF @WhatIf = 1 EXEC [SchemaSmith].[PrintWithNoWait] @sql ELSE EXEC sp_executesql @sql;
                 INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
                   VALUES (@@SPID, 'index', @ivSchema + '.' + @ivName + '.' + @ivIndexName, CASE WHEN @WhatIf = 1 THEN 'wouldModify' ELSE 'modified' END);
             END;

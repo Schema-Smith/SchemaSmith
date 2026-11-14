@@ -10,6 +10,7 @@ using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Schema.Domain.MySQL;
 using Schema.Domain.PostgreSQL;
+using Schema.Domain.Settings;
 using Schema.Domain.SqlServer;
 using Schema.Isolators;
 using Schema.Utility;
@@ -75,6 +76,10 @@ namespace Schema.Domain
         /// </summary>
         [JsonIgnore]
         public bool IsSchemaTemplate => !string.IsNullOrWhiteSpace(SchemaIdentificationScript);
+
+        // DatabaseSettings.json in the template folder; null when there is none, and then no database setting is read.
+        [JsonIgnore]
+        public SettingsFile DatabaseSettings { get; set; }
 
         [JsonProperty(Order = 3)]
         public string VersionStampScript { get; set; }
@@ -147,9 +152,9 @@ namespace Schema.Domain
         public bool ContinueOnSchemaFailure { get; set; } = true;
 
         /// <summary>
-        /// Failure-isolation parity at the database level — applies to BOTH regular and schema
-        /// templates. When true (default), one database's failure does not abort the product run
-        /// across other databases. When false, the run aborts at the first DB-level failure.
+        /// Failure isolation at the database level, for a regular template (a schema template follows
+        /// <see cref="ContinueOnSchemaFailure"/>). When true (default), one database's failure does not abort
+        /// the product run across other databases. When false, the run aborts at the first DB-level failure.
         /// </summary>
         [JsonProperty(Order = 15)]
         [DefaultValue(true)]
@@ -298,6 +303,10 @@ namespace Schema.Domain
         // Sequences, MariaDB (10.3+). The same folder, read as MariaDbSequence; MySQL has no sequence at any version.
         [JsonIgnore]
         public List<MariaDbSequence> MariaDbSequences { get; } = [];
+
+        // Sequences, SQL Server (2012+). The same folder, read as SqlServerSequence.
+        [JsonIgnore]
+        public List<SqlServerSequence> SqlServerSequences { get; } = [];
 
         [JsonIgnore]
         public string SequenceSchema { get; set; } = "[]";
@@ -452,6 +461,7 @@ namespace Schema.Domain
             clone.EnumTypeSchema = EnumTypeSchema;
             clone.Sequences.AddRange(Sequences);
             clone.MariaDbSequences.AddRange(MariaDbSequences);
+            clone.SqlServerSequences.AddRange(SqlServerSequences);
             clone.SequenceSchema = SequenceSchema;
             clone.MaterializedViewSchema = MaterializedViewSchema;
             clone.EventSchema = EventSchema;
@@ -564,6 +574,7 @@ namespace Schema.Domain
             // expensive load work — fail fast with a clear error rather than after Table.Load
             // has parsed half a dozen JSON files.
             template.ValidateSchemaTemplateRules(templatePath);
+            template.LoadDatabaseSettings(templatePath, missingMemberHandling, tolerateFileTokenErrors);
 
             foreach (var token in template.ScriptTokens)
                 template.LoggableTokens.Add(token.Key, token.Value);
@@ -582,6 +593,7 @@ namespace Schema.Domain
                 .ToDictionary(k => k.Key, v => v.Value);
 
             template.InstanceLoad(scriptTokens, product.Platform, tolerateComponentLoadErrors);
+            template.DatabaseSettings?.ResolveTokens(scriptTokens.ToList(), product.Platform);
 
             // Resolve the per-token TokenScope map so the SchemaQuench dispatcher can decide which
             // <*Query*> tokens need re-running per schema iteration vs. once per DB. Idempotent on
@@ -704,7 +716,9 @@ namespace Schema.Domain
             EnumTypeSchema = JArray.FromObject(EnumTypes).ToString();
             tokens.Add(new("EnumTypeSchema", EnumTypeSchema));
 
-            SequenceSchema = MariaDbSequences.Count > 0 ? JArray.FromObject(MariaDbSequences).ToString() : JArray.FromObject(Sequences).ToString();
+            SequenceSchema = MariaDbSequences.Count > 0 ? JArray.FromObject(MariaDbSequences).ToString()
+                : SqlServerSequences.Count > 0 ? JArray.FromObject(SqlServerSequences).ToString()
+                : JArray.FromObject(Sequences).ToString();
             tokens.Add(new("SequenceSchema", SequenceSchema));
 
             IndexedViewSchema = JArray.FromObject(IndexedViews).ToString();
@@ -899,7 +913,7 @@ namespace Schema.Domain
         /// <summary>Loads DECLARATIVE sequences from the Sequences/ folder; *.sql there still runs scripted.</summary>
         private void LoadSequences(Platform platform, bool tolerateComponentLoadErrors)
         {
-            if (platform != Platform.PostgreSQL && platform != Platform.MariaDb) return;
+            if (platform != Platform.PostgreSQL && platform != Platform.MariaDb && platform != Platform.SqlServer) return;
             var path = Path.Join(Path.GetDirectoryName(FilePath) ?? "", "Sequences");
             if (!ProductDirectoryWrapper.GetFromFactory().Exists(path)) return;
             var files = ProductDirectoryWrapper.GetFromFactory()
@@ -913,6 +927,9 @@ namespace Schema.Domain
                     if (platform == Platform.MariaDb)
                         MariaDbSequences.Add(JsonConvert.DeserializeObject<MariaDbSequence>(json, PlatformDeserializer.StrictSettings)
                                              ?? throw new JsonSerializationException("Failed to deserialize sequence"));
+                    else if (platform == Platform.SqlServer)
+                        SqlServerSequences.Add(JsonConvert.DeserializeObject<SqlServerSequence>(json, PlatformDeserializer.StrictSettings)
+                                               ?? throw new JsonSerializationException("Failed to deserialize sequence"));
                     else
                         Sequences.Add(JsonConvert.DeserializeObject<PostgreSqlSequence>(json, PlatformDeserializer.StrictSettings)
                                       ?? throw new JsonSerializationException("Failed to deserialize sequence"));
@@ -1190,6 +1207,17 @@ namespace Schema.Domain
         /// rejection is handled by <see cref="SchemaDefaultResolver"/> (slice 1) and bubbles up
         /// with file context via that resolver's outer wrap.
         /// </summary>
+        private void LoadDatabaseSettings(string templateDir, MissingMemberHandling missingMemberHandling, bool tolerateDeclarationErrors)
+        {
+            var path = Path.Join(templateDir, SettingsFile.DatabaseFileName);
+            DatabaseSettings = SettingsFile.LoadIfPresent(path, Product.Platform, SettingScope.Database, missingMemberHandling, tolerateDeclarationErrors);
+            if (DatabaseSettings != null && IsSchemaTemplate && !tolerateDeclarationErrors)
+                throw new PackageException(
+                    $"Template '{Name}' (file: {FilePath}) is a schema template but has {SettingsFile.DatabaseFileName} ({path}). " +
+                    "Database settings are database-scoped and cannot fan out per schema: a setting runs once per database. " +
+                    "Move the file to a regular template that targets the same databases.");
+        }
+
         private void ValidateSchemaTemplateRules(string templateDir)
         {
             // Rule 5 applies regardless of platform / SchemaIdentificationScript presence:
@@ -1295,12 +1323,6 @@ namespace Schema.Domain
             return $"{objectName[(objectName.LastIndexOf('.') + 1)..]}{bareName[objectName.Length..]}.json";
         }
 
-        /// <summary>
-        /// Per design §3.3, schema-only fields set non-default on a regular template are almost
-        /// certainly a configuration mistake. Don't fail the load — surface a clear warning
-        /// through the progress log so the user can correct it. <see cref="ContinueOnDatabaseFailure"/>
-        /// is excluded: it is the regular template's own setting.
-        /// </summary>
         // Every engine refuses a nullable primary-key column (PostgreSQL on every deploy after the first), and nobody
         // who puts a column in the key means it to hold NULL. A conditional key may not deploy, so its columns stay as declared.
         private void MakePrimaryKeyColumnsNotNull()
@@ -1347,6 +1369,12 @@ namespace Schema.Domain
                     "Remove the quotes so the declaration says what deploys.");
         }
 
+        /// <summary>
+        /// Per design §3.3, schema-only fields set non-default on a regular template are almost
+        /// certainly a configuration mistake. Don't fail the load — surface a clear warning
+        /// through the progress log so the user can correct it. <see cref="ContinueOnDatabaseFailure"/>
+        /// is excluded: it is the regular template's own setting.
+        /// </summary>
         private void WarnIfSchemaOnlyFieldsSetOnRegularTemplate()
         {
             if (IsSchemaTemplate) return;

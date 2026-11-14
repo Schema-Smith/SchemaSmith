@@ -1,0 +1,26 @@
+{
+  "schemaVersion": "1.4",
+  "failures": [],
+  "drift": {
+    "drifted": true,
+    "failOn": ["create", "modify", "drop"],
+    "targets": [
+      { "server": "sql01", "database": "Billing_1", "schema": "tenant_1", "template": "Tenant", "status": "drifted", "counted": 2, "plan": "p", "changes": [] },
+      { "server": "sql01", "database": "Billing_2", "schema": "", "template": "Main", "status": "clean", "counted": 0, "plan": "p", "changes": [] }
+    ],
+    "planGroups": [],
+    "pendingMigrations": [],
+    "unverifiable": [],
+    "extra": []
+  },
+  "unsupportedDowngrade": {
+    "downgrades": [ { "feature": "NULLS NOT DISTINCT (PG15)", "objectName": "public.ix_orders" } ]
+  },
+  "destructive": {
+    "policy": "fail",
+    "changes": [
+      { "kind": "dropColumn", "objectName": "[dbo].[T].[Old]", "detail": "", "server": "sql01", "database": "Billing_1", "estimatedRows": 10, "rowSource": "catalog", "accepted": false, "outcome": "refused" },
+      { "kind": "dropTable", "objectName": "[dbo].[Gone]", "detail": "", "server": "sql01", "database": "Billing_1", "estimatedRows": 0, "rowSource": "catalog", "accepted": true, "outcome": "applied" }
+    ]
+  }
+}

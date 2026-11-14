@@ -43,15 +43,8 @@ CREATE FUNCTION SchemaSmith.fn_ExpressionMapUnchanged(
 RETURNS BIT
 AS
 BEGIN
-  DECLARE @v_Version VARCHAR(50) = CONVERT(VARCHAR(50), SERVERPROPERTY('ProductVersion'))
-  -- sys.databases, not DATABASEPROPERTYEX(..., 'CompatibilityLevel'): that property returns NULL before SQL Server
-  -- 2017, so on 2008 R2 through 2016 no compatibility level was ever recorded and a compatibility change was
-  -- never seen as a context change -- measured on genuine 2012, 2014 and 2016 instances.
-  DECLARE @v_Compat INT = (SELECT [compatibility_level] FROM sys.databases WHERE [database_id] = DB_ID())
-
-  DECLARE @v_Authored NVARCHAR(MAX), @v_Canonical NVARCHAR(MAX), @v_RowVersion VARCHAR(50), @v_RowCompat INT
-  SELECT @v_Authored = em.[AuthoredText], @v_Canonical = em.[CanonicalText],
-         @v_RowVersion = em.[EngineVersion], @v_RowCompat = em.[CompatLevel]
+  DECLARE @v_Authored NVARCHAR(MAX), @v_Canonical NVARCHAR(MAX)
+  SELECT @v_Authored = em.[AuthoredText], @v_Canonical = em.[CanonicalText]
     FROM SchemaSmith.ExpressionMap em WITH (NOLOCK)
    WHERE em.[ObjectSchema] = SchemaSmith.fn_StripBracketWrapping(@p_ObjectSchema)
      AND em.[ObjectTable] = SchemaSmith.fn_StripBracketWrapping(@p_ObjectTable)
@@ -70,8 +63,8 @@ BEGIN
   -- object's stored text (SQL Server freezes it, so in practice this is PostgreSQL major upgrades), and that
   -- re-apply restores the declared text -- which is the right answer anyway.
   IF @v_Canonical <> ISNULL(@p_LiveCanonical, '') RETURN 0          -- the live object was edited out of band
-  IF @v_RowVersion <> @v_Version OR ISNULL(@v_RowCompat, -1) <> ISNULL(@v_Compat, -1) RETURN 1  -- stale: re-baseline
-
+  -- A stale context (engine version or compatibility level moved since the row was recorded) still reads as
+  -- unchanged: the recorder re-baselines it rather than re-applying.
   RETURN 1
 END
 GO

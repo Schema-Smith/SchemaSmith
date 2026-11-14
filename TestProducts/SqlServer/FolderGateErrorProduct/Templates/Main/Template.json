@@ -1,0 +1,11 @@
+{
+  "Name": "Main",
+  "DatabaseIdentificationScript": "SELECT name FROM sys.databases WHERE name = '{{TargetDB}}'",
+  "ScriptFolders": [
+    {
+      "FolderPath": "Gated",
+      "QuenchSlot": "Before",
+      "ShouldApplyExpression": "1 / 0 = 1"
+    }
+  ]
+}

@@ -201,6 +201,48 @@ INSERT INTO `{table}` (`Id`, `Val`) VALUES (1, 'one'), (2, 'two'), (3, NULL);");
 
     // ---- the proven AUTO_INCREMENT defect ------------------------------------
 
+    // The index that keys an AUTO_INCREMENT column outside the primary key goes into the shadow's CREATE whole, its
+    // comment included (up to 1024 characters).
+    [Test]
+    public void Rebuild_KeepsAnAutoIncrementKeyWithALongComment()
+    {
+        var table = $"RbAutoKey_{Uid()}";
+        var comment = new string('c', 600);
+        using var conn = OpenMainDb();
+        using var cmd = conn.CreateCommand();
+        try
+        {
+            Exec(cmd, $"CREATE TABLE `{table}` (`Id` INT NOT NULL AUTO_INCREMENT, `Code` INT NOT NULL, PRIMARY KEY (`Code`), UNIQUE KEY `ux_id` (`Id`)); " +
+                      $"INSERT INTO `{table}` (`Code`) VALUES (10), (20);");
+            var json = $$"""
+                [{
+                    "Name": "{{table}}",
+                    "Columns": [
+                        {"Name": "Id", "DataType": "INT", "Nullable": false, "AutoIncrement": true},
+                        {"Name": "Code", "DataType": "INT", "Nullable": false}
+                    ],
+                    "Indexes": [
+                        {"Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Code"},
+                        {"Name": "ux_id", "Unique": true, "IndexColumns": "Id", "Comment": "{{comment}}"}
+                    ]
+                }]
+                """;
+            Rebuild(cmd, json, table);
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(Int(cmd, $"SELECT COUNT(*) FROM `{table}`"), Is.EqualTo(2), "the rows came across");
+                Assert.That(Strings(cmd, "SELECT INDEX_COMMENT FROM INFORMATION_SCHEMA.STATISTICS " +
+                                         $"WHERE TABLE_SCHEMA = {Lit(_mainDb)} AND TABLE_NAME = {Lit(table)} AND INDEX_NAME = 'ux_id'"),
+                    Is.EqualTo(new List<string> { comment }), "with the key and its whole comment");
+            });
+        }
+        finally
+        {
+            Exec(cmd, $"DROP TABLE IF EXISTS `{table}`");
+        }
+    }
+
     [Test]
     public void Rebuild_DoesNotReissueTheAutoIncrementOfADeletedHighestRow()
     {
@@ -431,8 +473,6 @@ INSERT INTO `{child}` (`Id`, `ParentId`) VALUES (10, 1), (11, 2);");
 
             var inboundKeyCount = "SELECT COUNT(DISTINCT CONSTRAINT_NAME) FROM INFORMATION_SCHEMA.KEY_COLUMN_USAGE "
                                   + $"WHERE REFERENCED_TABLE_SCHEMA = {Lit(_mainDb)} AND REFERENCED_TABLE_NAME = {Lit(parent)}";
-            var childKeyCount = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS "
-                                + $"WHERE TABLE_SCHEMA = {Lit(_mainDb)} AND TABLE_NAME = {Lit(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'";
 
             Assert.That(Int(cmd, inboundKeyCount), Is.EqualTo(1),
                 "Setup precondition: an inbound foreign key must exist, or this test proves nothing.");
@@ -461,18 +501,28 @@ INSERT INTO `{child}` (`Id`, `ParentId`) VALUES (10, 1), (11, 2);");
                 + "would have failed and this table would still be sitting there -- with the child "
                 + "constrained against it instead of against the replacement.");
 
-            Assert.That(Int(cmd, childKeyCount), Is.EqualTo(0),
-                "The inbound key is deliberately NOT re-added here: it is declared in the CHILD's JSON, so "
-                + "the child's foreign-key quench pass re-creates it. What must never happen is the key "
-                + "surviving pointed at the renamed-away table.");
-
             Assert.That(AuditCount(cmd, $"{child}.{fkName}", "dropped"), Is.EqualTo(1),
-                "A key this rebuild removed and does not put back has to appear in the run manifest, or "
-                + "the operator has no record that referential integrity was briefly dropped on their behalf.");
+                "A key this rebuild removed has to appear in the run manifest.");
+
+            // The key -- not declared by this package -- is set aside for the foreign-key pass to put back; dropped and
+            // left to the child's JSON, a key no package declares was gone for good. Any deploy in this database restores
+            // a set-aside key, and the suite deploys concurrently, so by now it is either still recorded or already back
+            // on the child against the replacement. The record holds the name as the server reports it, folded to lower
+            // case under lower_case_table_names=1, so it is looked up without regard to case.
+            var recorded = Scalar(cmd, "SELECT CONCAT(Declared, '|', Definition) FROM SchemaSmith_RebuildSetAsideForeignKeys "
+                                       + $"WHERE LOWER(ChildTable) = LOWER({Lit(child)}) AND KeyName = {Lit(fkName)}")?.ToString();
+            if (recorded != null)
+                Assert.That(recorded, Does.StartWith($"0|FOREIGN KEY (`ParentId`) REFERENCES `{_mainDb}`.`{parent}` (`Id`) ON DELETE "));
+            else
+                Assert.That(Int(cmd, "SELECT COUNT(*) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS "
+                                     + $"WHERE CONSTRAINT_SCHEMA = {Lit(_mainDb)} AND TABLE_NAME = {Lit(child)} "
+                                     + $"AND CONSTRAINT_NAME = {Lit(fkName)} AND REFERENCED_TABLE_NAME = {Lit(parent)}"), Is.EqualTo(1),
+                    "The key is neither set aside nor back on the child: it was lost.");
         }
         finally
         {
             Exec(cmd, $"DROP TABLE IF EXISTS `{child}`");
+            Exec(cmd, $"DELETE FROM SchemaSmith_RebuildSetAsideForeignKeys WHERE LOWER(ChildTable) = LOWER({Lit(child)})");
             Exec(cmd, $"DROP TABLE IF EXISTS `{parent}`, `{parent}_SchemaSmithRebuild`, `{parent}_SchemaSmithOld`");
             conn.Close();
         }

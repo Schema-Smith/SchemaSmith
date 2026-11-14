@@ -58,6 +58,42 @@ namespace SchemaQuench.IntegrationTests.SqlServer
             }
         }
 
+        [Test]
+        public void XmlIndexOnly_AnEmptyDescription_RemovesTheIndexDescription()
+        {
+            // Description/text() is NULL for an empty element, so "" looked omitted and the description stayed.
+            const string xt = "IdxOnlyDescRmXml";
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+            conn.Open();
+            conn.ChangeDatabase(_mainDb);
+
+            Cleanup(conn, xt, xt);
+            try
+            {
+                Exec(conn, $"CREATE TABLE dbo.{xt} (Id INT NOT NULL, Label NVARCHAR(100) NULL);");
+                foreach (var b in SqlServerBatchSplitter.Split(XmlTierIndexOnlyQuench())) Exec(conn, b);
+
+                string Deploy(string description)
+                {
+                    var json = @"[{""Schema"":""dbo"",""Name"":""" + xt + @""",""Indexes"":[{""Name"":""IX_" + xt + @""",""IndexColumns"":""Label""" +
+                               (description == null ? "" : @",""Description"":""" + description + @"""") + "}]}]";
+                    Exec(conn, "EXEC SchemaSmith.IndexOnlyQuenchXmlTest @ProductName = 'DescRm', @TableDefinitions = @p",
+                        ("@p", ModelXmlSerializer.ToIngestXml(json, "Tables", "Table")));
+                    using var cmd = conn.CreateCommand();
+                    cmd.CommandText = $"SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'SCHEMA', N'dbo', N'TABLE', N'{xt}', N'INDEX', N'IX_{xt}')";
+                    return cmd.ExecuteScalar() as string;
+                }
+
+                Assert.That(Deploy("by label"), Is.EqualTo("by label"), "set");
+                Assert.That(Deploy(null), Is.EqualTo("by label"), "omitted leaves it");
+                Assert.That(Deploy(""), Is.Null, "an empty string removes it");
+            }
+            finally
+            {
+                Cleanup(conn, xt, xt);
+            }
+        }
+
         // The XML-tier procedure, kindled as the product kindles it, under a test name beside the JSON one.
         internal static string XmlTierIndexOnlyQuench() =>
             ForgeKindler.ResolveKindleScript("SchemaSmith.IndexOnlyXmlQuench.sql", Platform.SqlServer, replaceParseJson: false, replaceTableDef: false)

@@ -59,16 +59,15 @@ public class PruneScopeRespectsRunScopeTests
         // 2. Delete the file.
         // 3. Quench with Target.Schemas = [tenant_acme] + PruneObsoleteMigrationTracking: true.
         // 4. Only tenant_acme's tracking row for Migration_002 is pruned; the others remain.
-        var migrationFile = Path.Combine(
-            TestHelper.GetTestProductPath("SqlServer", ProductName),
-            "Templates", "TenantBody", "MigrationScripts", "Before", "Migration_002.sql");
+        var product = TestHelper.CopyTestProduct("SqlServer", ProductName);
+        var migrationFile = Path.Join(product, "Templates", "TenantBody", "MigrationScripts", "Before", "Migration_002.sql");
 
         lock (FactoryContainer.SharedLockObject)
         {
             SetupSharedMocks();
             ResetTrackingAndCreateTenantSchemas(DefaultTenants);
             var config = FactoryContainer.Resolve<IConfigurationRoot>();
-            config["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", ProductName);
+            config["SchemaPackagePath"] = product;
             ClearTargetFilters(config);
 
             try
@@ -112,12 +111,12 @@ IF NOT EXISTS (SELECT 1 FROM [{{SchemaName}}].[Customers] WHERE CustomerID = 200
             }
             finally
             {
-                if (File.Exists(migrationFile)) File.Delete(migrationFile);
                 ClearTargetFilters(config);
                 config["PruneObsoleteMigrationTracking"] = null;
                 DropTenantSchemas(DefaultTenants);
                 LogFactory.Clear();
                 FactoryContainer.Unregister<IEnvironment>();
+                Directory.Delete(product, true);
             }
         }
     }

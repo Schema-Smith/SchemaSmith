@@ -115,5 +115,10 @@ namespace Schema.Domain.PostgreSQL
             Description = "PostgreSQL only. Names the unique index backing ReplicaIdentity = INDEX. The index must be unique, non-partial and over NOT NULL columns; PostgreSQL rejects anything else.")]
         [JsonProperty(Order = 112, NullValueHandling = NullValueHandling.Ignore)]
         public string ReplicaIdentityIndex { get; set; }
+
+        [SchemaProperty(
+            Description = "PostgreSQL only. Declarative partitioning: the key and the partitions. A new table is created partitioned, with its partitions; a declared partition the table lacks is added; a different key, bound or partition tablespace is refused by name. Omit to leave partitioning unmanaged.")]
+        [JsonProperty(Order = 114, NullValueHandling = NullValueHandling.Ignore)]
+        public PostgreSqlPartitioning Partitioning { get; set; }
     }
 }

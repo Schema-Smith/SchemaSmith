@@ -40,7 +40,7 @@ BEGIN
       SET @v_msg = 'Change Data Capture requires CDC enabled on the database (EXEC sys.sp_cdc_enable_db), ' +
                    'which SchemaSmith does not do for you because it is database-wide; table(s): ' +
                    LEFT(@v_list, 1700) + '.'
-      RAISERROR(@v_msg, 16, 1)
+      RAISERROR('%s', 16, 1, @v_msg)
     END
     ELSE
     BEGIN
@@ -72,7 +72,7 @@ BEGIN
       SET @v_msg = 'Change Tracking requires it enabled on the database (ALTER DATABASE ... SET CHANGE_TRACKING = ON), ' +
                    'which SchemaSmith does not do for you because it is database-wide; table(s): ' +
                    LEFT(@v_list, 1700) + '.'
-      RAISERROR(@v_msg, 16, 1)
+      RAISERROR('%s', 16, 1, @v_msg)
     END
     ELSE
     BEGIN

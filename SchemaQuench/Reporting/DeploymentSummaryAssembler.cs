@@ -16,6 +16,9 @@ namespace SchemaQuench.Reporting;
 /// </summary>
 public static class DeploymentSummaryAssembler
 {
+    /// <summary>The contract version: a change to the summary's shape is a new version, and a new published schema file.</summary>
+    public const string SchemaVersion = "1.4";
+
     public static DeploymentSummary Assemble(
         string product,
         string platform,
@@ -33,7 +36,13 @@ public static class DeploymentSummaryAssembler
         IReadOnlyList<FailureRecord> failures,
         long bottleneckThresholdMs,
         ChangeAuditCapture changeAudit,
-        bool protectedModeEnabled = false)
+        bool protectedModeEnabled = false,
+        IReadOnlyList<LockWait> lockWaits = null,
+        SessionTimeouts settings = null,
+        string destructivePolicy = null,
+        DriftReport drift = null,
+        int? driftTier = null,
+        RunIdentity identity = null)
     {
         var run = new RunInfo(
             Product: product,
@@ -44,7 +53,16 @@ public static class DeploymentSummaryAssembler
             Mode: mode,
             Outcome: outcome,
             ExitCode: exitCode,
-            ResumedFromCheckpoint: resumedFromCheckpoint);
+            ResumedFromCheckpoint: resumedFromCheckpoint,
+            Settings: settings is null ? null : new RunSettings(settings.CommandTimeoutSeconds, settings.LockTimeoutSeconds, settings.ContentionRetryAttempts),
+            DriftTier: mode == RunMode.Drift ? driftTier : null,
+            Id: identity?.Id,
+            Label: identity?.Label,
+            ResumesRunId: identity?.ResumesRunId,
+            Package: identity?.Package,
+            Source: identity?.Source,
+            Ci: identity?.Ci,
+            Host: identity?.Host);
 
         var mappedTargets = targets
             .Select(tr => new TargetSummary(
@@ -56,7 +74,8 @@ public static class DeploymentSummaryAssembler
                 DurationMs: tr.DurationMs,
                 Slots: timing.SlotsForScope(tr.ScopeKey),
                 DatabaseSource: tr.DatabaseSource,
-                SchemaSource: tr.SchemaSource))
+                SchemaSource: tr.SchemaSource,
+                ConnectedAs: tr.ConnectedAs))
             .ToList();
 
         var mappedMigrationScripts = migrationScripts
@@ -76,7 +95,7 @@ public static class DeploymentSummaryAssembler
             ByDatabase: timing.ByDatabase(),
             Bottlenecks: timing.Bottlenecks(bottleneckThresholdMs));
 
-        var whatIf = mode == RunMode.WhatIf ? BuildWhatIfSummary(whatIfEntries) : null;
+        var whatIf = mode is RunMode.WhatIf or RunMode.Drift ? BuildWhatIfSummary(whatIfEntries) : null;
 
         var objectChanges = BuildObjectChanges(changeAudit);
 
@@ -85,7 +104,7 @@ public static class DeploymentSummaryAssembler
         var unsupportedDowngrade = BuildUnsupportedDowngrade(changeAudit);
 
         return new DeploymentSummary(
-            SchemaVersion: "1.2",
+            SchemaVersion: SchemaVersion,
             Tool: "SchemaQuench",
             ToolVersion: toolVersion,
             Run: run,
@@ -96,7 +115,26 @@ public static class DeploymentSummaryAssembler
             WhatIf: whatIf,
             ObjectChanges: objectChanges,
             PreventDrop: preventDrop,
-            UnsupportedDowngrade: unsupportedDowngrade);
+            UnsupportedDowngrade: unsupportedDowngrade,
+            LockWaits: lockWaits ?? [],
+            Destructive: BuildDestructive(changeAudit, destructivePolicy, mode),
+            Drift: mode == RunMode.Drift ? drift : null,
+            SettingOutcomes: BuildSettings(changeAudit));
+    }
+
+    private static SettingsSummary BuildSettings(ChangeAuditCapture changeAudit)
+    {
+        var rows = changeAudit?.Snapshot().Where(r => r.ObjectType is "ServerSetting" or "DatabaseSetting").ToList();
+        if (rows == null || rows.Count == 0) return null;
+
+        SettingsScopeCounts Counts(string type)
+        {
+            var scope = rows.Where(r => r.ObjectType == type).ToList();
+            if (scope.Count == 0) return null;
+            int N(string action) => scope.Count(r => r.Action == action);
+            return new SettingsScopeCounts(N("changed"), N("pendingRestart"), N("drift"), N("fixFailed"), N("unfixable"), N("wouldChange"));
+        }
+        return new SettingsSummary(Counts("ServerSetting"), Counts("DatabaseSetting"));
     }
 
     /// <summary>
@@ -110,7 +148,8 @@ public static class DeploymentSummaryAssembler
     /// </summary>
     private static UnsupportedDowngradeSummary BuildUnsupportedDowngrade(ChangeAuditCapture changeAudit)
     {
-        if (changeAudit is not { Instrumented: true })
+        // Not gated on Instrumented: a delivery downgrade is recorded in C#, on runs that never drain the table audit.
+        if (changeAudit == null)
             return null;
 
         var downgrades = changeAudit.Snapshot()
@@ -119,6 +158,39 @@ public static class DeploymentSummaryAssembler
             .ToArray();
 
         return downgrades.Length == 0 ? null : new UnsupportedDowngradeSummary(downgrades);
+    }
+
+    /// <summary>
+    /// The changes that removed data (H3): each table or column dropped because the package no longer declares it, with
+    /// the table's rows from the catalog and what the policy did. Null when there were none, so a run that removed nothing
+    /// keeps the shape it had.
+    /// </summary>
+    private static DestructiveSummary BuildDestructive(ChangeAuditCapture changeAudit, string policy, RunMode mode)
+    {
+        if (changeAudit == null) return null;
+        var changes = changeAudit.Snapshot()
+            .Where(r => r.Action == DestructiveLog.Action)
+            .Select(r => new DestructiveChange(
+                Kind: r.ObjectType switch
+                {
+                    "table drop" => "tableDrop", "column drop" => "columnDrop", "column replaced" => "columnReplaced",
+                    "type change" => "typeChange", _ => r.ObjectType,
+                },
+                ObjectName: r.ObjectName,
+                Detail: r.Detail,
+                Server: r.Target?.Server,
+                Database: r.Target?.Database,
+                EstimatedRows: r.EstimatedRows,
+                RowSource: r.EstimatedRows is null ? "unknown" : "catalog",
+                Accepted: r.Mode == "accepted",
+                Outcome: r.Mode switch
+                {
+                    "refused" => "refused",
+                    "wouldRefuse" => "wouldRefuse",
+                    _ => mode is RunMode.WhatIf or RunMode.Drift ? "wouldApply" : "applied",
+                }))
+            .ToList();
+        return changes.Count == 0 ? null : new DestructiveSummary(policy ?? DestructivePolicy.Warn, changes);
     }
 
     /// <summary>
@@ -152,7 +224,7 @@ public static class DeploymentSummaryAssembler
                 Instrumented: false,
                 Created: new CreatedCounts(0, 0, 0, 0, 0, 0, 0, 0),
                 Modified: new ModifiedCounts(0, 0),
-                Dropped: new DroppedCounts(0, 0, 0, 0),
+                Dropped: new DroppedCounts(0, 0, 0, 0, 0),
                 ScriptsRan: 0,
                 Details: Array.Empty<ObjectChangeDetail>());
 
@@ -183,6 +255,7 @@ public static class DeploymentSummaryAssembler
 
         var dropped = new DroppedCounts(
             Tables: Count2("table", "dropped", "wouldDrop"),
+            Columns: Count2("column", "dropped", "wouldDrop"),
             Indexes: Count2("index", "dropped", "wouldDrop"),
             Constraints: Count2("constraint", "dropped", "wouldDrop"),
             ForeignKeys: Count2("foreignKey", "dropped", "wouldDrop"));
@@ -194,7 +267,7 @@ public static class DeploymentSummaryAssembler
         // likewise belong to the UnsupportedDowngradeSummary manifest, not the detail. WhatIf 'would*'
         // rows ARE previewed changes and stay in the detail.
         var details = rows
-            .Where(r => r.Action != "dropSuppressed" && r.Action != "downgraded")
+            .Where(r => r.Action != "dropSuppressed" && r.Action != "downgraded" && r.Action != DestructiveLog.Action)
             .Select(r => new ObjectChangeDetail(r.ObjectType, r.ObjectName, r.Action, r.Mode, r.Target?.Server, r.Target?.Database, r.Target?.Schema))
             .ToArray();
 

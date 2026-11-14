@@ -75,6 +75,186 @@ public class CoherenceCheckTests
         return new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).ToArray();
     }
 
+    // #609: a PostgreSQL key part is a column with an operator class, COLLATE or NULLS ordering after it, or an expression
+    // (a function call needs no outer parentheses there). Both deploy; --Validate read the whole part as a column name.
+    private static Schema.Domain.PostgreSQL.PostgreSqlTable PgBooking(string indexColumns) => new()
+    {
+        Name = "booking",
+        Schema = "public",
+        Columns =
+        {
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "bookingid", DataType = "integer" },
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "details", DataType = "jsonb" },
+            new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "Notes", DataType = "text" }
+        },
+        Indexes = { new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "ix_booking", IndexColumns = indexColumns } }
+    };
+
+    [TestCase("details jsonb_path_ops")]
+    [TestCase("\"Notes\" text_pattern_ops DESC NULLS LAST")]
+    [TestCase("\"Notes\" COLLATE \"C\"")]
+    [TestCase("bookingid DESC NULLS FIRST, details")]
+    [TestCase("to_tsvector('english', \"Notes\")")]
+    [TestCase("to_tsvector('english'::regconfig, \"Notes\"), bookingid")]
+    [TestCase("(lower(\"Notes\"))")]
+    public void PostgreSqlKeyPart_WithAnOperatorClassOrAsAnExpression_IsNotAMissingColumn(string indexColumns)
+    {
+        Assert.That(RunOnPgTable(PgBooking(indexColumns)).Where(f => f.Code == "SS-IDX-001"), Is.Empty);
+    }
+
+    [TestCase("detail jsonb_path_ops", "detail")]
+    [TestCase("notes text_pattern_ops", "notes")]
+    [TestCase("\"bookingId\" DESC", "\"bookingId\"")]
+    public void PostgreSqlKeyPart_NamingNoColumn_IsStillReported(string indexColumns, string reported)
+    {
+        var findings = RunOnPgTable(PgBooking(indexColumns)).Where(f => f.Code == "SS-IDX-001").ToArray();
+        Assert.That(findings.Select(f => f.Message), Has.One.Contains($"'{reported}'"));
+    }
+
+    // ---- PostgreSQL declarative partitioning (G1) ----
+
+    private static Schema.Domain.PostgreSQL.PostgreSqlTable PgPartitioned(string method, string expression, params (string Name, string Bound)[] parts)
+    {
+        var table = new Schema.Domain.PostgreSQL.PostgreSqlTable
+        {
+            Name = "events",
+            Schema = "public",
+            Columns =
+            {
+                new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" },
+                new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "d", DataType = "date" },
+                new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "g", DataType = "integer", GenerationExpression = "id * 2" }
+            },
+            Partitioning = new Schema.Domain.PostgreSQL.PostgreSqlPartitioning { Method = method, Expression = expression }
+        };
+        foreach (var (name, bound) in parts)
+            table.Partitioning.Partitions.Add(new Schema.Domain.PostgreSQL.PostgreSqlPartition { Name = name, Bound = bound });
+        return table;
+    }
+
+    private static string[] PgPartCodes(Schema.Domain.PostgreSQL.PostgreSqlTable table) =>
+        RunOnPgTable(table).Where(f => f.Code.StartsWith("SS-PART")).Select(f => f.Code).ToArray();
+
+    [Test]
+    public void PgPartitioning_ASoundNestedDeclaration_HasNoFinding()
+    {
+        var table = PgPartitioned("RANGE", "d", ("e_2026", "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')"), ("e_rest", "DEFAULT"));
+        table.Partitioning.Partitions[0].Partitioning = new Schema.Domain.PostgreSQL.PostgreSqlPartitioning
+        {
+            Method = "HASH", Expression = "id",
+            Partitions = { new() { Name = "e_2026_h0", Bound = "FOR VALUES WITH (modulus 2, remainder 0)" }, new() { Name = "e_2026_h1", Bound = "FOR VALUES WITH (modulus 2, remainder 1)" } }
+        };
+        table.Indexes.Add(new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "pk_events", PrimaryKey = true, IndexColumns = "id,d" });
+        Assert.That(PgPartCodes(table), Is.Empty);
+    }
+
+    // Columns can carry variants (ShouldApplyExpression), so one name can be declared twice: the check reads one of them.
+    [Test]
+    public void PgPartitioning_AColumnWithVariants_IsReadNotACrash()
+    {
+        var table = PgPartitioned("RANGE", "d", ("e_rest", "DEFAULT"));
+        table.Columns.Add(new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "d", DataType = "timestamp", ShouldApplyExpression = "1 = 0" });
+        Assert.That(PgPartCodes(table), Is.Empty);
+    }
+
+    [TestCase("RANGE", "FOR VALUES IN ('a')")]
+    [TestCase("LIST", "FOR VALUES FROM (1) TO (2)")]
+    [TestCase("HASH", "DEFAULT")]
+    [TestCase("HASH", "FOR VALUES IN (1)")]
+    public void PgPartitioning_ABoundOfTheWrongShape_IsSS_PART_017(string method, string bound)
+    {
+        Assert.That(PgPartCodes(PgPartitioned(method, "id", ("p1", bound))), Does.Contain("SS-PART-017"));
+    }
+
+    // A comma inside a quoted bound value is part of the value, not a separator between key columns.
+    [Test]
+    public void PgPartitioning_ARangeBoundWithACommaInAQuotedValue_HasTheRightArity()
+    {
+        var table = PgPartitioned("RANGE", "id, d", ("p1", "FOR VALUES FROM (1, 'a,b') TO (2, 'c')"));
+        table.Columns[1].DataType = "text";
+        Assert.That(PgPartCodes(table), Does.Not.Contain("SS-PART-017"));
+    }
+
+    [Test]
+    public void PgPartitioning_ARangeBoundWithTheWrongArity_IsSS_PART_017()
+    {
+        Assert.That(PgPartCodes(PgPartitioned("RANGE", "id, d", ("p1", "FOR VALUES FROM (1) TO (2)"))), Does.Contain("SS-PART-017"));
+    }
+
+    [Test]
+    public void PgPartitioning_TwoDefaults_IsSS_PART_018()
+    {
+        Assert.That(PgPartCodes(PgPartitioned("LIST", "id", ("a", "DEFAULT"), ("b", "DEFAULT"))), Does.Contain("SS-PART-018"));
+    }
+
+    [TestCase("FOR VALUES WITH (modulus 2, remainder 2)", "FOR VALUES WITH (modulus 4, remainder 1)")]
+    [TestCase("FOR VALUES WITH (modulus 2, remainder 0)", "FOR VALUES WITH (modulus 2, remainder 0)")]
+    [TestCase("FOR VALUES WITH (modulus 2, remainder 0)", "FOR VALUES WITH (modulus 3, remainder 1)")]
+    public void PgPartitioning_IncoherentHash_IsSS_PART_019(string first, string second)
+    {
+        Assert.That(PgPartCodes(PgPartitioned("HASH", "id", ("h1", first), ("h2", second))), Does.Contain("SS-PART-019"));
+    }
+
+    [Test]
+    public void PgPartitioning_ARepeatedPartitionName_OrOneDeclaredAsATable_IsSS_PART_020()
+    {
+        Assert.That(PgPartCodes(PgPartitioned("LIST", "id", ("p", "FOR VALUES IN (1)"), ("p", "FOR VALUES IN (2)"))), Does.Contain("SS-PART-020"));
+
+        var parent = PgPartitioned("LIST", "id", ("orders_1", "FOR VALUES IN (1)"));
+        var template = new Template { Name = "T" };
+        template.Tables.Add(parent);
+        template.Tables.Add(new Schema.Domain.PostgreSQL.PostgreSqlTable { Name = "orders_1", Schema = "public", Columns = { new Schema.Domain.PostgreSQL.PostgreSqlColumn { Name = "id", DataType = "integer" } } });
+        var product = new Product { Name = "Acme", Platform = Platform.PostgreSQL, TemplateOrder = new System.Collections.Generic.List<string>() };
+        var codes = new CoherenceCheck().Run(new ValidationContext(product, new[] { template }, "pkg")).Select(f => f.Code);
+        Assert.That(codes, Does.Contain("SS-PART-020"));
+    }
+
+    [TestCase("missing")]
+    [TestCase("g")]
+    public void PgPartitioning_AKeyColumnNotDeclaredOrGenerated_IsSS_PART_021(string key)
+    {
+        Assert.That(PgPartCodes(PgPartitioned("LIST", key, ("p", "FOR VALUES IN (1)"))), Does.Contain("SS-PART-021"));
+    }
+
+    [Test]
+    public void PgPartitioning_UnloggedIsAnError_AndAnExclusionConstraintAWarning_SS_PART_022()
+    {
+        var table = PgPartitioned("LIST", "id", ("p", "FOR VALUES IN (1)"));
+        table.PersistenceType = "Unlogged";
+        table.ExcludeConstraints.Add(new ExcludeConstraint { Name = "ex" });
+        var findings = RunOnPgTable(table).Where(f => f.Code == "SS-PART-022").ToArray();
+        Assert.That(findings.Select(f => f.Severity), Is.EquivalentTo(new[] { Severity.Error, Severity.Warning }));
+    }
+
+    [Test]
+    public void PgPartitioning_RangeWithNoPartitions_IsAWarning_SS_PART_023()
+    {
+        var finding = RunOnPgTable(PgPartitioned("RANGE", "d")).Single(f => f.Code == "SS-PART-023");
+        Assert.That(finding.Severity, Is.EqualTo(Severity.Warning));
+    }
+
+    [Test]
+    public void PgPartitioning_AKeyThatDoesNotHoldThePartitionKey_IsSS_PART_005_AndNoExpression_IsSS_PART_007()
+    {
+        var table = PgPartitioned("RANGE", "d", ("p", "FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')"));
+        table.Indexes.Add(new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "pk_events", PrimaryKey = true, IndexColumns = "id" });
+        Assert.That(PgPartCodes(table), Does.Contain("SS-PART-005"));
+
+        var expressionKey = PgPartitioned("LIST", "lower(id::text)", ("p", "FOR VALUES IN ('1')"));
+        expressionKey.Indexes.Add(new Schema.Domain.PostgreSQL.PostgreSqlIndex { Name = "pk_events", PrimaryKey = true, IndexColumns = "id" });
+        Assert.That(PgPartCodes(expressionKey), Does.Contain("SS-PART-005"), "no primary key stands on an expression partition key");
+
+        Assert.That(PgPartCodes(PgPartitioned("LIST", "", ("p", "FOR VALUES IN (1)"))), Does.Contain("SS-PART-007"));
+    }
+
+    [Test]
+    public void PgPartitioning_AFillFactorOnAPartitionedTable_IsInert_SS_PART_016()
+    {
+        var table = PgPartitioned("LIST", "id", ("p", "FOR VALUES IN (1)"));
+        table.FillFactor = 80;
+        Assert.That(RunOnPgTable(table).Single(f => f.Code == "SS-PART-016").Severity, Is.EqualTo(Severity.Warning));
+    }
+
     // ---- PostgreSQL names compare exactly ----
     //
     // SchemaSmith deploys every PostgreSQL name quoted, so a key to `Customer` where the table is `customer` fails the
@@ -460,6 +640,40 @@ public class CoherenceCheckTests
         };
         table.JsonIndexes.AddRange(indexes);
         return table;
+    }
+
+    // A secondary XML index is built on its primary; one naming a primary the table does not declare validated clean and
+    // failed the deploy at CREATE XML INDEX.
+    [TestCase("PXML_Doc", true, false)]
+    [TestCase("pxml_doc", true, false)]
+    [TestCase("[PXML_Doc]", true, false)]
+    [TestCase("PXML_Missing", true, true)]
+    [TestCase("SXI_Doc", true, true)]
+    [TestCase(null, true, true)]
+    [TestCase("PXML_Doc", false, true)]
+    public void ASecondaryXmlIndexMustNameADeclaredPrimary(string primaryIndex, bool primaryIsPrimary, bool isError)
+    {
+        var table = Documents(true);
+        table.XmlIndexes.Add(new XmlIndex { Name = "PXML_Doc", Column = "Doc", IsPrimary = primaryIsPrimary, PrimaryIndex = primaryIsPrimary ? null : "PXML_Other", SecondaryIndexType = primaryIsPrimary ? null : "PATH" });
+        table.XmlIndexes.Add(new XmlIndex { Name = "SXI_Doc", Column = "Doc", Selective = new SelectiveXmlIndex { Paths = [new SelectiveXmlPath { Name = "p", Path = "/a" }] } });
+        table.XmlIndexes.Add(new XmlIndex { Name = "IXML_Doc_Value", Column = "Doc", PrimaryIndex = primaryIndex, SecondaryIndexType = "VALUE" });
+        var findings = RunOn(table).Where(f => f.Code == "SS-XML-002" && f.Location.Contains("IXML_Doc_Value")).ToArray();
+        Assert.That(findings.Select(f => f.Severity), Is.EqualTo(isError ? new[] { Severity.Error } : []));
+    }
+
+    // A secondary selective XML index names its selective index and one of that index's paths.
+    [TestCase("SXI_Doc", "p", false)]
+    [TestCase("SXI_Doc", "q", true)]
+    [TestCase("PXML_Doc", "p", true)]
+    [TestCase("SXI_Missing", "p", true)]
+    public void ASecondarySelectiveXmlIndexMustNameADeclaredSelectiveIndexAndPath(string primaryIndex, string forPath, bool isError)
+    {
+        var table = Documents(true);
+        table.XmlIndexes.Add(new XmlIndex { Name = "PXML_Doc", Column = "Doc", IsPrimary = true });
+        table.XmlIndexes.Add(new XmlIndex { Name = "SXI_Doc", Column = "Doc", Selective = new SelectiveXmlIndex { Paths = [new SelectiveXmlPath { Name = "p", Path = "/a" }] } });
+        table.XmlIndexes.Add(new XmlIndex { Name = "SXI_Doc_P", Column = "Doc", PrimaryIndex = primaryIndex, ForPath = forPath });
+        var findings = RunOn(table).Where(f => f.Code == "SS-XML-002" && f.Location.Contains("SXI_Doc_P")).ToArray();
+        Assert.That(findings.Select(f => f.Severity), Is.EqualTo(isError ? new[] { Severity.Error } : []));
     }
 
     // A selective XML index with no paths validated clean, and the deploy reported success with no index created.
@@ -1166,14 +1380,18 @@ public class CoherenceCheckTests
         Assert.That(RunOnMy(table).Select(f => f.Code), Has.Member("SS-PART-006"));
     }
 
-    [TestCase("", true)]
-    [TestCase("Id", false)]
-    public void APartitioningWithoutAnExpression_IsError(string expression, bool expected)
+    // KEY () names no columns and partitions on the primary key, a documented form the check used to refuse.
+    [TestCase("HASH", "", true)]
+    [TestCase("HASH", "Id", false)]
+    [TestCase("KEY", "", false)]
+    [TestCase("LINEAR KEY", null, false)]
+    [TestCase("RANGE", null, true)]
+    public void APartitioningWithoutAnExpression_IsError(string method, string expression, bool expected)
     {
         var table = new Schema.Domain.MySQL.MySqlTable
         {
             Name = "Spread",
-            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = "HASH", Expression = expression, PartitionCount = 2 },
+            Partitioning = new Schema.Domain.MySQL.MySqlPartitioning { Method = method, Expression = expression, PartitionCount = 2 },
             Columns = { new Schema.Domain.MySQL.MySqlColumn { Name = "Id", DataType = "int" } }
         };
         Assert.That(RunOnMy(table).Any(f => f.Code == "SS-PART-007"), Is.EqualTo(expected));
@@ -2904,7 +3122,7 @@ public class CoherenceCheckTests
         });
     }
 
-    // ---- SS-IDENT-002: a PostgreSQL name longer than 63 bytes is stored truncated ----
+    // ---- SS-IDENT-002: a name longer than the engine takes -- PostgreSQL truncates it, the others refuse it ----
 
     [Test]
     public void APostgreSqlColumnNameOver63Bytes_IsAnError()
@@ -2939,9 +3157,9 @@ public class CoherenceCheckTests
         Assert.That(findings.Where(f => f.Code == "SS-IDENT-002"), Is.Not.Empty);
     }
 
-    // MariaDB allows 64 characters, and refuses a longer name itself rather than truncating it.
+    // MariaDB counts characters: 52 of them in 64 bytes fit.
     [Test]
-    public void ALongMariaDbSequenceName_IsNotThisCheck()
+    public void AMariaDbNameIsMeasuredInCharacters()
     {
         var template = new Template { Name = "Main" };
         template.MariaDbSequences.Add(new MariaDbSequence { Name = new string('s', 40) + new string('é', 12) });
@@ -2951,11 +3169,128 @@ public class CoherenceCheckTests
     }
 
     [Test]
-    public void ALongNameOnAnotherEngine_IsNotThisCheck()
+    public void ASqlServerNameWithinItsLimit_IsNotReported()
     {
         var table = new SqlServerTable { Name = new string('t', 100) };
         table.Columns.Add(new SqlServerColumn { Name = "id", DataType = "INT" });
         Assert.That(RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-002"), Is.Empty);
+    }
+
+    // MySQL (1059) and MariaDB (1103) refuse a name over 64 characters, so the deploy stops mid-run.
+    [TestCase(Platform.MySQL)]
+    [TestCase(Platform.MariaDb)]
+    public void AMySqlFamilyNameOver64Characters_IsAnError(Platform platform)
+    {
+        var name = new string('c', 65);
+        MySqlTable table = platform == Platform.MariaDb ? new MariaDbTable { Name = "invoice" } : new MySqlTable { Name = "invoice" };
+        table.Columns.Add(new MySqlColumn { Name = name, DataType = "INT" });
+        var finding = RunFor(table, platform).Single(f => f.Code == "SS-IDENT-002");
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(finding.Severity, Is.EqualTo(Severity.Error), "the deploy fails");
+            Assert.That(finding.Message, Does.StartWith($"Column '{name}'").And.Contain("65 characters").And.Contain("64"), finding.Message);
+        });
+    }
+
+    // Characters, not bytes: 64 two-byte characters deploy (probed on MySQL 8.0 and MariaDB 11).
+    [TestCase(64, false)]
+    [TestCase(65, true)]
+    public void TheMySqlFamilyLimitIsInCharacters(int characters, bool reported)
+    {
+        var table = new MySqlTable { Name = new string('\u00e9', characters) };
+        table.Columns.Add(new MySqlColumn { Name = "id", DataType = "INT" });
+        Assert.That(RunFor(table, Platform.MySQL).Where(f => f.Code == "SS-IDENT-002"), reported ? Is.Not.Empty : Is.Empty);
+    }
+
+    // SQL Server refuses a name over 128 characters (Msg 103). The brackets around a name are not part of it.
+    [TestCase(128, true, false)]
+    [TestCase(129, false, true)]
+    public void TheSqlServerLimitIs128Characters(int characters, bool bracketed, bool reported)
+    {
+        var name = bracketed ? "[" + new string('n', characters) + "]" : new string('n', characters);
+        var table = new SqlServerTable { Name = "Invoice" };
+        table.Columns.Add(new SqlServerColumn { Name = name, DataType = "INT" });
+        var findings = RunFor(table, Platform.SqlServer).Where(f => f.Code == "SS-IDENT-002").ToList();
+        Assert.That(findings, reported ? Is.Not.Empty : Is.Empty);
+        if (reported)
+            Assert.That(findings[0].Message, Does.Contain("129 characters").And.Contain("128"), findings[0].Message);
+    }
+
+    // The kinds only the other engines have; the kinds every table has are the PostgreSQL population below.
+    private static System.Collections.Generic.IEnumerable<TestCaseData> OverlongEngineTableKinds()
+    {
+        var sql = new string('s', 129);
+        var my = new string('m', 65);
+
+        SqlServerTable Ss(System.Action<SqlServerTable> mutate)
+        {
+            var t = new SqlServerTable { Name = "Invoice", Columns = { new SqlServerColumn { Name = "Id", DataType = "INT" } } };
+            mutate(t);
+            return t;
+        }
+
+        yield return new TestCaseData(Ss(t => t.XmlIndexes.Add(new XmlIndex { Name = sql })), Platform.SqlServer, "XML index").SetName("SQL Server XML index");
+        yield return new TestCaseData(Ss(t => t.SpatialIndexes.Add(new SpatialIndex { Name = sql, Column = "Id" })), Platform.SqlServer, "Spatial index").SetName("SQL Server spatial index");
+        yield return new TestCaseData(Ss(t => t.JsonIndexes.Add(new JsonIndex { Name = sql })), Platform.SqlServer, "JSON index").SetName("SQL Server JSON index");
+        yield return new TestCaseData(Ss(t => t.Statistics.Add(new Schema.Domain.SqlServer.Statistic { Name = sql })), Platform.SqlServer, "Statistics").SetName("SQL Server statistics");
+        yield return new TestCaseData(Ss(t => t.EdgeConstraints.Add(new EdgeConstraint { Name = sql })), Platform.SqlServer, "Edge constraint").SetName("SQL Server edge constraint");
+        yield return new TestCaseData(Ss(t => t.ForeignKeys.Add(new SqlServerForeignKey { Name = "FK_1", Columns = "Id", RelatedTable = "Customer", RelatedColumns = "Id", RelatedTableSchema = sql })),
+            Platform.SqlServer, "Foreign key RelatedTableSchema").SetName("SQL Server FK RelatedTableSchema");
+
+        var partitioned = new MySqlTable { Name = "events", Columns = { new MySqlColumn { Name = "id", DataType = "INT" } } };
+        partitioned.Partitioning = new MySqlPartitioning { Partitions = { new MySqlPartition { Name = my } } };
+        yield return new TestCaseData(partitioned, Platform.MySQL, "Partition").SetName("MySQL partition");
+
+        var pg = new PostgreSqlTable { Name = "events", Schema = "public", Columns = { new PostgreSqlColumn { Name = "id", DataType = "integer" } } };
+        pg.Partitioning = new PostgreSqlPartitioning
+        {
+            Method = "LIST", Expression = "id",
+            Partitions = { new PostgreSqlPartition { Name = "events_a", Bound = "FOR VALUES IN (1)", Partitioning = new PostgreSqlPartitioning
+            {
+                Method = "LIST", Expression = "id", Partitions = { new PostgreSqlPartition { Name = Overlong, Bound = "FOR VALUES IN (1)" } }
+            } } }
+        };
+        yield return new TestCaseData(pg, Platform.PostgreSQL, "Partition").SetName("PostgreSQL nested partition");
+    }
+
+    [TestCaseSource(nameof(OverlongEngineTableKinds))]
+    public void EveryEngineTableNameKind_Overlong_IsAnError(Table table, Platform platform, string expectedKind)
+    {
+        var findings = RunFor(table, platform).Where(f => f.Code == "SS-IDENT-002").ToList();
+        Assert.That(findings.Select(f => f.Message).ToList(), Has.Some.StartsWith($"{expectedKind} '"),
+            $"no SS-IDENT-002 names the '{expectedKind}' kind on {platform}");
+    }
+
+    private static System.Collections.Generic.IEnumerable<TestCaseData> OverlongEngineModeledKinds()
+    {
+        var sql = new string('s', 129);
+        var my = new string('m', 65);
+
+        Template With(System.Action<Template> mutate)
+        {
+            var t = new Template { Name = "Main" };
+            mutate(t);
+            return t;
+        }
+
+        yield return new TestCaseData(With(t => t.SqlServerSequences.Add(new SqlServerSequence { Name = sql, Schema = "dbo" })), Platform.SqlServer, "Sequence").SetName("SQL Server sequence");
+        yield return new TestCaseData(With(t => t.SqlServerSequences.Add(new SqlServerSequence { Name = "Seq", Schema = sql })), Platform.SqlServer, "Sequence schema").SetName("SQL Server sequence schema");
+        yield return new TestCaseData(With(t => t.IndexedViews.Add(new SqlServerIndexedView { Name = sql, Schema = "dbo" })), Platform.SqlServer, "Indexed view").SetName("SQL Server indexed view");
+        yield return new TestCaseData(With(t => t.IndexedViews.Add(new SqlServerIndexedView { Name = "V", Schema = "dbo", Indexes = { new SqlServerIndex { Name = sql } } })),
+            Platform.SqlServer, "Indexed view index").SetName("SQL Server indexed view index");
+        yield return new TestCaseData(With(t => t.MariaDbSequences.Add(new MariaDbSequence { Name = my })), Platform.MariaDb, "Sequence").SetName("MariaDB sequence");
+        yield return new TestCaseData(With(t => t.Events.Add(new MySqlEvent { Name = my })), Platform.MySQL, "Event").SetName("MySQL event");
+    }
+
+    [TestCaseSource(nameof(OverlongEngineModeledKinds))]
+    public void EveryEngineModeledObjectKind_Overlong_IsAnError(Template template, Platform platform, string expectedKind)
+    {
+        var product = new Product { Name = "Acme", Platform = platform, TemplateOrder = [] };
+        var findings = new CoherenceCheck().Run(new ValidationContext(product, [template], "pkg"))
+            .Where(f => f.Code == "SS-IDENT-002").ToList();
+        Assert.That(findings.Select(f => f.Message).ToList(), Has.Some.StartsWith($"{expectedKind} '"),
+            $"no SS-IDENT-002 names the '{expectedKind}' kind on {platform}");
     }
 
     // ---- SS-IDENT-002's POPULATION: one case per PostgreSQL name kind that reaches DDL ----
@@ -3300,6 +3635,7 @@ public class CoherenceCheckTests
     [TestCase(" 'DATE_FORMAT(NOW(), ''%Y'')' ", true)]
     [TestCase("(CONCAT('A','B'))", false)]
     [TestCase("'n/a (unknown)'", false)]
+    [TestCase("'Pending (review)'", false)]
     [TestCase("'abc'", false)]
     [TestCase("CURRENT_TIMESTAMP", false)]
     [TestCase(null, false)]
@@ -3315,6 +3651,41 @@ public class CoherenceCheckTests
             Assert.That(finding?.Severity, Is.EqualTo(expected ? Severity.Warning : (Severity?)null), defaultValue);
             if (expected) Assert.That(finding!.Message, Does.Contain("re-extract"));
         }
+    }
+
+    // The same mistake on the other engines, written by hand: PostgreSQL reads 'now()' once, at the deploy, and stores
+    // that timestamp as the default; SQL Server creates the table and then fails every insert into a datetime column
+    // (Msg 241). Both probed live.
+    [TestCase(Platform.PostgreSQL, "'now()'", "now()")]
+    [TestCase(Platform.PostgreSQL, "'gen_random_uuid()'", "gen_random_uuid()")]
+    [TestCase(Platform.SqlServer, "'GETDATE()'", "GETDATE()")]
+    [TestCase(Platform.SqlServer, "N'NEWID()'", "NEWID()")]
+    [TestCase(Platform.SqlServer, "('SYSUTCDATETIME()')", "SYSUTCDATETIME()")]
+    [TestCase(Platform.PostgreSQL, "now()", null)]
+    [TestCase(Platform.PostgreSQL, "'n/a (unknown)'", null)]
+    [TestCase(Platform.SqlServer, "('Pending (review)')", null)]
+    [TestCase(Platform.SqlServer, "getdate()", null)]
+    [TestCase(Platform.SqlServer, "N'Active'", null)]
+    [TestCase(Platform.SqlServer, "('x')", null)]
+    public void AQuotedFunctionCallDefault_OnEveryEngine_IsAWarning(Platform platform, string defaultValue, string unquoted)
+    {
+        Table table = platform == Platform.PostgreSQL
+            ? new PostgreSqlTable { Name = "t", Schema = "public", Columns = { new PostgreSqlColumn { Name = "c", DataType = "timestamptz", Default = defaultValue } } }
+            : new SqlServerTable { Name = "T", Columns = { new SqlServerColumn { Name = "C", DataType = "DATETIME", Default = defaultValue } } };
+        var finding = RunFor(table, platform).SingleOrDefault(f => f.Code == "SS-COL-007");
+
+        if (unquoted == null)
+        {
+            Assert.That(finding, Is.Null, defaultValue);
+            return;
+        }
+        if (finding is not { } reported)
+        {
+            Assert.Fail($"no SS-COL-007 for {defaultValue}");
+            return;
+        }
+        Assert.That(reported.Severity, Is.EqualTo(Severity.Warning), defaultValue);
+        Assert.That(reported.Message, Does.Contain($"({unquoted})").And.Not.Contain("re-extract"), reported.Message);
     }
 
     [Test]

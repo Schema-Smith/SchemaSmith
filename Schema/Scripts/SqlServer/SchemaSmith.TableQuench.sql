@@ -91,6 +91,9 @@ BEGIN TRY
   IF EXISTS (SELECT 1 FROM #Tables WITH (NOLOCK) WHERE [Description] IS NOT NULL)
        OR EXISTS (SELECT 1 FROM #Columns WITH (NOLOCK) WHERE [Description] IS NOT NULL)
        OR EXISTS (SELECT 1 FROM #Indexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #XmlIndexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #SpatialIndexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
+       OR EXISTS (SELECT 1 FROM #JsonIndexes WITH (NOLOCK) WHERE [Description] IS NOT NULL)
        OR EXISTS (SELECT 1 FROM #ExtendedProperties WITH (NOLOCK))
     EXEC SchemaSmith.ExtendedPropertyQuench @WhatIf
   ELSE RAISERROR('Skipping extended properties: none declared', 10, 100) WITH NOWAIT
@@ -99,6 +102,6 @@ BEGIN TRY
   SET NOCOUNT OFF
 END TRY
 BEGIN CATCH
-    DECLARE @v_RethrowMsg NVARCHAR(4000) = ERROR_MESSAGE();
-    RAISERROR(@v_RethrowMsg, 16, 1);
+    DECLARE @v_RethrowMsg NVARCHAR(4000) = CASE WHEN ERROR_NUMBER() = 50000 THEN ERROR_MESSAGE() ELSE N'Msg ' + CAST(ERROR_NUMBER() AS NVARCHAR(10)) + N', Line ' + CAST(ERROR_LINE() AS NVARCHAR(10)) + ISNULL(N', Procedure ' + ERROR_PROCEDURE(), N'') + N': ' + ERROR_MESSAGE() END;
+    RAISERROR('%s', 16, 1, @v_RethrowMsg);
 END CATCH

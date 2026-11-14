@@ -154,6 +154,16 @@ public abstract class ScheduledEventSharedTests
         });
     }
 
+    [Test]
+    public void ADeclaredEventWhoseShouldApplyExpressionIsFalse_IsNotCreated()
+    {
+        Deploy(EventJson().Replace(" }]", ", \"ShouldApplyExpression\": \"1 = 0\" }]"));
+        Assert.That(EventCount(), Is.Zero, "the event's gate is false, so this deploy must leave it out");
+
+        Deploy(EventJson().Replace(" }]", ", \"ShouldApplyExpression\": \"1 = 1\" }]"));
+        Assert.That(EventCount(), Is.EqualTo(1), "a true gate deploys the event, or the check above proves nothing");
+    }
+
     // ---- ScheduleType / Status spelling must not be decided by the database's collation ----
     //
     // The two values land in temp-table columns that carried no collation, so they inherited the TARGET

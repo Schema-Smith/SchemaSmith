@@ -1,12 +1,14 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.IO;
 using Microsoft.Extensions.Configuration;
 using Schema.Checkpointing;
 using Schema.Domain;
 using Schema.Isolators;
 using Schema.Configuration;
 using Schema.Utility;
+using SchemaQuench.Reporting;
 using Schema.Validation;
 
 namespace SchemaQuench;
@@ -21,10 +23,17 @@ public static class Program
 
     public static void Main(string[] args)
     {
+        RunContext.Start("SchemaQuench");
         CommandLineParser.HandleCommonSwitches("SchemaQuench", ToolSpecificSwitches);
+        // Before the first-run screen and the settings: it needs neither.
+        if (CommandLineParser.ContainsSwitch("WriteSummarySchema"))
+        {
+            WriteSummarySchema(CommandLineParser.ValueOfSwitch("WriteSummarySchema"));
+            return;
+        }
         if (GettingStarted.ShowIfUnconfigured("SchemaQuench", "deploys a schema package to a database", FirstRunSettings, args)) return;
 
-        var skipKindlingForge = args.Length > 0 && args[0] == "SkipKindlingForge";
+        var skipKindlingForge = SkipsKindling(args);
         AppDomain.CurrentDomain.UnhandledException += UnhandledException;
         LogFactory.LogInitializer = ConfigHelper.ConfigureLog4Net;
         var config = ConfigHelper.GetAppSettingsAndUserSecrets("SchemaQuench", LogFactory.GetLogger("ProgressLog").Info);
@@ -97,6 +106,14 @@ public static class Program
         {
             productQuench.QuenchProduct(skipKindlingForge);
         }
+        catch (RunFailedException e)
+        {
+            // A failed validation, product script, version check or refused target: the run is over, the user can fix
+            // it, and checkpoints stay for --ResumeQuench. First, so a failure that names the server it could not reach keeps
+            // that message when a connection error is inside it.
+            LogBackup.FailedRunExit("SchemaQuench", e);
+            return;
+        }
         catch (Exception e) when (ConnectionLostClassifier.IsConnectionLost(e))
         {
             // Last-resort net for a mid-deploy drop that escapes the per-server/per-database seams
@@ -109,24 +126,23 @@ public static class Program
             LogBackup.BackupLogsAndExit("SchemaQuench", 2);
             return;
         }
-        catch (RunFailedException e)
-        {
-            // A failed validation, product script, version check or refused target: the run is over, the user can fix
-            // it, and checkpoints stay for --ResumeQuench.
-            LogBackup.FailedRunExit("SchemaQuench", e);
-            return;
-        }
 
         // Clean up checkpoint files only on a clean success — a failed run must preserve
         // checkpoints so the next invocation can resume.
         if (!productQuench.Failed)
         {
-            CleanupCheckpoints();
-            // #576: a clean run leaves none of its debug files behind.
+            // A preview took up no checkpoint, so a failed deploy's resume point is still the real run's to use.
+            if (!productQuench.IsWhatIfOnly) CleanupCheckpoints();
+            // #576: a clean run leaves none of its debug files behind; a drift check that finished is one.
             ResolvedSqlArtifactWriter.DeleteOwned(DebugSql.ArtifactDirectory, o => o.Run == ResolvedSqlArtifactWriter.RunId);
+            if (productQuench.IsDrift)
+            {
+                LogBackup.BackupLogsAndExit("SchemaQuench", productQuench.ExitCode);
+                return;
+            }
             // 1 when a feature was downgraded on a target that lacks it: the deploy finished, but not everything the
             // package declares is in place. The summary lists each downgrade.
-            LogBackup.BackupLogsAndExit("SchemaQuench", productQuench.Incomplete ? 1 : 0);
+            LogBackup.BackupLogsAndExit("SchemaQuench", productQuench.ExitCode);
         }
         else
         {
@@ -170,19 +186,59 @@ public static class Program
 
     private static readonly string[] KnownArguments =
     {
-        "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle", "WhatIf", "WriteDebugSql"
+        "SkipKindlingForge", "Validate", "TestConnection", "PreviewTargets", "ResumeQuench", "ForceReKindle", "WhatIf", "WriteDebugSql", "Drift",
+        "verbose", "ExitZeroOnDowngrade"
     };
+
+    // The bare word (the older form, and how a host passes it) or the switch.
+    internal static bool SkipsKindling(string[] args) =>
+        args.Contains("SkipKindlingForge") || CommandLineParser.ContainsSwitch("SkipKindlingForge");
+
+    private static void WriteSummarySchema(string path)
+    {
+        var environment = EnvironmentWrapper.GetFromFactory();
+        if (string.IsNullOrWhiteSpace(path))
+        {
+            Console.Error.WriteLine("--WriteSummarySchema needs a file to write: --WriteSummarySchema:<path>");
+            environment.Exit(2);
+            return;
+        }
+        try
+        {
+            var directory = Path.GetDirectoryName(Path.GetFullPath(path));
+            if (!string.IsNullOrEmpty(directory)) DirectoryWrapper.GetFromFactory().CreateDirectory(directory);
+            FileWrapper.GetFromFactory().WriteAllText(path, DeploymentSummarySchema.Render());
+            Console.WriteLine($"Deployment summary schema {DeploymentSummaryAssembler.SchemaVersion} written: {path}");
+            environment.Exit(0);
+        }
+        catch (IOException e)
+        {
+            Console.Error.WriteLine($"Could not write the deployment summary schema to {path}: {e.Message}");
+            environment.Exit(2);
+        }
+        catch (UnauthorizedAccessException e)
+        {
+            Console.Error.WriteLine($"Could not write the deployment summary schema to {path}: {e.Message}");
+            environment.Exit(2);
+        }
+    }
 
     private static void ToolSpecificSwitches()
     {
+        Console.WriteLine("  --WriteSummarySchema:<path>      Write the JSON Schema of this version's deployment summary (Summary.json) to <path>, then exit.");
         Console.WriteLine("  --Validate                       Statically validate the schema package (no database connection), then exit.");
         Console.WriteLine("  --TestConnection                 Validate server connection(s) + minimum version, then exit. No deployment.");
         Console.WriteLine("  --PreviewTargets                 Validate, then list the databases/schemas each template would target (read-only). No deployment.");
         Console.WriteLine("  --ResumeQuench                   Resume from an existing checkpoint if one is present.");
         Console.WriteLine("  --CheckpointDirectory:<path>     Directory for checkpoint files (default: %TEMP%/schemaquench-checkpoints).");
         Console.WriteLine("  --ForceReKindle                  Re-deploy the SchemaSmith helper procedures this run even if the in-database kindle stamp is current.");
+        Console.WriteLine("  --SkipKindlingForge              Do not install or update the SchemaSmith helpers this run (as KindleTheForge: false).");
+        Console.WriteLine("  --verbose                        Log more of what the run does (same as the VerboseLogging setting).");
+        Console.WriteLine("  --ExitZeroOnDowngrade            Exit 0, not 1, when the run finished but downgraded a feature the target lacks (also the setting).");
         Console.WriteLine("  --WhatIf                         Dry run: report what would change and change nothing of yours (same as the WhatIfONLY setting).");
         Console.WriteLine("  --WhatIfDetail:<mode>            WhatIf console verbosity: concise | normal (default) | verbose. Concise collapses each section's per-script lines into per-category counts. Does not affect the WhatIf summary file.");
+        Console.WriteLine("  --Drift                          Read-only: does each target match the package? Exit 0 no drift, 5 drift, 2 a target could not be checked.");
+        Console.WriteLine("  --DriftFailOn:<list>             What --Drift counts: create, modify, drop and/or object types (table, column, index, ..., modules, migrations). Default: create,modify,drop,modules.");
         Console.WriteLine("  --report:<basepath>              Write the deployment summary to <basepath>.json and <basepath>.md instead of the log directory. Give the path without an extension.");
         Console.WriteLine("  --WriteDebugSql                  Write the resolved SQL of each step to ArtifactPath (same as the WriteDebugSql setting). Holds real values; local debugging only.");
     }

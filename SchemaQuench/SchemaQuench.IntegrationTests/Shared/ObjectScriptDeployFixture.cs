@@ -34,7 +34,8 @@ public abstract class ObjectScriptDeployFixture
     protected string PackageDir { get; private set; } = "";
     protected string TemplateDir => Path.Join(PackageDir, "Templates", "Main");
 
-    protected sealed record DeployResult(Dictionary<string, ScriptOutcome> Outcomes, IReadOnlyList<ChangeAuditRow> Audit, List<string> Log)
+    protected sealed record DeployResult(Dictionary<string, ScriptOutcome> Outcomes, IReadOnlyList<ChangeAuditRow> Audit, List<string> Log,
+        FailureRecord Failure = null, IReadOnlyList<LockWait> LockWaits = null)
     {
         public string Describe() => string.Join(", ", Outcomes.Select(kv => $"{kv.Key}={kv.Value}"));
         public string DescribeAudit() => string.Join(", ", Audit.Select(r => $"{r.ObjectType} {r.ObjectName} {r.Action}"));
@@ -86,7 +87,10 @@ public abstract class ObjectScriptDeployFixture
     /// Starts the package over: Product.json, a Main template whose ScriptFolders are the given JSON array body, and
     /// an empty folder for each name (Tables is always there).
     /// </summary>
-    protected void WritePackage(string scriptFoldersJson, params string[] folders)
+    protected void WritePackage(string scriptFoldersJson, params string[] folders) => WritePackageWith("", scriptFoldersJson, folders);
+
+    /// <param name="templateJson">More Template.json properties, written after ScriptFolders (", \"ScriptTokens\": { ... }").</param>
+    protected void WritePackageWith(string templateJson, string scriptFoldersJson, params string[] folders)
     {
         if (Directory.Exists(PackageDir)) Directory.Delete(PackageDir, true);
         foreach (var folder in folders.Append("Tables")) Directory.CreateDirectory(Path.Join(TemplateDir, folder));
@@ -94,7 +98,7 @@ public abstract class ObjectScriptDeployFixture
             { "Name": "{{ProductName}}", "Platform": "{{Platform}}", "TemplateOrder": [ "Main" ] }
             """);
         File.WriteAllText(Path.Join(TemplateDir, "Template.json"), $$"""
-            { "Name": "Main", "DatabaseIdentificationScript": "SELECT '{{MainDb}}'", "ScriptFolders": [ {{scriptFoldersJson}} ] }
+            { "Name": "Main", "DatabaseIdentificationScript": "SELECT '{{MainDb}}'", "ScriptFolders": [ {{scriptFoldersJson}} ]{{templateJson}} }
             """);
     }
 
@@ -105,7 +109,8 @@ public abstract class ObjectScriptDeployFixture
     /// <param name="resume">Adopt the checkpoint a previous deploy left, as --ResumeQuench does.</param>
     protected DeployResult Deploy(bool skipUnchanged = true, bool whatIf = false, bool runTwice = false, bool expectSuccess = true, bool dropSchemaBoundDependents = false,
         bool updateTables = true, (string User, string Password)? login = null, bool dropRemovedTables = false,
-        string checkpointDir = null, bool resume = false)
+        string checkpointDir = null, bool resume = false, IReadOnlyDictionary<string, string> settings = null, bool keepColumns = false,
+        bool deliverData = false)
     {
         var ownsCheckpointDir = checkpointDir == null;
         checkpointDir ??= Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
@@ -115,7 +120,7 @@ public abstract class ObjectScriptDeployFixture
             try
             {
                 var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-                var settings = new Dictionary<string, string>
+                var values = new Dictionary<string, string>
                 {
                     ["SchemaPackagePath"] = PackageDir,
                     ["Target:User"] = login?.User ?? config[$"{ConfigPrefix}:User"] ?? config["Target:User"] ?? "TestUser",
@@ -125,8 +130,10 @@ public abstract class ObjectScriptDeployFixture
                     ["Target:SkipUnchangedObjects"] = skipUnchanged ? "true" : "false"
                 };
                 foreach (var prop in ConnectionString.ReadProperties(config, $"{ConfigPrefix}:ConnectionProperties"))
-                    settings[$"Target:ConnectionProperties:{prop.Key}"] = prop.Value;
-                FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(settings!).Build());
+                    values[$"Target:ConnectionProperties:{prop.Key}"] = prop.Value;
+                foreach (var (key, value) in settings ?? new Dictionary<string, string>())
+                    values[key] = value;
+                FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(values!).Build());
 
                 var product = Product.Load();
                 var template = Template.Load("Main", product);
@@ -141,14 +148,9 @@ public abstract class ObjectScriptDeployFixture
                 errorLog.When(l => l.Error(Arg.Any<object>(), Arg.Any<Exception>())).Do(ci => log.Add("ERROR " + ci.ArgAt<object>(0) + " " + ci.ArgAt<Exception>(1)?.Message));
                 LogFactory.Register("ProgressLog", progressLog);
                 LogFactory.Register("ErrorLog", errorLog);
-                // The PostgreSQL quench renders these as booleans, the others as 0/1.
-                var no = Platform == Platform.PostgreSQL ? "false" : "0";
-                var yes = Platform == Platform.PostgreSQL ? "true" : "1";
                 var audit = new ChangeAuditCapture();
-                var quench = new DatabaseQuench("127.0.0.1", product, template, MainDb,
-                    suppressKindling: login != null, whatIfOnly: whatIf ? yes : no, runScriptsTwice: runTwice,
-                    dropRemovedTables: dropRemovedTables ? yes : no, dropRemovedColumns: yes, dropRemovedForeignKeys: yes, dropRemovedCheckConstraints: yes, dropRemovedExcludeConstraints: yes, dropRemovedStatistics: yes, dropRemovedIndexes: yes, dropUnknownIndexes: false, updateTables: updateTables,
-                    deliverData: false, checkpointing: new FileCheckpointManager(checkpointDir, resume)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents };
+                var contention = new ContentionLog();
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = MainDb, SuppressKindling = login != null, WhatIf = whatIf, RunScriptsTwice = runTwice, UpdateTables = updateTables, DeliverData = deliverData, Drops = new DropPolicy(Tables: dropRemovedTables, Columns: !keepColumns, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true), Destructive = DestructivePolicy.Read(FactoryContainer.Resolve<IConfigurationRoot>()) }, new FileCheckpointManager(checkpointDir, resume)) { ChangeAudit = audit, DropSchemaBoundDependents = dropSchemaBoundDependents, Contention = contention };
                 quench.Execute();
                 var scripts = quench.IterationObjectScripts.Concat(quench.IterationAfterTablesObjectScripts).ToList();
                 var errors = scripts.Where(s => s.Error != null).Select(s => $"{Path.GetFileName(s.LogPath)}: {s.Error.Message}");
@@ -161,13 +163,105 @@ public abstract class ObjectScriptDeployFixture
                     var folder = Path.GetFileName(Path.GetDirectoryName(script.LogPath) ?? "");
                     outcomes[folder] = script.Outcome;
                 }
-                return new DeployResult(outcomes, audit.Snapshot(), log);
+                return new DeployResult(outcomes, audit.Snapshot(), log, quench.LastFailure, contention.Snapshot());
             }
             finally
             {
                 LogFactory.Clear();
                 FactoryContainer.Register<IConfigurationRoot>(savedConfig);
                 if (ownsCheckpointDir && Directory.Exists(checkpointDir)) Directory.Delete(checkpointDir, true);
+            }
+        }
+    }
+
+    protected sealed record DriftRun(int ExitCode, DriftReport Report, List<string> Log, string Refusal = null, int? DriftTier = null)
+    {
+        public string Describe() => $"exit {ExitCode}; {Refusal}; changes: "
+                                    + string.Join(", ", Report?.Targets.SelectMany(t => t.Changes).Select(c => $"{c.ObjectType} {c.ObjectName} {c.Action}") ?? [])
+                                    + "; " + string.Join(" | ", Log.Where(l => l != null && (l.StartsWith("ERROR") || l.StartsWith("WARN") || l.Contains("rift"))));
+    }
+
+    /// <summary>
+    /// Runs the whole product through ProductQuench with <paramref name="switches"/> on the command line (--Drift by default),
+    /// as SchemaQuench.exe would, and returns the exit code it would end with and the drift verdict.
+    /// </summary>
+    protected DriftRun RunDrift(string switches = "--Drift", IReadOnlyDictionary<string, string> settings = null)
+    {
+        var reportBase = Path.Join(Path.GetTempPath(), $"DriftReport_{Guid.NewGuid():N}");
+        var checkpointDir = Path.Join(Path.GetTempPath(), $"Checkpoint_{Guid.NewGuid():N}");
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var savedConfig = FactoryContainer.Resolve<IConfigurationRoot>();
+            // A run of the tool is a process of its own: it decides from its own command line whether to take up a checkpoint,
+            // and finds none another test left. A manager registered by an earlier test (one built for --ResumeQuench) would
+            // otherwise resume this run and skip its scripts.
+            var savedCheckpointing = FactoryContainer.Resolve<ICheckpointing>();
+            FactoryContainer.Register<ICheckpointing>(new FileCheckpointManager(checkpointDir, switches.Contains("--ResumeQuench")));
+            try
+            {
+                var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
+                var values = new Dictionary<string, string>
+                {
+                    ["SchemaPackagePath"] = PackageDir,
+                    ["Target:User"] = config[$"{ConfigPrefix}:User"] ?? config["Target:User"] ?? "TestUser",
+                    ["Target:Password"] = config[$"{ConfigPrefix}:Password"] ?? config["Target:Password"],
+                    ["Target:Port"] = config[$"{ConfigPrefix}:Port"] ?? config["Target:Port"],
+                    ["Target:Server"] = config[$"{ConfigPrefix}:Server"] ?? config["Target:Server"] ?? "127.0.0.1",
+                };
+                foreach (var prop in ConnectionString.ReadProperties(config, $"{ConfigPrefix}:ConnectionProperties"))
+                    values[$"Target:ConnectionProperties:{prop.Key}"] = prop.Value;
+                foreach (var (key, value) in settings ?? new Dictionary<string, string>())
+                    values[key] = value;
+                FactoryContainer.Register<IConfigurationRoot>(new ConfigurationBuilder().AddInMemoryCollection(values!).Build());
+
+                int? exited = null;
+                var environment = Substitute.For<IEnvironment>();
+                environment.CommandLine.Returns($"SchemaQuench.exe {switches} --report:{reportBase}");
+                environment.When(e => e.Exit(Arg.Any<int>())).Do(ci => exited ??= ci.ArgAt<int>(0));
+                FactoryContainer.Register(environment);
+
+                var log = new List<string>();
+                var progressLog = Substitute.For<log4net.ILog>();
+                progressLog.When(l => l.Info(Arg.Any<object>())).Do(ci => log.Add(ci.ArgAt<object>(0)?.ToString()));
+                progressLog.When(l => l.Warn(Arg.Any<object>())).Do(ci => log.Add("WARN " + ci.ArgAt<object>(0)));
+                progressLog.When(l => l.Error(Arg.Any<object>())).Do(ci => log.Add("ERROR " + ci.ArgAt<object>(0)));
+                var errorLog = Substitute.For<log4net.ILog>();
+                errorLog.When(l => l.Error(Arg.Any<object>())).Do(ci => log.Add("ERROR " + ci.ArgAt<object>(0)));
+                errorLog.When(l => l.Error(Arg.Any<object>(), Arg.Any<Exception>())).Do(ci => log.Add("ERROR " + ci.ArgAt<object>(0) + " " + ci.ArgAt<Exception>(1)?.Message));
+                LogFactory.Register("ProgressLog", progressLog);
+                LogFactory.Register("ErrorLog", errorLog);
+
+                ProductQuench product;
+                try
+                {
+                    product = new ProductQuench();
+                }
+                catch (RunFailedException e)
+                {
+                    return new DriftRun(2, null, log, e.Message);
+                }
+                try
+                {
+                    product.QuenchProduct();
+                }
+                catch (RunFailedException e)
+                {
+                    SummaryConformance.AssertConforms(reportBase + ".json");
+                    return new DriftRun(2, product.DriftReport, log, e.Message, product.DriftTier);
+                }
+                SummaryConformance.AssertConforms(reportBase + ".json");
+                return new DriftRun(exited ?? product.ExitCode, product.DriftReport, log, null, product.DriftTier);
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                FactoryContainer.Register<IConfigurationRoot>(savedConfig);
+                FactoryContainer.Unregister<ICheckpointing>();
+                if (savedCheckpointing != null) FactoryContainer.Register(savedCheckpointing);
+                if (Directory.Exists(checkpointDir)) Directory.Delete(checkpointDir, true);
+                foreach (var ext in new[] { ".json", ".md" })
+                    if (File.Exists(reportBase + ext)) File.Delete(reportBase + ext);
             }
         }
     }

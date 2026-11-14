@@ -420,7 +420,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                (SELECT STRING_AGG(CAST(CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) COLLATE DATABASE_DEFAULT ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY key_ordinal)
                   FROM sys.index_columns ic
                   LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
-                  WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0) AS [IndexColumns],
+                  WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0 AND (ic.key_ordinal > 0 OR si.[type] NOT IN (1, 2))) AS [IndexColumns],
                (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) AS NVARCHAR(MAX)), ',') WITHIN GROUP (ORDER BY index_column_id)
                   FROM sys.index_columns ic
                   WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 1) AS [IncludeColumns],
@@ -472,7 +472,8 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                             WHERE i.xml_index_type = 2
                             FOR JSON PATH, WITHOUT_ARRAY_WRAPPER)) AS [Selective],
                (SELECT s.[ForPath] FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id) AS [ForPath],
-			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE(x.[Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)) + '}}') AS [Extensions]
+               (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Index', i.[Name])) AS [Description],
+			   JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE(x.[Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
           FROM sys.xml_indexes i
           JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
           WHERE i.[object_id] = st.[object_id]
@@ -491,7 +492,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                tz.cells_per_object AS [CellsPerObject],
                NULLIF(i.fill_factor, 0) AS [FillFactor],
                NULLIF((SELECT MAX(p.data_compression_desc) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1
-                        WHERE it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id) COLLATE DATABASE_DEFAULT, 'NONE') AS [CompressionType]
+                        WHERE it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id) COLLATE DATABASE_DEFAULT, 'NONE') AS [CompressionType],
+               (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Index', i.[name])) AS [Description],
+               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE(x.[Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
           FROM sys.spatial_indexes i
           JOIN sys.spatial_index_tessellations tz ON tz.[object_id] = i.[object_id] AND tz.index_id = i.index_id
           JOIN sys.index_columns ic ON ic.[object_id] = i.[object_id] AND ic.index_id = i.index_id
@@ -506,7 +509,9 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                              WHERE p.[object_id] = l.[object_id] AND p.index_id = l.index_id AND p.[Path] <> '$')) AS [Paths],
                CASE WHEN l.[OptimizeForArraySearch] = 1 THEN CAST(1 AS BIT) END AS [OptimizeForArraySearch],
                l.[FillFactor] AS [FillFactor],
-               NULLIF(l.[Compression], 'NONE') AS [CompressionType]
+               NULLIF(l.[Compression], 'NONE') AS [CompressionType],
+               (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Index', l.[Name])) AS [Description],
+               JSON_QUERY('{"ExtendedProperties": {' + (SELECT STRING_AGG(CAST('"' + STRING_ESCAPE(x.[Name], 'json') + '": "' + STRING_ESCAPE(CONVERT(NVARCHAR(MAX), [Value]), 'json') + '"' AS NVARCHAR(MAX)), ',') FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', l.[Name]) x WHERE x.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND x.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description') + '}}') AS [Extensions]
           FROM #LiveJsonIndexes l
           WHERE l.[object_id] = st.[object_id]
           ORDER BY l.[Name]
@@ -575,7 +580,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        JSON_QUERY((SELECT FullTextCatalog = QUOTENAME((SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
                KeyIndex = QUOTENAME((SELECT i.[Name] FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
                ChangeTracking = change_tracking_state_desc,
-               [StopList] = QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)),
+               [StopList] = CASE WHEN fi.stoplist_id IS NULL THEN 'OFF' ELSE QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)) END,
                (SELECT STRING_AGG(CAST(QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)) +
                                        CASE WHEN fc.type_column_id IS NOT NULL
                                             THEN ' TYPE COLUMN ' + QUOTENAME(COL_NAME(fc.[object_id], fc.type_column_id)) + ''

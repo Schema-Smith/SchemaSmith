@@ -8,6 +8,7 @@ using System.Text.RegularExpressions;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Schema.Domain;
+using Schema.Domain.Settings;
 using Schema.Domain.MariaDb;
 using Schema.Domain.MySQL;
 using Schema.Domain.PostgreSQL;
@@ -169,7 +170,7 @@ public static class RepositoryHelper
         var schemaPath = Path.Combine(productPath, ".json-schemas");
         directory.CreateDirectory(schemaPath);
 
-        foreach (var fileName in GetSchemaFileNames(platform))
+        foreach (var fileName in GetSchemaFileNames(platform).Concat(SettingsSchemaFileNamesFor(productPath, schemaPath, platform)))
         {
             var schemaFile = Path.Combine(schemaPath, fileName);
             if (file.Exists(schemaFile)) continue;
@@ -211,7 +212,7 @@ public static class RepositoryHelper
         // than in a log; the flag on the result already carries it for anyone who wants to render it.
         warn ??= message => LogFactory.GetLogger(nameof(RepositoryHelper)).Warn(message);
 
-        var schemaFileNames = GetSchemaFileNames(platform);
+        var schemaFileNames = GetSchemaFileNames(platform).Concat(SettingsSchemaFileNamesFor(productPath, schemaPath, platform)).ToList();
         var results = new List<SchemaFileResult>();
         foreach (var fileName in schemaFileNames)
             results.Add(WriteSchemaFileWithResult(schemaPath, fileName, platform));
@@ -403,6 +404,7 @@ public static class RepositoryHelper
         return (objectPart, platform.GetBasePlatform()) switch
         {
             ("products", _) => typeof(Product),
+            ("serversettings", _) or ("databasesettings", _) => typeof(SettingsFile),
             ("templates", Platform.SqlServer) => typeof(SqlServerTemplate),
             ("templates", Platform.PostgreSQL) => typeof(PostgreSqlTemplate),
             ("templates", Platform.MySQL) => typeof(MySqlTemplate),
@@ -415,8 +417,30 @@ public static class RepositoryHelper
             ("domaintypes", Platform.PostgreSQL) => typeof(PostgreSqlDomainType),
             ("enumtypes", Platform.PostgreSQL) => typeof(PostgreSqlEnumType),
             ("sequences", Platform.PostgreSQL) => typeof(PostgreSqlSequence),
+            ("sequences", Platform.SqlServer) => typeof(SqlServerSequence),
             _ => throw new ArgumentException($"Unknown schema file mapping: {fileName} for platform {platform}")
         };
+    }
+
+    // Written only for a package that has the settings file (or already commits the schema), so a package without one
+    // is extracted and regenerated exactly as before.
+    public static string[] GetSettingsSchemaFileNames(Platform platform)
+    {
+        var platformName = platform.ToCanonicalString().ToLower();
+        return [$"serversettings.{platformName}.schema", $"databasesettings.{platformName}.schema"];
+    }
+
+    private static IEnumerable<string> SettingsSchemaFileNamesFor(string productPath, string schemaPath, Platform platform)
+    {
+        var file = FileWrapper.GetFromFactory();
+        var directory = DirectoryWrapper.GetFromFactory();
+        var templates = Path.Join(productPath, "Templates");
+        var names = GetSettingsSchemaFileNames(platform);
+        var hasServer = file.Exists(Path.Join(productPath, SettingsFile.ServerFileName));
+        var hasDatabase = directory.Exists(templates)
+                          && (directory.GetFiles(templates, SettingsFile.DatabaseFileName, SearchOption.AllDirectories)?.Length ?? 0) > 0;
+        if (hasServer || file.Exists(Path.Join(schemaPath, names[0]))) yield return names[0];
+        if (hasDatabase || file.Exists(Path.Join(schemaPath, names[1]))) yield return names[1];
     }
 
     public static string[] GetSchemaFileNames(Platform platform)
@@ -440,8 +464,8 @@ public static class RepositoryHelper
             files.Add($"domaintypes.{platformName}.schema");
         if (platform == Platform.PostgreSQL)
             files.Add($"enumtypes.{platformName}.schema");
-        // Sequences: PostgreSQL, and MariaDB (10.3+); MySQL has none at any version.
-        if (platform == Platform.PostgreSQL || platform == Platform.MariaDb)
+        // Sequences: PostgreSQL, SQL Server (2012+) and MariaDB (10.3+); MySQL has none at any version.
+        if (platform == Platform.PostgreSQL || platform == Platform.MariaDb || platform == Platform.SqlServer)
             files.Add($"sequences.{platformName}.schema");
         return files.ToArray();
     }

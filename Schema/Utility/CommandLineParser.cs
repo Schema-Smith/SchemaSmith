@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
+using Schema.Configuration;
 using Schema.Domain;
 using Schema.Isolators;
 
@@ -11,28 +12,28 @@ namespace Schema.Utility;
 
 public static class CommandLineParser
 {
+    // Read on every step (DebugSql.Enabled), so the parse is kept per command line: the same string parses the same way,
+    // and a test that swaps the command line gets a fresh parse. Callers get copies.
+    private static readonly object ParseLock = new();
+    private static string _parsedCommandLine;
+    private static List<string> _parsedArguments;
+    private static Dictionary<string, string> _parsedSwitches;
+
     public static List<string> Arguments
     {
         get
         {
-            var commandLine = ForceLeadingSpace(EnvironmentWrapper.GetFromFactory().CommandLine);
-            var result = new List<string>();
-            var pos = 0;
-            while (pos < commandLine.Length - 1)
+            var commandLine = EnvironmentWrapper.GetFromFactory().CommandLine;
+            lock (ParseLock)
             {
-                var nextPos = FindNextUnquotedSpace(commandLine, pos);
-                if (nextPos == -1)
+                if (!string.Equals(commandLine, _parsedCommandLine, StringComparison.Ordinal) || _parsedArguments == null)
                 {
-                    result.Add(commandLine.Substring(pos).Trim().Unquote());
-                    break;
+                    _parsedArguments = Tokenize(commandLine);
+                    _parsedSwitches = null;
+                    _parsedCommandLine = commandLine;
                 }
-                var arg = commandLine.Substring(pos, nextPos - pos).Trim().Unquote();
-                if (arg != string.Empty)
-                    result.Add(arg);
-                pos = FindNextNonSpace(commandLine, nextPos);
+                return new List<string>(_parsedArguments);
             }
-
-            return result;
         }
     }
 
@@ -40,20 +41,52 @@ public static class CommandLineParser
     {
         get
         {
-            var result = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
-            foreach (var argument in Arguments.Where(x => x.StartsWith("/") || x.StartsWith("-")))
+            var arguments = Arguments;
+            lock (ParseLock)
             {
-                // split into max 2 parts to handle values with embedded colon or equals
-                var parts = argument.Split(new[] { ':', '=' }, 2);
-                result[TrimKeyName(parts[0])] = parts.Length switch
-                {
-                    1 => string.Empty,
-                    2 => parts[1],
-                    _ => result[TrimKeyName(parts[0])]
-                };
+                _parsedSwitches ??= ParseSwitches(arguments);
+                return new Dictionary<string, string>(_parsedSwitches, StringComparer.InvariantCultureIgnoreCase);
             }
-            return result;
         }
+    }
+
+    private static List<string> Tokenize(string rawCommandLine)
+    {
+        var commandLine = ForceLeadingSpace(rawCommandLine);
+        var result = new List<string>();
+        var pos = 0;
+        while (pos < commandLine.Length - 1)
+        {
+            var nextPos = FindNextUnquotedSpace(commandLine, pos);
+            if (nextPos == -1)
+            {
+                result.Add(commandLine.Substring(pos).Trim().Unquote());
+                break;
+            }
+            var arg = commandLine.Substring(pos, nextPos - pos).Trim().Unquote();
+            if (arg != string.Empty)
+                result.Add(arg);
+            pos = FindNextNonSpace(commandLine, nextPos);
+        }
+
+        return result;
+    }
+
+    private static Dictionary<string, string> ParseSwitches(List<string> arguments)
+    {
+        var result = new Dictionary<string, string>(StringComparer.InvariantCultureIgnoreCase);
+        foreach (var argument in arguments.Where(x => x.StartsWith("/") || x.StartsWith("-")))
+        {
+            // split into max 2 parts to handle values with embedded colon or equals
+            var parts = argument.Split(new[] { ':', '=' }, 2);
+            result[TrimKeyName(parts[0])] = parts.Length switch
+            {
+                1 => string.Empty,
+                2 => parts[1],
+                _ => result[TrimKeyName(parts[0])]
+            };
+        }
+        return result;
     }
 
     /// <summary>
@@ -83,6 +116,14 @@ public static class CommandLineParser
                 if (key.Length == 0) continue;
                 result[key] = trimmed.Substring(sep + 1).Trim('"', ' ');
             }
+            // --verbose is the switch people reach for; only a tool that lists it accepts it (SchemaQuench).
+            if (ContainsSwitch("verbose") && !result.ContainsKey(SettingsKeys.VerboseLogging))
+                result[SettingsKeys.VerboseLogging] = "true";
+            // SchemaQuench's SkipKindlingForge, as a bare word or a switch, is KindleTheForge: false, so everything that
+            // reads the setting (the drift tier among them) sees it.
+            if ((ContainsSwitch("SkipKindlingForge") || Arguments.Skip(1).Contains("SkipKindlingForge"))
+                && !result.ContainsKey(SettingsKeys.KindleTheForge))
+                result[SettingsKeys.KindleTheForge] = "false";
             return result;
         }
     }
@@ -129,7 +170,7 @@ public static class CommandLineParser
     }
 
     private static readonly string[] CommonBareFlags =
-        { "v", "ver", "version", "?", "h", "help", "Encrypt", "NoEncrypt", "debug", "verbose", "ExitNonZeroOnWarning" };
+        { "v", "ver", "version", "?", "h", "help", "Encrypt", "NoEncrypt", "ExitNonZeroOnWarning" };
 
     /// <summary>
     /// Arguments this run will never read, in command-line order. Two shapes qualify, and both are
@@ -229,10 +270,10 @@ public static class CommandLineParser
 
     private static void ShowHelpAndExit(string app, Action toolSpecificSwitches = null)
     {
-        Console.WriteLine($"{app}.exe [<command>]");
+        Console.WriteLine($"Usage: {app} [options]");
         Console.WriteLine("  --version                        Show the program version");
         Console.WriteLine("  --LogPath:<logpath>              Path to write logs and create backup directories. The default is the executable's directory.");
-        Console.WriteLine("  --ConfigFile:<filepath>          Path and file name of the config file. The default is <toolname>.settings.json in the current path.");
+        Console.WriteLine("  --ConfigFile:<filepath>          Path and file name of the config file, relative to the current directory. The default is <toolname>.settings.json in the current directory, else in the tool's folder.");
         Console.WriteLine("  --ConnectionString:<connstr>     Override the connection string. Bypasses all connection settings in the config file.");
         Console.WriteLine("  --Encrypt | --NoEncrypt          Force transport encryption on/off (SQL Server Encrypt, PostgreSQL SSL Mode, MySQL/MariaDB SslMode). Wins over ConnectionProperties.");
         Console.WriteLine("  --<Key>=<value>                  Override any configuration option (also --<Key>:<value>; nest with '__', e.g. --Source__Server=host). Logged at startup; sensitive values scrubbed.");

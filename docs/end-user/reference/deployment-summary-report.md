@@ -53,7 +53,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 
 ```jsonc
 {
-  "schemaVersion": "1.2",           // contract version of this report shape
+  "schemaVersion": "1.4",           // contract version of this report shape
   "tool": "SchemaQuench",
   "toolVersion": "2.8.0.0",
   "run": {
@@ -62,10 +62,21 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     "startedUtc": "2026-07-09T14:03:11.204Z",
     "finishedUtc": "2026-07-09T14:03:47.881Z",
     "durationMs": 36677,            // run wall-clock
-    "mode": "Quench",               // Quench | WhatIf
+    "mode": "Quench",               // Quench | WhatIf | Drift
     "outcome": "Incomplete",        // Success | Incomplete | PartialFailure | Aborted
     "exitCode": 1,                  // 1 because unsupportedDowngrade below is populated
-    "resumedFromCheckpoint": false
+    "resumedFromCheckpoint": false,
+    "settings": { "commandTimeoutSeconds": 0, "lockTimeoutSeconds": 10, "contentionRetryAttempts": 20 },
+    "id": "5d2c1a0e-7f3b-4a55-9a0c-1c2f6f0e8b11",   // this run; the progress log's "Run <id>" line too
+    "label": "2026.11.3",           // RunLabel, when the pipeline supplies one
+    "resumesRunId": null,           // on a --ResumeQuench run, the run whose checkpoint it took up
+    "package": { "contentHash": "sha256:9b1f…", "fileCount": 412 },
+    "source": { "repository": "acme/northwind-db", "commit": "4f2a9c1e…", "branch": "main", "from": "ci" },
+    "ci": {
+      "provider": "GitHubActions", "pipeline": "Deploy production", "runId": "9912345678", "runAttempt": "1",
+      "url": "https://github.com/acme/northwind-db/actions/runs/9912345678", "actor": "octocat", "environment": "production"
+    },
+    "host": { "machine": "BUILD01", "user": "svc-deploy" }
   },
   "targets": [
     {
@@ -77,6 +88,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
       "durationMs": 14820,
       "databaseSource": "DatabaseIdentificationScript",
       "schemaSource": "TemplateTargets:Tenant:Schemas",
+      "connectedAs": "deploy_user",  // the login the engine saw
       "slots": [
         { "slot": "ModifiedTables", "durationMs": 9120, "scriptsRun": 3 },
         { "slot": "ObjectScripts",  "durationMs": 4110, "scriptsRun": 12 }
@@ -107,12 +119,15 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
     ]
   },
   "failures": [],                   // one entry per failed scope; empty on a clean run
+  "lockWaits": [                    // statements that waited on another session's lock and were tried again
+    { "target": "[primary].[TenantA]", "step": "ModifiedTables", "attempts": 2, "waitedMs": 10240, "outcome": "succeeded" }
+  ],
   "whatIf": null,                   // populated only for a WhatIf-mode run
   "objectChanges": {
     "instrumented": true,
     "created":  { "tables": 1, "columns": 2, "indexes": 4, "constraints": 2, "foreignKeys": 1, "procedures": 0, "views": 0, "functions": 0 },
     "modified": { "tables": 1, "columns": 3 },
-    "dropped":  { "tables": 0, "indexes": 1, "constraints": 0, "foreignKeys": 0 },
+    "dropped":  { "tables": 0, "columns": 0, "indexes": 1, "constraints": 0, "foreignKeys": 0 },
     "scriptsRan": 12,
     "scriptsUnchanged": 3,          // object scripts left alone because nothing changed since their last apply
     "details": [
@@ -131,11 +146,21 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 }
 ```
 
+### Validating a summary
+
+The report's shape is published as a JSON Schema (draft-07), one file per schema version: [`deployment-summary-1.4.schema.json`](schemas/deployment-summary-1.4.schema.json). A released version's file never changes; a change to the shape is a new version and a new file. Each object lists every property it may carry, so a summary with a key the schema does not know fails validation. To get the schema for the exact SchemaQuench you run, with no repository and no settings file:
+
+```bash
+SchemaQuench --WriteSummarySchema:deployment-summary.schema.json
+```
+
+Pick the file by the summary's `schemaVersion`.
+
 ### Top-level fields
 
 | Key | Meaning |
 | --- | --- |
-| `schemaVersion` | Contract version of the report shape — currently `"1.2"`. |
+| `schemaVersion` | Contract version of the report shape — currently `"1.4"`. |
 | `tool` | Always `"SchemaQuench"`. |
 | `toolVersion` | The CLI version that wrote the report — the same string `--version` prints. |
 | `run` | Run-level facts: product, platform, timing, mode, outcome. |
@@ -143,6 +168,9 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `migrationScripts` | One entry per migration script that ran. |
 | `timing` | Aggregate timing plus the bottleneck outliers. |
 | `failures` | One entry per failed scope — the same content as the failure roll-up log. |
+| `lockWaits` | Each statement that had to wait on another session's lock, or lost a deadlock, and was tried again — its own section below. Empty when nothing waited. |
+| `destructive` | Each table or column the run dropped, or refused to drop, because the package no longer declares it — its own section below. `null` when there were none. Schema version 1.3 added it. |
+| `settingOutcomes` | What the [server and database settings](schema-packages.md#server-and-database-settings) steps reported, counted per scope: `server` and `database`, each with `changed`, `pendingRestart`, `drift`, `fixFailed`, `unfixable` and `wouldChange` (`null` for a scope with nothing reported). `null` when the package declares no settings, or every setting matched. Schema version 1.3 added it. |
 | `whatIf` | The would-apply / would-skip / would-deliver plan; `null` unless the run was `WhatIf` mode. |
 | `objectChanges` | Verified DDL changes and object-script runs — its own section below. |
 | `preventDrop` | The no-drop protection manifest: what the run would have dropped by absence and withheld — its own section below. `null` unless the environment's `PreventDrop` is on. |
@@ -156,10 +184,38 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `platform` | `SqlServer`, `PostgreSQL`, `MySQL`, or `MariaDb`. |
 | `startedUtc` / `finishedUtc` | Run start and end, UTC. |
 | `durationMs` | Wall-clock milliseconds for the whole run. |
-| `mode` | `Quench` (a real deploy) or `WhatIf` (a dry run). A `--Validate` run writes no report: it exits with its findings before a deployment starts. |
+| `mode` | `Quench` (a real deploy), `WhatIf` (a dry run) or `Drift` (a [drift check](schemaquench.md#drift-checks)). A `--Validate` run writes no report: it exits with its findings before a deployment starts. |
 | `outcome` | `Success`; `Incomplete` (every target finished, but a feature was downgraded on a target that lacks it -- see `unsupportedDowngrade` -- exit code `1`); `PartialFailure` (some targets failed, others succeeded); or `Aborted`. |
 | `exitCode` | The process exit code the run returned. |
 | `resumedFromCheckpoint` | `true` when the run resumed a prior interrupted deployment. |
+| `driftTier` | On a `Drift` run, how it read the targets: `0` against the helpers already there, `1` in a rolled-back transaction, `2` through a helper database. `null` otherwise. Schema version 1.3 added it. |
+| `settings` | The limits the run used: `commandTimeoutSeconds` (`0` = none), `lockTimeoutSeconds` (`null` = the engine's own wait) and `contentionRetryAttempts`. See [Timeouts and contention](configuration.md#timeouts-and-contention). Schema version 1.3 added it. |
+| `id` | A new id for every run. The progress log says `Run <id>` just after `Begin Quench`, every checkpoint the run saves carries it, and so does each row the run writes in a target's [deployment record](schemaquench.md#deployment-record). Schema version 1.4 added it, with the rest of the run identity below. |
+| `label` | Free text the pipeline supplied as `RunLabel`: a release number, a ticket. `null` when none was. |
+| `resumesRunId` | On a `--ResumeQuench` run, the `id` of the run whose checkpoint it took up. `null` otherwise, and for a checkpoint written before 1.4. |
+| `package` | `contentHash` (`sha256:` and 64 hex digits) and `fileCount`: the package's identity, the same for a Windows and a Linux checkout and for a folder and its zip. See [Run identity](#run-identity). `null` when the package could not be hashed. |
+| `source` | `repository`, `commit` and `branch` the package came from, and `from`: whether the commit came from a `setting`, the `ci` system or the package's own `git` repository. `null` when none was found. |
+| `ci` | The pipeline run: `provider` (`GitHubActions`, `AzureDevOps`, `GitLab`, `Jenkins`, or `Other` when only settings supplied it), `pipeline`, `runId`, `runAttempt`, `url`, `actor` and `environment`. `null` when the run was not under a recognised CI system and no setting supplied it. |
+| `host` | `machine` and `user` of the process that ran, with the user's domain where it has one. Names only, never a credential. Not printed in `Summary.md`, which is the file that gets pasted into tickets. |
+
+### Run identity
+
+The run identity ties a summary found in an artifact store to the package and the pipeline run that produced it.
+
+**The package's content.** `package.contentHash` covers every file under the product folder, taken in order of its path, with Windows line ends read as Unix ones. Directories whose names start with `.` (`.git`, `.json-schemas`), `.sqlerror` files and a log directory inside the package are left out, since the tools and editors write those. A package deployed from a zip hashes the same as its folder. Two targets with the same hash received the same package, even where there is no commit to compare, as with a package deployed from a build artifact.
+
+**Where the source comes from.** Each of `repository`, `commit` and `branch` is taken from the first of these that has it: a `Run*` setting, the CI system's environment, then the package's own repository (read from the files under `.git`, worktrees included; no `git` executable is run).
+
+**Recognised CI systems.** Detected from the variables each one sets for every job:
+
+| Provider | Recognised by | Run id (attempt) | Environment |
+| --- | --- | --- | --- |
+| `GitHubActions` | `GITHUB_ACTIONS=true` | `GITHUB_RUN_ID` (`GITHUB_RUN_ATTEMPT`) | none; set `RunEnvironment` |
+| `AzureDevOps` | `TF_BUILD=True` | `BUILD_BUILDID` (`SYSTEM_JOBATTEMPT`) | `ENVIRONMENT_NAME` in a deployment job, else `RELEASE_ENVIRONMENTNAME` |
+| `GitLab` | `GITLAB_CI=true` | `CI_PIPELINE_ID` | `CI_ENVIRONMENT_NAME` |
+| `Jenkins` | `JENKINS_URL` or `JENKINS_HOME` | `BUILD_NUMBER` | none; set `RunEnvironment` |
+
+Octopus Deploy does not put its variables in the environment, so pass them as settings: see [Run identity settings](configuration.md#run-identity-settings).
 
 ### `targets[]`
 
@@ -170,6 +226,7 @@ The JSON is the frozen contract: camelCase keys, enum values as their names, ind
 | `outcome` | `Success`, `Failed`, or `Skipped`. A target skipped because a `TemplateTargets` database or schema does not exist and `CreateIfMissing` is `false` is listed as `Skipped`. |
 | `durationMs` | Milliseconds spent on this target. |
 | `slots[]` | Per-slot timing for this target: `slot`, `durationMs`, `scriptsRun`. |
+| `connectedAs` | The login the engine reported for this target's session: `ORIGINAL_LOGIN()` on SQL Server, `session_user` on PostgreSQL, `USER()` without its host on MySQL and MariaDB. Asked of the engine, not read from the settings file, so it names the real identity under Windows authentication or a cloud identity too. A name, never a credential. `null` when it could not be read. Schema version 1.4 added it. |
 | `databaseSource` / `schemaSource` | Where each axis of this target came from — the discovery script, or a `TemplateTargets` override naming the template and key. This is the run's source-disclosure audit trail: it answers "was this tenant selected by the script, or overridden in config?" per target. A regular template has no schema axis, so its targets carry `schemaSource: "(regular template)"` -- which is every target on MySQL and MariaDB, where schema templates do not apply. Empty on a run with no source information recorded. |
 
 ### `migrationScripts[]`
@@ -207,6 +264,57 @@ Empty on a clean run. Each entry mirrors the failure triage roll-up exactly — 
 | `error` | The engine's error text for the failure. |
 | `contextTail[]` | The captured tail of log lines leading up to the failure. |
 | `artifactPath` | Path to the resolved-SQL artifact for the failed scope, when one was written. |
+| `kind` | `lockTimeout` (it gave up waiting for another session's lock), `commandTimeout` (a command ran past `Target:CommandTimeoutSeconds`) or `other`. A timeout's `error` names the setting, the step and the attempts. Schema version 1.3 added it. |
+
+### `lockWaits[]`
+
+One entry per statement that waited on another session -- it timed out waiting for a lock, or lost a deadlock -- and was
+tried again. A statement that ran first time is not listed. Only SchemaSmith's own convergence steps and the kindle are
+retried; a script or a data delivery that hits a lock timeout fails at once and appears under `failures[]` instead.
+
+| Key | Meaning |
+| --- | --- |
+| `target` | The target, as `[server].[database]` (and `[schema]` for a schema template). |
+| `step` | The deploy step the statement belonged to, such as `ModifiedTables`. |
+| `attempts` | How many times it ran, the last one included. |
+| `waitedMs` | Milliseconds from its first attempt to its last. |
+| `outcome` | `succeeded`, or `failed` when it ran out of `Target:ContentionRetryAttempts`. |
+
+### `destructive`
+
+The data a run removed, or would have, and what [`DestructiveChangePolicy`](configuration.md#destructivechangepolicy)
+did about it. `policy` is the run's policy; `changes[]` has one entry per change per target:
+
+| Key | Meaning |
+| --- | --- |
+| `kind` | `tableDrop`, `columnDrop`, `typeChange` (a type change that rounds or cuts values), or `columnReplaced` (dropped and added again for a generated-status change). |
+| `objectName` | `schema.table` or `schema.table.column` (the database for the schema on MySQL and MariaDB). |
+| `detail` | For `typeChange` and `columnReplaced`, the change as `live -> declared` (`generated` or `computed` standing for an expression); `null` for a drop. |
+| `server` / `database` | The target. |
+| `estimatedRows` | The table's rows from the catalog; `null` when the catalog does not know. |
+| `rowSource` | `catalog`, or `unknown` when `estimatedRows` is `null`. |
+| `accepted` | `true` when `Target:AcceptDestructive` named it. |
+| `outcome` | `applied`, `refused` (under `fail`, the step stopped before it), `wouldApply` or `wouldRefuse` (a `WhatIf` run). |
+
+A destructive change is not counted again in `objectChanges`: the drop itself is there as it always was, and this
+section says that it removed data.
+
+### `drift`
+
+`null` except on a `Drift` run, where it holds the verdict. `drifted` is the answer -- the exit code is `5` when it is
+`true` and nothing failed -- and `failOn` is what counted (`--DriftFailOn`, or the default `create`, `modify`, `drop`,
+`modules`). Schema version 1.3 added it.
+
+| Key | Meaning |
+| --- | --- |
+| `targets[]` | One per target: `server`, `database`, `schema`, `template`, `status` (`drifted`, `clean`, `unverifiable` -- nothing counted but an object script that cannot be compared -- or `failed`), `counted`, `plan` and `changes[]`, each counted change with its `objectType`, `objectName` and `action` (`create`, `modify` or `drop`). |
+| `planGroups[]` | Targets of one template that need the same changes, schema name set aside: `template`, `plan`, `targets` (how many) and `sample` (one of them). |
+| `pendingMigrations[]` | Run-once scripts the target has not run: reported, and counted only under `--DriftFailOn:migrations`. |
+| `unverifiable[]` | Object scripts never stamped, so whether they changed cannot be said. Never counted. |
+| `extra[]` | Drops `PreventDrop` kept: a deploy would not make them, so they are not drift. |
+
+The changes themselves are in `objectChanges` too, with their `would*` actions, as on a `WhatIf` run; `whatIf` lists the
+scripts.
 
 ### `whatIf`
 
@@ -257,7 +365,7 @@ Timing tells you where the run spent its seconds; `objectChanges` tells you what
 | --- | --- |
 | `created` | `tables`, `columns` (columns added to an already-existing table — a new table's own columns count under that table's creation, not here), `indexes`, `constraints`, `foreignKeys`, plus `procedures` / `views` / `functions` fields that stay `0` by design (object scripts don't count as created). |
 | `modified` | `tables`, `columns`. |
-| `dropped` | `tables`, `indexes`, `constraints`, `foreignKeys`. |
+| `dropped` | `tables`, `columns` (columns dropped from a table that stays — a dropped table's columns go with it, not here; schema version 1.3 added it), `indexes`, `constraints`, `foreignKeys`. |
 | `scriptsRan` | Total object scripts that ran this run. |
 | `scriptsUnchanged` | Total object scripts left alone because their text and the module the server renders are both as they were after the last apply. |
 
@@ -274,6 +382,8 @@ Where the counts are the summary, `details[]` is the itemized list — one row p
 - **`dataDelivery`** — a table's `DataDelivery` that ran (`delivered`), or under `WhatIf` would run (`wouldDeliver`). The name is the table's, with ` [variant]` when the delivery names one.
 - **`database`** and **`schema`** — a database or schema created because its `TemplateTargets` entry or template sets `CreateIfMissing` (`created`, or `wouldCreate` under `WhatIf`).
 - **`sequence`** — a sequence created or modified (PostgreSQL and MariaDB).
+- **`period`** — a MariaDB application-time period added to an existing table (`created`) or dropped by `DropPeriodsRemovedFromProduct` (`dropped`), named `table.period`; `wouldCreate` / `wouldDrop` under `WhatIf`.
+- **`ServerSetting`** and **`DatabaseSetting`** — a declared [server or database setting](schema-packages.md#server-and-database-settings) that differed, named `Kind Name` (such as `Option RECOVERY`): `changed`, `pendingRestart` (set, waiting for a restart), `drift` (reported, not fixed), `fixFailed`, `unfixable`, or `wouldChange` under `WhatIf`. A matching setting has no row. The `settingOutcomes` block counts them per scope.
 - **`domain type`**, **`domain constraint`**, **`enum type`** and **`enum value`** — PostgreSQL domains and enum types. An enum value the package no longer declares, or a changed value order, is recorded as `wouldDrop` / `wouldModify` even on a real run, because PostgreSQL cannot apply it without recreating the type.
 - **`changeDataCapture`**, **`changeTracking`** and **`temporal`** — SQL Server CDC, change tracking and system versioning on a table: `created` when turned on, `dropped` when turned off, `modified` for a CDC capture-instance rotation or a change-tracking reset. Disabling CDC on a table with two capture instances records one row for each.
 

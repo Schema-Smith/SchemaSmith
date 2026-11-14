@@ -83,7 +83,7 @@ public abstract class TableQuench_DropIndexesSharedTests : BaseTableQuenchTests
         {
             cmd.CommandText = $"DROP TABLE IF EXISTS `{_mainDb}`.`FkNeedChild`, `{_mainDb}`.`FkNeedParent`; " +
                               $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}';";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
     }
 
@@ -139,7 +139,7 @@ public abstract class TableQuench_DropIndexesSharedTests : BaseTableQuenchTests
         {
             cmd.CommandText = $"DROP TABLE IF EXISTS `{_mainDb}`.`FkPreByCode`, `{_mainDb}`.`FkPreById`, `{_mainDb}`.`FkPreParent`; " +
                               $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}';";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
     }
 

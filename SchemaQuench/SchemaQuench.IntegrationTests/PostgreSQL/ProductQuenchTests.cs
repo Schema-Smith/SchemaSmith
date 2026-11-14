@@ -220,8 +220,7 @@ DROP TABLE IF EXISTS ""SchemaSmith"".""TestLog"";
                 _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("[postgres]") && s.Contains("Would Quench") && s.Contains("Job 1.sql")));
                 _progressLog.Received().Info(Arg.Is<string>(s => s.Contains("[postgres]") && s.Contains("Would Quench") && s.Contains("Job 2.sql")));
 
-                // Verify nothing was actually quenched - TestLog should not exist (we dropped it before run)
-                // (In WhatIf mode, the 00-Initialize DB Objects.sql that creates TestLog is not executed)
+                // Nothing was quenched: TestLog, which the first Before script creates, is still absent (dropped before the run).
 
                 // Verify database state was not modified by WhatIf
                 conn.Open();
@@ -230,6 +229,8 @@ DROP TABLE IF EXISTS ""SchemaSmith"".""TestLog"";
                 Assert.That((long)cmd.ExecuteScalar(), Is.EqualTo(mainMigrationCountBefore), "MainDB CompletedMigrationScripts should be unchanged");
 
                 Assert.That(TestTableRowsOrMinusOne(cmd), Is.EqualTo(mainTestTableRowsBefore), "MainDB TestTable should be unchanged (-1: still absent)");
+                cmd.CommandText = @"SELECT to_regclass('""SchemaSmith"".""TestLog""') IS NULL";
+                Assert.That((bool)cmd.ExecuteScalar(), Is.True, "no script ran, so TestLog was not created");
 
                 conn.ChangeDatabase(_secondaryDb);
                 cmd.CommandText = @"SELECT COUNT(*) FROM ""SchemaSmith"".""CompletedMigrationScripts""";

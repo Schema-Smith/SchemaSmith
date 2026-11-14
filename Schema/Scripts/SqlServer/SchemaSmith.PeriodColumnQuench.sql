@@ -46,7 +46,7 @@ BEGIN
   -- The end column's default is the largest value of its own precision: SQL Server fills existing rows with it, and
   -- refuses the period unless every row's end is that maximum. DATETIME2(7) gives the literal the convention always used.
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-      'RAISERROR(''  Adding period columns to ' + p.[Schema] + '.' + p.[Name] + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+      'RAISERROR(''  Adding period columns to ' + REPLACE(REPLACE(p.[Schema], '''', ''''''), '%', '%%') + '.' + REPLACE(REPLACE(p.[Name], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
       'ALTER TABLE ' + p.[Schema] + '.' + p.[Name] + ' ADD ' +
           ISNULL(p.[PeriodStart], '[ValidFrom]') + ' ' + p.[StartType] + ' GENERATED ALWAYS AS ROW START' + CASE WHEN p.[StartHidden] = 1 THEN ' HIDDEN' ELSE '' END +
           ' NOT NULL DEFAULT ''0001-01-01 00:00:00.0000000'', ' +
@@ -68,15 +68,14 @@ BEGIN
   -- declared name. Compared with a binary collation so a case-only rename is a rename.
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
       CASE WHEN x.[Live] <> SchemaSmith.fn_StripBracketWrapping(x.[Declared]) COLLATE Latin1_General_BIN2
-           THEN 'RAISERROR(''  Rename period column ' + REPLACE(REPLACE(x.[Schema] + '.' + x.[Name] + '.' + QUOTENAME(x.[Live]) + ' to ' + x.[Declared], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
-                'EXEC sp_rename ''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(x.[Schema]) + '.' + SchemaSmith.fn_StripBracketWrapping(x.[Name]) + '.' + x.[Live], '''', '''''') + ''', ''' +
-                     REPLACE(SchemaSmith.fn_StripBracketWrapping(x.[Declared]), '''', '''''') + ''', ''COLUMN'';' + CHAR(13) + CHAR(10)
+           THEN 'RAISERROR(''  Rename period column ' + REPLACE(REPLACE((x.[Schema] + '.' + x.[Name] + '.' + QUOTENAME(x.[Live]) + ' to ' + x.[Declared]) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+                'EXEC sp_rename N''' + REPLACE((x.[Schema] + '.' + x.[Name] + '.' + QUOTENAME(x.[Live])) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', N''' + REPLACE(SchemaSmith.fn_StripBracketWrapping(x.[Declared]), '''', '''''') + ''', ''COLUMN'';' + CHAR(13) + CHAR(10)
            ELSE '' END +
       CASE WHEN x.[Hidden] <> x.[LiveHidden]
-           THEN 'RAISERROR(''  Making period column ' + REPLACE(REPLACE(x.[Schema] + '.' + x.[Name] + '.' + x.[Declared], '''', ''''''), '%', '%%') + CASE WHEN x.[Hidden] = 1 THEN ' hidden' ELSE ' visible' END + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
+           THEN 'RAISERROR(''  Making period column ' + REPLACE(REPLACE((x.[Schema] + '.' + x.[Name] + '.' + x.[Declared]) COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') + REPLACE(REPLACE(CASE WHEN x.[Hidden] = 1 THEN ' hidden' ELSE ' visible' END, '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT;' + CHAR(13) + CHAR(10) +
                 'ALTER TABLE ' + x.[Schema] + '.' + x.[Name] + ' ALTER COLUMN ' + x.[Declared] + CASE WHEN x.[Hidden] = 1 THEN ' ADD' ELSE ' DROP' END + ' HIDDEN;' + CHAR(13) + CHAR(10)
            ELSE '' END +
-      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''column'', ''' + REPLACE(x.[Schema] + '.' + x.[Name] + '.' + x.[Declared], '''', '''''') + ''', ''modified'');'
+      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''column'', ''' + REPLACE((x.[Schema] + '.' + x.[Name] + '.' + x.[Declared]) COLLATE DATABASE_DEFAULT, '''', '''''') + ''', ''modified'');'
       AS NVARCHAR(MAX))
     FROM #LivePeriods p
     CROSS APPLY (SELECT p.[Schema], p.[Name], p.[PeriodStart] AS [Declared], p.[LiveStart] AS [Live], p.[StartHidden] AS [Hidden], p.[LiveStartHidden] AS [LiveHidden]
@@ -90,8 +89,8 @@ BEGIN
 
   -- A precision the engine cannot change: one warning per table, naming each column with its live and declared type.
   SELECT @v_Warn = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-      'RAISERROR(''  WARNING: ' + REPLACE(REPLACE(p.[Schema] + '.' + p.[Name] + ': ' + w.[Columns] +
-          '. SQL Server cannot change the precision of a period column, so the deploy leaves it as it is; re-create the table to change it.', '''', ''''''), '%', '%%') +
+      'RAISERROR(''  WARNING: ' + REPLACE(REPLACE((p.[Schema] + '.' + p.[Name] + ': ' + w.[Columns] +
+          '. SQL Server cannot change the precision of a period column, so the deploy leaves it as it is; re-create the table to change it.') COLLATE DATABASE_DEFAULT, '''', ''''''), '%', '%%') +
       ''', 10, 100) WITH NOWAIT;' AS NVARCHAR(MAX))
     FROM #LivePeriods p
     CROSS APPLY (SELECT STUFF(

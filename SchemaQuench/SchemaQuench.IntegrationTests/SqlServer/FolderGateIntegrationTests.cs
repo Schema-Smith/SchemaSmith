@@ -108,7 +108,7 @@ public class FolderGateIntegrationTests
                     Folder("PrimaryOnly", ServerToQuench.Primary), Folder("SecondaryOnly", ServerToQuench.Secondary), Folder("Both", ServerToQuench.Both)
                 };
 
-                new ProductQuench().QuenchProductScriptsWithCheckpoint(folders, "After Product", false);
+                new ProductQuench().QuenchProductScripts(folders, "After Product", false);
 
                 cmd.CommandText = $"SELECT name FROM [{probeDb}].sys.tables ORDER BY name";
                 var created = new List<string>();
@@ -120,8 +120,7 @@ public class FolderGateIntegrationTests
             {
                 config["SchemaPackagePath"] = null;
                 config["Target:SecondaryServers"] = secondaries;
-                cmd.CommandText = $"IF DB_ID('{probeDb}') IS NOT NULL BEGIN ALTER DATABASE [{probeDb}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [{probeDb}] END";
-                cmd.ExecuteNonQuery();
+                Schema.IntegrationTests.SqlServer.TestDatabaseDrop.Drop(cmd, probeDb);
                 if (Directory.Exists(scriptDir)) Directory.Delete(scriptDir, true);
             }
         }
@@ -150,12 +149,12 @@ public class FolderGateIntegrationTests
                 var folder = new ProductFolder { FolderPath = "Messages", QuenchSlot = ProductQuenchSlot.After };
                 folder.Scripts.Add(SqlScript.Load(path, []));
 
-                new ProductQuench().QuenchProductScriptsWithCheckpoint([folder], "After Product", false);
+                new ProductQuench().QuenchProductScripts([folder], "After Product", false);
 
                 Assert.Multiple(() =>
                 {
                     Assert.That(progress, Has.Some.EndsWith("product script says hello"), string.Join(Environment.NewLine, progress));
-                    Assert.That(progress, Has.Some.Matches<string>(l => l.StartsWith("WARN ") && l.EndsWith("WARNING: product script warns")), "a WARNING: line is a warning");
+                    Assert.That(progress, Has.Some.Matches<string>(l => l.StartsWith("WARN ") && l.EndsWith("]      product script warns")), "a WARNING: line is a warning, logged without its own WARNING: (the layout adds one)");
                     Assert.That(progress, Has.None.Contains("product script mutters"), "a message without state 100 stays out unless VerboseLogging is on");
                 });
             }
@@ -252,6 +251,52 @@ public class FolderGateIntegrationTests
                 FactoryContainer.Unregister<IEnvironment>();
                 DropDatabase(highDb);
                 DropDatabase(lowDb);
+            }
+        }
+    }
+
+    // A gate that errors is not a gate that evaluated to false. The template connection reports user errors as messages,
+    // so "Divide by zero" was logged, the scalar came back NULL, the folder was skipped and the run exited 0.
+    [Test]
+    public void FolderGate_AGateThatErrors_FailsTheDeploy_AndSkipsNothingSilently()
+    {
+        var db = $"FGError_{Guid.NewGuid():N}".Substring(0, 24);
+        lock (FactoryContainer.SharedLockObject)
+        {
+            CreateDatabaseAtCompatLevel(db, 130);
+            try
+            {
+                var config = FactoryContainer.Resolve<IConfigurationRoot>();
+                config["SchemaPackagePath"] = TestHelper.GetTestProductPath("SqlServer", "FolderGateErrorProduct");
+                config["ScriptTokens:TargetDB"] = db;
+                // Exit 2 says the run failed; the log says it failed on the gate's own error, not on something else.
+                var logged = new System.Collections.Generic.List<string>();
+                var progressLog = Substitute.For<log4net.ILog>();
+                progressLog.When(l => l.Error(Arg.Any<object>())).Do(ci => logged.Add(ci.ArgAt<object>(0)?.ToString()));
+                var errorLog = Substitute.For<log4net.ILog>();
+                errorLog.When(l => l.Error(Arg.Any<object>())).Do(ci => logged.Add(ci.ArgAt<object>(0)?.ToString()));
+                errorLog.When(l => l.Error(Arg.Any<object>(), Arg.Any<Exception>())).Do(ci => logged.Add(ci.ArgAt<object>(0) + " " + ci.ArgAt<Exception>(1)?.Message));
+                LogFactory.Register("ProgressLog", progressLog);
+                LogFactory.Register("ErrorLog", errorLog);
+
+                FactoryContainer.Register(_environment);
+                _environment.ClearReceivedCalls();
+                Program.Main(System.Array.Empty<string>());
+
+                _environment.Received(1).Exit(2);
+                Assert.That(logged, Has.Some.Contains("Divide by zero"), string.Join(Environment.NewLine, logged));
+                using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+                conn.Open();
+                conn.ChangeDatabase(db);
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "SELECT COUNT(*) FROM sys.tables WHERE name = 'GateMarker'";
+                Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "the gated folder did not run");
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                DropDatabase(db);
             }
         }
     }

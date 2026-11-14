@@ -42,6 +42,34 @@ public class ZipFileWrapperTests
         return entry;
     }
 
+    // A package load asks the factory for the zip again for each file it reads; every one of those must not leave the
+    // archive open behind it, or the zip stays locked after the run is done with it.
+    [Test]
+    public void GettingTheZipAgain_LeavesOnlyOneArchiveOpen()
+    {
+        var dir = Path.Join(Path.GetTempPath(), "ssmith_zip_" + System.Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Join(dir, "src"));
+        File.WriteAllText(Path.Join(dir, "src", "Product.json"), "{}");
+        var zip = Path.Join(dir, "pkg.zip");
+        ZipFile.CreateFromDirectory(Path.Join(dir, "src"), zip);
+        try
+        {
+            ZipFileWrapper.GetFromFactory(zip);
+            ZipFileWrapper.GetFromFactory(zip);
+            var wrapper = (ZipFileWrapper)ZipFileWrapper.GetFromFactory(zip);
+            Assert.That(wrapper.Exists("Product.json"), Is.True, "still reads after being asked again");
+
+            wrapper.Dispose();
+
+            Assert.That(() => File.Delete(zip), Throws.Nothing, "disposing the wrapper releases the zip");
+        }
+        finally
+        {
+            FactoryContainer.Clear();
+            Directory.Delete(dir, true);
+        }
+    }
+
     // --- Exists ---
 
     [Test]

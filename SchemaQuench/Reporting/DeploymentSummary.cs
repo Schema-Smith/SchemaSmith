@@ -26,7 +26,26 @@ public sealed record DeploymentSummary(
     WhatIfSummary WhatIf,
     ObjectChangeSummary ObjectChanges,
     PreventDropSummary PreventDrop = null,
-    UnsupportedDowngradeSummary UnsupportedDowngrade = null);
+    UnsupportedDowngradeSummary UnsupportedDowngrade = null,
+    // 1.3: every statement that waited on another session's lock, retried or not.
+    IReadOnlyList<LockWait> LockWaits = null,
+    // 1.3: the changes that removed data, and what the policy did with each; null when there were none.
+    DestructiveSummary Destructive = null,
+    // 1.3: a drift check's verdict (H1); null for any other run.
+    DriftReport Drift = null,
+    // 1.3: what the server and database settings steps found, per scope; null when the package declares no settings.
+    SettingsSummary SettingOutcomes = null);
+
+/// <summary>One scope's counts, or null when no setting of that scope was reported (a matching setting is never reported).</summary>
+public sealed record SettingsSummary(SettingsScopeCounts Server, SettingsScopeCounts Database);
+
+public sealed record SettingsScopeCounts(int Changed, int PendingRestart, int Drift, int FixFailed, int Unfixable, int WouldChange);
+
+public sealed record DestructiveSummary(string Policy, IReadOnlyList<DestructiveChange> Changes);
+
+/// <summary>Outcome: applied, refused, wouldApply or wouldRefuse. RowSource: catalog, or unknown when EstimatedRows is null.</summary>
+public sealed record DestructiveChange(string Kind, string ObjectName, string Detail, string Server, string Database,
+    long? EstimatedRows, string RowSource, bool Accepted, string Outcome);
 
 public sealed record RunInfo(
     string Product,
@@ -37,7 +56,22 @@ public sealed record RunInfo(
     RunMode Mode,
     RunOutcome Outcome,
     int ExitCode,
-    bool ResumedFromCheckpoint);
+    bool ResumedFromCheckpoint,
+    // 1.3: the timeouts and retry count the run used.
+    RunSettings Settings = null,
+    // 1.3: how a drift check read the targets -- 0 against helpers already there, 1 in a rolled-back transaction, 2 through a
+    // helper database; null for any other run.
+    int? DriftTier = null,
+    // 1.4: which run this is, which package content it deployed and where it came from.
+    Guid? Id = null,
+    string Label = null,
+    Guid? ResumesRunId = null,
+    PackageIdentity Package = null,
+    RunSource Source = null,
+    CiInfo Ci = null,
+    RunHost Host = null);
+
+public sealed record RunSettings(int CommandTimeoutSeconds, int? LockTimeoutSeconds, int ContentionRetryAttempts);
 
 /// <summary>
 /// <para><see cref="DatabaseSource"/> and <see cref="SchemaSource"/> are the source-disclosure fields
@@ -55,7 +89,9 @@ public sealed record TargetSummary(
     long DurationMs,
     IReadOnlyList<TargetSlotTiming> Slots,
     string DatabaseSource = "",
-    string SchemaSource = "");
+    string SchemaSource = "",
+    // 1.4: the login the engine reported for the session; null when it could not be read.
+    string ConnectedAs = null);
 
 /// <summary>Per-target slot timing — distinct from E1's aggregate <see cref="SlotTiming"/>.</summary>
 public sealed record TargetSlotTiming(string Slot, long DurationMs, int ScriptsRun);
@@ -112,7 +148,7 @@ public sealed record CreatedCounts(
 
 public sealed record ModifiedCounts(int Tables, int Columns);
 
-public sealed record DroppedCounts(int Tables, int Indexes, int Constraints, int ForeignKeys);
+public sealed record DroppedCounts(int Tables, int Columns, int Indexes, int Constraints, int ForeignKeys);
 
 // Mode is left out of the report when null, so a deploy without OnlineApply reports exactly what it did before. Server,
 // Database and Schema name where the change was made: a fleet run makes the same change in many places.
@@ -155,7 +191,8 @@ public enum RunMode
 {
     Quench,
     WhatIf,
-    Validate
+    Validate,
+    Drift
 }
 
 public enum RunOutcome

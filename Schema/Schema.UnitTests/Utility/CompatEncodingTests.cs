@@ -24,5 +24,21 @@ namespace Schema.UnitTests.Utility
         [TestCase("Legacy", 130, 16, IngestEncoding.Xml)]    // legacy override, case-insensitive
         public void Select_resolves_encoding(string overrideValue, int? compat, int serverMajor, IngestEncoding expected)
             => Assert.That(CompatEncoding.Select(overrideValue, compat, serverMajor), Is.EqualTo(expected));
+
+        // Only legacy and modern force the encoding; auto, a typo, or the Json / Xml an older sample named is chosen
+        // automatically, and the log has to say so.
+        [TestCase("legacy", " (forced by Target:CompatEncoding=legacy)", false)]
+        [TestCase("Modern", " (forced by Target:CompatEncoding=Modern)", false)]
+        [TestCase("auto", " (auto)", false)]
+        [TestCase(null, " (auto)", false)]
+        [TestCase("", " (auto)", false)]
+        [TestCase("Json", " (auto)", true)]
+        [TestCase("Xml", " (auto)", true)]
+        [TestCase("legacyy", " (auto)", true)]
+        public void HowChosen_SaysForcedOnlyForLegacyOrModern(string value, string expected, bool unrecognized)
+        {
+            Assert.That(CompatEncoding.HowChosen("Target:CompatEncoding", value), Is.EqualTo(expected));
+            Assert.That(CompatEncoding.IsUnrecognized(value), Is.EqualTo(unrecognized));
+        }
     }
 }

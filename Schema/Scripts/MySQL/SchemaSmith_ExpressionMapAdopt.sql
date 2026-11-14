@@ -147,7 +147,7 @@ proc: BEGIN
 
     SET v_ProbeTable = CONCAT('_schemasmith_probe_', CONNECTION_ID());
     SET @v_eaProbeCi = CONVERT(v_ProbeTable USING utf8mb4) COLLATE utf8mb4_general_ci;
-    SET v_Qualified = CONCAT('`', REPLACE(p_DatabaseName, '`', '``'), '`.`', v_ProbeTable, '`');
+    SET v_Qualified = CONCAT('`', SchemaSmith_EscapeBackticks(p_DatabaseName), '`.`', SchemaSmith_EscapeBackticks(v_ProbeTable), '`');
     SET @v_eaSql = CONCAT('DROP TABLE IF EXISTS ', v_Qualified);
     PREPARE stmt FROM @v_eaSql;
     EXECUTE stmt;

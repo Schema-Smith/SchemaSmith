@@ -1,0 +1,14 @@
+{
+  "name": "schemasmith",
+  "displayName": "SchemaSmith",
+  "version": "2.8.0",
+  "description": "Operates the SchemaSmith command-line tools from a conversation: install, settings, extraction, validation, preview, a deployment you confirm, drift checks, reading a run's results, and the GitHub Action.",
+  "author": {
+    "name": "SchemaSmith Contributors",
+    "url": "https://schemasmith.com"
+  },
+  "homepage": "https://schemasmith.com",
+  "repository": "https://github.com/Schema-Smith/SchemaSmith",
+  "license": "LicenseRef-SSCL-2.0",
+  "keywords": ["database", "schema", "sql-server", "postgresql", "mysql", "mariadb", "deployment"]
+}

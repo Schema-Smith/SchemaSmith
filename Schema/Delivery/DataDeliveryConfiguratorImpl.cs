@@ -28,7 +28,7 @@ public class DataDeliveryConfiguratorImpl : IDataDeliveryConfigurator
         if (tableJsonFile == null)
         {
             var displayName = string.IsNullOrEmpty(context.TableSchema) ? context.TableName : $"{context.TableSchema}.{context.TableName}";
-            context.WarningLog?.Invoke($"    Table.json not found for {displayName} in {Path.Combine(context.TemplateRootPath ?? "", "Tables")}. Skipping data delivery configuration.");
+            context.WarningLog?.Invoke($"    Table.json not found for {displayName} in {Path.Join(context.TemplateRootPath ?? "", "Tables")}. Skipping data delivery configuration.");
             return false;
         }
 
@@ -100,6 +100,8 @@ public class DataDeliveryConfiguratorImpl : IDataDeliveryConfigurator
         var contentEncoding = string.Equals(context.ContentEncoding, "Xml", StringComparison.OrdinalIgnoreCase) ? "Xml" : null;
         changed |= SetIfDifferent(delivery, "ContentEncoding", contentEncoding);
 
+        changed |= SetIfDifferent(delivery, "Columns", string.IsNullOrWhiteSpace(context.Columns) ? null : context.Columns);
+
         // The zone the data was extracted in (MySQL family); absent means the target session's zone.
         changed |= SetIfDifferent(delivery, "TimeZone", string.IsNullOrWhiteSpace(context.TimeZone) ? null : context.TimeZone);
 
@@ -135,14 +137,14 @@ public class DataDeliveryConfiguratorImpl : IDataDeliveryConfigurator
         var file = FileWrapper.GetFromFactory();
         var directory = DirectoryWrapper.GetFromFactory();
 
-        var tablesDir = Path.Combine(templateRootPath, "Tables");
+        var tablesDir = Path.Join(templateRootPath, "Tables");
         if (!directory.Exists(tablesDir))
             return null;
 
         var candidates = new[]
         {
-            Path.Combine(tablesDir, $"{tableName}.json"),
-            Path.Combine(tablesDir, $"{tableSchema}.{tableName}.json")
+            Path.Join(tablesDir, $"{tableName}.json"),
+            Path.Join(tablesDir, $"{tableSchema}.{tableName}.json")
         };
 
         foreach (var candidate in candidates)

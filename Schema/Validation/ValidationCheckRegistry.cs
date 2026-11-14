@@ -20,10 +20,12 @@ public static class ValidationCheckRegistry
         new TableFileNameCheck(),
         new DeprecationCheck(),
         new SequenceScriptCheck(),
+        new SequenceRangeCheck(),
         new GeneratedScriptCheck(),
         new ModuleSyntaxCheck(),
         new DescriptionCheck(),
         new ConstraintAttributeCheck(),
+        new SettingsCheck(),
         new JsonSchemaCheck()
     };
 }

@@ -51,7 +51,54 @@ public abstract class TableQuench_ForeignKeySchemaSharedTests : BaseTableQuenchT
         finally
         {
             cmd.CommandText = $"DROP TABLE IF EXISTS `wchd_{uid}`; DROP TABLE IF EXISTS `wpar_{uid}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{uid}%'";
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
+        }
+    }
+
+    // A key declared ON DELETE / ON UPDATE SET NULL deploys with both actions, nulls the child when its parent goes, and a
+    // redeploy of the same declaration leaves it as it is.
+    [Test]
+    public void ASetNullForeignKey_NullsTheChild_AndARedeployLeavesTheKeyAlone()
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        var json = $$"""
+            [{ "Name": "snpar_{{uid}}", "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false } ],
+               "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" } ] },
+             { "Name": "snchd_{{uid}}", "Columns": [ { "Name": "Id", "DataType": "INT", "Nullable": false }, { "Name": "ParentId", "DataType": "INT", "Nullable": true } ],
+               "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "Id" } ],
+               "ForeignKeys": [ { "Name": "fksn_{{uid}}", "Columns": "ParentId", "RelatedTable": "snpar_{{uid}}", "RelatedColumns": "Id",
+                                  "DeleteAction": "SET NULL", "UpdateAction": "SET NULL" } ] }]
+            """;
+        string Scalar(string sql)
+        {
+            cmd.CommandText = sql;
+            return cmd.ExecuteScalar()?.ToString() ?? "";
+        }
+        try
+        {
+            RunTableQuenchProc(cmd, json);
+            Assert.That(Scalar($"SELECT CONCAT(DELETE_RULE, '/', UPDATE_RULE) FROM INFORMATION_SCHEMA.REFERENTIAL_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = DATABASE() AND CONSTRAINT_NAME = 'fksn_{uid}'"),
+                Is.EqualTo("SET NULL/SET NULL"), "both actions deployed");
+
+            cmd.CommandText = $"INSERT INTO `snpar_{uid}` VALUES (1); INSERT INTO `snchd_{uid}` VALUES (10, 1); DELETE FROM `snpar_{uid}` WHERE Id = 1";
             cmd.ExecuteNonQuery();
+            Assert.That(Scalar($"SELECT COALESCE(ParentId, 'null') FROM `snchd_{uid}` WHERE Id = 10"), Is.EqualTo("null"), "deleting the parent nulls the child");
+
+            cmd.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+            cmd.ExecuteNonQuery();
+            RunTableQuenchProc(cmd, json);
+            Assert.That(Scalar($"SELECT COUNT(*) FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ObjectName LIKE '%fksn_{uid}%'"),
+                Is.EqualTo("0"), "a redeploy of the same key changes nothing");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS `snchd_{uid}`; DROP TABLE IF EXISTS `snpar_{uid}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{uid}%'";
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
     }
 
@@ -104,7 +151,7 @@ public abstract class TableQuench_ForeignKeySchemaSharedTests : BaseTableQuenchT
         finally
         {
             cmd.CommandText = $"DROP TABLE IF EXISTS `gchd_{uid}`; DROP TABLE IF EXISTS `gpar_{uid}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{uid}%'";
-            cmd.ExecuteNonQuery();
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
         }
     }
 
@@ -155,7 +202,7 @@ public abstract class TableQuench_ForeignKeySchemaSharedTests : BaseTableQuenchT
         }
         finally
         {
-            Exec($"DROP TABLE IF EXISTS `{_mainDb}`.`{child}`; DROP TABLE IF EXISTS `{_mainDb}`.`fkparent_{uid}`; DROP DATABASE IF EXISTS `{other}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{uid}%'");
+            TransientRetry.Run(() => Exec($"DROP TABLE IF EXISTS `{_mainDb}`.`{child}`; DROP TABLE IF EXISTS `{_mainDb}`.`fkparent_{uid}`; DROP DATABASE IF EXISTS `{other}`; DELETE FROM SchemaSmith_ProductOwnership WHERE ObjectName LIKE '%{uid}%'"));
         }
     }
 }

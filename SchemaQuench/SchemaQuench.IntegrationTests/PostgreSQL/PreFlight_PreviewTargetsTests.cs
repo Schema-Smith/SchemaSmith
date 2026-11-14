@@ -153,6 +153,41 @@ public class PreFlight_PreviewTargetsTests
         }
     }
 
+    // A Target.Templates value that names no template is an error the preview logs -- and must not then report a pass:
+    // the exit code is what a pipeline reads.
+    [Test]
+    public void PreviewTargets_ATargetTemplateThatDoesNotExist_ReturnsFalseAndFailed()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            config["SchemaPackagePath"] = TestHelper.GetTestProductPath("PostgreSQL", ProductName);
+            ClearTargetFilters(config);
+            ClearTemplateTargets(config);
+            config["Target:Templates:0"] = "NoSuchTemplate";
+
+            try
+            {
+                var pq = new ProductQuench();
+                var result = pq.RunPreFlight(previewTargets: true);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(result, Is.False, "the preview fails, so the run exits non-zero");
+                    Assert.That(pq.Failed, Is.True);
+                    _progressLog.Received().Error(Arg.Is<string>(m => m.Contains("NoSuchTemplate")));
+                });
+            }
+            finally
+            {
+                config["Target:Templates:0"] = null;
+                ClearTemplateTargets(config);
+                ClearTargetFilters(config);
+                config["SchemaPackagePath"] = null;
+            }
+        }
+    }
+
     [Test]
     public void PreviewTargets_RequiredTemplateMatchesNothing_ReturnsFalseAndFailed()
     {

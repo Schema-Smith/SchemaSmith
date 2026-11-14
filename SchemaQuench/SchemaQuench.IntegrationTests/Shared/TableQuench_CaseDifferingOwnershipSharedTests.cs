@@ -110,7 +110,7 @@ public abstract class TableQuench_CaseDifferingOwnershipSharedTests : BaseTableQ
     {
         TryExec(cmd, $"DROP TABLE IF EXISTS `{Upper}`");
         TryExec(cmd, $"DROP TABLE IF EXISTS `{Lower}`");
-        TryExec(cmd, $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName IN ('{ProductUpper}', '{ProductLower}')");
+        TransientRetry.Run(() => Exec(cmd, $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName IN ('{ProductUpper}', '{ProductLower}')"));
     }
 
     private static void Exec(IDbCommand cmd, string sql)

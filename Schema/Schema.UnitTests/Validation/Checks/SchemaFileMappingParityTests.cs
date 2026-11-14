@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System;
+using System.Linq;
 using NUnit.Framework;
 using Schema.Domain;
 using Schema.Utility;
@@ -31,7 +32,7 @@ public class SchemaFileMappingParityTests
     {
         foreach (var platform in Platforms)
         {
-            foreach (var fileName in RepositoryHelper.GetSchemaFileNames(platform))
+            foreach (var fileName in RepositoryHelper.GetSchemaFileNames(platform).Concat(RepositoryHelper.GetSettingsSchemaFileNames(platform)))
             {
                 Assert.DoesNotThrow(
                     () => JsonSchemaCheck.GetTypeForSchemaFile(fileName, platform),
@@ -56,7 +57,7 @@ public class SchemaFileMappingParityTests
     {
         foreach (var platform in Platforms)
         {
-            foreach (var fileName in RepositoryHelper.GetSchemaFileNames(platform))
+            foreach (var fileName in RepositoryHelper.GetSchemaFileNames(platform).Concat(RepositoryHelper.GetSettingsSchemaFileNames(platform)))
             {
                 Assert.That(JsonSchemaCheck.GetTypeForSchemaFile(fileName, platform),
                     Is.EqualTo(RepositoryHelper.GetTypeForSchemaFile(fileName, platform)),

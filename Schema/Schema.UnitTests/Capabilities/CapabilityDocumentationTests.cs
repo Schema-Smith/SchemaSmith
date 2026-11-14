@@ -57,6 +57,7 @@ public class CapabilityDocumentationTests
         ["SqlServer/memory-optimized-constraints"] = "**Memory-optimized constraints**",
         ["SqlServer/memory-optimized-computed"] = "**Memory-optimized computed columns**",
         ["SqlServer/online-index"] = "**Online index build**",
+        ["SqlServer/settings-scoped-configuration"] = "**Database-scoped configuration setting**",
         ["SqlServer/online-alter-column"] = "**Online column change**",
         ["SqlServer/resumable-index"] = "**Resumable index build**",
         ["SqlServer/selective-xml-index"] = "**Selective XML index**",
@@ -93,10 +94,12 @@ public class CapabilityDocumentationTests
         ["PostgreSQL/table-access-method"] = "**Table access method**",
         ["PostgreSQL/drop-expression"] = "**Removing a column's generation**",
         ["PostgreSQL/virtual-generated-column"] = "**`VIRTUAL` generated columns**",
+        ["PostgreSQL/partitioned-table-access-method"] = "**Table access method on a partitioned table**",
         ["PostgreSQL/not-enforced-constraint"] = "**`NOT ENFORCED` constraints**",
 
         // ---- MySQL ----
         ["MySQL/invisible-index"] = "**Invisible index**",
+        ["MySQL/settings-persist"] = "**Persisted server variable**",
         ["MySQL/descending-index"] = "**Descending index key parts**",
         ["MySQL/instant-alter"] = "**Instant column add or drop**",
         ["MySQL/check-constraint"] = "**CHECK constraints**",
@@ -105,6 +108,15 @@ public class CapabilityDocumentationTests
         ["MySQL/invisible-column"] = "**Invisible column**",
         ["MySQL/column-srid"] = "**Column SRID restriction**",
         ["MySQL/functional-index"] = "**Functional / expression index**",
+        // Never on this engine: the other engine's row names it, and says so.
+        ["MySQL/vector-index"] = "**Vector index**",
+        ["MySQL/copy-lock-none"] = "**Online table copy**",
+        ["MariaDb/functional-index"] = "**Functional / expression index**",
+        ["MariaDb/column-srid"] = "**Column SRID restriction**",
+        ["MySQL/application-time-period"] = "**Application-time period**",
+        ["MySQL/temporal-key"] = "**Temporal key**",
+        ["MySQL/column-history-exclusion"] = "**Per-column history exclusion**",
+        ["MySQL/table-system-versioning"] = "**Table-level system versioning**",
         // Gated on the server's filesystem, so documented in prose below the table, like FILESTREAM.
         ["MySQL/page-compression"] = "**Page compression**",
 
@@ -125,6 +137,7 @@ public class CapabilityDocumentationTests
         ["MariaDb/generated-column-collation"] = "**`COLLATE` on a generated column**",
         ["MariaDb/long-unique-key"] = "**Long unique key**",
         ["MariaDb/sequence"] = "**Declared sequence**",
+        ["SqlServer/sequence"] = "**Declared SQL Server sequence**",
         ["MariaDb/sequence-type"] = "**Sequence data type**",
         ["MariaDb/vector-index"] = "**Vector index**",
     };
@@ -200,6 +213,12 @@ public class CapabilityDocumentationTests
         // Rows with IntroducedInComparable 0 are gated on server or database state, so there is no
         // version for the page to agree with -- see the comment on the three SQL Server rows above.
         if (capability.IntroducedInComparable == 0) return;
+        // A feature the engine never has has no version either; the row says the engine has none.
+        if (capability.NeverSupported)
+        {
+            Assert.That(match, Does.Contain("at any version"), $"'{id}' is never supported, and the documented line should say so: {match}");
+            return;
+        }
 
         Assert.That(match, Does.Contain(capability.IntroducedInDisplay),
             $"The reference page documents '{id}' but does not quote the version the gate actually "

@@ -3,6 +3,7 @@
 using System;
 using System.Data;
 using System.IO;
+using System.Linq;
 using log4net;
 using Microsoft.Extensions.Configuration;
 using Newtonsoft.Json.Linq;
@@ -13,6 +14,7 @@ using Schema.Domain;
 using Schema.IntegrationTests;
 using Schema.Isolators;
 using Schema.Utility;
+using SchemaQuench.Reporting;
 
 namespace SchemaQuench.IntegrationTests.Shared;
 
@@ -63,6 +65,11 @@ public abstract class CheckpointIntegrationTestsSharedTests
     [TearDown]
     public void TearDown()
     {
+        // A test that stops early skips its own clean-up; what Program.Main registered for this directory, and the
+        // setting that names it, would otherwise be taken up by a later fixture's deploy.
+        FactoryContainer.Unregister<Schema.Checkpointing.ICheckpointing>();
+        if (FactoryContainer.Resolve<IConfigurationRoot>() is { } config && config["CheckpointDirectory"] == _checkpointDir)
+            config["CheckpointDirectory"] = null;
         try
         {
             if (Directory.Exists(_checkpointDir))
@@ -85,36 +92,6 @@ public abstract class CheckpointIntegrationTestsSharedTests
 
             Assert.That(Directory.Exists(nestedDir), Is.True);
             Assert.That(manager, Is.Not.Null);
-        }
-    }
-
-    [Test]
-    public void CheckpointManager_ShouldSaveAndLoadProductCheckpoint()
-    {
-        lock (FactoryContainer.SharedLockObject)
-        {
-            var manager = new FileCheckpointManager(_checkpointDir);
-            var scope = new TrackingScope { ProductName = "TestProduct" };
-
-            manager.MarkScriptCompleted(scope, "Before", "Scripts/Before1.sql");
-            manager.MarkStepCompleted(scope, "Template:Main");
-            manager.MarkScriptCompleted(scope, "After", "Scripts/After1.sql");
-
-            var filePath = Path.Combine(_checkpointDir, "TestProduct.product.checkpoint");
-            Assert.That(File.Exists(filePath), Is.True, "Product checkpoint file should exist on disk");
-
-            var content = File.ReadAllText(filePath);
-            Assert.That(content, Does.Contain("# Product: TestProduct"));
-            Assert.That(content, Does.Contain("[Before Product Scripts - default]"));
-            Assert.That(content, Does.Contain("Scripts/Before1.sql"));
-            Assert.That(content, Does.Contain("[Completed Templates]"));
-            Assert.That(content, Does.Contain("Template:Main"));
-            Assert.That(content, Does.Contain("[After Product Scripts - default]"));
-            Assert.That(content, Does.Contain("Scripts/After1.sql"));
-
-            Assert.That(manager.HasCompleted(scope, "Template:Main"), Is.True);
-            Assert.That(manager.HasCompletedScript(scope, "Before", "Scripts/Before1.sql"), Is.True);
-            Assert.That(manager.HasCompletedScript(scope, "After", "Scripts/After1.sql"), Is.True);
         }
     }
 
@@ -160,16 +137,14 @@ public abstract class CheckpointIntegrationTestsSharedTests
     }
 
     [Test]
-    public void CheckpointManager_ShouldDeleteProductCheckpoint()
+    public void CheckpointManager_ShouldDeleteALegacyProductCheckpoint()
     {
         lock (FactoryContainer.SharedLockObject)
         {
+            // Product checkpoints were written by 2.7 and earlier; a successful run still removes one left behind.
             var manager = new FileCheckpointManager(_checkpointDir);
-            var scope = new TrackingScope { ProductName = "TestProduct" };
-            manager.MarkStepCompleted(scope, "Template:Main");
-
-            var filePath = Path.Combine(_checkpointDir, "TestProduct.product.checkpoint");
-            Assert.That(File.Exists(filePath), Is.True);
+            var filePath = Path.Join(_checkpointDir, "TestProduct.product.checkpoint");
+            File.WriteAllText(filePath, "# SchemaQuench Product Checkpoint");
 
             manager.DeleteCheckpoints("TestProduct");
 
@@ -397,6 +372,152 @@ ModifiedTables
                 // And its summary says it resumed: the training certification saw false on a run where every unit resumed.
                 var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
                 Assert.That(summary.SelectToken("run.resumedFromCheckpoint")?.Value<bool>(), Is.True);
+
+                // 1.4 run identity: the summary names the run the progress log opened with and the package content it
+                // deployed; the seeded checkpoint predates 2.9, so it names no earlier run.
+                SummaryConformance.AssertConforms(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json"));
+                var runId = (string)summary.SelectToken("run.id");
+                Assert.That(runId, Is.Not.Null.And.Not.Empty, "run.id");
+                _progressLog.Received(1).Info(Arg.Is<object>(o => o.ToString() == $"Run {runId}"));
+                var expected = PackageContentHash.ForFolder(Path.GetDirectoryName(product.FilePath), ConfigHelper.ResolveLogPath());
+                Assert.That((string)summary.SelectToken("run.package.contentHash"), Is.EqualTo(expected.ContentHash));
+                Assert.That((int?)summary.SelectToken("run.package.fileCount"), Is.EqualTo(expected.FileCount));
+                Assert.That(summary.SelectToken("run.resumesRunId")?.Type, Is.EqualTo(JTokenType.Null));
+                Assert.That((string)summary.SelectToken("run.host.machine"), Is.EqualTo(Environment.MachineName));
+                // The login the engine saw for the session, asked of the engine and never read from the settings.
+                var expectedLogin = FactoryContainer.Resolve<IConfigurationRoot>()["Target:User"];
+                Assert.That(summary.SelectToken("targets")!.Select(t => (string)t["connectedAs"]), Is.Not.Empty.And.All.EqualTo(expectedLogin));
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                FactoryContainer.Unregister<ICheckpointing>();
+            }
+        }
+    }
+
+    // A16: a preview loaded the checkpoint (which, without --ResumeQuench, discards it) and a successful preview then
+    // cleaned up the run's checkpoints, so "deploy fails, preview, resume" started the resume over from scratch.
+    [Test]
+    public void APreviewLeavesAFailedDeploysResumePointForTheResume()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            FactoryContainer.Register(FixtureConfig);
+            FactoryContainer.Register(_environment);
+            LogFactory.Register("ErrorLog", _errorLog);
+            LogFactory.Register("ProgressLog", _progressLog);
+
+            var config = FactoryContainer.Resolve<IConfigurationRoot>();
+            config["SchemaPackagePath"] = TestHelper.GetTestProductPath(ProductPlatformFolder, "ResumeProbe");
+            config["CheckpointDirectory"] = _checkpointDir;
+            Directory.CreateDirectory(_checkpointDir);
+            using (var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString))
+            {
+                conn.Open();
+                conn.ChangeDatabase(_mainDb);
+                using var cmd = conn.CreateCommand();
+                ForgeKindler.KindleTheForge(cmd, Platform, forceReKindle: false);
+            }
+
+            var product = Product.Load();
+            var storedDb = StoredDatabaseName();
+            var dbCheckpointPath = Path.Join(_checkpointDir,
+                Path.GetFileName($"{FileNameEncoder.Encode(product.Name)}.{FileNameEncoder.Encode("Main")}.{FileNameEncoder.Encode(_server)}.{FileNameEncoder.Encode(storedDb)}.{FileNameEncoder.Encode("")}.checkpoint"));
+            File.WriteAllText(dbCheckpointPath, $"# SchemaQuench Database Checkpoint\n# Product: {product.Name}\n# Template: Main\n# Server: {_server}\n# Database: {storedDb}\n\n[Completed Steps]\nModifiedTables\n");
+
+            try
+            {
+                _environment.CommandLine.Returns("--SkipKindlingForge --WhatIf");
+                Program.Main(["SkipKindlingForge", "WhatIf"]);
+                Assert.That(File.Exists(dbCheckpointPath), Is.True, "the failed deploy's resume point survived the preview");
+
+                _environment.ClearReceivedCalls();
+                _environment.CommandLine.Returns("--SkipKindlingForge --ResumeQuench");
+                Program.Main(["SkipKindlingForge"]);
+                _environment.DidNotReceive().Exit(Arg.Is<int>(c => c != 0));
+                var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+                Assert.That(summary.SelectToken("run.resumedFromCheckpoint")?.Value<bool>(), Is.True, "the resume took it up");
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                FactoryContainer.Unregister<ICheckpointing>();
+            }
+        }
+    }
+
+    // The MySQL family's twins of the SQL Server and PostgreSQL resume tests: a seeded database checkpoint is resumed
+    // from, and a failed run leaves the checkpoints it found.
+    private void RegisterRun(string product)
+    {
+        FactoryContainer.Register(FixtureConfig);
+        FactoryContainer.Register(_environment);
+        LogFactory.Register("ErrorLog", _errorLog);
+        LogFactory.Register("ProgressLog", _progressLog);
+        _environment.CommandLine.Returns("--SkipKindlingForge --ResumeQuench");
+        var config = FactoryContainer.Resolve<IConfigurationRoot>();
+        config["SchemaPackagePath"] = TestHelper.GetTestProductPath(ProductPlatformFolder, product);
+        config["CheckpointDirectory"] = _checkpointDir;
+        Directory.CreateDirectory(_checkpointDir);
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        ForgeKindler.KindleTheForge(cmd, Platform, forceReKindle: false);
+    }
+
+    [Test]
+    public void ShouldResumeFromDatabaseCheckpoint()
+    {
+        lock (FactoryContainer.SharedLockObject)
+        {
+            RegisterRun("ValidProduct");
+            var product = Product.Load();
+            var storedDb = StoredDatabaseName();
+            File.WriteAllText(Path.Join(_checkpointDir,
+                    Path.GetFileName($"{FileNameEncoder.Encode(product.Name)}.{FileNameEncoder.Encode("Main")}.{FileNameEncoder.Encode(_server)}.{FileNameEncoder.Encode(storedDb)}.{FileNameEncoder.Encode("")}.checkpoint")),
+                $"# SchemaQuench Database Checkpoint\n# Product: {product.Name}\n# Template: Main\n# Server: {_server}\n# Database: {storedDb}\n" +
+                $"# Started: {DateTime.Now:yyyy-MM-dd HH:mm:ss}\n\n[Completed Steps]\nKindleForge\n\n[Before Scripts]\n\n[Object Scripts]\n\n" +
+                "[After Tables Object Scripts]\n\n[Between Tables And Keys Scripts]\n\n[After Table Scripts]\n\n[Table Data Scripts]\n\n[After Scripts]\n");
+            try
+            {
+                Program.Main(["SkipKindlingForge"]);
+
+                _progressLog.Received(1).Info(Arg.Is<string>(s => s.Contains(storedDb) && s.Contains("Resuming from checkpoint")));
+            }
+            finally
+            {
+                LogFactory.Clear();
+                FactoryContainer.Unregister<IEnvironment>();
+                FactoryContainer.Unregister<ICheckpointing>();
+            }
+        }
+    }
+
+    [Test]
+    public void ShouldPreserveCheckpointOnFailure()
+    {
+        // The failing run stops before any step succeeds, so nothing it writes shows that cleanup was skipped: a checkpoint
+        // seeded ahead of it has to still be there, unchanged.
+        lock (FactoryContainer.SharedLockObject)
+        {
+            RegisterRun("BeforeTemplateScriptError");
+            var seeded = Path.Join(_checkpointDir, "BeforeTemplateScriptError.product.checkpoint");
+            const string seededContent = "# Seeded by test to verify cleanup is skipped on failure\n[Completed Templates]\nTemplate:Seeded\n";
+            File.WriteAllText(seeded, seededContent);
+            try
+            {
+                Program.Main(["SkipKindlingForge"]);
+
+                Assert.Multiple(() =>
+                {
+                    Assert.That(File.Exists(seeded), Is.True, "a failed run must not delete a checkpoint");
+                    Assert.That(File.ReadAllText(seeded), Is.EqualTo(seededContent), "nor change it");
+                    _environment.Received(1).Exit(2);
+                });
             }
             finally
             {

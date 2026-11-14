@@ -139,7 +139,8 @@ public class ConfigureDataDeliveryTests
               ],
               "DataDelivery": {
                 "ContentFile": "Content/dbo.TestTable.tabledata",
-                "MergeType": "Insert/Update"
+                "MergeType": "Insert/Update",
+                "Columns": "Id,Name"
               }
             }
             """;

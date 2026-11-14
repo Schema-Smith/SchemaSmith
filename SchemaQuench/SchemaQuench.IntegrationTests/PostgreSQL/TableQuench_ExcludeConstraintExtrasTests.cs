@@ -4,6 +4,7 @@ using System;
 using System.Data;
 using Schema.DataAccess;
 using Schema.Domain;
+using SchemaQuench.IntegrationTests.Shared;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -49,7 +50,8 @@ public class TableQuench_ExcludeConstraintExtrasTests : BaseTableQuenchTests
         conn.ChangeDatabase(_mainDb);
         using var cmd = conn.CreateCommand();
         cmd.CommandTimeout = 300;
-        cmd.CommandText = "CREATE EXTENSION IF NOT EXISTS btree_gist";
+        // Two fixtures creating the extension at once collide on its unique name; the loser finds it created.
+        cmd.CommandText = "DO $$ BEGIN CREATE EXTENSION IF NOT EXISTS btree_gist; EXCEPTION WHEN unique_violation THEN NULL; END $$";
         cmd.ExecuteNonQuery();
         try
         {
@@ -85,6 +87,22 @@ public class TableQuench_ExcludeConstraintExtrasTests : BaseTableQuenchTests
                 Assert.That(second, Does.EndWith("|fillfactor=80"), second);
                 Assert.That(second.Split('|')[0], Is.Not.EqualTo(first.Split('|')[0]), "a changed storage parameter replaces the constraint");
             });
+        });
+    }
+
+    // The index behind an exclusion constraint is not declared as an index, so DropUnknownIndexes took it for an unknown
+    // one and every deploy failed: "cannot drop index ... because constraint ... requires it".
+    [Test]
+    public void DropUnknownIndexes_LeavesAnExclusionConstraintsIndexAlone()
+    {
+        const string table = "excl_unknown";
+        WithTable(table, cmd =>
+        {
+            RunTableQuenchProc(cmd, Json(table, ""));
+            var first = ConstraintState(cmd, table);
+            cmd.CommandText = $"CALL \"SchemaSmith\".\"TableQuench\"(p_ProductName := '{_productName}', p_TableDefinitions := '{Json(table, "").Replace("'", "''")}', p_WhatIf := false, p_DropTablesRemovedFromProduct := false, p_DropUnknownIndexes := true)";
+            Assert.DoesNotThrow(() => TransientRetry.Run(() => cmd.ExecuteNonQuery()));
+            Assert.That(ConstraintState(cmd, table), Is.EqualTo(first), "the constraint and its index are untouched");
         });
     }
 

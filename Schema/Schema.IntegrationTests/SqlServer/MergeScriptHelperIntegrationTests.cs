@@ -6,6 +6,7 @@ using System.Data;
 using System.Linq;
 using NUnit.Framework;
 using Schema.DataAccess;
+using Schema.Delivery;
 using Schema.Domain;
 using Schema.Utility;
 
@@ -36,6 +37,41 @@ public class MergeScriptHelperIntegrationTests
         _connection?.Close();
         _connection?.Dispose();
     }
+
+    #region Key-only tables
+
+    // A table whose only column is its identity has nothing to update; MergeUpdate built the update list from a null
+    // column list and failed with a NullReferenceException before any script was written.
+    [Test]
+    public void BuildMergeScript_IdentityOnlyTable_WithMergeUpdate_DeliversItsRows()
+    {
+        using var command = _connection.CreateCommand();
+        var tableName = $"_test_keyonly_{Guid.NewGuid():N}"[..40];
+        try
+        {
+            command.CommandText = $"CREATE TABLE [dbo].[{tableName}] ([Id] INT IDENTITY(1,1) NOT NULL PRIMARY KEY)";
+            command.ExecuteNonQuery();
+            command.CommandText = $"INSERT INTO [dbo].[{tableName}] DEFAULT VALUES";
+            command.ExecuteNonQuery();
+
+            var script = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command,
+                "dbo", tableName, @"[{""Id"":1},{""Id"":2}]", "[Id]",
+                mergeUpdate: true, mergeDelete: true, disableTriggers: false,
+                tokenizeScripts: false, mergeFilter: null);
+            command.CommandText = script;
+            command.ExecuteNonQuery();
+
+            command.CommandText = $"SELECT COUNT(*) FROM [dbo].[{tableName}]";
+            Assert.That(Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(2));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [dbo].[{tableName}]";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    #endregion
 
     #region GEOMETRY Tests
 
@@ -487,6 +523,64 @@ CREATE TABLE [dbo].[{tableName.Replace("]", "]]")}] (
         }
     }
 
+    // Rows that wait on a foreign key are delivered by a second, insert-only pass. SQL Server refuses MERGE on a
+    // memory-optimized table, so that pass failed on a table the first pass delivers.
+    [TestCase("memory-optimized")]
+    [TestCase("append-only ledger")]
+    public void DeferredPass_InsertsTheMissingRows_OnATableMergeCannotTarget(string kind)
+    {
+        using var master = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
+            new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(FixtureSetup.GetMainDbConnectionString()) { InitialCatalog = "master" }.ConnectionString);
+        master.Open();
+        using var masterCmd = master.CreateCommand();
+        masterCmd.CommandText = "SELECT CAST(PARSENAME(CAST(SERVERPROPERTY('ProductVersion') AS NVARCHAR(50)), 4) AS INT), CONVERT(INT, ISNULL(SERVERPROPERTY('IsXTPSupported'), 0))";
+        using (var reader = masterCmd.ExecuteReader())
+        {
+            reader.Read();
+            if (kind == "append-only ledger" && reader.GetInt32(0) < 16) Assert.Ignore("Ledger tables need SQL Server 2022.");
+            if (kind == "memory-optimized" && (reader.GetInt32(0) < 13 || reader.GetInt32(1) != 1))
+                Assert.Ignore("Memory-optimized tables with foreign keys need SQL Server 2016 and an edition that supports them.");
+        }
+
+        var db = $"DeferMo_Test_{DateTime.Now:yyyyMMdd_HHmmss}_{Guid.NewGuid():N}"[..37];
+        masterCmd.CommandText = $"CREATE DATABASE [{db}]";
+        masterCmd.ExecuteNonQuery();
+        try
+        {
+            if (kind == "memory-optimized")
+            {
+                masterCmd.CommandText = $@"
+DECLARE @v_Path NVARCHAR(500) = (SELECT LEFT(physical_name, LEN(physical_name) - CHARINDEX('\', REVERSE(physical_name)) + 1) FROM sys.master_files WHERE database_id = DB_ID('{db}') AND file_id = 1);
+ALTER DATABASE [{db}] ADD FILEGROUP [MOD_fg] CONTAINS MEMORY_OPTIMIZED_DATA;
+EXEC('ALTER DATABASE [{db}] ADD FILE (NAME = ''MOD_container'', FILENAME = ''' + @v_Path + '{db}_MOD'') TO FILEGROUP [MOD_fg]');";
+                masterCmd.ExecuteNonQuery();
+            }
+            using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(
+                new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(FixtureSetup.GetMainDbConnectionString()) { InitialCatalog = db }.ConnectionString);
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            var options = kind == "memory-optimized" ? "WITH (MEMORY_OPTIMIZED = ON, DURABILITY = SCHEMA_AND_DATA)" : "WITH (LEDGER = ON (APPEND_ONLY = ON))";
+            var key = kind == "memory-optimized" ? "PRIMARY KEY NONCLUSTERED" : "PRIMARY KEY";
+            cmd.CommandText = $"CREATE TABLE dbo.T (Id INT NOT NULL {key}, ParentId INT NULL, V NVARCHAR(20) NULL) {options}; " +
+                              "INSERT dbo.T (Id, ParentId, V) VALUES (1, NULL, N'a');";
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = DeferredMergeBuilder.Build(new MergeScriptHelperAdapter(Platform.SqlServer), cmd, "SqlServer", "dbo", "T",
+                @"[{""Id"":1,""ParentId"":null,""V"":""a""},{""Id"":2,""ParentId"":1,""V"":""b""}]", "[Id]",
+                disableTriggers: false, deferredColumns: ["ParentId"]);
+            cmd.ExecuteNonQuery();
+
+            cmd.CommandText = "SELECT STRING_AGG(CONCAT(Id, ':', COALESCE(CAST(ParentId AS NVARCHAR(10)), '-'), ':', V), ',') WITHIN GROUP (ORDER BY Id) FROM dbo.T";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("1:-:a,2:-:b"),
+                "the missing row arrives with its waiting key left NULL for the second pass; the existing row is untouched");
+        }
+        finally
+        {
+            Microsoft.Data.SqlClient.SqlConnection.ClearAllPools();
+            TestDatabaseDrop.Drop(masterCmd, db);
+        }
+    }
+
     #endregion
 
     #region XML Tests
@@ -572,6 +666,51 @@ CREATE TABLE [dbo].[{tableName}] (
         finally
         {
             command.CommandText = $"DROP TABLE IF EXISTS [dbo].[{tableName}]";
+            command.ExecuteNonQuery();
+        }
+    }
+
+    // The XML shred cast each value to the column's declared type, which .value() refuses when it is an alias type -- and
+    // named one outside dbo twice over (s.s.type) -- so an XML delivery into an alias-typed column failed. It casts to the
+    // base type now; OPENJSON accepted the alias all along, and is covered so that stays true.
+    [TestCase("Json")]
+    [TestCase("Xml")]
+    public void BuildMergeScript_AnAliasTypedColumn_DeliversItsValue(string encoding)
+    {
+        using var command = _connection.CreateCommand();
+        var suffix = Guid.NewGuid().ToString("N")[..8];
+        var schema = $"_test_alias_{suffix}";
+        var dboType = $"_test_alias_code_{suffix}";
+        var tableName = $"_test_alias_tbl_{suffix}";
+
+        try
+        {
+            command.CommandText = $"CREATE SCHEMA [{schema}]";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TYPE [{schema}].[Code] FROM NVARCHAR(10) NULL; CREATE TYPE [dbo].[{dboType}] FROM VARCHAR(5) NULL";
+            command.ExecuteNonQuery();
+            command.CommandText = $"CREATE TABLE [{schema}].[{tableName}] ([Id] INT PRIMARY KEY, [C] [{schema}].[Code] NULL, [D] [dbo].[{dboType}] NULL)";
+            command.ExecuteNonQuery();
+
+            var data = encoding == "Xml"
+                ? "<rows><row><c n=\"Id\">1</c><c n=\"C\">abc</c><c n=\"D\">xy</c></row></rows>"
+                : "[{\"Id\":1,\"C\":\"abc\",\"D\":\"xy\"}]";
+            var script = MergeScriptHelper.BuildMergeScript(Platform.SqlServer, command,
+                schema, tableName, data, "[Id]",
+                mergeUpdate: true, mergeDelete: false, disableTriggers: false,
+                tokenizeScripts: false, mergeFilter: null, contentEncoding: encoding);
+            command.CommandText = script;
+            command.ExecuteNonQuery();
+
+            command.CommandText = $"SELECT [C] + '|' + [D] FROM [{schema}].[{tableName}] WHERE [Id] = 1";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("abc|xy"));
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS [{schema}].[{tableName}]; " +
+                                  $"IF TYPE_ID('{schema}.Code') IS NOT NULL DROP TYPE [{schema}].[Code]; " +
+                                  $"IF TYPE_ID('dbo.{dboType}') IS NOT NULL DROP TYPE [dbo].[{dboType}]; " +
+                                  $"IF SCHEMA_ID('{schema}') IS NOT NULL DROP SCHEMA [{schema}]";
             command.ExecuteNonQuery();
         }
     }

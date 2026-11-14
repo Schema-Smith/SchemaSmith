@@ -10,7 +10,7 @@
     -- entries shared a name with mutually exclusive ShouldApply expressions.
     CREATE TEMPORARY TABLE temp_tables AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
-    SELECT ROW_NUMBER() OVER () AS "_RowId",
+    SELECT te.ord AS "_RowId",
            elem ->> 'Schema' AS "Schema",
            elem ->> 'Name' AS "Name",
            COALESCE(elem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
@@ -64,8 +64,11 @@
            (elem #>> '{RebuildPolicy,OnOrderMismatch}')::BOOLEAN AS "RebuildPolicyOnOrderMismatch",
            COALESCE(JSON_TYPEOF(elem -> 'RebuildPolicy') = 'object', FALSE) AS "RebuildPolicySpecified",
            -- The table's OnlineApply (OFF, PREFER, REQUIRE) over the deploy's; NULL inherits (OnlineApplyMode).
-           UPPER(NULLIF(TRIM(elem ->> 'OnlineApply'), '')) AS "OnlineApply"
-    FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem;
+           UPPER(NULLIF(TRIM(elem ->> 'OnlineApply'), '')) AS "OnlineApply",
+           -- Declarative partitioning: empty when the package does not manage it (not "unpartitioned").
+           COALESCE(UPPER(TRIM(elem #>> '{Partitioning,Method}')), '') AS "PartitionMethod",
+           COALESCE(elem #>> '{Partitioning,Expression}', '') AS "PartitionExpression"
+    FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord);
 
     -- ShouldApply scoped by "_RowId" so each generated DELETE targets exactly the source row.
     SELECT STRING_AGG('DELETE FROM temp_tables WHERE "_RowId" = ' || "_RowId"::TEXT || ' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
@@ -74,6 +77,31 @@
       WHERE NULLIF("ShouldApplyExpression", '') IS NOT NULL;
     CALL "SchemaSmith"."ExecuteOrDebug"(sql_script, false);
 
+    -- Every declared partition, flattened: its root table, its immediate parent, and its own key when it is partitioned
+    -- again. Built from the tables that survived the gate, as every other set below is.
+    DROP TABLE IF EXISTS temp_partitions;
+    CREATE TEMPORARY TABLE temp_partitions AS
+    WITH RECURSIVE my_tables(arr) AS (VALUES(table_json::JSON)),
+    parts AS (
+      SELECT te.elem ->> 'Schema' AS "TableSchema", te.elem ->> 'Name' AS "TableName", te.elem ->> 'Name' AS "ParentName",
+             p.value AS pj, 1 AS "Depth", p.ordinality AS "Position"
+        FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+        CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS(COALESCE(te.elem #> '{Partitioning,Partitions}', '[]'::JSON)) WITH ORDINALITY AS p(value, ordinality)
+       WHERE te.ord IN (SELECT "_RowId" FROM temp_tables)
+      UNION ALL
+      SELECT parts."TableSchema", parts."TableName", parts.pj ->> 'Name', c.value, parts."Depth" + 1, c.ordinality
+        FROM parts
+        CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS(COALESCE(parts.pj #> '{Partitioning,Partitions}', '[]'::JSON)) WITH ORDINALITY AS c(value, ordinality))
+    SELECT "TableSchema", "TableName", "ParentName", pj ->> 'Name' AS "Name", TRIM(COALESCE(pj ->> 'Bound', '')) AS "Bound",
+           NULLIF(TRIM(COALESCE(pj ->> 'Tablespace', '')), '') AS "Tablespace",
+           COALESCE(UPPER(TRIM(pj #>> '{Partitioning,Method}')), '') AS "Method",
+           COALESCE(pj #>> '{Partitioning,Expression}', '') AS "Expression",
+           "Depth", "Position", UPPER(TRIM(COALESCE(pj ->> 'Bound', ''))) = 'DEFAULT' AS "IsDefault"
+      FROM parts;
+
+    -- Each set below is read from the array again, so it keeps only the entries whose table survived the gate:
+    -- a skipped table takes its columns, keys, checks and statistics with it, and of two same-named variants
+    -- only the applied one's are deployed.
     DROP TABLE IF EXISTS temp_columns;
     CREATE TEMPORARY TABLE temp_columns AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
@@ -114,8 +142,9 @@
                 THEN REPLACE(SUBSTRING((celem ->> 'OldName'), 2, LENGTH(celem ->> 'OldName') - 2), '""', '"')
                 ELSE COALESCE(celem ->> 'OldName', '') END AS "OldName",
            COALESCE(celem ->> 'CheckExpression', '') AS "CheckExpression"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
-      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Columns')::JSON) AS celem(value);
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Columns')::JSON) AS celem(value)
+     WHERE te.ord IN (SELECT "_RowId" FROM temp_tables);
 
     -- A generated column's nullability is the engine's unless the package states one, as on SQL Server. Taking the
     -- live value (nullable for a new column) makes every comparison downstream agree without touching any of them;
@@ -185,6 +214,37 @@
        SET "DataType" = REGEXP_REPLACE("DataType", '^_(.+)$', '\1[]')
      WHERE "DataType" ~ '^_';
 
+    -- More spellings of one type, each proven by format_type, folded on the declared side (extraction and the live
+    -- compare already agree, through ColumnDataType). PostgreSQL ignores array dimensions and bounds (int[][], int[3]
+    -- are integer[]); dec is decimal; a scalar numeric with scale 0 reads back without it, an array one with it; bare
+    -- char and character are character(1); float(p) is real up to 24 and double precision above.
+    UPDATE temp_columns
+       SET "DataType" = REGEXP_REPLACE("DataType", '(\s*\[\s*[0-9]*\s*\])+\s*$', '[]')
+     WHERE "DataType" ~ '\[\s*[0-9]+\s*\]\s*$' OR "DataType" ~ '\]\s*\[';
+    UPDATE temp_columns
+       SET "DataType" = REGEXP_REPLACE("DataType", '^\s*dec\s*', 'NUMERIC', 'i')
+     WHERE "DataType" ~* '^\s*dec\s*(\(|\[|$)';
+    UPDATE temp_columns
+       SET "DataType" = REGEXP_REPLACE("DataType", '^\s*NUMERIC\s*\(\s*([0-9]+)\s*,\s*0\s*\)\s*$', 'NUMERIC(\1)', 'i')
+     WHERE "DataType" ~* '^\s*NUMERIC\s*\(\s*[0-9]+\s*,\s*0\s*\)\s*$';
+    UPDATE temp_columns
+       SET "DataType" = REGEXP_REPLACE("DataType", '^\s*NUMERIC\s*\(\s*([0-9]+)\s*\)\s*\[\]\s*$', 'NUMERIC(\1,0)[]', 'i')
+     WHERE "DataType" ~* '^\s*NUMERIC\s*\(\s*[0-9]+\s*\)\s*\[\]\s*$';
+    UPDATE temp_columns
+       SET "DataType" = 'CHAR(1)'
+     WHERE "DataType" ~* '^\s*(char|character)\s*$';
+    UPDATE temp_columns
+       SET "DataType" = CASE WHEN SUBSTRING("DataType" FROM '([0-9]+)')::INT <= 24 THEN 'FLOAT4' ELSE 'FLOAT8' END
+     WHERE "DataType" ~* '^\s*float\s*\(\s*[0-9]+\s*\)\s*$';
+    -- A collation written delimited ("C") that is one of pg_catalog's: ColumnCollation reports those bare, and
+    -- CollateClause delimits it again for DDL, so only the compare sees the difference.
+    UPDATE temp_columns c
+       SET "Collation" = SUBSTRING(c."Collation" FROM 2 FOR CHAR_LENGTH(c."Collation") - 2)
+     WHERE c."Collation" ~ '^"[^".]+"$'
+       AND EXISTS (SELECT 1 FROM pg_catalog.pg_collation co
+                    WHERE co.collnamespace = 'pg_catalog'::regnamespace
+                      AND co.collname = SUBSTRING(c."Collation" FROM 2 FOR CHAR_LENGTH(c."Collation") - 2));
+
     -- Synonym mapping
     UPDATE temp_columns
        SET "DataType" = CASE WHEN TRIM(UPPER("DataType")) = 'BIGINT' THEN 'INT8'
@@ -250,13 +310,13 @@
            "DataType" = CASE TRIM(UPPER(c."DataType")) WHEN 'SERIAL2' THEN 'INT2' WHEN 'SERIAL8' THEN 'INT8' ELSE 'INT4' END,
            "Nullable" = FALSE,
            "Default" = 'nextval(''' ||
-                       CASE WHEN TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName")) IS NOT NULL
+                       REPLACE(CASE WHEN TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName")) IS NOT NULL
                              AND EXISTS (SELECT 1 FROM pg_attribute a
                                           WHERE a.attrelid = TO_REGCLASS(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"))
                                             AND a.attname = c."Name" AND NOT a.attisdropped)
                              AND pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name") IS NOT NULL
                             THEN pg_get_serial_sequence(QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName"), c."Name")::regclass::text
-                            ELSE QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT(c."TableName" || '_' || c."Name" || '_seq') END ||
+                            ELSE QUOTE_IDENT(c."TableSchema") || '.' || QUOTE_IDENT("SchemaSmith"."SerialSequenceName"(c."TableSchema", c."TableName", c."Name")) END, '''', '''''') ||
                        '''::regclass)'
      WHERE TRIM(UPPER(c."DataType")) IN ('SERIAL2', 'SERIAL4', 'SERIAL8');
     -- Family defaults, applied AFTER the synonym fold so both spellings of a type reach one rule.
@@ -328,8 +388,9 @@
            COALESCE((SELECT STRING_AGG(sp.k || '=' || sp.v, ',' ORDER BY sp.k)
                        FROM JSON_EACH_TEXT(COALESCE(celem -> 'StorageParameters', '{}'::JSON)) AS sp(k, v)
                       WHERE sp.k <> 'fillfactor'), '') AS "StorageParameters"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
-      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Indexes')::JSON) AS celem(value);
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Indexes')::JSON) AS celem(value)
+     WHERE te.ord IN (SELECT "_RowId" FROM temp_tables);
 
     UPDATE temp_indexes -- Table-level setting overrides index-level setting when true
       SET "UpdateFillFactor" = true
@@ -350,6 +411,7 @@
     CREATE TEMPORARY TABLE temp_checks AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
     SELECT ROW_NUMBER() OVER () AS "_RowId",
+           celem ->> 'Description' AS "Description",
            elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
@@ -364,8 +426,9 @@
            COALESCE((celem ->> 'NoInherit')::BOOLEAN, false) AS "NoInherit",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
-      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'CheckConstraints')::JSON) AS celem(value);
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'CheckConstraints')::JSON) AS celem(value)
+     WHERE te.ord IN (SELECT "_RowId" FROM temp_tables);
 
     SELECT STRING_AGG('DELETE FROM temp_checks WHERE "_RowId" = ' || "_RowId"::TEXT || ' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
       INTO sql_script
@@ -377,6 +440,7 @@
     CREATE TEMPORARY TABLE temp_fks AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
     SELECT ROW_NUMBER() OVER () AS "_RowId",
+           celem ->> 'Description' AS "Description",
            elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
@@ -405,8 +469,9 @@
            -- declared one drives the unsupported-feature policy. Written as the catalog reads it back: no spaces.
            CASE WHEN "SchemaSmith"."ServerVersionNum"() >= 15 THEN REGEXP_REPLACE(COALESCE(celem ->> 'SetNullColumns', ''), '\s*,\s*', ',', 'g') ELSE '' END AS "SetNullColumns",
            REGEXP_REPLACE(COALESCE(celem ->> 'SetNullColumns', ''), '\s*,\s*', ',', 'g') AS "SetNullColumnsDeclared"
-    FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
-      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'ForeignKeys')::JSON) AS celem(value);
+    FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'ForeignKeys')::JSON) AS celem(value)
+     WHERE te.ord IN (SELECT "_RowId" FROM temp_tables);
 
     SELECT STRING_AGG('DELETE FROM temp_fks WHERE "_RowId" = ' || "_RowId"::TEXT || ' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
       INTO sql_script
@@ -418,6 +483,7 @@
     CREATE TEMPORARY TABLE temp_statistics AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
     SELECT ROW_NUMBER() OVER () AS "_RowId",
+           celem ->> 'Description' AS "Description",
            elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
@@ -428,8 +494,9 @@
            COALESCE(celem ->> 'StatisticsColumns', '') AS "StatisticsColumns",
            COALESCE(celem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(celem ->> 'VariantName', '') AS "VariantName"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
-      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Statistics')::JSON) AS celem(value);
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Statistics')::JSON) AS celem(value)
+     WHERE te.ord IN (SELECT "_RowId" FROM temp_tables);
 
     SELECT STRING_AGG('DELETE FROM temp_statistics WHERE "_RowId" = ' || "_RowId"::TEXT || ' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
       INTO sql_script
@@ -441,6 +508,7 @@
     CREATE TEMPORARY TABLE temp_excludes AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
     SELECT ROW_NUMBER() OVER () AS "_RowId",
+           celem ->> 'Description' AS "Description",
            elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            celem ->> 'Name' AS "Name",
@@ -457,8 +525,9 @@
            COALESCE((SELECT STRING_AGG(sp.k || '=' || sp.v, ',' ORDER BY sp.k)
                        FROM JSON_EACH_TEXT(COALESCE(celem -> 'StorageParameters', '{}'::JSON)) AS sp(k, v)), '') AS "StorageParameters",
            COALESCE(celem ->> 'Tablespace', '') AS "Tablespace"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
-      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'ExcludeConstraints')::JSON) AS celem(value);
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'ExcludeConstraints')::JSON) AS celem(value)
+     WHERE te.ord IN (SELECT "_RowId" FROM temp_tables);
 
     SELECT STRING_AGG('DELETE FROM temp_excludes WHERE "_RowId" = ' || "_RowId"::TEXT || ' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
       INTO sql_script
@@ -470,6 +539,7 @@
     CREATE TEMPORARY TABLE temp_policies AS
     WITH my_tables(arr) AS (VALUES(table_json::JSON))
     SELECT ROW_NUMBER() OVER () AS "_RowId",
+           pelem ->> 'Description' AS "Description",
            elem ->> 'Schema' AS "TableSchema",
            elem ->> 'Name' AS "TableName",
            pelem ->> 'Name' AS "Name",
@@ -480,8 +550,9 @@
            COALESCE(pelem ->> 'WithCheckExpression', '') AS "WithCheckExpression",
            COALESCE(pelem ->> 'ShouldApplyExpression', '') AS "ShouldApplyExpression",
            COALESCE(pelem ->> 'VariantName', '') AS "VariantName"
-      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem
-      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Policies')::JSON) AS pelem(value);
+      FROM my_tables, JSON_ARRAY_ELEMENTS(arr) WITH ORDINALITY AS te(elem, ord)
+      CROSS JOIN LATERAL JSON_ARRAY_ELEMENTS((elem ->> 'Policies')::JSON) AS pelem(value)
+     WHERE te.ord IN (SELECT "_RowId" FROM temp_tables);
 
     SELECT STRING_AGG('DELETE FROM temp_policies WHERE "_RowId" = ' || "_RowId"::TEXT || ' AND NOT (' || "SchemaSmith"."StripLeadingSelect"("ShouldApplyExpression") || ');', CHR(10))
       INTO sql_script

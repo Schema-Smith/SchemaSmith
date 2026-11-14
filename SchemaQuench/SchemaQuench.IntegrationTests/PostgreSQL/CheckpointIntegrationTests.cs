@@ -2,15 +2,18 @@
 
 using log4net;
 using Microsoft.Extensions.Configuration;
+using Newtonsoft.Json.Linq;
 using NSubstitute;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.IntegrationTests;
 using Schema.Isolators;
 using Schema.Utility;
+using SchemaQuench.Reporting;
 using System;
 using System.Data;
 using System.IO;
+using System.Linq;
 
 namespace SchemaQuench.IntegrationTests.PostgreSQL;
 
@@ -44,6 +47,11 @@ public class CheckpointIntegrationTests
     [TearDown]
     public void TearDown()
     {
+        // A test that stops early skips its own clean-up; what Program.Main registered for this directory, and the
+        // setting that names it, would otherwise be taken up by a later fixture's deploy.
+        FactoryContainer.Unregister<Schema.Checkpointing.ICheckpointing>();
+        if (FactoryContainer.Resolve<IConfigurationRoot>() is { } config && config["CheckpointDirectory"] == _checkpointDir)
+            config["CheckpointDirectory"] = null;
         try
         {
             if (Directory.Exists(_checkpointDir))
@@ -354,12 +362,14 @@ KindleForge
             FactoryContainer.Resolve<IConfigurationRoot>()["CheckpointDirectory"] = _checkpointDir;
 
             var product = Product.Load();
+            var seededRunId = Guid.NewGuid();
             var dbCheckpointContent = $@"# SchemaQuench Database Checkpoint
 # Product: {product.Name}
 # Template: Main
 # Server: {_server}
 # Database: {_mainDb}
 # Started: {DateTime.Now:yyyy-MM-dd HH:mm:ss}
+# RunId: {seededRunId}
 
 [Completed Steps]
 MissingTablesAndColumns
@@ -400,6 +410,31 @@ ModifiedTables
 
             _errorLog.DidNotReceive().Error(Arg.Is<object>(o => o != null && o.ToString().Contains("temp_existing_indexes")));
             _environment.DidNotReceive().Exit(Arg.Is<int>(c => c != 0));
+
+            // 1.4 run identity: the summary names the run the progress log opened with and the package content it
+            // deployed; the seeded checkpoint predates 2.9, so it names no earlier run.
+            SummaryConformance.AssertConforms(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json"));
+            var summary = JObject.Parse(File.ReadAllText(Path.Join(ConfigHelper.ResolveLogPath(), "SchemaQuench - Summary.json")));
+            var runId = (string)summary.SelectToken("run.id");
+            Assert.That(runId, Is.Not.Null.And.Not.Empty, "run.id");
+            _progressLog.Received(1).Info(Arg.Is<object>(o => o.ToString() == $"Run {runId}"));
+            var expected = PackageContentHash.ForFolder(Path.GetDirectoryName(product.FilePath), ConfigHelper.ResolveLogPath());
+            Assert.That((string)summary.SelectToken("run.package.contentHash"), Is.EqualTo(expected.ContentHash));
+            Assert.That((int?)summary.SelectToken("run.package.fileCount"), Is.EqualTo(expected.FileCount));
+            // The seeded checkpoint names the run that wrote it, so the summary and this target's record name it too.
+            Assert.That((string)summary.SelectToken("run.resumesRunId"), Is.EqualTo(seededRunId.ToString()));
+            using (var recordConn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString))
+            {
+                recordConn.Open();
+                recordConn.ChangeDatabase(_mainDb);
+                using var recordCmd = recordConn.CreateCommand();
+                recordCmd.CommandText = $"SELECT \"ResumedFromRunId\" FROM \"SchemaSmith\".\"DeploymentHistory\" WHERE \"RunId\" = '{runId}'";
+                Assert.That(recordCmd.ExecuteScalar()?.ToString(), Is.EqualTo(seededRunId.ToString()), "the record's ResumedFromRunId");
+            }
+            Assert.That((string)summary.SelectToken("run.host.machine"), Is.EqualTo(Environment.MachineName));
+            // The login the engine saw for the session, asked of the engine and never read from the settings.
+            var expectedLogin = FactoryContainer.Resolve<IConfigurationRoot>()["Target:User"];
+            Assert.That(summary.SelectToken("targets")!.Select(t => (string)t["connectedAs"]), Is.Not.Empty.And.All.EqualTo(expectedLogin));
 
             LogFactory.Clear();
             FactoryContainer.Unregister<IEnvironment>();

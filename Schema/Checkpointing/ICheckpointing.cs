@@ -18,13 +18,6 @@ public interface ICheckpointing
     void Track(TrackingScope scope, string stepName, Action work);
 
     /// <summary>
-    /// Run a script execution under tracking at script-level granularity. The slot
-    /// identifies which script slot is running, and scriptPath is the unique identifier
-    /// for this script within the slot.
-    /// </summary>
-    void TrackScript(TrackingScope scope, string slot, string scriptPath, Action work);
-
-    /// <summary>
     /// Whether a major step has been recorded as complete in a prior run for this scope.
     /// Callers use this to emit user-visible "skipping" logs before (or instead of) calling Track.
     /// </summary>
@@ -32,15 +25,9 @@ public interface ICheckpointing
 
     /// <summary>
     /// Whether a specific script has been recorded as complete for this scope and slot.
-    /// Callers use this to emit user-visible "skipping" logs before (or instead of) calling TrackScript.
+    /// Callers use this to emit user-visible "skipping" logs before (or instead of) running it.
     /// </summary>
     bool HasCompletedScript(TrackingScope scope, string slot, string scriptPath);
-
-    /// <summary>
-    /// Summary of product-level completions for emitting "Resuming from checkpoint (...)" on start.
-    /// Returns an all-zero summary if no checkpoint exists.
-    /// </summary>
-    ProductCheckpointSummary GetProductCheckpointSummary(string productName);
 
     /// <summary>
     /// Summary of database-level completions for the given scope, for emitting
@@ -72,22 +59,12 @@ public interface ICheckpointing
 
     /// <summary>Whether any database in this run continued from a checkpoint a failed run left.</summary>
     bool ResumedAny => false;
-}
 
-/// <summary>
-/// Aggregate counts from a product-level checkpoint, used for resume banner text.
-/// </summary>
-public record ProductCheckpointSummary(
-    int TotalBeforeScripts,
-    int ServersWithBeforeScripts,
-    int CompletedTemplates,
-    int TotalAfterScripts,
-    int ServersWithAfterScripts)
-{
-    public bool HasAnyCompleted =>
-        TotalBeforeScripts > 0 || CompletedTemplates > 0 || TotalAfterScripts > 0;
+    /// <summary>Writes this run's id into every checkpoint it saves, so a later resume can name the run it continues.</summary>
+    void StampRunId(Guid runId) { }
 
-    public static ProductCheckpointSummary Empty => new(0, 0, 0, 0, 0);
+    /// <summary>The id of the run whose checkpoint this run took up; null when not resuming or the checkpoint predates 2.9.</summary>
+    Guid? ResumedRunId => null;
 }
 
 /// <summary>

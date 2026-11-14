@@ -56,6 +56,7 @@ A hands-on journey from first contact to confident production deployment, organi
 | [9. Power Workflows](guide/09-power-workflows.md) | Script tokens, multi-database products, DataTongs, execution slots |
 | [10. Multi-Tenant Deployments](guide/10-multi-tenant-deployments.md) | Schema-per-tenant fan-out, tenant onboarding, cross-schema references |
 | [11. Edge Cases & Escape Hatches](guide/11-edge-cases.md) | Migration scripts, renames, cross-dependencies, special types |
+| [13. Server and Database Settings](guide/13-server-settings.md) | Server classes, settings policies, capturing a reference server, Agent jobs and audits |
 
 ### Appendix
 

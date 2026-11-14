@@ -106,7 +106,7 @@ BEGIN
                                              FROM #IndexDegrades d
                                              FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 2, '')
     DECLARE @v_FailMsg NVARCHAR(2048) = LEFT(@v_List, 1900) + ' (detected major ' + CONVERT(NVARCHAR(10), @v_Major) + ').'
-    RAISERROR(@v_FailMsg, 16, 1)
+    RAISERROR('%s', 16, 1, @v_FailMsg)
     RETURN
   END
 

@@ -316,4 +316,18 @@ public class CleanupScriptGeneratorTests
         var result = CleanupScriptGenerator.GenerateDropStatement("something.sql", ScriptObjectType.None, Platform.SqlServer, "Before Scripts");
         Assert.That(result, Is.Null);
     }
+
+    // The file name is the name as FileNameEncoder wrote it, and the drop names the object the file was written for.
+    [TestCase("dbo.a]b'c%2Fd.sql", ScriptObjectType.Views, Platform.SqlServer, "DROP VIEW IF EXISTS [dbo].[a]]b'c/d];")]
+    [TestCase("public.a%22b%3Fc.sql", ScriptObjectType.Views, Platform.PostgreSQL, "DROP VIEW IF EXISTS \"public\".\"a\"\"b?c\";")]
+    [TestCase("a`b%5Cc.sql", ScriptObjectType.Views, Platform.MySQL, "DROP VIEW IF EXISTS `a``b\\c`;")]
+    // A table trigger's file is schema.table.trigger: SQL Server drops it by schema and name, PostgreSQL on its table.
+    [TestCase("dbo.Orders.trg_Audit.sql", ScriptObjectType.Triggers, Platform.SqlServer, "DROP TRIGGER IF EXISTS [dbo].[trg_Audit];")]
+    [TestCase("public.orders.trg_audit.sql", ScriptObjectType.Triggers, Platform.PostgreSQL, "DROP TRIGGER IF EXISTS \"trg_audit\" ON \"public\".\"orders\";")]
+    // An overloaded routine's file carries its argument types, which name the one overload to drop.
+    [TestCase("public.my_func(integer, text).sql", ScriptObjectType.Functions, Platform.PostgreSQL, "DROP FUNCTION IF EXISTS \"public\".\"my_func\"(integer, text);")]
+    public void GenerateDropStatement_NamesTheObjectTheFileWasWrittenFor(string file, ScriptObjectType type, Platform platform, string expected)
+    {
+        Assert.That(CleanupScriptGenerator.GenerateDropStatement(file, type, platform), Is.EqualTo(expected));
+    }
 }

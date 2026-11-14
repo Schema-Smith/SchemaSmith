@@ -31,7 +31,7 @@ namespace Schema.Domain.PostgreSQL
         /// keep their values. Omitted means every column, as a plain <c>SET NULL</c> does. Below 15 every column is set
         /// and a downgrade is recorded.
         /// </summary>
-        [SchemaProperty(Description = "PostgreSQL 15+. With DeleteAction SET NULL, the comma-separated subset of Columns set to NULL when the referenced row is deleted (ON DELETE SET NULL (column, ...)); the other key columns keep their values. Omitted means every column. Below 15 every column is set and a downgrade is recorded.")]
+        [SchemaProperty(Description = "PostgreSQL 15+. With DeleteAction SET NULL or SET DEFAULT, the comma-separated subset of Columns a delete of the referenced row sets to NULL or to its default (ON DELETE SET NULL (column, ...)); the other key columns keep their values. Omitted means every column. Below 15 every column is set and a downgrade is recorded.")]
         [JsonProperty(Order = 106, NullValueHandling = NullValueHandling.Ignore)]
         public string SetNullColumns { get; set; }
 
@@ -42,5 +42,9 @@ namespace Schema.Domain.PostgreSQL
         [SchemaProperty(Description = "false creates the key NOT VALID, so the rows already in the table are not checked. true over a NOT VALID key validates it, which fails when any row violates it. Omitted leaves an existing key as it is, and a new one is validated.")]
         [JsonProperty(Order = 105, NullValueHandling = NullValueHandling.Ignore)]
         public bool? Validated { get; set; }
+
+        [SchemaProperty(Description = "Optional. Stored with COMMENT ON. An omitted value leaves an existing comment alone; \"\" removes it.")]
+        [JsonProperty(Order = 107, NullValueHandling = NullValueHandling.Ignore)]
+        public string Description { get; set; }
     }
 }

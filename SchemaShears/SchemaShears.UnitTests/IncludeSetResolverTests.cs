@@ -107,4 +107,14 @@ public class IncludeSetResolverTests
             Assert.That(result.Count, Is.EqualTo(2)); // readme + Product.json scaffolding only
         });
     }
+
+    // B27: the Templates folder was matched by exact case, so a "templates/..." manifest line (which resolves on a
+    // case-insensitive file system) brought its file without its Template.json.
+    [Test]
+    public void Resolve_ATemplatesPathInAnotherCase_StillAddsTheTemplateScaffolding()
+    {
+        var result = IncludeSetResolver.Resolve(new[] { Path.Join("templates", "Main", "Tables", "dbo.Orders.json") }, new List<string>(), _source);
+
+        Assert.That(result.ContainsKey(_mainTemplateRel), Is.True, string.Join(", ", result.Keys));
+    }
 }

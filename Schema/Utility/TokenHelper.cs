@@ -303,15 +303,17 @@ SELECT @v_sql = @v_sql + N'DROP TABLE ' + QUOTENAME([name]) + N';' + NCHAR(13) +
 IF @v_sql <> N'' EXEC(@v_sql)
 """;
 
+    // The session's own temp tables, found by namespace: casting every schema name in the database to regnamespace
+    // failed on any name holding a double quote, and that broke every query token there.
     private const string DropTempTablesPostgreSQL = """
 DO $$
 DECLARE
   v_sql TEXT = '';
 BEGIN
-  SELECT STRING_AGG('DROP TABLE IF EXISTS "' || tablename || '";', CHR(10))
+  SELECT STRING_AGG('DROP TABLE IF EXISTS pg_temp.' || quote_ident(c.relname) || ';', CHR(10))
     INTO v_sql
-    FROM pg_catalog.pg_tables
-    WHERE ('"' || schemaname || '"')::regnamespace = pg_catalog.PG_MY_TEMP_SCHEMA();
+    FROM pg_catalog.pg_class c
+    WHERE c.relnamespace = pg_catalog.PG_MY_TEMP_SCHEMA() AND c.relkind IN ('r', 'p');
   IF v_sql IS NOT NULL THEN
     EXECUTE v_sql;
   END IF;
@@ -324,7 +326,7 @@ END $$;
     // needed between query token resolutions within the same session.
     private const string DropTempTablesMySQL = "SELECT 1";
 
-    public static void ResolveQueryTokens(Dictionary<string, string> queryTokens, List<KeyValuePair<string, string>> nonQueryTokens, System.Data.IDbCommand cmd, string basePath, Platform platform)
+    public static void ResolveQueryTokens(Dictionary<string, string> queryTokens, List<KeyValuePair<string, string>> nonQueryTokens, System.Data.IDbCommand cmd, Platform platform)
     {
         var dropTempTablesScript = GetDropTempTablesScript(platform);
         foreach (var token in queryTokens.ToList())
@@ -344,7 +346,8 @@ END $$;
             }
             catch (Exception ex)
             {
-                throw new Exception($"Error resolving {token.Key}\r\n{token.Value}\r\n{ex.Message}\r\n{cmd.CommandText}");
+                // The query as sent has every token substituted, so it can hold a secret; it is not part of the message.
+                throw new Exception($"Error resolving {token.Key}: {ex.Message}", ex);
             }
         }
     }

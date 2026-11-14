@@ -9,12 +9,13 @@ namespace Schema.Capabilities
     /// </summary>
     public enum DegradeKind
     {
-        /// <summary>The declared feature is omitted entirely below the floor — e.g. a temporal / masked /
-        /// encrypted / columnstore declaration is not applied, or a CHECK / NULLS NOT DISTINCT clause is dropped.</summary>
+        /// <summary>The declared object is not created below the floor — e.g. a columnstore, JSON or selective XML
+        /// index, a CHECK constraint, a VIRTUAL generated column.</summary>
         Skip,
 
-        /// <summary>The object is created but with reduced fidelity below the floor — e.g. a descending index
-        /// key part is stored ascending.</summary>
+        /// <summary>The object is created without what the server cannot express below the floor — e.g. a table
+        /// without system versioning, a column unmasked, an index stored visible or ascending, a key without WITHOUT
+        /// OVERLAPS.</summary>
         Reduced,
 
         /// <summary>No degrade is safe, so the deploy is refused below the floor whatever the unsupported-feature

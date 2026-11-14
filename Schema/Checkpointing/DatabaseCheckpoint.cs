@@ -13,24 +13,12 @@ internal class DatabaseCheckpoint
     public string Server { get; set; } = "";
     public string DatabaseName { get; set; } = "";
     public string SchemaName { get; set; } = "";
-    public DateTime StartedAt { get; set; } = DateTime.Now;
+    // UTC, as the deployment summary reports times.
+    public DateTime StartedAt { get; set; } = DateTime.UtcNow;
+    public Guid? RunId { get; set; }
 
     public List<string> CompletedSteps { get; set; } = [];
     public Dictionary<DatabaseScriptSlot, List<string>> CompletedScripts { get; set; } = new();
-
-    public static class Steps
-    {
-        public const string KindleForge = "KindleForge";
-        public const string ValidateBaseline = "ValidateBaseline";
-        public const string MissingTablesAndColumns = "MissingTablesAndColumns";
-        public const string ModifiedTables = "ModifiedTables";
-        public const string IndexesAndConstraints = "IndexesAndConstraints";
-        public const string TableDataDelivery = "TableDataDelivery";
-        public const string ForeignKeys = "ForeignKeys";
-        public const string MaterializedViewQuench = "MaterializedViewQuench";
-        public const string IndexedViewQuench = "IndexedViewQuench";
-        public const string VersionStamp = "VersionStamp";
-    }
 
     public void AddStep(string stepName)
     {

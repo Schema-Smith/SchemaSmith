@@ -1,0 +1,75 @@
+// Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
+
+using System.Collections.Generic;
+using NUnit.Framework;
+
+namespace SchemaTongs.UnitTests;
+
+// A WMI alert can exist only on a Windows server with SQL Server Agent running, so no container leg can extract one;
+// these pin the arguments its script passes, which sp_verify_alert accepts only in the WMI form.
+[TestFixture]
+public class SqlServerServerObjectCasterTests
+{
+    private static Dictionary<string, string> Alert(string eventId, string messageId, string severity, string databaseName, string performanceCondition) => new()
+    {
+        ["name"] = "a1", ["event_id"] = eventId, ["message_id"] = messageId, ["severity"] = severity, ["enabled"] = "1",
+        ["delay_between_responses"] = "0", ["notification_message"] = null, ["include_event_description"] = "5",
+        ["database_name"] = databaseName, ["event_description_keyword"] = null, ["job_name"] = null, ["performance_condition"] = performanceCondition
+    };
+
+    [Test]
+    public void AWmiAlert_IsScriptedWithItsNamespaceAndQuery()
+    {
+        // msdb keeps a WMI alert's namespace in database_name and its query in performance_condition.
+        var args = SqlServerServerObjectCaster.AlertArguments(
+            Alert("8", "0", "0", @"\\.\root\Microsoft\SqlServer\ServerEvents\MSSQLSERVER", "SELECT * FROM DEADLOCK_GRAPH"));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(args, Does.Contain(@"@wmi_namespace = N'\\.\root\Microsoft\SqlServer\ServerEvents\MSSQLSERVER'"));
+            Assert.That(args, Does.Contain("@wmi_query = N'SELECT * FROM DEADLOCK_GRAPH'"));
+            Assert.That(args, Does.Not.Contain("@database_name"), "the namespace is not a database");
+            Assert.That(args, Does.Not.Contain("@performance_condition"), "the query is not a performance condition");
+        });
+    }
+
+    [Test]
+    public void ASeverityAlert_KeepsItsDatabaseAndHasNoWmiArguments()
+    {
+        var args = SqlServerServerObjectCaster.AlertArguments(Alert("1", "0", "17", "Sales", null));
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(args, Does.Contain("@severity = 17"));
+            Assert.That(args, Does.Contain("@database_name = N'Sales'"));
+            Assert.That(args, Does.Not.Contain("@wmi_"));
+        });
+    }
+
+    // The fingerprint is of the captured object, so an edited body does nothing where the server still matches: the script
+    // has to say so where the edit would be made.
+    [Test]
+    public void AFingerprintedScript_SaysToChangeTheObjectOnTheReferenceServer()
+    {
+        var script = SqlServerServerObjectCaster.IfChanged("SELECT N'x'", "job", "x", "SELECT 1;");
+        Assert.That(script, Does.StartWith("-- Captured from the reference server. To change this object, change it there and extract again"));
+    }
+
+    // A job script compares the server with the values it declares, so the header points at those values.
+    [Test]
+    public void AJobScript_SaysToEditItsValues()
+    {
+        var job = new Dictionary<string, string>
+        {
+            ["name"] = "j1", ["enabled"] = "1", ["description"] = null, ["category"] = null, ["owner"] = null, ["notify_level_eventlog"] = "2",
+            ["notify_level_email"] = "0", ["notify_level_page"] = "0", ["delete_level"] = "0", ["email_operator"] = null, ["page_operator"] = null, ["start_step_id"] = "1"
+        };
+        var script = SqlServerServerObjectCaster.JobScript(job, [], []);
+        Assert.Multiple(() =>
+        {
+            Assert.That(script, Does.StartWith("-- Captured from the reference server. To change the job, edit the values below"));
+            Assert.That(script, Does.Contain("IF ISNULL((").And.Contain("<> @expected COLLATE Latin1_General_BIN2"), "the server is compared with the declared values");
+            Assert.That(script, Does.Not.Contain("INSERT @steps"), "a job with no steps declares none");
+        });
+    }
+}

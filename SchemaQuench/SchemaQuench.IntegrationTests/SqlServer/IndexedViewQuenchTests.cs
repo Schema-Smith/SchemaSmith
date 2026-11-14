@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Data;
 using System.Data.Common;
+using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Schema.DataAccess;
 using Schema.Domain;
@@ -190,6 +191,33 @@ INNER JOIN sys.schemas s ON v.schema_id = s.schema_id
 WHERE s.name = '{_schema}' AND v.name = 'vTestSummary'";
         var objectIdAfter = cmd.ExecuteScalar();
         Assert.That(objectIdAfter, Is.EqualTo(objectIdBefore), "View object_id should be unchanged (no-op re-quench)");
+
+        conn.Close();
+    }
+
+    // B6: an indexed view's index columns were compared as written against the bracketed live list, so a hand-written
+    // "Name" or "Id, Name" dropped and re-created the index on every deploy.
+    [Test]
+    public void ReQuench_UnbracketedIndexColumns_DoesNotRecreateTheIndex()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+
+        var json = @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""Id""},{""Name"":""[IX_vTestSummary_Name]"",""Unique"":false,""Clustered"":false,""IndexColumns"":""Name, Id""}]}]";
+        RunIndexedViewQuench(cmd, json);
+
+        string Partitions()
+        {
+            cmd.CommandText = $@"SELECT STRING_AGG(CAST(p.partition_id AS VARCHAR(30)), ',') WITHIN GROUP (ORDER BY i.index_id)
+  FROM sys.indexes i JOIN sys.partitions p ON p.[object_id] = i.[object_id] AND p.index_id = i.index_id
+ WHERE i.[object_id] = OBJECT_ID('{_schema}.vTestSummary')";
+            return cmd.ExecuteScalar()?.ToString();
+        }
+        var before = Partitions();
+        RunIndexedViewQuench(cmd, json);
+        Assert.That(Partitions(), Is.EqualTo(before), "the unchanged indexes are left as they are");
 
         conn.Close();
     }
@@ -508,6 +536,40 @@ WHERE s.name = '{_schema}' AND v.name = 'vTestSummary2'";
         conn.Close();
     }
 
+    // The preview prints what the deploy would run, not just the narration around it, and changes nothing.
+    [Test]
+    public void WhatIf_PrintsTheStatementsTheDeployWouldRun()
+    {
+        var messages = new System.Collections.Generic.List<string>();
+        using var conn = (Microsoft.Data.SqlClient.SqlConnection)DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.InfoMessage += (_, e) => { foreach (Microsoft.Data.SqlClient.SqlError err in e.Errors) messages.Add(err.Message); };
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        var view = $"[{_schema}].[vTestSummary]";
+
+        EnsureViewExists(cmd);
+        messages.Clear();
+        RunIndexedViewQuench(cmd, ViewDefinitionWithWhereClause(), whatIf: true);
+        var redefined = messages.ToList();
+        messages.Clear();
+        RunIndexedViewQuench(cmd, "[]", whatIf: true);
+        var removed = messages.ToList();
+
+        cmd.CommandText = $"SELECT COUNT(*) FROM sys.indexes WHERE object_id = OBJECT_ID('{view}') AND name IN ('IX_vTestSummary_Id', 'IX_vTestSummary_Name')";
+        var indexesLeft = (int)cmd.ExecuteScalar()!;
+        Assert.Multiple(() =>
+        {
+            Assert.That(redefined, Has.Some.EqualTo($"DROP INDEX [IX_vTestSummary_Name] ON {view}"));
+            Assert.That(redefined, Has.Some.EqualTo($"DROP INDEX [IX_vTestSummary_Id] ON {view}"));
+            Assert.That(redefined, Has.Some.EqualTo($"DROP VIEW {view}"));
+            Assert.That(redefined, Has.Some.StartsWith($"CREATE VIEW {view} WITH SCHEMABINDING AS SELECT").And.Contains("WHERE Amount > 0"));
+            Assert.That(removed, Has.Some.EqualTo($"DROP VIEW {view}"));
+            Assert.That(indexesLeft, Is.EqualTo(2), "a preview changed the view");
+        });
+        conn.Close();
+    }
+
     /// <summary>
     /// Ensures vTestSummary exists with the standard two-index definition.
     /// Idempotent — safe to call whether the view exists or not.
@@ -615,6 +677,43 @@ WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSum
             + "freshly created one");
     }
 
+    // The live compression was read from partition 1 only, so on a partitioned view index a declared PAGE compared equal
+    // while the other partitions stayed uncompressed.
+    [Test]
+    public void ACompressionDeclaredOnAPartitionedIndex_ReachesEveryPartition()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        var pf = $"pf_{_schema}";
+        var ps = $"ps_{_schema}";
+        EnsureViewDropped(cmd);
+        try
+        {
+            var json = @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]"",""CompressionType"":""PAGE""}]}]";
+            RunIndexedViewQuench(cmd, json);
+            cmd.CommandText = $"CREATE PARTITION FUNCTION [{pf}] (INT) AS RANGE RIGHT FOR VALUES (10); " +
+                              $"CREATE PARTITION SCHEME [{ps}] AS PARTITION [{pf}] ALL TO ([PRIMARY]);";
+            cmd.ExecuteNonQuery();
+            cmd.CommandText = $"CREATE UNIQUE CLUSTERED INDEX [IX_vTestSummary_Id] ON [{_schema}].[vTestSummary] ([Id]) " +
+                              $"WITH (DROP_EXISTING = ON, DATA_COMPRESSION = PAGE ON PARTITIONS (1)) ON [{ps}]([Id])";
+            cmd.ExecuteNonQuery();
+
+            RunIndexedViewQuench(cmd, json);
+
+            cmd.CommandText = $"SELECT COUNT(*) FROM sys.partitions WHERE [object_id] = OBJECT_ID('[{_schema}].[vTestSummary]') AND index_id = 1 AND data_compression_desc <> 'PAGE'";
+            Assert.That((int)cmd.ExecuteScalar()!, Is.Zero, "every partition of the index is compressed as declared");
+        }
+        finally
+        {
+            EnsureViewDropped(cmd);
+            cmd.CommandText = $"IF EXISTS (SELECT 1 FROM sys.partition_schemes WHERE [name] = '{ps}') DROP PARTITION SCHEME [{ps}]; " +
+                              $"IF EXISTS (SELECT 1 FROM sys.partition_functions WHERE [name] = '{pf}') DROP PARTITION FUNCTION [{pf}];";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     private static string ViewDefinitionWithPadIndex(bool padIndex) =>
         @"[{""Schema"":""[IvSchema]"",""Name"":""[vTestSummary]"",""Definition"":""SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [IvSchema].SourceTable GROUP BY Id, Name"",""Indexes"":[{""Name"":""[IX_vTestSummary_Id]"",""Unique"":true,""Clustered"":true,""IndexColumns"":""[Id]"",""FillFactor"":70,""PadIndex"":"
         + (padIndex ? "true" : "false") + @"}]}]";
@@ -624,6 +723,74 @@ WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSum
     /// <summary>
     /// Drops vTestSummary (and any other views) by quenching with an empty array.
     /// </summary>
+    // B6: a view of the declared name that this product does not own reached CREATE VIEW and failed with the raw
+    // "There is already an object named ..." (2714), which names neither the product nor what to do.
+    [Test]
+    public void AnUnownedViewOfTheSameName_IsRefusedByName()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+        try
+        {
+            cmd.CommandText = $"EXEC('CREATE VIEW [{_schema}].[vTestSummary] AS SELECT 1 AS x')";
+            cmd.ExecuteNonQuery();
+
+            var ex = Assert.Throws<Microsoft.Data.SqlClient.SqlException>(() => RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes()));
+            Assert.That(ex!.Number, Is.Not.EqualTo(2714), ex.Message);
+            Assert.That(ex.Message, Does.Contain("vTestSummary").And.Contain("not owned"), ex.Message);
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP VIEW IF EXISTS [{_schema}].[vTestSummary]";
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    // B6: a view this product created whose index never made it (an earlier deploy failed between the two) is not an
+    // indexed view, so it was not seen as existing, and the CREATE VIEW failed on it with 2714 on every later deploy.
+    [Test]
+    public void AnOwnedViewLeftWithoutItsIndex_IsRebuilt()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+        cmd.CommandText = $@"EXEC('CREATE VIEW [{_schema}].[vTestSummary] WITH SCHEMABINDING AS SELECT Id, Name, COUNT_BIG(*) AS Cnt, SUM(Amount) AS TotalAmount FROM [{_schema}].SourceTable GROUP BY Id, Name')
+EXEC sp_addextendedproperty 'SchemaSmith_Product', N'{_productName}', 'SCHEMA', N'{_schema}', 'VIEW', N'vTestSummary'";
+        cmd.ExecuteNonQuery();
+
+        Assert.DoesNotThrow(() => RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes()));
+        cmd.CommandText = $"SELECT OBJECTPROPERTY(OBJECT_ID('[{_schema}].[vTestSummary]'), 'IsIndexed')";
+        Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(1), "the view is indexed");
+    }
+
+    // B6: creating and dropping an indexed view wrote no change-audit row, so the deploy summary never counted them.
+    [Test]
+    public void CreatingAndDroppingAnIndexedView_IsAudited()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        EnsureViewDropped(cmd);
+        int Audit(string action)
+        {
+            cmd.CommandText = $"SELECT COUNT(*) FROM SchemaSmith.ChangeAudit WHERE SessionId = @@SPID AND ObjectType = 'indexedView' AND ObjectName = '{_schema}.vTestSummary' AND ActionType = '{action}'";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+        cmd.CommandText = $"DELETE FROM SchemaSmith.ChangeAudit WHERE ObjectName = '{_schema}.vTestSummary'";
+        cmd.ExecuteNonQuery();
+
+        RunIndexedViewQuench(cmd, ViewDefinitionWithTwoIndexes());
+        Assert.That(Audit("created"), Is.EqualTo(1), "the create is audited");
+        EnsureViewDropped(cmd);
+        Assert.That(Audit("dropped"), Is.EqualTo(1), "the drop is audited");
+    }
+
     private void EnsureViewDropped(IDbCommand cmd)
     {
         RunIndexedViewQuench(cmd, "[]");
@@ -662,14 +829,14 @@ WHERE s.name = '{_schema}' AND v.name = 'vTestSummary' AND i.name = 'IX_vTestSum
 
     // Definitions name their schema as the placeholder IvSchema: the database is shared, so it resolves to
     // this fixture's own schema here.
-    private void RunIndexedViewQuench(IDbCommand cmd, string indexedViewJson)
+    private void RunIndexedViewQuench(IDbCommand cmd, string indexedViewJson, bool whatIf = false)
     {
         indexedViewJson = indexedViewJson.Replace("[IvSchema]", $"[{_schema}]");
         cmd.CommandTimeout = 300;
         cmd.CommandText = $@"EXEC [SchemaSmith].[IndexedViewQuench]
     @ProductName = '{_productName}',
     @IndexedViewSchema = '{indexedViewJson.Replace("'", "''")}',
-    @WhatIf = 0,
+    @WhatIf = {(whatIf ? 1 : 0)},
     @UpdateFillFactor = 0,
     @TemplateName = N'Main',
     @SchemaName = N''";

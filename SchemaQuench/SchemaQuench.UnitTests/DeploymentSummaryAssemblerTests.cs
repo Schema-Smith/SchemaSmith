@@ -38,7 +38,8 @@ public class DeploymentSummaryAssemblerTests
         IReadOnlyList<FailureRecord> failures = null,
         long bottleneckThresholdMs = 5000,
         ChangeAuditCapture changeAudit = null,
-        bool protectedModeEnabled = false)
+        bool protectedModeEnabled = false,
+        RunIdentity identity = null)
     {
         targets ??= new List<TargetResult>
         {
@@ -68,7 +69,81 @@ public class DeploymentSummaryAssemblerTests
             failures: failures,
             bottleneckThresholdMs: bottleneckThresholdMs,
             changeAudit: changeAudit,
-            protectedModeEnabled: protectedModeEnabled);
+            protectedModeEnabled: protectedModeEnabled,
+            identity: identity);
+    }
+
+    [Test]
+    public void Assemble_CarriesTheRunIdentity()
+    {
+        var id = Guid.NewGuid();
+        var resumed = Guid.NewGuid();
+        var identity = new RunIdentity(id, "2026.11.3", resumed, new PackageIdentity("sha256:ab", 4),
+            new RunSource("acme/db", "4f2a9c1", "main", "git"), new CiInfo("Other", "p", "7", null, null, null, null),
+            new RunHost("BUILD01", "svc"));
+
+        var run = AssembleWith(identity: identity).Run;
+
+        Assert.That(run.Id, Is.EqualTo(id));
+        Assert.That(run.Label, Is.EqualTo("2026.11.3"));
+        Assert.That(run.ResumesRunId, Is.EqualTo(resumed));
+        Assert.That(run.Package, Is.EqualTo(identity.Package));
+        Assert.That(run.Source, Is.EqualTo(identity.Source));
+        Assert.That(run.Ci, Is.EqualTo(identity.Ci));
+        Assert.That(run.Host, Is.EqualTo(identity.Host));
+    }
+
+    [Test]
+    public void Assemble_WithoutAnIdentity_LeavesTheRunIdentityPropertiesNull()
+    {
+        var run = AssembleWith().Run;
+
+        Assert.That(new object[] { run.Id, run.Label, run.ResumesRunId, run.Package, run.Source, run.Ci, run.Host }, Is.All.Null);
+    }
+
+    // D12: what the settings steps found, counted per scope; absent when the package declares no settings.
+    [Test]
+    public void Assemble_Settings_CountsEachScopesOutcomes()
+    {
+        var audit = new ChangeAuditCapture();
+        audit.Record("ServerSetting", "Configuration max degree of parallelism", "changed");
+        audit.Record("ServerSetting", "Configuration user connections", "pendingRestart");
+        audit.Record("DatabaseSetting", "Option RECOVERY", "drift");
+        audit.Record("DatabaseSetting", "Option AUTO_CLOSE", "drift");
+        audit.Record("DatabaseSetting", "ScopedConfiguration MAXDOP", "fixFailed");
+        audit.Record("table", "dbo.t", "created");
+
+        var settings = AssembleWith(changeAudit: audit).SettingOutcomes;
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(settings.Server, Is.EqualTo(new SettingsScopeCounts(Changed: 1, PendingRestart: 1, Drift: 0, FixFailed: 0, Unfixable: 0, WouldChange: 0)));
+            Assert.That(settings.Database, Is.EqualTo(new SettingsScopeCounts(Changed: 0, PendingRestart: 0, Drift: 2, FixFailed: 1, Unfixable: 0, WouldChange: 0)));
+        });
+    }
+
+    [Test]
+    public void Assemble_Settings_AbsentWithoutSettingRows_AndAScopeWithoutRowsIsNull()
+    {
+        var audit = new ChangeAuditCapture();
+        audit.Record("table", "dbo.t", "created");
+        Assert.That(AssembleWith(changeAudit: audit).SettingOutcomes, Is.Null);
+
+        audit.Record("DatabaseSetting", "Option RECOVERY", "wouldChange");
+        var settings = AssembleWith(changeAudit: audit).SettingOutcomes;
+        Assert.That(settings.Server, Is.Null);
+        Assert.That(settings.Database.WouldChange, Is.EqualTo(1));
+    }
+
+    [Test]
+    public void Assemble_SettingRows_StayInTheDetail()
+    {
+        var audit = new ChangeAuditCapture();
+        audit.MarkInstrumented();
+        audit.Record("DatabaseSetting", "Option RECOVERY", "changed");
+
+        Assert.That(AssembleWith(changeAudit: audit).ObjectChanges.Details.Select(d => $"{d.ObjectType} {d.ObjectName} {d.Action}"),
+            Has.Member("DatabaseSetting Option RECOVERY changed"));
     }
 
     [Test]
@@ -105,6 +180,7 @@ public class DeploymentSummaryAssemblerTests
         cap.Record("column", "dbo.Existing.Name", "wouldModify");
         cap.Record("foreignKey", "dbo.Existing.FK_Old", "wouldDrop");
         cap.Record("constraint", "dbo.Existing.CK_Old", "wouldDrop");
+        cap.Record("column", "dbo.Existing.Phone", "wouldDrop");
         cap.MarkInstrumented();
 
         var oc = AssembleWith(changeAudit: cap, protectedModeEnabled: false).ObjectChanges;
@@ -114,9 +190,10 @@ public class DeploymentSummaryAssemblerTests
         Assert.That(oc.Modified.Columns, Is.EqualTo(1), "wouldModify column maps into modified.columns");
         Assert.That(oc.Dropped.ForeignKeys, Is.EqualTo(1), "wouldDrop FK maps into dropped.foreignKeys");
         Assert.That(oc.Dropped.Constraints, Is.EqualTo(1), "wouldDrop constraint maps into dropped.constraints");
+        Assert.That(oc.Dropped.Columns, Is.EqualTo(1), "wouldDrop column maps into dropped.columns (#607)");
         // WhatIf previews ARE changes — they stay in the detail (unlike protection-suppressed dropSuppressed).
         Assert.That(oc.Details.Select(d => d.Action),
-            Is.EquivalentTo(new[] { "wouldCreate", "wouldCreate", "wouldModify", "wouldDrop", "wouldDrop" }));
+            Is.EquivalentTo(new[] { "wouldCreate", "wouldCreate", "wouldModify", "wouldDrop", "wouldDrop", "wouldDrop" }));
     }
 
     [Test]
@@ -137,6 +214,19 @@ public class DeploymentSummaryAssemblerTests
     public void Assemble_UnsupportedDowngrade_NullWhenNoDowngradeRows()
     {
         Assert.That(AssembleWith().UnsupportedDowngrade, Is.Null);
+    }
+
+    // A delivery downgrade is recorded on the C# side, and a run that changes no tables (a datafix profile) never
+    // drains the procedures' audit, so it is not instrumented: the run exited 1 "Incomplete" with no manifest saying why.
+    [Test]
+    public void Assemble_UnsupportedDowngrade_ManifestEvenWhenTheTableAuditDidNotRun()
+    {
+        var cap = new ChangeAuditCapture();
+        cap.Record("JSON data delivery (SQL Server compat 130)", "dbo.Orders", "downgraded");
+
+        var summary = AssembleWith(changeAudit: cap);
+
+        Assert.That(summary.UnsupportedDowngrade?.Downgrades.Select(d => d.ObjectName), Is.EquivalentTo(new[] { "dbo.Orders" }));
     }
 
     [Test]
@@ -210,7 +300,7 @@ public class DeploymentSummaryAssemblerTests
 
         // Pinned deliberately: the version is the contract's own statement that its shape changed,
         // so a field added without bumping it should redden here rather than ship silently.
-        Assert.That(summary.SchemaVersion, Is.EqualTo("1.2"));
+        Assert.That(summary.SchemaVersion, Is.EqualTo("1.4"));
         Assert.That(summary.Tool, Is.EqualTo("SchemaQuench"));
         Assert.That(summary.ToolVersion, Is.EqualTo("2.3.0"));
 
@@ -414,7 +504,7 @@ public class DeploymentSummaryAssemblerTests
         Assert.That(summary.ObjectChanges.Instrumented, Is.False);
         Assert.That(summary.ObjectChanges.Created, Is.EqualTo(new CreatedCounts(0, 0, 0, 0, 0, 0, 0, 0)));
         Assert.That(summary.ObjectChanges.Modified, Is.EqualTo(new ModifiedCounts(0, 0)));
-        Assert.That(summary.ObjectChanges.Dropped, Is.EqualTo(new DroppedCounts(0, 0, 0, 0)));
+        Assert.That(summary.ObjectChanges.Dropped, Is.EqualTo(new DroppedCounts(0, 0, 0, 0, 0)));
         Assert.That(summary.ObjectChanges.Details, Is.Empty);
     }
 

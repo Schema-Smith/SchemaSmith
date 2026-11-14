@@ -114,6 +114,60 @@ public class MySqlScriptGuardTests
             + "MySQL 8.0. Compare it to a variable instead (`<column> = v_DbCi`):\n  " + string.Join("\n  ", offenders));
     }
 
+    /// <summary>
+    /// Every working table the scripts create has a primary key. A server running MariaDB's innodb_force_primary_key
+    /// or MySQL's sql_require_primary_key refuses a temporary table without one too, so a single keyless table fails
+    /// every deploy there.
+    /// </summary>
+    [Test]
+    public void EveryWorkingTable_HasAPrimaryKey()
+    {
+        var offenders = new List<string>();
+        var tablesChecked = 0;
+        foreach (var (name, sql) in Scripts())
+        {
+            var code = Regex.Replace(sql, @"--[^\r\n]*", string.Empty);
+            foreach (Match start in Regex.Matches(code, @"CREATE\s+TEMPORARY\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?(`?\w+`?)",
+                         RegexOptions.IgnoreCase))
+            {
+                tablesChecked++;
+                var statement = code[start.Index..].Split(';')[0];
+                if (!Regex.IsMatch(statement, @"\bPRIMARY\s+KEY\b", RegexOptions.IgnoreCase))
+                    offenders.Add($"{name}: {start.Groups[1].Value}");
+            }
+        }
+
+        Assert.That(tablesChecked, Is.GreaterThan(100), "too few working tables found; the scan is broken");
+        Assert.That(offenders, Is.Empty,
+            "A working table has no primary key, so every deploy fails on a server that requires one. Give it one "
+            + "(a RowId INT AUTO_INCREMENT PRIMARY KEY column also works ahead of a SELECT):\n  " + string.Join("\n  ", offenders));
+    }
+
+    /// <summary>
+    /// MySQL 8.0.22 misreads SET @var := (SELECT ...) inside a stored program from its second execution in a session:
+    /// the variable comes back NULL. A loop that advances that way stops after two rows with no error, and a check
+    /// computed that way passes on every call after the first. SELECT (SELECT ...) INTO @var gives the same value,
+    /// NULL when no row matches, on every patch.
+    /// </summary>
+    [Test]
+    public void NoUserVariable_IsSetFromABareSubquery()
+    {
+        var offenders = new List<string>();
+        var selectIntoVariable = 0;
+        foreach (var (name, sql) in Scripts())
+        {
+            var code = Regex.Replace(sql, @"--[^\r\n]*", string.Empty);
+            selectIntoVariable += Regex.Matches(code, @"\bINTO\s+@\w+", RegexOptions.IgnoreCase).Count;
+            offenders.AddRange(Regex.Matches(code, @"\bSET\s+@\w+\s*:?=\s*\(\s*SELECT\b", RegexOptions.IgnoreCase)
+                .Select(m => $"{name}: {Regex.Replace(m.Value, @"\s+", " ")}"));
+        }
+
+        Assert.That(selectIntoVariable, Is.GreaterThan(50), "too few SELECT ... INTO @var found; the scan is broken");
+        Assert.That(offenders, Is.Empty,
+            "A user variable is set from a bare subquery, which MySQL 8.0.22 reads as NULL from the second execution in a "
+            + "session. Write SELECT (SELECT ...) INTO @var instead:\n  " + string.Join("\n  ", offenders));
+    }
+
     private static int ClosingParen(string text, int open)
     {
         var depth = 0;

@@ -21,8 +21,15 @@ public class CiTestedPathsTests
 
     private static (List<string> Tested, List<string> Untested) ReadList()
     {
+        var (tested, untested, _) = ReadSections();
+        return (tested, untested);
+    }
+
+    private static (List<string> Tested, List<string> Untested, List<string> UnitTested) ReadSections()
+    {
         var tested = new List<string>();
         var untested = new List<string>();
+        var unitTested = new List<string>();
         List<string> section = null;
         foreach (var raw in File.ReadAllLines(RepoFile(".github", "ci-tested-paths.txt")))
         {
@@ -30,15 +37,16 @@ public class CiTestedPathsTests
             if (line.Length == 0 || line.StartsWith('#')) continue;
             if (line == "[tested]") { section = tested; continue; }
             if (line == "[untested]") { section = untested; continue; }
+            if (line == "[unit-tested]") { section = unitTested; continue; }
             section?.Add(line);
         }
-        return (tested, untested);
+        return (tested, untested, unitTested);
     }
 
-    // The `paths:` list that follows each trigger in continuous-integration.yml, in order.
-    private static List<List<string>> TriggerCopies()
+    // The `paths:` list that follows each trigger in a workflow, in order.
+    private static List<List<string>> TriggerCopies(string workflow = "continuous-integration.yml")
     {
-        var lines = File.ReadAllLines(RepoFile(".github", "workflows", "continuous-integration.yml"));
+        var lines = File.ReadAllLines(RepoFile(".github", "workflows", workflow));
         var copies = new List<List<string>>();
         for (var i = 0; i < lines.Length; i++)
         {
@@ -67,17 +75,39 @@ public class CiTestedPathsTests
     }
 
     [Test]
+    public void FilesOnlyUnitTestsRead_RunTheirTestsAlone_NotTheMatrix()
+    {
+        var (tested, _, unitTested) = ReadSections();
+        var copies = TriggerCopies("ci-doc-contract.yml");
+        var workflow = File.ReadAllText(RepoFile(".github", "workflows", "ci-doc-contract.yml"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(unitTested, Does.Contain("docs/end-user/reference/*.md"),
+                "CapabilityDocumentationTests and SettingsDocumentationTests read the reference pages");
+            Assert.That(unitTested.Intersect(tested), Is.Empty, "a file only unit tests read does not start the full matrix");
+            Assert.That(copies, Has.Count.EqualTo(2), "a paths list on the push trigger and on the pull_request trigger");
+            foreach (var copy in copies)
+                Assert.That(copy, Is.EqualTo(unitTested), "the trigger's paths, in order, are .github/ci-tested-paths.txt's [unit-tested] lines");
+            Assert.That(workflow, Does.Contain("--filter \"FullyQualifiedName~CapabilityDocumentationTests|FullyQualifiedName~SettingsDocumentationTests\""),
+                "the workflow runs the tests that read those files");
+        });
+    }
+
+    [Test]
     public void TheCompanionAndTheReleaseGate_ReadTheList()
     {
         var companion = File.ReadAllText(RepoFile(".github", "workflows", "ci-docs-only-companion.yml"));
         var release = File.ReadAllText(RepoFile(".github", "workflows", "release.yml"));
+        var walkBack = File.ReadAllText(RepoFile("scripts", "release-gate", "trusted-shas.sh"));
         const string call = "python3 scripts/ci_path_filter.py .github/ci-tested-paths.txt";
         Assert.Multiple(() =>
         {
             Assert.That(companion, Does.Contain(call), "the companion's gate asks the list");
             Assert.That(companion, Does.Not.Contain("    paths:").And.Not.Contain("paths-ignore"),
                 "and starts on every pull request, so its trigger cannot disagree with CI's");
-            Assert.That(release, Does.Contain(call), "the release walk-back asks the list");
+            Assert.That(release, Does.Contain("bash scripts/release-gate/trusted-shas.sh"), "the release gate walks back with the script");
+            Assert.That(walkBack, Does.Contain("FILTER=\"$HERE/../ci_path_filter.py\"").And.Contain("LIST=\"$HERE/../../.github/ci-tested-paths.txt\""),
+                "which asks the list");
         });
     }
 

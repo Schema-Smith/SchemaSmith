@@ -22,7 +22,7 @@ END $$;
 
 -- Why a statement of this kind on this table has no lower-lock form, or NULL when it has one (probed on 12, 17, 18).
 -- p_Kind: index, constraint (a primary key or unique constraint, built as an index and attached USING INDEX),
--- withoutOverlaps, exclusion, foreignKey, check.
+-- withoutOverlaps, exclusion, foreignKey, check, partition.
 CREATE OR REPLACE FUNCTION "SchemaSmith"."OnlineUnavailableReason"(p_Schema TEXT, p_Table TEXT, p_Kind TEXT) RETURNS TEXT
     LANGUAGE plpgsql STABLE
   SET jit = 'off'
@@ -33,6 +33,7 @@ DECLARE
 BEGIN
   RETURN CASE p_Kind
            WHEN 'check' THEN NULL
+           WHEN 'partition' THEN 'adding a partition locks the partitioned table'
            WHEN 'foreignKey' THEN CASE WHEN v_partitioned AND "SchemaSmith"."ServerVersionNum"() < 18
                                        THEN 'a foreign key on a partitioned table cannot be added NOT VALID before PostgreSQL 18' END
            WHEN 'exclusion' THEN 'an exclusion constraint cannot be built concurrently'

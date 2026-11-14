@@ -128,6 +128,25 @@ public class DescriptionCheckTests
         Assert.That(findings.Single(f => f.Code == "SS-DESC-001").Message, Does.Contain("'new words'").And.Contain("'old words'"));
     }
 
+    // G5: an XML, spatial or JSON index now has a Description, so an MS_Description in its bag is the same old spelling.
+    [Test]
+    public void SqlServer_ATypedIndexsMsDescriptionInTheBag_IsTheDeprecatedSpelling_AndADisagreementIsAnError()
+    {
+        var table = new SqlServerTable { Name = "[Docs]" };
+        table.XmlIndexes.Add(new XmlIndex { Name = "[PXML_Doc]", Extensions = LegacyMsDescription("the doc") });
+        table.SpatialIndexes.Add(new SpatialIndex { Name = "[SX_Shape]", Column = "[Shape]", Description = "new", Extensions = LegacyMsDescription("old") });
+        table.JsonIndexes.Add(new JsonIndex { Name = "[JX_Data]", Extensions = LegacyMsDescription("the data") });
+
+        var findings = new DescriptionCheck().Run(Context(Platform.SqlServer, table)).ToList();
+
+        Assert.Multiple(() =>
+        {
+            Assert.That(findings.Single(f => f.Code == "SS-DESC-002").Message,
+                Does.Contain("XML index [PXML_Doc]").And.Contain("spatial index [SX_Shape]").And.Contain("JSON index [JX_Data]"));
+            Assert.That(findings.Single(f => f.Code == "SS-DESC-001").Message, Does.Contain("spatial index [SX_Shape]").And.Contain("'new'").And.Contain("'old'"));
+        });
+    }
+
     [Test]
     public void SqlServer_AnMsDescriptionThatIsNotAString_IsIgnored()
     {

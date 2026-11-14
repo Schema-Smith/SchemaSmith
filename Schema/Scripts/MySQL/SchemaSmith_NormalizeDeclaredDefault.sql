@@ -48,7 +48,7 @@ BEGIN
     END IF;
 
     IF v_Normalized LIKE CONVERT('''%''' USING utf8mb4) COLLATE utf8mb4_unicode_ci THEN
-        RETURN REPLACE(SUBSTRING(v_Normalized, 2, CHAR_LENGTH(v_Normalized) - 2), '''''', '''');
+        RETURN SchemaSmith_DecodeStringLiteral(SUBSTRING(v_Normalized, 2, CHAR_LENGTH(v_Normalized) - 2));
     END IF;
 
     RETURN v_Normalized;

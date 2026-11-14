@@ -34,6 +34,16 @@
       "Nullable": true
     },
     {
+      "Name": "Detail",
+      "DataType": "VARCHAR(400)",
+      "Nullable": true
+    },
+    {
+      "Name": "EstimatedRows",
+      "DataType": "BIGINT",
+      "Nullable": true
+    },
+    {
       "Name": "CreatedAt",
       "DataType": "DATETIME(3)",
       "Nullable": true,

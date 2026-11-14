@@ -61,6 +61,15 @@ public abstract class SchemaTongsSharedTests
             file.Received().WriteAllText(Arg.Is<string>(s => s.EndsWithIgnoringCase("template.json")), Arg.Any<string>());
             file.Received().WriteAllText(Arg.Is<string>(s => s.Contains("Tables") && s.EndsWithIgnoringCase(".json")), Arg.Any<string>());
             ExtractedJson.HasNoEmptyValues(file);
+            // The deployment record is a SchemaSmith helper table: kindling created it, and extraction leaves it out.
+            using (var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString + $"Database={_integrationDb};"))
+            {
+                conn.Open();
+                using var check = conn.CreateCommand();
+                check.CommandText = "SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'SchemaSmith_DeploymentHistory'";
+                Assert.That(Convert.ToInt32(check.ExecuteScalar()), Is.EqualTo(1), "the deployment record's table is there to be left out");
+            }
+            file.DidNotReceive().WriteAllText(Arg.Is<string>(s => s.Contains("DeploymentHistory")), Arg.Any<string>());
 
             config["ShouldCast:Tables"] = "false";
             FactoryContainer.Clear();

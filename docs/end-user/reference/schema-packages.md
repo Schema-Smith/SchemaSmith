@@ -36,6 +36,7 @@ The `Product.json` file sits at the root of the schema package and is the top-le
 | `DropStatisticsRemovedFromProduct` | bool | omitted = inherit | No | **SQL Server and PostgreSQL.** Product tier for statistics. See [DropStatisticsRemovedFromProduct](configuration.md#dropstatisticsremovedfromproduct). |
 | `DropIndexesRemovedFromProduct` | bool | omitted = inherit | No | Product tier for indexes the package once declared. See [DropIndexesRemovedFromProduct](configuration.md#dropindexesremovedfromproduct). |
 | `DropSchemaBoundDependents` | bool | omitted = inherit | No | **SQL Server only.** Product tier of the same [cascade](#drop-cascade), off when no level declares it: a column change a `SCHEMABINDING` module blocks drops the module and lets the after-tables pass recreate it from the package. See [DropSchemaBoundDependents](configuration.md#dropschemabounddependents). |
+| `PruneObsoleteMigrationTracking` | bool | omitted | No | `false` keeps the run-once record of a migration script the package does not carry, even when the [`PruneObsoleteMigrationTracking`](schemaquench.md#pruneobsoletemigrationtracking) setting is on. SchemaShears writes it into every patch. |
 | `RebuildPolicy` | object | omitted = inherit | No | Product tier of the rebuild policy: `{ "Mode": "Never" / "Always" / "Threshold", "Threshold": n, "OnOrderMismatch": bool }`. Unlike the drop flags the levels do not combine -- the nearest level that declares a policy (table, template, product, environment) wins whole. See [RebuildPolicy](configuration.md#rebuildpolicy). |
 
 ### Settings intent
@@ -481,6 +482,86 @@ A SQL Server `Template.json` takes the same `ServerToQuench` key at the template
 
 ---
 
+## Server and Database Settings
+
+A package can say how the servers and databases it deploys to should be configured, and SchemaQuench brings each target into line or reports how it differs. `ServerSettings.json` sits beside `Product.json` and describes the server; `DatabaseSettings.json` sits in a template folder and describes every database that template deploys to. Neither file is required. Without one, SchemaQuench reads no setting of that scope, needs no extra permission and adds nothing to the log or the [deployment summary](deployment-summary-report.md). A setting the file does not list is never read or changed. For how to use them -- one package per class of server, capturing a reference server -- see [Server and Database Settings](../guide/13-server-settings.md) in the guide.
+
+```json
+{
+  "Settings": [
+    { "Kind": "Configuration", "Name": "cost threshold for parallelism", "Value": "50", "Fix": true, "OnDrift": "Warn" },
+    { "Kind": "Configuration", "Name": "max degree of parallelism", "Value": "8", "Fix": true, "OnDrift": "Error",
+      "ShouldApplyExpression": "SELECT CASE WHEN @@SERVERNAME LIKE 'OLTP%' THEN 1 ELSE 0 END", "VariantName": "OLTP class" }
+  ]
+}
+```
+
+| Property | Required | Meaning |
+|---|---|---|
+| `Kind` | yes | The catalog the setting lives in (table below). A name alone is ambiguous: SQL Server's `MAXDOP` is both a server configuration and a database-scoped configuration. |
+| `Name` | yes | The setting as the engine names it, matched without regard to case. |
+| `Value` | yes | The value the setting should have, as a string. |
+| `Fix` | yes | `true` changes a setting that differs; `false` only reports it. |
+| `OnDrift` | yes | `Warn`, `Error` or `Ignore`: the level for whatever is still wrong once the deploy has done its part (policy table below). |
+| `ShouldApplyExpression` | no | A query returning 1 when this declaration applies to the target, as for [conditional application](#conditional-application). |
+| `VariantName` | no | The variant's name, echoed in the log. |
+
+`Fix` and `OnDrift` are required so a policy is never assumed: a declaration without them is refused at load and reported by [`--Validate`](validate.md#server-and-database-settings). SchemaTongs writes both on every setting it captures.
+
+| Engine | `ServerSettings.json` | `DatabaseSettings.json` |
+|---|---|---|
+| SQL Server | `Configuration` (`sys.configurations`, set with `sp_configure` and `RECONFIGURE`); `TraceFlag` (named by number, `ON` or `OFF`, global) | `Option` (an `ALTER DATABASE ... SET` keyword); `ScopedConfiguration` (`ALTER DATABASE SCOPED CONFIGURATION`, SQL Server 2016 and later) |
+| PostgreSQL | `Parameter` (`ALTER SYSTEM`, then a configuration reload) | `Parameter` (`ALTER DATABASE ... SET`) |
+| MySQL, MariaDB | `Variable` (`SET PERSIST` on MySQL 8.0 and later, `SET GLOBAL` otherwise) | `Option`: `CHARACTER SET` or `COLLATE` |
+
+The SQL Server `Option` names SchemaQuench reads are `COMPATIBILITY_LEVEL`, `RECOVERY`, `READ_COMMITTED_SNAPSHOT`, `ALLOW_SNAPSHOT_ISOLATION`, `AUTO_CLOSE`, `AUTO_SHRINK`, `AUTO_CREATE_STATISTICS`, `AUTO_UPDATE_STATISTICS`, `AUTO_UPDATE_STATISTICS_ASYNC`, `PAGE_VERIFY`, `TRUSTWORTHY`, `PARAMETERIZATION`, `TARGET_RECOVERY_TIME` (in seconds), `DELAYED_DURABILITY`, `ANSI_NULLS`, `ANSI_PADDING`, `ANSI_WARNINGS`, `ARITHABORT`, `CONCAT_NULL_YIELDS_NULL`, `QUOTED_IDENTIFIER`, `NUMERIC_ROUNDABORT` and `ACCELERATED_DATABASE_RECOVERY` (2019 and later). Another option is reported as one that cannot be fixed; set it in a [`Setup`](#quench-slot-reference) script instead. A PostgreSQL parameter that only a server restart can change (`postmaster`) cannot be set per database, and is reported so.
+
+**Spellings compare.** Each kind compares the engine's way, so a different spelling of the same value is not drift: `ON`, `1`, `true` and `yes` are one value, numbers compare as numbers, and keywords ignore case. A PostgreSQL value with a unit is converted using the parameter's own unit, so `128MB` matches `16384` for a parameter counted in 8 kB pages. A SQL Server `Option` or `ScopedConfiguration` value must be a keyword or a number; anything else is refused rather than sent.
+
+**Variants.** Two or more declarations of one `Kind` and `Name`, each gated by a `ShouldApplyExpression`, let one package serve several classes of server. A target where none applies leaves the setting unmanaged; one where two apply stops the step, naming both variants. An ungated duplicate is `--Validate` error `SS-SET-003`.
+
+**Not per schema.** A database setting runs once per database, so a schema template with `DatabaseSettings.json` is refused; put the file in a regular template that targets the same databases.
+
+### What the policy does
+
+| `Fix`, `OnDrift` | Differs, not fixed | Fixed and in effect | Fixed, takes effect after a restart | Fix failed, or cannot be fixed here |
+|---|---|---|---|---|
+| `false`, `Warn` | warning | -- | -- | -- |
+| `false`, `Error` | **error**, and the step stops before changing anything | -- | -- | -- |
+| `false`, `Ignore` | info | -- | -- | -- |
+| `true`, `Warn` | -- | info | warning | warning |
+| `true`, `Error` | -- | info | **error**, and the deploy stops after the step | **error**, and the deploy stops after the step |
+| `true`, `Ignore` | -- | info | info | info |
+
+A setting that matches is silent. A fix that takes effect now but is lost at the next restart -- `SET GLOBAL` on MySQL 5.7 and MariaDB, a SQL Server trace flag -- is a fix with a warning under every policy that fixes; the next deploy after a restart finds the drift and fixes it again. A trace flag's warning says to add `-T<n>` to the server's startup parameters to keep it.
+
+**Waiting for a restart.** SQL Server reports a change as waiting when the configured value and the value in use differ after `RECONFIGURE`; PostgreSQL reports it in `pg_settings.pending_restart`; on MySQL 8.0 a read-only variable is persisted with `SET PERSIST_ONLY` and reported as waiting. MySQL 5.7 and MariaDB cannot say, and a read-only variable there cannot be fixed from a deploy.
+
+**A value the server rounds or limits.** Some servers take a change and keep a different value: MySQL rounds `innodb_buffer_pool_size` up to a whole number of buffer-pool chunks (128 MB by default), and cuts a value past a variable's limit to the limit. The setting is reported as one that cannot be fixed, naming the value the server holds -- declare that value and the next deploy matches. A change the server finishes a moment after the statement returns (MySQL 5.7 resizes the buffer pool in the background) is read again for a few seconds before it is graded.
+
+**One line per outcome.** For example:
+
+```
+Server setting Configuration 'max degree of parallelism': 4 -> 8
+Server setting Configuration 'user connections' set to 500; takes effect after a restart (running value 0)
+Database setting Option 'COMPATIBILITY_LEVEL' fix failed: <the engine's message>
+Server setting Variable 'innodb_buffer_pool_size' cannot be fixed on this server: the server set 268435456 instead of 200000000; declare 268435456 to match it
+Database setting ScopedConfiguration 'MAXDOP' cannot be fixed on this server: database-scoped configuration needs SQL Server 2016
+Database setting Option 'RECOVERY' is FULL, declared SIMPLE (not fixed)
+```
+
+### When it runs
+
+- **Server settings** run after the product's validation and before its `Before` scripts, on the primary server and on each [secondary server](#secondary-servers): configuration belongs to each instance.
+- **Database settings** run in each database right after its `Setup` scripts, so a script can prepare what a setting relies on, and before the first object.
+- Neither step is checkpointed: both run again on a [resumed](schemaquench.md#checkpoint-and-resume) deploy, where a setting already fixed reads as matching and is silent.
+- **Under WhatIf** both read and compare, change nothing, and say what the real run would change -- including `would stop here` where it would stop.
+
+**Permissions.** A report-only setting needs only catalog reads. Fixing needs the engine's rights: `ALTER SETTINGS` (SQL Server server configuration), `ALTER` on the database, a superuser for PostgreSQL's `ALTER SYSTEM`, `SYSTEM_VARIABLES_ADMIN` on MySQL. A missing right is reported as a failed fix with the engine's message, so a least-privilege account still gets a useful report. Each outcome is a [deployment summary](deployment-summary-report.md) row with object type `ServerSetting` or `DatabaseSetting`.
+
+SchemaTongs captures both files from a reference server: see [Server and Database Settings](schematongs.md#server-and-database-settings) in the SchemaTongs reference.
+
+
 ## Complete Folder Structure
 
 A schema package is a predictable directory tree. Every tool in the SchemaSmith toolset discovers what it needs by convention -- `Product.json` at the root, `Templates/` one level down, platform-specific script folders inside each template -- so you never have to configure paths or point a tool at individual files. Marker files and generated artifacts sit alongside the files you author, and the whole layout maps cleanly onto source control.
@@ -495,6 +576,7 @@ MyProduct/
     indexedviews.sqlserver.schema             SQL Server packages
     materializedviews.postgresql.schema       PostgreSQL packages
     sequences.postgresql.schema               PostgreSQL packages
+    sequences.sqlserver.schema                SQL Server packages
     enumtypes.postgresql.schema               PostgreSQL packages
     domaintypes.postgresql.schema             PostgreSQL packages
     events.mysql.schema                       MySQL packages
@@ -599,7 +681,7 @@ Each platform's table definition extends the shared properties with engine-speci
 | Property | Type | Default | Description |
 |---|---|---|---|
 | `Schema` | string | `"dbo"` | Database schema. Use bracket notation in extracted files (e.g., `"[Production]"`). |
-| `CompressionType` | string | `"NONE"` | Data compression: `"NONE"`, `"ROW"`, `"PAGE"`, or `"MIXED"` to leave the live compression as it is. A columnstore index left unset means `"COLUMNSTORE"`. |
+| `CompressionType` | string | `"NONE"` | Data compression: `"NONE"`, `"ROW"`, `"PAGE"`, or `"MIXED"` to leave the live compression as it is. A columnstore index left unset means `"COLUMNSTORE"`. On a partitioned table or index one value applies to every partition, and a deploy rebuilds only the partitions that differ from it; SchemaTongs writes `"MIXED"` when the partitions are compressed differently. |
 | `XmlCompression` | bool | `false` | **SQL Server 2022+.** Compresses XML column data in place. Independent of `CompressionType` — a table can carry both. **Deployable from 2022; readable where the server reports `sys.partitions.xml_compression`** — SQL Server 2025, and 2022 from CU26 (2022 CU25 does not have the column). Where the server cannot report it, SchemaSmith applies the setting and cannot read it back: SchemaTongs carries the declared value forward from the package it is refreshing rather than dropping it, and drift is not re-evaluated there — the setting is applied at create. Where it can, it round-trips and converges normally. Below 2022 the clause is suppressed and reported through `UnsupportedFeaturePolicy`. |
 | `IsTemporal` | bool | `false` | When `true`, SchemaQuench manages the table as system-versioned temporal: emits `ALTER TABLE ... SET (SYSTEM_VERSIONING = ON (HISTORY_TABLE = <Schema>.<Name>_Hist))` and protects the period columns from drop detection. They are `ValidFrom` / `ValidTo` unless the package declares its own (see [SQL Server column extras](#sql-server-column-extras)). When toggled back to `false`, SchemaQuench emits `SET (SYSTEM_VERSIONING = OFF)`. When the history table (`<Name>_Hist` in the same schema, unless `HistoryTableSchema` / `HistoryTableName` say otherwise) does not exist, SQL Server creates it as versioning is turned on, with the versioned table's columns. To control its indexes, compression or filegroup, declare it as a sibling table JSON in your package, or create it in a Before script, before the `IsTemporal=true` table is quenched. |
 | `XmlIndexes` | array | `[]` | XML index definitions. See [XML Indexes (SQL Server)](#xml-indexes-sql-server). |
@@ -642,10 +724,11 @@ Each platform's table definition extends the shared properties with engine-speci
 | `AccessMethod` | string | `null` | Storage access method (e.g., `"heap"`). |
 | `PersistenceType` | string | `null` | Persistence override (e.g., `"UNLOGGED"`, `"TEMPORARY"`). |
 | `ReplicaIdentity` | string | `null` | `REPLICA IDENTITY` for logical replication: `"DEFAULT"`, `"FULL"`, `"NOTHING"` or `"INDEX"`. **On a table that belongs to a publication this decides whether `UPDATE` and `DELETE` are permitted at all** — PostgreSQL refuses both when there is no usable identity. Omit to leave the server's current setting alone; extraction emits it only for a table that is not at `DEFAULT`. |
-| `Tablespace` | string | `null` | The tablespace the table's data lives on. Omitting it means placement is **not managed** — it does **not** declare the database default, so a table a DBA placed by hand is left alone. Create-time only: moving an existing table rewrites it under an `ACCESS EXCLUSIVE` lock, so a declared tablespace that differs from where the table already lives is refused by name rather than performed. A declared tablespace that does not exist -- on a table, an index, an exclusion constraint or a materialized view -- refuses the deploy before any change, naming what declares it. |
+| `Tablespace` | string | `null` | The tablespace the table's data lives on. Omitting it means placement is **not managed** — it does **not** declare the database default, so a table a DBA placed by hand is left alone. Create-time only: moving an existing table rewrites it under an `ACCESS EXCLUSIVE` lock, so a declared tablespace that differs from where the table already lives is refused by name rather than performed — except in a [table rebuild](configuration.md#what-a-rebuild-costs), which rewrites the table anyway and creates it on the declared tablespace. A partitioned table is the exception: it holds no rows, and its tablespace is only where new partitions go, so a declared one is set and the partitions already there stay where they are. A declared tablespace that does not exist -- on a table, an index, an exclusion constraint or a materialized view -- refuses the deploy before any change, naming what declares it. |
 | `ReplicaIdentityIndex` | string | `null` | Names the unique index backing `ReplicaIdentity: "INDEX"`. The index must be unique, non-partial and over `NOT NULL` columns. Applied after indexes are created, so it works on a table's first deploy. |
 | `UpdateFillFactor` | bool | `false` | Enables fill-factor reconciliation for this table. |
 | `FillFactor` | short (0--100) | `0` | Table fill factor. `0` means use the server default. |
+| `Partitioning` | object | `null` | Declarative partitioning: the key and the partitions. See [Partitioning (PostgreSQL)](#partitioning-postgresql). Leave it unset and SchemaSmith does not manage partitioning, so a table someone partitioned by hand is left as it is. |
 
 **A name with a double quote in it.** PostgreSQL allows `"` inside a name, and so does SchemaSmith: write the name as it is in a `Name` property (`"Name": "Or\"ders"` in JSON). Inside a comma-separated list (`IndexColumns`, a foreign key's `Columns` and `RelatedColumns`, `StatisticsColumns`), write such a name quoted, with its inner quotes doubled (`"\"La\"\"bel\""` for the column `La"bel`), because a bare quote there cannot be told from the start of a quoted name. Extraction writes it that way. Expressions (`FilterExpression`, check constraints, a materialized view's `Definition`) are SQL, and take the name the way PostgreSQL does.
 
@@ -653,7 +736,7 @@ Each platform's table definition extends the shared properties with engine-speci
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `Engine` | string | `"InnoDB"` | Storage engine. |
+| `Engine` | string | `"InnoDB"` on create | Storage engine. A new table is created `InnoDB` when it is omitted; an existing table's engine is then left as it is. |
 | `RowFormat` | string | `null` | Row format: `"Dynamic"`, `"Compact"`, `"Compressed"`, `"Redundant"` or `"Fixed"`, in any casing. |
 | `CharacterSet` | string | `null` | Default character set for the table. |
 | `Collation` | string | `null` | Default collation for the table. |
@@ -691,7 +774,7 @@ MariaDB tables carry every MySQL property above, plus the ones below for feature
 
 | Property | Type | Default | Description |
 |---|---|---|---|
-| `Engine` | string | `"InnoDB"` | Storage engine. |
+| `Engine` | string | `"InnoDB"` on create | Storage engine. A new table is created `InnoDB` when it is omitted; an existing table's engine is then left as it is. |
 | `RowFormat` | string | `null` | Row format: `"Dynamic"`, `"Compact"`, `"Compressed"`, `"Redundant"`, `"Fixed"`, or `"Page"` for an Aria table, in any casing. |
 | `CharacterSet` | string | `null` | Default character set for the table. |
 | `Collation` | string | `null` | Default collation for the table. |
@@ -879,7 +962,7 @@ column that is not `BIGINT` (`SS-LDG-005`).
 
 ### PostgreSQL column extras
 
-`GenerationExpression` (for stored generated columns -- `Generated` may be left out, since an expression can only mean `ALWAYS`; add `"Virtual": true` for a `VIRTUAL` generated column on PostgreSQL 18+), `Collation`, `Storage` (`PLAIN`, `MAIN`, `EXTERNAL` or `EXTENDED` -- the column's TOAST strategy), `Compression` (`pglz` or `lz4`, PostgreSQL 14+), identity columns declared in `Generated` (`GENERATED BY DEFAULT AS IDENTITY` or `GENERATED ALWAYS AS IDENTITY`) beside a plain integer `DataType`. An identity's sequence options written in its `Generated` value (`GENERATED ALWAYS AS IDENTITY(START WITH 1 INCREMENT BY 5 CACHE 10)`) are applied to an existing column when they change; only the options written there are managed, so a bare `GENERATED ... AS IDENTITY` leaves the sequence as it is. A `serial`, `bigserial` or `smallserial` `DataType` is the engine's own declaration: on a new table or a new column PostgreSQL creates the sequence and makes the column its owner; on an existing serial column it is the same column and a redeploy changes nothing; on an existing plain integer column the deploy creates the sequence, makes the column its owner and sets it as the default. SchemaTongs writes a column it finds in that shape as the keyword, without a `Default`.
+`GenerationExpression` (for stored generated columns -- `Generated` may be left out, since an expression can only mean `ALWAYS`; add `"Virtual": true` for a `VIRTUAL` generated column on PostgreSQL 18+), `Generated` (`ALWAYS`, `NEVER`, or an identity: `GENERATED ALWAYS AS IDENTITY` or `GENERATED BY DEFAULT AS IDENTITY` with optional sequence options -- written in capitals, as SchemaTongs extracts it), `Collation`, `Storage` (`PLAIN`, `MAIN`, `EXTERNAL` or `EXTENDED` -- the column's TOAST strategy), `Compression` (`pglz` or `lz4`, PostgreSQL 14+), identity columns declared in `Generated` (`GENERATED BY DEFAULT AS IDENTITY` or `GENERATED ALWAYS AS IDENTITY`) beside a plain integer `DataType`. An identity's sequence options written in its `Generated` value (`GENERATED ALWAYS AS IDENTITY(START WITH 1 INCREMENT BY 5 CACHE 10)`) are applied to an existing column when they change; only the options written there are managed, so a bare `GENERATED ... AS IDENTITY` leaves the sequence as it is. A `serial`, `bigserial` or `smallserial` `DataType` is the engine's own declaration: on a new table or a new column PostgreSQL creates the sequence and makes the column its owner; on an existing serial column it is the same column and a redeploy changes nothing; on an existing plain integer column the deploy creates the sequence, makes the column its owner and sets it as the default. SchemaTongs writes a column it finds in that shape as the keyword, without a `Default`.
 
 ### MySQL column extras
 
@@ -1183,7 +1266,7 @@ place — `hnsw`'s `m` and `ivfflat`'s `lists` among them — so rather than con
 silently ignoring the ones that cannot, any difference in the set drops and recreates the index. The
 comparison is order-insensitive, because PostgreSQL returns `reloptions` in its own order.
 
-`Tablespace` places the index. An index does **not** follow its table's tablespace — created with no clause it lands wherever `default_tablespace` points, which is usually but not always the same place. Omitting it means placement is **not managed**, which is not the same as declaring the database default: an index a DBA placed by hand is left exactly where it is. Create-time only — moving an existing index rebuilds it, so a declared tablespace that differs from where the index already lives is refused by name rather than performed.
+`Tablespace` places the index. An index does **not** follow its table's tablespace — created with no clause it lands wherever `default_tablespace` points, which is usually but not always the same place. Omitting it means placement is **not managed**, which is not the same as declaring the database default: an index a DBA placed by hand is left exactly where it is. Create-time only — moving an existing index rebuilds it, so a declared tablespace that differs from where the index already lives is refused by name rather than performed. An index on a partitioned table is set instead, for the same reason as the table: it only says where new partitions' indexes go.
 
 ### MySQL index extras
 
@@ -1232,6 +1315,7 @@ Referential integrity lives in the table JSON alongside columns and indexes, not
 | `SetNullColumns` | string | | **PostgreSQL 15+.** With `DeleteAction: "SET NULL"` or `"SET DEFAULT"`, the comma-separated subset of `Columns` set when the referenced row is deleted (`ON DELETE SET NULL (col, ...)`, `ON DELETE SET DEFAULT (col, ...)`); the other key columns keep their values. Omitted means every column. Below 15 the key is created with the plain action per the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). `--Validate` stops it with any other action or naming a column outside the key (`SS-FK-007`). |
 | `ShouldApplyExpression` | string | | Conditional inclusion. |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
+| `Description` | string | `null` | **PostgreSQL only.** `COMMENT ON CONSTRAINT`. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | `null` | Custom metadata. |
 
 For composite foreign keys, list all columns in both `Columns` and `RelatedColumns` in matching order.
@@ -1270,6 +1354,7 @@ Tables without a `DataDelivery` block are left alone. Tables that declare one ar
 |---|---|---|---|
 | `ContentFile` | string | | Path to the row data, relative to the template root. Typically produced by DataTongs as a `.tabledata` file (raw JSON array). |
 | `ContentEncoding` | string | `Json` | Encoding of `ContentFile`: `Json` (default) or `Xml`. Accepted on every platform. See [Content Encoding](#content-encoding) below. |
+| `Columns` | string | | Optional. The comma-separated columns the `ContentFile` was extracted with; a name that holds a comma is written in the platform's delimiters (`[Last, First]`). A listed column is delivered even when no row carries it, written NULL, so a column that was NULL in every extracted row still updates the target. DataTongs writes it on SQL Server, whose extraction leaves such a column out. Omitted, the delivered columns are the ones present in the data. |
 | `MergeType` | string | | One of `Insert`, `Insert/Update`, `Insert/Update/Delete`. Required to deliver: a delivery without it, or with `None`, is not run. See [MergeType](#mergetype) below. |
 | `MatchColumns` | string | | Comma-separated column names that identify a row. Prefix a column with `*` for NULL-safe comparison on nullable keys. Matches the `KeyColumns` concept in DataTongs. |
 | `MergeFilter` | string | `""` | Optional SQL `WHERE` clause (without the `WHERE` keyword). Scopes both the rows considered for matching and, when delete is enabled, the rows eligible for deletion. |
@@ -1464,6 +1549,7 @@ Table-level check constraints in the `CheckConstraints` array. Used when `CheckC
 | `NoInherit` | bool | omitted = not managed | **PostgreSQL only.** `NO INHERIT`: child tables do not inherit the constraint. Create-time state, so a change drops and re-creates it. Omitted, a new constraint is created inheritable and an existing one is left as it is. |
 | `ShouldApplyExpression` | string | | Conditional inclusion. |
 | `VariantName` | string | | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
+| `Description` | string | `null` | **PostgreSQL only.** `COMMENT ON CONSTRAINT`. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | `null` | Custom metadata. |
 
 When `CheckConstraintStyle` is `"ColumnLevel"` (the default), single-column check constraints are written as `CheckExpression` on the column instead. Multi-column constraints always use the `CheckConstraints` array.
@@ -1505,6 +1591,7 @@ XML index definitions in the `XmlIndexes` array. A primary XML index must be cre
 | `ForPath` | string | **SQL Server 2012 SP1+.** Makes this a secondary selective XML index on the named path of the selective index in `PrimaryIndex` (`USING XML INDEX … FOR (path)`). `SecondaryIndexType` does not apply. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
+| `Description` | string | The `MS_Description` extended property. Omitted, an existing description is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | Custom metadata. |
 
 ### Selective XML indexes
@@ -1565,6 +1652,7 @@ Spatial index definitions in the `SpatialIndexes` array, one `CREATE SPATIAL IND
 | `CompressionType` | string | `DATA_COMPRESSION`: `NONE`, `ROW` or `PAGE`. Omitted, the index is created uncompressed. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies. Max 128 characters. |
+| `Description` | string | The `MS_Description` extended property. Omitted, an existing description is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | Custom metadata. |
 
 **Only what you declare is compared.** An attribute you leave out is the engine's choice when the index is created, and a later deploy does not compare it, so a definition that names only the column keeps whatever the index has. A declared attribute that differs from the live index drops and re-creates it. A change to the clustered primary key takes the table's spatial indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A spatial index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and [`IndexOnlyTableQuenches`](#template-settings-intent) deploys behave the same. That includes `CompressionType`: left out, an index compressed by hand keeps its compression. SchemaTongs writes it when the index is compressed.
@@ -1600,6 +1688,7 @@ JSON index definitions in the `JsonIndexes` array, one `CREATE JSON INDEX` each 
 | `CompressionType` | string | `DATA_COMPRESSION`: `NONE`, `ROW` or `PAGE`. Omitted, the index is created uncompressed and its compression is not compared. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies. Max 128 characters. |
+| `Description` | string | The `MS_Description` extended property. Omitted, an existing description is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | Custom metadata. |
 
 **The paths are a set, compared as written.** Their order does not matter, but their text does: JSON keys are case-sensitive, so changing `$.status` to `$.Status` is a change, and SQL Server keeps a path exactly as it was written, spacing included. A changed path, column, `OptimizeForArraySearch`, `FillFactor` or `CompressionType` drops and re-creates the index; a `FillFactor` or `CompressionType` you leave out is not compared, so a JSON index someone compressed by hand stays compressed. A change to the clustered primary key takes the table's JSON indexes with it, since SQL Server will not keep one without the key, and the same deploy puts them back. A JSON index the package stops declaring is dropped, and one it never declared is dropped only with [`DropUnknownIndexes`](configuration.md#dropunknownindexes). Full and [`IndexOnlyTableQuenches`](#template-settings-intent) deploys behave the same. SchemaTongs extracts `CompressionType` when the index is compressed.
@@ -1637,6 +1726,7 @@ Custom statistics definitions in the `Statistics` array. SQL Server uses traditi
 | `StatisticsTarget` | int | The statistics target (`ALTER STATISTICS … SET STATISTICS n`, PostgreSQL 13+), the sample size `ANALYZE` uses for this object. Omit it and the target is unmanaged: whatever is set stays. Declared, it is applied when the object is created and converged in place when it changes, without re-creating the object. Below 13 it follows the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). SchemaTongs writes it only when someone set one. |
 | `ShouldApplyExpression` | string | Conditional inclusion. |
 | `VariantName` | string | Optional label for a conditional variant. |
+| `Description` | string | **PostgreSQL only.** `COMMENT ON STATISTICS`. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 
 ---
 
@@ -1652,10 +1742,10 @@ SQL Server's answer is to allow **two capture instances per table** so a new one
 |---|---|
 | A column altered in place: type, length, precision or scale, nullability, collation, sparse | No. SQL Server's capture job alters the change table's column to match, so the one instance keeps capturing. |
 | A column dropped | No. It stays in the change table and captures NULL from then on. |
-| A computed column's expression changed | No. A captured computed column is always NULL, whatever its expression. |
+| A computed column added, or its expression changed | No. A captured computed column is always NULL, persisted or not, so an instance without it loses nothing. |
 | A column option toggled: `NOT FOR REPLICATION`, `ROWGUIDCOL`, a `DataMaskFunction` | No. None of them is captured. |
 | A regular column turned into a computed one | No. A captured computed column is always NULL. |
-| A column added | Yes. Only a new instance captures it. |
+| A column added (other than a computed one) | Yes. Only a new instance captures it. |
 | A column replaced rather than altered: an identity added or removed, a column-set change, an `AnsiPadding` change, a computed column turned into a regular one | Yes. The replacement has a new position, which the old instance does not record, so it would capture NULL. |
 | `CdcFilegroup`, `CdcSupportsNetChanges` or `CdcIndexName` changed | Yes. Each is fixed per instance. |
 
@@ -1667,7 +1757,7 @@ When a deploy rotates a tracked table it:
 
 Rotation, and the two-instance checks below, apply only to a table that declares `"EnableCDC": true`. A tracked table that leaves `EnableCDC` out is neither rotated nor checked against the two-instance limit, so a column added to it is not captured; the type-change check below still covers it.
 
-On a deploy (not a `--WhatIf` preview), the same rotation happens whenever a tracked table's newest capture instance does not capture one of the table's columns, even when the deploy changed none. A column the instance still captures but the table no longer has is not a reason to rotate. That catches a column a previous deploy added but never got to capture -- because it stopped partway, say -- and an instance created before its computed columns existed.
+On a deploy (not a `--WhatIf` preview), the same rotation happens whenever a tracked table's newest capture instance does not capture one of the table's stored columns, even when the deploy changed none. A column the instance still captures but the table no longer has is not a reason to rotate. That catches a column a previous deploy added but never got to capture -- because it stopped partway, say -- or one another tool added. A computed column the instance lacks is left alone, for the reason above.
 
 > **Warning: a type change the change table cannot take.** SQL Server applies a column's type change to *every* change table that captures it -- a retired instance you have not yet dropped included -- inside the capture job, after the deploy. When a change table holds values the new type cannot take (a `VARCHAR(50)` narrowed to `VARCHAR(10)` over history with longer values), that fails there, and the capture job stops for the **whole database** until the instance is dropped. A rotation does not avoid it. SchemaSmith tries each in-place type change against the change tables first and refuses the deploy before any existing column is altered (apart from a ledger table's generated columns, which converge earlier), naming the column, the instance and the error. Drain that instance, drop it, and re-run.
 
@@ -1822,7 +1912,7 @@ SQL Server allows one full-text index per table. Declare it as a single `FullTex
 - **One match per target.** With more than one variant, *every* variant must declare a `ShouldApplyExpression`, and those expressions must be mutually exclusive on any given target. Two variants matching the same target fails the deployment with a clear error.
 - **No match means none.** When no variant matches a target, the table behaves as if no full-text index were declared there -- any existing full-text index is removed.
 - **No-op when unchanged.** When the deployed index already matches the selected variant, re-deployment performs no full-text work: no drop, no repopulation.
-- **`LANGUAGE` extracts only when it differs from the column default.** SchemaTongs omits `LANGUAGE` for a column already indexed in the language its collation implies, so extracted packages stay uncluttered. A column with no collation (a binary document column indexed through `TYPE COLUMN`) always extracts its `LANGUAGE`, because it has no implied default to fall back on.
+- **`LANGUAGE` extracts only when it differs from the column default.** SchemaTongs omits `LANGUAGE` for a column already indexed in the language its collation implies, so extracted packages stay uncluttered. A column with no collation (a binary document column indexed through `TYPE COLUMN`) always extracts its `LANGUAGE`, because it has no implied default to fall back on. Declared without one, such a column takes the server's default full-text language, and a deploy compares it that way, so a hand-written `"[Resume]"` and an extracted `"[Resume] LANGUAGE 1033"` both leave an index at the default language alone.
 - **`STATISTICAL_SEMANTICS` needs the semantic database.** The clause requires SQL Server 2012 or later with the Semantic Language Statistics Database installed and registered on the instance; without it the server rejects the index with "semantic functionality is not available." SchemaSmith deploys and compares the clause on every supported SQL Server encoding, so declaring it does not force a rebuild on each deploy.
 
 > **Note:** When no variant matches a target, an existing full-text index on that table is dropped -- the absence of a match is treated as "no full-text index here," not "leave it alone."
@@ -1887,6 +1977,7 @@ PostgreSQL exclusion constraints are declared in the `ExcludeConstraints` array.
 | `VariantName` | string | Optional label for a conditional variant. Appears in deployment log messages when the variant applies, and documents the intent behind the `ShouldApplyExpression`. Max 128 characters. |
 | `Deferrable` | bool | Whether the constraint is deferrable. |
 | `InitiallyDeferred` | bool | Whether the constraint defers by default. |
+| `Description` | string | `COMMENT ON CONSTRAINT`. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | Custom metadata. |
 
 ### Example -- non-overlapping reservation periods
@@ -1922,6 +2013,7 @@ table has `RowLevelSecurity` set, it needs at least one permissive policy to be 
 | `WithCheckExpression` | string | `null` | The `WITH CHECK` expression: which new or updated rows are allowed. When omitted on a policy that has `UsingExpression`, PostgreSQL applies the `USING` expression to writes as well. |
 | `ShouldApplyExpression` | string | `null` | Conditional inclusion. |
 | `VariantName` | string | `null` | Optional label for a conditional variant. Max 128 characters. |
+| `Description` | string | `null` | `COMMENT ON POLICY`. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `Extensions` | object | `{}` | Custom metadata. |
 
 **Policies are dropped when they leave the package**, and unlike indexes and statistics there is no opt-out
@@ -2013,7 +2105,7 @@ supported, both can live in one package, and existing scripted packages need no 
 
 | Object type | Folder | Engine |
 |---|---|---|
-| Sequences | `Sequences/` | PostgreSQL / MariaDB |
+| Sequences | `Sequences/` | PostgreSQL / SQL Server / MariaDB |
 | Domain types | `Domain Types/` | PostgreSQL |
 | Enum types | `Enum Types/` | PostgreSQL |
 | Scheduled events | `Events/` | MySQL / MariaDB |
@@ -2036,12 +2128,12 @@ engine. Each is documented in full in its own section below.
 
 | Object | Converged | Where it stops, and why |
 |---|---|---|
-| Sequence | type, increment, bounds, cache | **The current position is never managed** — it records which numbers were handed out, so it is data, not schema |
+| Sequence | type, increment, bounds, cache | **The current position is never managed** — it records which numbers were handed out, so it is data, not schema. On SQL Server the type and the start cannot be altered: a changed type, or a range that leaves out the start or current value, is refused, and `Start` applies at creation |
 | Domain type | `CHECK`, default, nullability | **A base-type or collation change is refused** — PostgreSQL has no `ALTER DOMAIN … TYPE` or `… COLLATE`; it is a syntax error, not an unsupported operation |
 | Enum type | added values, ordering | **Removing a value is reported, never performed** — PostgreSQL cannot remove one without recreating the type, which would drop every column using it |
 | Scheduled event | schedule, body, status | **Removal reaches only events SchemaSmith created**, and only with `DropEventsRemovedFromProduct` on — one made by hand is never touched |
 
-## Sequence JSON Format (PostgreSQL, MariaDB)
+## Sequence JSON Format (PostgreSQL, SQL Server, MariaDB)
 
 Sequences live in the `Sequences/` directory of each template, which accepts both `.json` (declared and converged) and `.sql` (scripted, exactly as before). The PostgreSQL form is below; MariaDB's differences follow it.
 
@@ -2056,7 +2148,7 @@ Sequences live in the `Sequences/` directory of each template, which accepts bot
 | `MaxValue` | long | `null` | Omit for the type's natural maximum. |
 | `Cache` | long | `1` | Values pre-allocated per session. Higher is faster but leaves larger gaps after a crash. |
 | `Cycle` | bool | `false` | Wrap to `MinValue` after `MaxValue` instead of erroring. |
-| `Description` | string | `null` | **PostgreSQL.** `COMMENT ON SEQUENCE`. A MariaDB sequence has no comment, so the key is not offered there. See [Descriptions](#descriptions). |
+| `Description` | string | `null` | `COMMENT ON SEQUENCE` on PostgreSQL; the sequence's `COMMENT` on MariaDB. Omitted, an existing comment is left alone; `""` removes it. See [Descriptions](#descriptions). |
 | `PersistenceType` | string | `null` | **PostgreSQL 15+.** `Unlogged` for a sequence that skips the write-ahead log, or `Logged`. Left out, a new sequence is created logged and an existing one's persistence is not changed. Below 15 the clause is dropped under the [unsupported-feature policy](schemaquench.md#version-adaptive-code-generation). |
 | `ShouldApplyExpression` | string | `null` | Conditional inclusion: a sequence whose predicate is false on the target is left out of that deploy. See [Conditional Application](#conditional-application). |
 | `VariantName` | string | `null` | Optional label for a conditional variant. Max 128 characters. |
@@ -2078,7 +2170,30 @@ Sequences live in the `Sequences/` directory of each template, which accepts bot
 }
 ```
 
-**MariaDB** (10.3 and later; MySQL has no sequence at any version) declares the same properties with these differences: there is no `Schema`, because a MariaDB schema is the database; `DataType` is an integer type (`tinyint`, `smallint`, `mediumint`, `int` or `bigint`, optionally `unsigned`) and needs MariaDB 11.5, below which every sequence is a signed `bigint` and another type is recorded as a downgrade; `Cache` defaults to `1000`, as it does in MariaDB; and an omitted `Start`, `MinValue` or `MaxValue` is left to the engine at creation and never compared afterwards. `ShouldApplyExpression`, `VariantName` and `Extensions` work as they do on PostgreSQL. Lowering `MaxValue` below the position a running sequence has already reserved (its cache, 1000 values by default) is the one attribute change the engine does not take quietly: a cycling sequence wraps to `MinValue` on its next value and a non-cycling one errors, which is MariaDB's rule rather than SchemaSmith's. A column that defaults to a sequence is declared with the bare name, `nextval(`invoice_number_seq`)`, which is how SchemaTongs writes it: the catalog qualifies it with the database, and a package has to deploy to any database.
+**MariaDB** (10.3 and later; MySQL has no sequence at any version) declares the same properties with these differences: there is no `Schema`, because a MariaDB schema is the database; `DataType` is an integer type (`tinyint`, `smallint`, `mediumint`, `int` or `bigint`, optionally `unsigned`) and needs MariaDB 11.5, below which every sequence is a signed `bigint` and another type is recorded as a downgrade; `Cache` defaults to `1000`, as it does in MariaDB; and an omitted `Start`, `MinValue` or `MaxValue` is left to the engine at creation and never compared afterwards. `ShouldApplyExpression`, `VariantName`, `Description` and `Extensions` work as they do on PostgreSQL; changing the `Description` of an existing sequence, like any change to it, discards the values its sessions have cached, so the next value skips ahead. Lowering `MaxValue` below the position a running sequence has already reserved (its cache, 1000 values by default) is the one attribute change the engine does not take quietly: a cycling sequence wraps to `MinValue` on its next value and a non-cycling one errors, which is MariaDB's rule rather than SchemaSmith's. A column that defaults to a sequence is declared with the bare name, `nextval(`invoice_number_seq`)`, which is how SchemaTongs writes it: the catalog qualifies it with the database, and a package has to deploy to any database.
+
+**SQL Server** (2012 and later) declares the same properties with these differences. `Schema` defaults to `dbo`.
+`DataType` is `tinyint`, `smallint`, `int`, `bigint`, or `decimal(p)` / `numeric(p)` with up to 38 digits; a
+user-defined alias type is accepted and compared as its base type, which is what SQL Server records for a sequence,
+so extraction writes the base type. `Start`, `MinValue` and `MaxValue` take any whole number the type holds, 38 digits
+included. An omitted `MinValue` or `MaxValue` is the type's bound, an omitted `Cache` is SQL Server's default cache,
+and `0` means `NO CACHE`; each is converged back to that. `Description` is the `MS_Description` extended property.
+Two attributes cannot be changed after creation, because `ALTER SEQUENCE` has no `AS` and no `START WITH`: a changed
+`DataType` is refused, naming the sequence, and a different `Start` is reported and left as it is. SQL Server also
+keeps a sequence's start value inside its range for life, so a `MinValue` above the start, or a range that leaves out
+the current value, is refused before anything is altered; change such a sequence with a migration script. Below SQL
+Server 2012 a declared sequence is skipped under the unsupported-feature policy.
+
+```json
+{
+  "Schema": "billing",
+  "Name": "InvoiceNumbers",
+  "DataType": "decimal(18)",
+  "Start": 100000,
+  "Increment": 1,
+  "Cache": 50
+}
+```
 
 ```json
 {
@@ -2238,6 +2353,51 @@ MySQL and MariaDB carry a table's partition definition in the table DDL itself �
 
 ---
 
+## Partitioning (PostgreSQL)
+
+PostgreSQL declares a partitioned table with its key and each partition as a table of its own, so `Partitioning` names the key and lists the partitions, and a partition that is partitioned again carries its own `Partitioning` one level down. SchemaSmith **creates and appends, verifies, and never moves rows**:
+
+- A new table is created partitioned, with every declared partition. Partitions are created before any index or key, so the parent's primary key, unique keys and indexes reach every partition through the engine, as do foreign keys into the table.
+- A declared partition the table lacks is added. Adding one takes an `ACCESS EXCLUSIVE` lock on the partitioned table, so under [`OnlineApply`](configuration.md) `Require` it is refused by name, and under `Prefer` it is added and recorded with mode `unavailable`.
+- A key, a partition's bound, or a leaf partition's tablespace that differs from the deployed one is **refused by name before any change**, as is a declared partition that already exists as a standalone table or as a partition of another table. Changing any of them would move or re-check rows -- do it by hand, then correct the declaration.
+- A new partition whose range holds rows sitting in the `DEFAULT` partition is refused by name: adding it would move them.
+- A partition the package does not name is **reported and left alone**, never dropped or detached. Partition managers create partitions out of band, and a partition is data. `Partitions: []` is legal for such a table (`--Validate` warns, `SS-PART-023`).
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `Method` | string | *(required)* | `RANGE`, `LIST` or `HASH`. |
+| `Expression` | string | *(required)* | The key, as it goes inside `PARTITION BY <Method> ( ... )`: a column (`"created_at"`), several (`"y, m"`), an expression (`"lower(code)"`) or a collated column. |
+| `Partitions` | array | `[]` | The partitions, each in the table's schema. |
+
+Each partition:
+
+| Property | Type | Default | Description |
+|---|---|---|---|
+| `Name` | string | *(required)* | The partition's table name. |
+| `Bound` | string | *(required)* | The whole bound clause, as `\d+` shows it: `FOR VALUES FROM (...) TO (...)`, `FOR VALUES IN (...)`, `FOR VALUES WITH (modulus n, remainder r)`, or `DEFAULT`. |
+| `Tablespace` | string | `null` | Where the partition is created. A leaf already on another tablespace is refused rather than moved. A partition that is partitioned again holds no rows, so a changed tablespace is set on it, as on a partitioned table: its partitions stay where they are and new ones go there. A new partition with no `Tablespace` of its own goes where its nearest parent declares. |
+| `Partitioning` | object | `null` | A partition that is itself partitioned: its key and partitions, one level down. |
+
+```json
+{
+  "Name": "events",
+  "Columns": [ { "Name": "region", "DataType": "text", "Nullable": false },
+               { "Name": "created_at", "DataType": "timestamp with time zone", "Nullable": false },
+               { "Name": "id", "DataType": "bigint", "Nullable": false } ],
+  "Indexes": [ { "Name": "pk_events", "PrimaryKey": true, "Unique": true, "IndexColumns": "region,created_at,id" } ],
+  "Partitioning": { "Method": "LIST", "Expression": "region", "Partitions": [
+    { "Name": "events_eu", "Bound": "FOR VALUES IN ('eu')",
+      "Partitioning": { "Method": "RANGE", "Expression": "created_at", "Partitions": [
+        { "Name": "events_eu_old", "Bound": "FOR VALUES FROM (MINVALUE) TO ('2026-01-01 00:00:00+00')" },
+        { "Name": "events_eu_2026", "Bound": "FOR VALUES FROM ('2026-01-01 00:00:00+00') TO ('2027-01-01 00:00:00+00')" } ] } },
+    { "Name": "events_rest", "Bound": "DEFAULT" } ] }
+}
+```
+
+**Bounds and keys compare as PostgreSQL renders them.** `0` and `'0'`, or `'2026-01-01'` and `'2026-01-01 00:00:00+00'`, are the same bound: a declaration that differs from the deployed text only in spelling is rendered by the engine on a temporary copy and matches. **A `timestamp with time zone` bound written without an offset means UTC**: SchemaSmith creates and compares partitions under the UTC time zone, whatever the connection's, and SchemaTongs writes bounds in UTC.
+
+**What PostgreSQL does not allow on a partitioned table**, which `--Validate` reports: a primary or unique key that does not hold every key column, or one on a key with an expression in it (`SS-PART-005`); a generated column in the key (`SS-PART-021`); an unlogged partitioned table (`SS-PART-022`); and, before PostgreSQL 17, an exclusion constraint (`SS-PART-022`, a warning) or an access method (created without one, and recorded as a downgrade). A partitioned table holds no rows, so `FillFactor` and `PersistenceType` do nothing on it and are not written by SchemaTongs. Indexes, checks, statistics and comments a partition has *of its own* are not modelled: SchemaTongs names each one in a warning. Permissions on the partitioned table are not copied to partitions created later (engine behaviour).
+
 ## Scheduled Event JSON Format (MySQL / MariaDB)
 
 Scheduled events live in the `Events/` directory of each template. That folder accepts **both** forms:
@@ -2261,6 +2421,7 @@ Existing packages need no change. Declaring the same event both ways is reported
 | `Description` | string | `null` | The event's `COMMENT`. An omitted value clears a comment the server has, as the engine's own DDL does. |
 | `Comment` | string | `null` | **Deprecated** alias of `Description`. Still deploys; `--Validate` reports it (`SS-DESC-002`). |
 | `TimeZone` | string | `null` | The time zone `Starts`, `Ends` and `ExecuteAt` are read in, as the engine stores it: an offset such as `"+05:00"`, or a named zone on a server with time-zone tables. The deploy sets it on its session around the `CREATE` and restores the session's own zone. Omitted, the event takes the deploying session's zone and the server's value is not compared. SchemaTongs writes it unless the event's zone is `SYSTEM`. |
+| `ShouldApplyExpression` | string | `null` | Conditional inclusion: an event whose predicate is false on the target is left out of that deploy. See [Conditional Application](#conditional-application). |
 | `SqlMode` | string | `null` | The `sql_mode` the body runs under, written as the engine reports it (`SELECT @@sql_mode` after `SET`; the engine canonicalises the list). Compared as a set of flags, so the order does not matter. The deploy sets it around the `CREATE` and restores the session's own mode. Omitted, the event takes the deploying session's mode and the server's value is not compared. SchemaTongs always writes it. |
 | `VariantName` | string | `null` | Optional label for a conditional variant. Max 128 characters. |
 | `Extensions` | object | `null` | Custom metadata, preserved and never read at deploy time. See [Custom Properties](custom-properties.md). |
@@ -2320,18 +2481,18 @@ A materialized view that should be skipped for non-production environments is on
 
 ## Descriptions
 
-A table, column, index, indexed view, materialized view, sequence, enum type and domain type can carry a `Description`. It is one key on every engine, stored where the engine keeps such things:
+A table, column, index (on SQL Server XML, spatial and JSON indexes included), indexed view, materialized view, sequence, enum type and domain type can carry a `Description`, and on PostgreSQL so can a foreign key, check or exclusion constraint, row-level security policy and statistics object. It is one key on every engine, stored where the engine keeps such things:
 
 | Engine | Where `Description` lives |
 |---|---|
 | SQL Server | The `MS_Description` extended property, the one SSMS and most documentation tools read. On an index that backs a primary key or unique constraint it sits on the constraint. |
-| PostgreSQL | `COMMENT ON TABLE` / `COLUMN` / `INDEX` / `MATERIALIZED VIEW` / `SEQUENCE` / `TYPE` / `DOMAIN`. |
-| MySQL, MariaDB | The `COMMENT` clause of the table, column, index, full-text index or event. |
+| PostgreSQL | `COMMENT ON TABLE` / `COLUMN` / `INDEX` / `MATERIALIZED VIEW` / `SEQUENCE` / `TYPE` / `DOMAIN` / `CONSTRAINT` / `POLICY` / `STATISTICS`. |
+| MySQL, MariaDB | The `COMMENT` clause of the table, column, index, full-text index, event or (MariaDB) sequence. |
 
 **Three states, and the engines differ on one of them.** A declared description is set, and a changed one is updated in place without rebuilding anything. `"Description": ""` removes it. An *omitted* `Description` means something different on SQL Server and PostgreSQL than on MySQL and MariaDB:
 
 - **SQL Server and PostgreSQL:** an omitted `Description` is not managed. Whatever the database has stays, so a package that never mentions descriptions never touches the ones a DBA wrote, and a re-created indexed or materialized view keeps the comment it had.
-- **MySQL and MariaDB:** the comment is part of the object's definition, so an omitted `Description` clears a comment the server has, exactly as the engine's own `CREATE TABLE` would. This is how `Comment` has always behaved there.
+- **MySQL and MariaDB:** the comment is part of the object's definition, so an omitted `Description` clears a comment the server has, exactly as the engine's own `CREATE TABLE` would. This is how `Comment` has always behaved there. A MariaDB sequence is the exception: its comment was not managed before 2.9, so an omitted `Description` leaves it alone, as on PostgreSQL, rather than clearing comments every existing package was written without.
 
 **Extraction writes `Description`.** SchemaTongs reads the description back under that key on every engine. On SQL Server, `MS_Description` is the one extended property with a key of its own; every other extended property is recorded under `Extensions.ExtendedProperties` and deploys from there (below).
 
@@ -2414,6 +2575,7 @@ Each file carries a platform infix matching the package's platform -- `<platform
 | `indexedviews.sqlserver.schema` | Indexed view JSON files (SQL Server packages) |
 | `materializedviews.postgresql.schema` | Materialized view JSON files (PostgreSQL packages) |
 | `sequences.postgresql.schema` | Sequence JSON files (PostgreSQL packages) |
+| `sequences.sqlserver.schema` | Sequence JSON files (SQL Server packages) |
 | `enumtypes.postgresql.schema` | Enum type JSON files (PostgreSQL packages) |
 | `domaintypes.postgresql.schema` | Domain type JSON files (PostgreSQL packages) |
 | `events.mysql.schema` | Scheduled event JSON files (MySQL packages) |

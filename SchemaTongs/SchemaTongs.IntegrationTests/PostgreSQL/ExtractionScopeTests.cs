@@ -86,13 +86,14 @@ public class ExtractionScopeTests
     }
 
     [Test]
-    public void TriggersOnAPartitionedTableAndItsPartitions_AreNotExtracted()
+    public void ATriggerOnAPartitionedTable_IsExtracted_AndItsClonesOnThePartitionsAreNot()
     {
         var triggers = Written("Triggers").ToList();
         Assert.Multiple(() =>
         {
             Assert.That(triggers, Does.Contain("public.plain.plain_tr.sql"), "triggers written: " + string.Join(", ", triggers));
-            Assert.That(triggers.Where(t => t.Contains(".pp")), Is.Empty, "the partitioned table and its partitions are refused, so their triggers cannot deploy: " + string.Join(", ", triggers));
+            Assert.That(triggers.Where(t => t.Contains(".pp")), Is.EqualTo(new[] { "public.pp.pp_tr.sql" }),
+                "the partitioned table's trigger, once; the copies the engine clones onto pp1 and pp2 are not the package's: " + string.Join(", ", triggers));
         });
     }
 

@@ -26,6 +26,7 @@ BEGIN
   DECLARE @v_Last BIT = 0
   DECLARE @v_Audit INT
   DECLARE @v_AuditEnd INT, @v_AuditNull INT
+  DECLARE @v_Space INT, @v_Rest INT, @v_Piece NVARCHAR(2000)
 
   IF @Message IS NULL OR LEN(@Message) = 0
     RETURN
@@ -73,7 +74,29 @@ BEGIN
 
     -- DATALENGTH for the last line, for the same reason it sizes @v_End above: LEN reports 0 for a line made
     -- entirely of spaces, so a final line of indentation was silently dropped rather than printed.
-    IF @v_Line IS NOT NULL AND (@v_Last = 0 OR DATALENGTH(@v_Line) > 0) RAISERROR(@v_Line, 10, 100) WITH NOWAIT
+    -- The line is an argument, not the format string: a % in generated SQL (a LIKE pattern, a '50%d' default) was read
+    -- as a placeholder, and the preview showed SQL the deploy would not run, or dropped the line.
+    -- A server message holds 2,047 characters and cuts a longer one short, so a longer line goes out in pieces, each broken
+    -- at its last space (dropped, so the pieces joined by a space are the line) or, with none, at 2,000 characters.
+    WHILE @v_Line IS NOT NULL AND DATALENGTH(@v_Line) / 2 > 2000
+    BEGIN
+      SET @v_Space = CHARINDEX(N' ', REVERSE(LEFT(@v_Line, 2001)))
+      IF @v_Space > 0
+      BEGIN
+        SET @v_Space = 2002 - @v_Space
+        SET @v_Rest = @v_Space + 1
+      END
+      ELSE
+      BEGIN
+        SET @v_Space = 2001
+        SET @v_Rest = 2001
+      END
+      SET @v_Piece = LEFT(@v_Line, @v_Space - 1)
+      RAISERROR(N'%s', 10, 100, @v_Piece) WITH NOWAIT
+      SET @v_Line = SUBSTRING(@v_Line, @v_Rest, DATALENGTH(@v_Line) / 2)
+    END
+
+    IF @v_Line IS NOT NULL AND (@v_Last = 0 OR DATALENGTH(@v_Line) > 0) RAISERROR(N'%s', 10, 100, @v_Line) WITH NOWAIT
     IF @v_Last = 1 BREAK
     SET @v_Pos = @v_LfPos + 1
   END

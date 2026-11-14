@@ -377,10 +377,38 @@ END";
         finally { DropWithEveryCaptureInstance(cmd, "CdcComputed"); }
     }
 
-    // The rotation for a column change runs in the same place, so a deploy that ADDS a computed column must rotate to
-    // an instance that includes it.
+    // What the rule below rests on: SQL Server records a computed column in a capture instance as NULL, persisted or not.
+    // An instance that lacks one therefore loses nothing, and rotating to gain one spends the table's second slot for a
+    // column that is always NULL (#618).
     [Test]
-    public void AddingAComputedColumnToACapturedTable_RotatesToAnInstanceThatIncludesIt()
+    public void AComputedColumn_IsCapturedAsNull_EvenWhenPersisted()
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        DropWithEveryCaptureInstance(cmd, "CdcComputedNull");
+        try
+        {
+            cmd.CommandText = @"
+CREATE TABLE dbo.CdcComputedNull (Id INT NOT NULL PRIMARY KEY, A INT NULL, Twice AS (A * 2) PERSISTED, Thrice AS (A * 3))
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcComputedNull', @role_name = NULL";
+            ExecuteWithDeadlockRetry(cmd);
+            cmd.CommandText = "INSERT dbo.CdcComputedNull (Id, A) VALUES (1, 5)";
+            cmd.ExecuteNonQuery();
+            WaitForCapture(cmd, "dbo_CdcComputedNull_CT", "Id = 1");
+
+            cmd.CommandText = "SELECT CONVERT(VARCHAR(10), A) + '|' + ISNULL(CONVERT(VARCHAR(10), Twice), 'NULL') + '|' + ISNULL(CONVERT(VARCHAR(10), Thrice), 'NULL') FROM cdc.dbo_CdcComputedNull_CT WHERE Id = 1";
+            Assert.That((string)cmd.ExecuteScalar(), Is.EqualTo("5|NULL|NULL"));
+        }
+        finally { DropWithEveryCaptureInstance(cmd, "CdcComputedNull"); }
+    }
+
+    // #618: a deploy that adds a computed column keeps the one capture instance, which goes on capturing. Rotating for
+    // it gained a column that is always NULL and left the table at the two-instance limit, so its next column change
+    // was refused. The redeploy is the capture-drift check's turn: it must not rotate for the same column either.
+    [Test]
+    public void AddingAComputedColumnToACapturedTable_DoesNotRotate_AndCaptureContinues()
     {
         using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
         conn.Open();
@@ -393,23 +421,73 @@ END";
 CREATE TABLE dbo.CdcAddComputed (Id INT NOT NULL PRIMARY KEY, A INT NULL)
 EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcAddComputed', @role_name = NULL";
             ExecuteWithDeadlockRetry(cmd);
-
-            RunTableQuenchProc(cmd, """
+            var json = """
                 {
                     "Schema": "dbo",
                     "Name": "CdcAddComputed",
                     "EnableCDC": true,
                     "Columns": [
-                        { "Name": "Id",    "DataType": "INT", "Nullable": false },
-                        { "Name": "A",     "DataType": "INT", "Nullable": true },
-                        { "Name": "Twice", "DataType": "INT", "Nullable": true, "ComputedExpression": "[A] * 2" }
+                        { "Name": "Id",     "DataType": "INT", "Nullable": false },
+                        { "Name": "A",      "DataType": "INT", "Nullable": true },
+                        { "Name": "Twice",  "DataType": "INT", "Nullable": true, "ComputedExpression": "[A] * 2", "Persisted": true },
+                        { "Name": "Thrice", "DataType": "INT", "Nullable": true, "ComputedExpression": "[A] * 3" }
+                    ]
+                }
+                """;
+
+            RunTableQuenchProc(cmd, json);
+            var afterAdd = (InstanceCount(cmd, "CdcAddComputed"), NewestInstanceName(cmd, "CdcAddComputed"));
+            RunTableQuenchProc(cmd, json);
+            var afterRedeploy = InstanceCount(cmd, "CdcAddComputed");
+            cmd.CommandText = "INSERT dbo.CdcAddComputed (Id, A) VALUES (1, 5)";
+            cmd.ExecuteNonQuery();
+            WaitForCapture(cmd, "dbo_CdcAddComputed_CT", "Id = 1 AND A = 5");
+
+            Assert.Multiple(() =>
+            {
+                Assert.That(afterAdd, Is.EqualTo((1, "dbo_CdcAddComputed")), "adding the computed columns");
+                Assert.That(afterRedeploy, Is.EqualTo(1), "the redeploy");
+            });
+        }
+        finally { DropWithEveryCaptureInstance(cmd, "CdcAddComputed"); }
+    }
+
+    // #618's report: the column was added by another tool before the deploy, so the deploy changes no column and only the
+    // capture-drift check sees an instance without it. A plain column added the same way still rotates (#427).
+    [TestCase("Twice AS (A * 2) PERSISTED", "{ \"Name\": \"Twice\", \"DataType\": \"INT\", \"Nullable\": true, \"ComputedExpression\": \"[A] * 2\", \"Persisted\": true }", 1)]
+    [TestCase("Twice INT NULL", "{ \"Name\": \"Twice\", \"DataType\": \"INT\", \"Nullable\": true }", 2)]
+    public void AColumnAddedOutsideTheDeploy_RotatesOnlyWhenItWouldBeCaptured(string added, string declared, int expectedInstances)
+    {
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        DropWithEveryCaptureInstance(cmd, "CdcOutsideAdd");
+        try
+        {
+            cmd.CommandText = @"
+CREATE TABLE dbo.CdcOutsideAdd (Id INT NOT NULL PRIMARY KEY, A INT NULL)
+EXEC sys.sp_cdc_enable_table @source_schema = N'dbo', @source_name = N'CdcOutsideAdd', @role_name = NULL";
+            ExecuteWithDeadlockRetry(cmd);
+            cmd.CommandText = $"ALTER TABLE dbo.CdcOutsideAdd ADD {added}";
+            cmd.ExecuteNonQuery();
+
+            RunTableQuenchProc(cmd, $$"""
+                {
+                    "Schema": "dbo",
+                    "Name": "CdcOutsideAdd",
+                    "EnableCDC": true,
+                    "Columns": [
+                        { "Name": "Id", "DataType": "INT", "Nullable": false },
+                        { "Name": "A",  "DataType": "INT", "Nullable": true },
+                        {{declared}}
                     ]
                 }
                 """);
 
-            Assert.That(NewestInstanceColumns(cmd, "CdcAddComputed"), Is.EqualTo(new[] { "A", "Id", "Twice" }));
+            Assert.That(InstanceCount(cmd, "CdcOutsideAdd"), Is.EqualTo(expectedInstances));
         }
-        finally { DropWithEveryCaptureInstance(cmd, "CdcAddComputed"); }
+        finally { DropWithEveryCaptureInstance(cmd, "CdcOutsideAdd"); }
     }
 
     private static string[] NewestInstanceColumns(IDbCommand cmd, string table)
@@ -1095,6 +1173,14 @@ END";
     {
         cmd.CommandText = $"SELECT COUNT(*) FROM cdc.change_tables WHERE source_object_id = OBJECT_ID('dbo.{table}')";
         return (int)cmd.ExecuteScalar();
+    }
+
+    private static string NewestInstanceName(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = $@"SELECT TOP 1 ct.capture_instance FROM cdc.change_tables ct
+                             WHERE ct.source_object_id = OBJECT_ID('dbo.{table}')
+                             ORDER BY ct.create_date DESC, ct.object_id DESC";
+        return cmd.ExecuteScalar() as string;
     }
 
     private static string DefaultFilegroup(IDbCommand cmd)

@@ -16,7 +16,10 @@
     "",
     "Doing only (2) is how the gap comes back. The failure message says so.",
     "",
-    "Match is on the MAJOR version only -- a patch release should not redden CI.",
+    "Match is on the MAJOR version only -- a patch release should not redden CI -- except MariaDB, which matches",
+    "MAJOR.MINOR: its rolling releases ship features in minors (13.0, 13.1), and its `13` leg floats across them, so",
+    "a major-only match let 13.1 replace 13.0 in CI with no signal. Its leg stays `13` (a required check by name);",
+    "the ratchet failing on a new minor is the prompt to pin the outgoing one or accept the hole.",
     "",
     "SQL Server is resolved by MANIFEST DIGEST rather than by version string: booting it just to ask its",
     "version means a ~1.5 GB image, an SA password and a startup wait, while MCR publishes a <year>-latest",
@@ -28,5 +31,5 @@
   "sqlserver": "2025",
   "postgresql": "18",
   "mysql": "26",
-  "mariadb": "13"
+  "mariadb": "13.0"
 }

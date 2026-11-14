@@ -239,7 +239,7 @@ BEGIN TRY
                     N'SchemaSmith bootstrap: cannot rebuild PRIMARY KEY on ' + @v_QualifiedName + N' as (' +
                     @v_DeclPkCols + N') -- the table holds duplicate rows for that key. The existing key is ' +
                     N'unchanged; resolve the duplicates and re-run.';
-                RAISERROR(@v_PkMsg, 16, 1);
+                RAISERROR('%s', 16, 1, @v_PkMsg);
                 RETURN;
             END
 
@@ -325,6 +325,6 @@ BEGIN TRY
         EXEC(@v_SQL);
 END TRY
 BEGIN CATCH
-    DECLARE @v_RethrowMsg NVARCHAR(4000) = ERROR_MESSAGE();
-    RAISERROR(@v_RethrowMsg, 16, 1);
+    DECLARE @v_RethrowMsg NVARCHAR(4000) = CASE WHEN ERROR_NUMBER() = 50000 THEN ERROR_MESSAGE() ELSE N'Msg ' + CAST(ERROR_NUMBER() AS NVARCHAR(10)) + N', Line ' + CAST(ERROR_LINE() AS NVARCHAR(10)) + ISNULL(N', Procedure ' + ERROR_PROCEDURE(), N'') + N': ' + ERROR_MESSAGE() END;
+    RAISERROR('%s', 16, 1, @v_RethrowMsg);
 END CATCH

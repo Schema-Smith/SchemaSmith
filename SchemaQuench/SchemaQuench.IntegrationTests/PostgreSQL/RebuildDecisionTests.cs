@@ -31,7 +31,6 @@ namespace SchemaQuench.IntegrationTests.PostgreSQL;
 [Parallelizable(scope: ParallelScope.Self)]
 public class RebuildDecisionTests : BaseTableQuenchTests
 {
-    private const string MarkerIndex = "ix_rebuild_decision_marker";
     private const string TableName = "RebuildDecision";
 
     // ---- harness ------------------------------------------------------------
@@ -96,9 +95,15 @@ public class RebuildDecisionTests : BaseTableQuenchTests
     private static long Oid(IDbCommand cmd, string schema, string name)
         => Long(cmd, $"SELECT COALESCE(to_regclass('\"{schema}\".\"{name}\"')::oid::BIGINT, -1)");
 
-    private static int MarkerCount(IDbCommand cmd, string schema)
-        => Int(cmd, "SELECT COUNT(*) FROM pg_indexes "
-                    + $"WHERE schemaname = {Lit(schema)} AND tablename = {Lit(TableName)} AND indexname = {Lit(MarkerIndex)}");
+    // Whether the table is the one the test marked, or was replaced: a rebuild swaps in a new table, and an in-place
+    // ALTER keeps it. It used to be an index the package does not declare, which a rebuild lost; a rebuild now refuses
+    // to lose one (Paul, 2026-11-10), so the table's own identity is read instead.
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> _marked = new();
+
+    private void Mark(IDbCommand cmd, string schema) => _marked[schema] = Oid(cmd, schema, TableName);
+
+    private int MarkerCount(IDbCommand cmd, string schema)
+        => _marked.TryGetValue(schema, out var marked) && Oid(cmd, schema, TableName) == marked ? 1 : 0;
 
     private static string ColumnType(IDbCommand cmd, string schema, string column)
         => Str(cmd, "SELECT data_type || COALESCE('(' || character_maximum_length || ')', '') "
@@ -185,7 +190,7 @@ public class RebuildDecisionTests : BaseTableQuenchTests
               + "VALUES (1, 10, 'a1', 'd1', 'b1', 'c1'), (2, 20, 'a2', 'd2', 'b2', 'c2');"
             : $"INSERT INTO \"{schema}\".\"{TableName}\" (\"Id\", \"Marker\", \"A\", \"B\", \"C\") "
               + "VALUES (1, 10, 'a1', 'b1', 'c1'), (2, 20, 'a2', 'b2', 'c2');");
-        Exec(cmd, $"CREATE INDEX \"{MarkerIndex}\" ON \"{schema}\".\"{TableName}\" (\"Marker\");");
+        Mark(cmd, schema);
 
         Assert.That(MarkerCount(cmd, schema), Is.EqualTo(1),
             "Setup precondition: the live-only marker index must exist, or its absence later proves nothing.");
@@ -533,7 +538,7 @@ public class RebuildDecisionTests : BaseTableQuenchTests
 
         // The rebuild took the marker index with the old table, so re-create it: without a live-only object
         // in place there is nothing for the second deploy's "was this table replaced?" check to read.
-        Exec(cmd, $"CREATE INDEX \"{MarkerIndex}\" ON \"{schema}\".\"{TableName}\" (\"Marker\");");
+        Mark(cmd, schema);
         Assert.That(MarkerCount(cmd, schema), Is.EqualTo(1),
             "Setup precondition: the fresh marker index must exist before the second deploy.");
 

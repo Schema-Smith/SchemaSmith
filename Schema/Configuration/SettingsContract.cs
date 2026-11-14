@@ -72,13 +72,16 @@ public static class SettingsContract
             SettingsKeys.RebuildPolicyOnOrderMismatch, SettingsKeys.SystemVersioningAlterHistory,
             SettingsKeys.OnlineApply, SettingsKeys.OnlineApplyMaxDuration,
             SettingsKeys.PreventDrop, SettingsKeys.UpdateTables, SettingsKeys.SkipUnchangedObjects,
+            SettingsKeys.CommandTimeoutSeconds, SettingsKeys.LockTimeoutSeconds, SettingsKeys.ContentionRetryAttempts,
+            SettingsKeys.DestructiveChangePolicy, SettingsKeys.AcceptDestructive, SettingsKeys.DriftHelperDatabase,
             SettingsKeys.KindleTheForge, SettingsKeys.ForceReKindle, SettingsKeys.CheckpointDirectory,
             SettingsKeys.DeliverData, SettingsKeys.VerboseLogging, SettingsKeys.FailureContextLines,
             SettingsKeys.BottleneckThresholdMs, SettingsKeys.TrackRunOnceMigrations,
             SettingsKeys.PruneObsoleteMigrationTracking,
             SettingsKeys.ArtifactPath, SettingsKeys.ScrubArtifacts, SettingsKeys.WriteDebugSql, SettingsKeys.ScriptTokens,
-            SettingsKeys.LogHygiene, SettingsKeys.ExitNonZeroOnWarning
-        ]), StringComparer.OrdinalIgnoreCase),
+            SettingsKeys.LogHygiene, SettingsKeys.ExitNonZeroOnWarning, SettingsKeys.ExitZeroOnDowngrade, SettingsKeys.LogFormat,
+            SettingsKeys.DeploymentHistory, SettingsKeys.DeploymentHistoryRetentionDays
+        ]).Concat(SettingsKeys.Run.All), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.SchemaTongs)).Concat(
         [
@@ -87,21 +90,21 @@ public static class SettingsContract
             SettingsKeys.ProductKeys.ObjectOrder, SettingsKeys.ProductKeys.PreserveExistingOrder,
             SettingsKeys.TemplateKeys.Name, SettingsKeys.TemplateKeys.SchemaIdentificationScript,
             SettingsKeys.OrphanHandling.Mode, SettingsKeys.FolderMapping, SettingsKeys.LogHygiene,
-            SettingsKeys.ExitNonZeroOnWarning
+            SettingsKeys.ExitNonZeroOnWarning, SettingsKeys.LogFormat
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.DataTongs] = new(BaseSourceKeys().Concat(ShouldCastKeys(SettingsTool.DataTongs)).Concat(
         [
             SettingsKeys.ContentPath, SettingsKeys.ScriptPath, SettingsKeys.TemplatePath,
             SettingsKeys.TablesToExtract, SettingsKeys.CompatEncoding, SettingsKeys.LogHygiene,
-            SettingsKeys.ExitNonZeroOnWarning
+            SettingsKeys.ExitNonZeroOnWarning, SettingsKeys.LogFormat
         ]), StringComparer.OrdinalIgnoreCase),
 
         [SettingsTool.SchemaShears] = new(
         [
             SettingsKeys.SourcePath, SettingsKeys.ManifestPath, SettingsKeys.AlwaysIncludePath,
             SettingsKeys.OutputPath, SettingsKeys.Zip, SettingsKeys.AllowDrops, SettingsKeys.LogHygiene,
-            SettingsKeys.ExitNonZeroOnWarning
+            SettingsKeys.ExitNonZeroOnWarning, SettingsKeys.LogFormat
         ], StringComparer.OrdinalIgnoreCase)
     };
 
@@ -120,7 +123,7 @@ public static class SettingsContract
         SettingsKeys.Source.Server, SettingsKeys.Source.User, SettingsKeys.Source.Password,
         SettingsKeys.Source.Port, SettingsKeys.Source.Platform, SettingsKeys.Source.Database,
         SettingsKeys.Source.Schema, SettingsKeys.Source.IntegratedSecurity,
-        SettingsKeys.Source.ConnectionProperties, SettingsKeys.SourceCompatEncoding,
+        SettingsKeys.Source.ConnectionProperties, SettingsKeys.SourceCompatEncoding, SettingsKeys.SourceCommandTimeoutSeconds,
         SettingsKeys.Target.Platform,
         // Each Source:* connection key falls back to its Target:* twin when absent.
         SettingsKeys.Target.Server, SettingsKeys.Target.User, SettingsKeys.Target.Password, SettingsKeys.Target.Port,

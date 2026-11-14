@@ -21,7 +21,7 @@ CREATE OR REPLACE FUNCTION "SchemaSmith"."BareColumnList"(p_List TEXT)
     IMMUTABLE
 AS $$
   SELECT STRING_AGG("SchemaSmith"."BareName"(item), ',' ORDER BY ord)
-    FROM UNNEST(STRING_TO_ARRAY(p_List, ',')) WITH ORDINALITY AS u(item, ord)
+    FROM UNNEST("SchemaSmith"."SplitTopLevelList"(p_List)) WITH ORDINALITY AS u(item, ord)
 $$;
 
 CREATE OR REPLACE FUNCTION "SchemaSmith"."QuoteColumnList"(p_List TEXT)
@@ -30,5 +30,5 @@ CREATE OR REPLACE FUNCTION "SchemaSmith"."QuoteColumnList"(p_List TEXT)
 AS $$
 BEGIN
   RETURN (SELECT STRING_AGG("SchemaSmith"."QuoteName"("SchemaSmith"."BareName"(item)), ',')
-            FROM UNNEST(STRING_TO_ARRAY(p_List, ',')) AS item);
+            FROM UNNEST("SchemaSmith"."SplitTopLevelList"(p_List)) AS item);
 END $$

@@ -73,7 +73,10 @@ BEGIN
         -- with the catalog goes through these; DDL keeps the declared spelling in TableName.
         TableKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
         OldNameKey VARCHAR(260) COLLATE utf8mb4_bin DEFAULT NULL,
-        Engine VARCHAR(50) DEFAULT 'InnoDB',
+        -- NULL when omitted: a new table is created InnoDB, an existing one keeps its engine (as Partitioning,
+        -- RowFormat and Tablespace treat an omitted value). Defaulted here, ALTER ... ENGINE = InnoDB converted a
+        -- MEMORY, Aria or MyISAM table nobody asked to convert.
+        Engine VARCHAR(50) DEFAULT NULL,
         Collation VARCHAR(100) DEFAULT NULL,
         CharacterSet VARCHAR(50) DEFAULT NULL,
         OldName VARCHAR(128) DEFAULT NULL,
@@ -122,7 +125,9 @@ BEGIN
         ShouldApply TINYINT DEFAULT 1,
         ShouldApplyExpression VARCHAR(4000) DEFAULT NULL,
         VariantName VARCHAR(128) DEFAULT NULL,
-        AutoIncrementKeyClause VARCHAR(500) DEFAULT '',
+        AutoIncrementKeyClause TEXT DEFAULT NULL,
+        -- The AUTO_INCREMENT column the clause above keys, when the primary key does not lead with it.
+        AutoIncrementColumn VARCHAR(128) DEFAULT NULL,
         DropColumnsRemovedFromProduct TINYINT DEFAULT NULL,
         DropForeignKeysRemovedFromProduct TINYINT DEFAULT NULL,
         DropCheckConstraintsRemovedFromProduct TINYINT DEFAULT NULL,
@@ -161,7 +166,7 @@ BEGIN
             INSERT INTO _SchemaSmith_Tables (TableName, Engine, Collation, CharacterSet, OldName, RowFormat, Compression, KeyBlockSize, PageCompressed, PageCompressionLevel, Encryption, Encrypted, EncryptionKeyId, Tablespace, DataDirectory, PartitionMethod, PartitionExpression, PartitionCount, PartitionKeyAlgorithm, SubpartitionMethod, SubpartitionExpression, SubpartitionCount, SystemTimeInterval, SystemTimeStarts, SystemTimeLimit, SystemTimeAuto, AutoIncrementValue, Comment, NewTable, ShouldApply, ShouldApplyExpression, VariantName, DropColumnsRemovedFromProduct, DropForeignKeysRemovedFromProduct, DropCheckConstraintsRemovedFromProduct, DropPeriodsRemovedFromProduct, DropIndexesRemovedFromProduct, RebuildPolicyMode, RebuildPolicyThreshold, RebuildPolicyOnOrderMismatch, RebuildPolicySpecified, PreventDrop, IsSystemVersioned, OnlineApply)
             SELECT
                 SchemaSmith_SafeBacktickWrap(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Name')))) AS TableName,
-                COALESCE(NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Engine')))), ''), 'InnoDB') AS Engine,
+                NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Engine')))), '') AS Engine,
                 NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].Collation')))), '') AS Collation,
                 NULLIF(TRIM(SchemaSmith_JsonScalarStr(JSON_EXTRACT(p_TableDefinitions, CONCAT('$[', v_TblIdx, '].CharacterSet')))), '') AS CharacterSet,
                 -- #375: a blank/whitespace OldName means "no rename" -> NULL, not a manufactured `` backtick pair.
@@ -518,7 +523,7 @@ BEGIN
     -- (utf8mb3_general_ci); earlier servers under utf8 (utf8_general_ci), and each lists only its own form in
     -- COLLATIONS (checked on 8.0.28, 8.0.45, 10.5.29 and 11.4.12). Declared names are written the way this server
     -- reports them, so a package in either form compares equal on both kinds of server.
-    SET @ss_utf8_is_mb3 = (SELECT COUNT(*) FROM information_schema.COLLATIONS WHERE COLLATION_NAME = 'utf8mb3_general_ci');
+    SELECT (SELECT COUNT(*) FROM information_schema.COLLATIONS WHERE COLLATION_NAME = 'utf8mb3_general_ci') INTO @ss_utf8_is_mb3;
     UPDATE _SchemaSmith_Columns
     SET CharacterSet = CASE WHEN @ss_utf8_is_mb3 > 0 AND LOWER(TRIM(CharacterSet)) = 'utf8' THEN 'utf8mb3'
                             WHEN @ss_utf8_is_mb3 = 0 AND LOWER(TRIM(CharacterSet)) = 'utf8mb3' THEN 'utf8'
@@ -582,6 +587,13 @@ BEGIN
                                     OR COALESCE(isc.GENERATION_EXPRESSION, '') = '' THEN 1 ELSE 0 END
      WHERE c.GeneratedExpression IS NOT NULL AND TRIM(c.GeneratedExpression) != ''
        AND (c.NullableDeclared = 0 OR VERSION() LIKE '%MariaDB%');
+
+    -- An unquoted NULL default is no default: the catalog reports it as SQL NULL, so the text compared unequal and
+    -- MODIFY ... DEFAULT NULL ran on every deploy (an error on a MySQL 5.7 TIMESTAMP NOT NULL). A quoted 'NULL' is a
+    -- four-letter string and is left alone.
+    UPDATE _SchemaSmith_Columns
+       SET DefaultValue = NULL
+     WHERE UPPER(TRIM(DefaultValue)) = 'NULL';
 
     -- Below MySQL 8.0.13 every DEFAULT-expression gate recognises an expression by its leading '(', but the column
     -- script below wraps any default containing '(' -- so a bare function default (curdate(), uuid()) escaped the
@@ -725,7 +737,7 @@ BEGIN
         -- Escaping (double the embedded single quotes) mirrors that same established form -- see
         -- _SchemaSmith_FullTextIndexes.Comment's CREATE/ADD FULLTEXT INDEX emit in
         -- SchemaSmith_IndexOnlyQuench.sql.
-        CASE WHEN Comment IS NOT NULL AND Comment != '' THEN CONCAT(' COMMENT ''', REPLACE(Comment, '''', ''''''), '''') ELSE '' END,
+        CASE WHEN Comment IS NOT NULL AND Comment != '' THEN CONCAT(' COMMENT ', QUOTE(Comment), '') ELSE '' END,
         -- Truly last: MariaDB accepts this clause either side of COMMENT (verified on 11.4), so it goes
         -- where the grammar documents it rather than interleaved. Gated the same way SRID and INVISIBLE
         -- are -- below MariaDB 10.3, and on MySQL at any version, the keyword is a hard syntax error, so
@@ -761,7 +773,7 @@ BEGIN
            SET sp.EndColumn = c.ColumnName, sp.EndScript = c.ColumnScript;
         DELETE FROM _SchemaSmith_SystemPeriods WHERE EndColumn IS NULL;
         UPDATE _SchemaSmith_SystemPeriods sp
-           SET sp.LiveEndColumn = (SELECT CONCAT('`', c.COLUMN_NAME, '`')
+           SET sp.LiveEndColumn = (SELECT CONCAT('`', SchemaSmith_EscapeBackticks(c.COLUMN_NAME), '`')
                                      FROM INFORMATION_SCHEMA.COLUMNS c
                                     WHERE c.TABLE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(c.TABLE_SCHEMA) = SchemaSmith_IdentifierKey(p_DatabaseName)
                                       AND SchemaSmith_IdentifierKey(c.TABLE_NAME) = SchemaSmith_IdentifierKey(SchemaSmith_StripBacktickWrapping(sp.TableName))
@@ -844,8 +856,7 @@ BEGIN
               WHERE g2.TableName = g1.TableName
                 AND g2.DependencyLevel = 0
                 AND g2.ColumnName != g1.ColumnName
-                AND (g1.GeneratedExpression LIKE CONCAT('%', g2.ColumnNameStripped, '%')
-                     OR g1.GeneratedExpression LIKE CONCAT('%', g2.ColumnName, '%'))
+                AND SchemaSmith_ExpressionReadsColumn(g1.GeneratedExpression, g2.ColumnNameStripped) = 1
           );
 
         -- Sync the changes back to GenColDeps2
@@ -956,15 +967,6 @@ BEGIN
     UPDATE _SchemaSmith_Indexes
        SET IndexColumns = SchemaSmith_StripFullLengthPrefixes(IndexColumns, TableName)
      WHERE LOCATE('(', IndexColumns) > 0;
-
-    -- MySQL: AUTO_INCREMENT column must be indexed. When it's not the first column
-    -- in a composite PK, we need a separate KEY clause in the CREATE TABLE statement.
-    -- Uses JOIN syntax instead of correlated subquery to avoid MySQL temp table re-open restriction.
-    UPDATE _SchemaSmith_Tables t
-      JOIN _SchemaSmith_Columns c ON c.TableName = t.TableName AND c.IsAutoIncrement = 1
-      JOIN _SchemaSmith_Indexes i ON i.TableName = t.TableName AND i.IsPrimaryKey = 1
-       SET t.AutoIncrementKeyClause = CONCAT(', KEY (`', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`)')
-     WHERE LOCATE(CONCAT('`', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`') COLLATE utf8mb4_unicode_ci, i.IndexColumns COLLATE utf8mb4_unicode_ci) > 1;
 
     INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'ParseTableJson: Parse foreign keys');
 
@@ -1321,6 +1323,30 @@ BEGIN
     DELETE FROM _SchemaSmith_Indexes WHERE ShouldApply = 0;
     DELETE FROM _SchemaSmith_FullTextIndexes WHERE ShouldApply = 0;
     DELETE FROM _SchemaSmith_Columns WHERE ShouldApply = 0;
+
+    -- MySQL: AUTO_INCREMENT column must be indexed (1075), and the CREATE carries only the columns and the primary key.
+    -- When the primary key does not lead with the column, or there is none, the CREATE needs another index that does.
+    -- Uses JOIN syntax instead of correlated subquery to avoid MySQL temp table re-open restriction.
+    UPDATE _SchemaSmith_Tables t
+      JOIN _SchemaSmith_Columns c ON c.TableName = t.TableName AND c.IsAutoIncrement = 1
+      LEFT JOIN _SchemaSmith_Indexes i ON i.TableName = t.TableName AND i.IsPrimaryKey = 1
+       SET t.AutoIncrementColumn = SchemaSmith_StripBacktickWrapping(c.ColumnName),
+           t.AutoIncrementKeyClause = CONCAT(', KEY (`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`)')
+     WHERE i.RowId IS NULL
+        OR LOCATE(CONCAT('`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`') COLLATE utf8mb4_unicode_ci, SchemaSmith_NormalizeIndexColumns(i.IndexColumns) COLLATE utf8mb4_unicode_ci) <> 1;
+
+    -- A declared index that leads with the column is that index, created in the CREATE under its own name and options,
+    -- so the index pass finds it present. An unnamed KEY is left only when the package declares none: it belongs to no
+    -- one, and DropUnknownIndexes then tried to drop it on every deploy.
+    UPDATE _SchemaSmith_Tables t
+      JOIN _SchemaSmith_Indexes i ON i.TableName = t.TableName AND i.IsPrimaryKey = 0 AND i.ShouldApply = 1
+                                 AND UPPER(i.IndexType) IN ('BTREE', 'HASH')
+       SET t.AutoIncrementKeyClause = CONCAT(', ', IF(i.IsUnique = 1, 'UNIQUE ', ''), 'KEY ', i.IndexName, ' (', COALESCE(i.EmitColumns, i.IndexColumns), ')',
+                                             IF(UPPER(i.IndexType) = 'HASH', ' USING HASH', ''),
+                                             IF(COALESCE(i.Comment, '') <> '', CONCAT(' COMMENT ', QUOTE(i.Comment), ''), ''),
+                                             IF(i.IsVisible = 0 AND SchemaSmith_SupportsInvisibleIndex() = 1, SchemaSmith_IndexInvisibleClause(), ''))
+     WHERE t.AutoIncrementColumn IS NOT NULL
+       AND LOCATE(CONCAT('`', SchemaSmith_EscapeBackticks(t.AutoIncrementColumn), '`') COLLATE utf8mb4_unicode_ci, SchemaSmith_NormalizeIndexColumns(i.IndexColumns) COLLATE utf8mb4_unicode_ci) = 1;
 
     -- Now that ShouldApply has filtered each temp table down to at most one row per natural
     -- key, promote the natural-key indexes to UNIQUE so MySQL's optimizer can infer functional

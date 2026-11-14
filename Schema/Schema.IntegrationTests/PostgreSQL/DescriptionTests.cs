@@ -25,28 +25,19 @@ namespace Schema.IntegrationTests.PostgreSQL;
 public class DescriptionTests
 {
     private const string Table = "desc_orders";
-    private string _server = "", _user = "", _password = "", _port = "";
-    private Dictionary<string, string> _props = new();
     private string _db = "";
 
+    // A schema of its own in the suite's kindled database, not a database: nothing here is a database-level setting, and a
+    // database cost a CREATE DATABASE and a kindle per run. Every connection puts the schema first on its search_path.
     [OneTimeSetUp]
     public void OneTimeSetUp()
     {
-        var config = ConfigHelper.GetAppSettingsAndUserSecrets("test", null);
-        _server = config["PostgreSQL:Server"] ?? "127.0.0.1";
-        _user = config["PostgreSQL:User"];
-        _password = config["PostgreSQL:Password"];
-        _port = config["PostgreSQL:Port"];
-        _props = ConnectionString.ReadProperties(config, "PostgreSQL:ConnectionProperties");
-
         _db = $"ss_desc_{Guid.NewGuid():N}"[..28].ToLowerInvariant();
-        using var maint = Open("postgres");
-        Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
-        Exec(maint, $"CREATE DATABASE \"{_db}\"");
-
-        using var c = Open(_db);
-        using var cmd = c.CreateCommand();
-        ForgeKindler.KindleTheForge(cmd, Platform.PostgreSQL);
+        using (var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString()))
+        {
+            main.Open();
+            Exec(main, $"CREATE SCHEMA \"{_db}\"");
+        }
     }
 
     [OneTimeTearDown]
@@ -54,9 +45,9 @@ public class DescriptionTests
     {
         try
         {
-            using var maint = Open("postgres");
-            Exec(maint, $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{_db}' AND pid <> pg_backend_pid()");
-            Exec(maint, $"DROP DATABASE IF EXISTS \"{_db}\"");
+            using var main = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
+            main.Open();
+            Exec(main, $"DROP SCHEMA IF EXISTS \"{_db}\" CASCADE");
         }
         catch (DbException) { /* teardown must not mask an assertion */ }
     }
@@ -64,15 +55,15 @@ public class DescriptionTests
     [SetUp]
     public void SetUp() => OnDb(cmd =>
     {
-        Exec2(cmd, $"DROP TABLE IF EXISTS public.{Table}");
+        Exec2(cmd, $"DROP TABLE IF EXISTS {Table}");
         Exec2(cmd, "DELETE FROM \"SchemaSmith\".\"ChangeAudit\"");
     });
 
-    private IDbConnection Open(string database)
+    private IDbConnection Open(string schema)
     {
-        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL)
-            .GetDbConnection(ConnectionString.Build(Platform.PostgreSQL, _server, database, _user, _password, _port, _props));
+        var c = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(FixtureSetup.GetMainDbConnectionString());
         c.Open();
+        Exec(c, $"SET search_path = \"{schema}\", public");
         return c;
     }
 
@@ -106,8 +97,8 @@ public class DescriptionTests
 
     private static string Desc(string description) => description == null ? "" : ", \"Description\": \"" + description + "\"";
 
-    private static string Package(string table = null, string id = null, string pk = null, string ix = null) =>
-        "[{ \"Schema\": \"public\", \"Name\": \"" + Table + "\"" + Desc(table) + ", \"Columns\": ["
+    private string Package(string table = null, string id = null, string pk = null, string ix = null) =>
+        "[{ \"Schema\": \"" + _db + "\", \"Name\": \"" + Table + "\"" + Desc(table) + ", \"Columns\": ["
         + " { \"Name\": \"id\", \"DataType\": \"integer\", \"Nullable\": false" + Desc(id) + " },"
         + " { \"Name\": \"v\", \"DataType\": \"integer\", \"Nullable\": true } ], \"Indexes\": ["
         + " { \"Name\": \"pk_" + Table + "\", \"IndexColumns\": \"id\", \"PrimaryKey\": true, \"Unique\": true" + Desc(pk) + " },"
@@ -120,10 +111,10 @@ public class DescriptionTests
         return r == null || r == DBNull.Value ? null : r.ToString();
     }
 
-    private static string TableComment(IDbCommand cmd) => Str(cmd, $"SELECT obj_description('public.{Table}'::regclass, 'pg_class')");
+    private static string TableComment(IDbCommand cmd) => Str(cmd, $"SELECT obj_description('{Table}'::regclass, 'pg_class')");
     private static string ColumnComment(IDbCommand cmd, string column = "id") =>
-        Str(cmd, $"SELECT col_description('public.{Table}'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = 'public.{Table}'::regclass AND attname = '{column}'))");
-    private static string IndexComment(IDbCommand cmd, string index) => Str(cmd, $"SELECT obj_description('public.{index}'::regclass, 'pg_class')");
+        Str(cmd, $"SELECT col_description('{Table}'::regclass, (SELECT attnum FROM pg_attribute WHERE attrelid = '{Table}'::regclass AND attname = '{column}'))");
+    private static string IndexComment(IDbCommand cmd, string index) => Str(cmd, $"SELECT obj_description('{index}'::regclass, 'pg_class')");
 
     private static int Audits(IDbCommand cmd, string action, string objectType = null) =>
         Convert.ToInt32(Str(cmd, "SELECT COUNT(*) FROM \"SchemaSmith\".\"ChangeAudit\" WHERE \"ActionType\" = '" + action + "'"
@@ -156,15 +147,15 @@ public class DescriptionTests
     {
         OnDb(cmd =>
         {
-            Exec2(cmd, $"CREATE TABLE public.{Table} (id integer NOT NULL, v integer) PARTITION BY RANGE (id)");
-            Deploy(cmd, "[{ \"Schema\": \"public\", \"Name\": \"" + Table + "\", \"Description\": \"all the orders\", \"Columns\": ["
+            Exec2(cmd, $"CREATE TABLE {Table} (id integer NOT NULL, v integer) PARTITION BY RANGE (id)");
+            Deploy(cmd, "[{ \"Schema\": \"" + _db + "\", \"Name\": \"" + Table + "\", \"Description\": \"all the orders\", \"Columns\": ["
                         + " { \"Name\": \"id\", \"DataType\": \"integer\", \"Nullable\": false, \"Description\": \"the key\" },"
                         + " { \"Name\": \"v\", \"DataType\": \"integer\", \"Nullable\": true } ],"
                         + " \"Indexes\": [ { \"Name\": \"ix_" + Table + "_v\", \"IndexColumns\": \"v\", \"Description\": \"the lookup\" } ] }]");
 
             Assert.Multiple(() =>
             {
-                Assert.That(Str(cmd, $"SELECT relkind::text FROM pg_class WHERE oid = 'public.{Table}'::regclass"), Is.EqualTo("p"), "setup: partitioned");
+                Assert.That(Str(cmd, $"SELECT relkind::text FROM pg_class WHERE oid = '{Table}'::regclass"), Is.EqualTo("p"), "setup: partitioned");
                 Assert.That(TableComment(cmd), Is.EqualTo("all the orders"));
                 Assert.That(ColumnComment(cmd), Is.EqualTo("the key"));
                 Assert.That(IndexComment(cmd, "ix_" + Table + "_v"), Is.EqualTo("the lookup"));
@@ -212,7 +203,7 @@ public class DescriptionTests
         OnDb(cmd =>
         {
             Deploy(cmd, Package());
-            Exec2(cmd, $"COMMENT ON TABLE public.{Table} IS 'written by a DBA'; COMMENT ON COLUMN public.{Table}.id IS 'also by a DBA'");
+            Exec2(cmd, $"COMMENT ON TABLE {Table} IS 'written by a DBA'; COMMENT ON COLUMN {Table}.id IS 'also by a DBA'");
             Exec2(cmd, "DELETE FROM \"SchemaSmith\".\"ChangeAudit\"");
 
             Deploy(cmd, Package());
@@ -301,7 +292,7 @@ public class DescriptionTests
         {
             Deploy(cmd, Package(table: "all the orders", id: "the key", pk: "the key index", ix: "the lookup"));
 
-            var json = Str(cmd, $"SELECT \"SchemaSmith\".\"GenerateTableJSON\"('public', '{Table}')");
+            var json = Str(cmd, $"SELECT \"SchemaSmith\".\"GenerateTableJSON\"(current_schema()::text, '{Table}')");
             var table = (PostgreSqlTable)PlatformDeserializer.DeserializeTable(json, Platform.PostgreSQL);
 
             Assert.Multiple(() =>

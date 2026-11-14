@@ -319,7 +319,7 @@ public class DataDeliveryProcessor : IDataDelivery
                 var mergeScript = helper.BuildMergeScript(context.Command, schemaOrDb, table.Name,
                     content.Data, keyColumns, update, delete, delivery.MergeDisableTriggers, false, mergeFilter,
                     delivery.MergeDisableRules, delivery.MergeUpdateDescendents, context.PostgreSqlServerVersionNum, context.MySqlServerVersionNum,
-                    content.Encoding);
+                    content.Encoding, delivery.Columns);
 
                 if (!context.WhatIf)
                 {
@@ -426,7 +426,7 @@ public class DataDeliveryProcessor : IDataDelivery
                 var mergeScript = helper.BuildMergeScript(context.Command, schemaOrDb, table.Name,
                     content.Data, keyColumns, update, delete, delivery.MergeDisableTriggers, false, mergeFilter,
                     delivery.MergeDisableRules, delivery.MergeUpdateDescendents, context.PostgreSqlServerVersionNum, context.MySqlServerVersionNum,
-                    content.Encoding);
+                    content.Encoding, delivery.Columns);
 
                 try
                 {
@@ -594,7 +594,10 @@ WHERE tc_p.TABLE_SCHEMA = '{schema.Replace("'", "''")}'
         if (Path.IsPathRooted(normalized))
             return null;
 
-        var fullRoot = Path.GetFullPath(templateRootPath);
+        // A relative root is a path inside a zipped package, read through the zip: it is resolved against a stand-in
+        // anchor for the containment check and handed back relative, never against the working directory.
+        var relativeRoot = !Path.IsPathRooted(templateRootPath);
+        var fullRoot = relativeRoot ? Path.GetFullPath(templateRootPath, ZipAnchor) : Path.GetFullPath(templateRootPath);
         // Append the (now guaranteed relative) suffix and canonicalize. Concatenate rather than
         // Path.Combine, which would discard fullRoot for a rooted suffix — already excluded above.
         var fullCombined = Path.GetFullPath(fullRoot + Path.DirectorySeparatorChar + normalized);
@@ -605,8 +608,10 @@ WHERE tc_p.TABLE_SCHEMA = '{schema.Replace("'", "''")}'
             !fullCombined.StartsWith(fullRoot + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             return null;
 
-        return fullCombined;
+        return relativeRoot ? Path.GetRelativePath(ZipAnchor, fullCombined) : fullCombined;
     }
+
+    private static readonly string ZipAnchor = Path.GetFullPath(Path.Join(Path.DirectorySeparatorChar.ToString(), "package-root"));
 
     /// <summary>
     /// Substitutes the <c>{{SchemaName}}</c> token in a user-authored

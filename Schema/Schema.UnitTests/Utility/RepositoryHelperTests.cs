@@ -2,6 +2,7 @@
 
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using NSubstitute;
@@ -72,11 +73,12 @@ public class RepositoryHelperTests
     {
         var names = RepositoryHelper.GetSchemaFileNames(Platform.SqlServer);
 
-        Assert.That(names, Has.Length.EqualTo(4));
+        Assert.That(names, Has.Length.EqualTo(5));
         Assert.That(names[0], Does.StartWith("products."));
         Assert.That(names[1], Does.StartWith("templates."));
         Assert.That(names[2], Does.StartWith("tables."));
         Assert.That(names[3], Is.EqualTo("indexedviews.sqlserver.schema"));
+        Assert.That(names[4], Is.EqualTo("sequences.sqlserver.schema"));
 
         var platformStr = Platform.SqlServer.ToCanonicalString().ToLower();
         foreach (var name in names)
@@ -244,9 +246,9 @@ public class RepositoryHelperTests
 
         var results = RepositoryHelper.WriteSchemaFilesWithResults("/fake/product", Platform.SqlServer);
 
-        Assert.That(results, Has.Count.EqualTo(4)); // products, templates, tables, indexedviews
+        Assert.That(results, Has.Count.EqualTo(5)); // products, templates, tables, indexedviews, sequences
         Assert.That(results, Has.All.Matches<SchemaFileResult>(r => r.WasCreated));
-        Assert.That(writtenFiles, Has.Count.EqualTo(4));
+        Assert.That(writtenFiles, Has.Count.EqualTo(5));
 
         // Verify each written file is valid JSON with schema structure
         foreach (var (_, content) in writtenFiles)
@@ -255,6 +257,49 @@ public class RepositoryHelperTests
             Assert.That(schema["type"]?.ToString(), Is.EqualTo("object"));
             Assert.That(schema["properties"], Is.Not.Null);
         }
+    }
+
+    // A settings schema is written only for a package that has the settings file, so a package without one is extracted
+    // and regenerated exactly as before.
+    [Test]
+    public void WriteSchemaFilesWithResults_PackageWithServerSettings_AddsOnlyThatSchema()
+    {
+        _file.Exists(Arg.Any<string>()).Returns(false);
+        _file.Exists(Path.Join("/fake/product", "ServerSettings.json")).Returns(true);
+
+        var results = RepositoryHelper.WriteSchemaFilesWithResults("/fake/product", Platform.SqlServer);
+
+        Assert.That(results.Select(r => r.FileName), Has.Member("serversettings.sqlserver.schema")
+            .And.No.Member("databasesettings.sqlserver.schema"));
+        Assert.That(results, Has.Count.EqualTo(6));
+    }
+
+    [Test]
+    public void WriteSchemaFilesWithResults_TemplateWithDatabaseSettings_AddsThatSchema()
+    {
+        var templates = Path.Join("/fake/product", "Templates");
+        _file.Exists(Arg.Any<string>()).Returns(false);
+        _directory.Exists(templates).Returns(true);
+        _directory.GetFiles(templates, "DatabaseSettings.json", SearchOption.AllDirectories)
+            .Returns([Path.Join(templates, "Main", "DatabaseSettings.json")]);
+
+        var results = RepositoryHelper.WriteSchemaFilesWithResults("/fake/product", Platform.PostgreSQL);
+
+        Assert.That(results.Select(r => r.FileName), Has.Member("databasesettings.postgresql.schema")
+            .And.No.Member("serversettings.postgresql.schema"));
+    }
+
+    [Test]
+    public void WriteSchemaFilesWithResults_CommittedSettingsSchema_IsKeptCurrent()
+    {
+        var committed = Path.Join("/fake/product", ".json-schemas", "serversettings.mysql.schema");
+        _file.Exists(Arg.Any<string>()).Returns(false);
+        _file.Exists(committed).Returns(true);
+        _file.ReadAllText(committed).Returns("""{ "type": "object", "properties": {} }""");
+
+        var results = RepositoryHelper.WriteSchemaFilesWithResults("/fake/product", Platform.MySQL);
+
+        Assert.That(results.Select(r => r.FileName), Has.Member("serversettings.mysql.schema"));
     }
 
     [Test]

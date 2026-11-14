@@ -45,7 +45,7 @@ These are the minimum engine versions SchemaSmith supports. The floor is enforce
 |--------|-------------------|
 | SQL Server | 2008 (major version 10) |
 | PostgreSQL | 12 |
-| MySQL | 5.7.22 / 8.0.23 |
+| MySQL | 5.7.16 / 8.0.11 |
 | MariaDB | 10.2.13 |
 
 The floor is enforced from the detected server version — below it, the run aborts before any change. SchemaSmith reaches these floors by generating version-correct SQL for each target rather than demanding a uniform version: newer-version features are taken by an equivalent path (or degraded through a policy with a downgrade manifest) instead of refused. For SQL Server the target database's `compatibility_level` is also checked (100+). Full detail — the compatibility-level floor, the per-version feature adaptations, and how to raise the floor per product — is in the [Engine Version Compatibility](docs/end-user/reference/schemaquench.md#engine-version-compatibility) reference.
@@ -124,6 +124,15 @@ docker run --rm -v "$PWD/schema:/pkg" \
 ```
 
 Tags: `latest`, `X.Y.Z` (immutable), `X.Y`, `X`. Multi-arch (`linux/amd64` + `linux/arm64`). Configure via `SmithySettings_` environment variables (`__` denotes nesting) or a mounted `SchemaQuench.settings.json`; append `--Key:value` overrides as needed.
+
+## Claude Code
+
+In Claude Code, the SchemaSmith plugin installs the tools, extracts a database, previews a deployment and runs one you confirm, in one conversation. It operates the tools and does not edit packages. See [Using SchemaSmith with Claude Code](docs/end-user/guide/claude-code.md).
+
+```
+/plugin marketplace add Schema-Smith/SchemaSmith
+/plugin install schemasmith@schemasmith
+```
 
 ## GitHub Action (CI/CD)
 

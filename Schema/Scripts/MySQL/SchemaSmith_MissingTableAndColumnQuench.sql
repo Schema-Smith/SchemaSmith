@@ -43,7 +43,7 @@ BEGIN
             t.TableName,
             t.VariantName,
             CONCAT(
-                'CREATE TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' (',
+                'CREATE TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' (',
                 GROUP_CONCAT(c.ColumnScript ORDER BY c.OrdinalPosition SEPARATOR ', '),
                 COALESCE(t.AutoIncrementKeyClause, ''),
                 COALESCE(
@@ -124,7 +124,7 @@ BEGIN
                 -- Escaping matches the established _SchemaSmith_FullTextIndexes.Comment form (double
                 -- the embedded single quotes) -- see SchemaSmith_IndexOnlyQuench.sql.
                 CASE WHEN t.Comment IS NOT NULL AND t.Comment != ''
-                     THEN CONCAT(' COMMENT=''', REPLACE(t.Comment, '''', ''''''), '''')
+                     THEN CONCAT(' COMMENT=', QUOTE(t.Comment), '')
                      ELSE '' END,
                 -- General tablespace placement (F2b), MySQL only -- like the CREATE_OPTIONS four above,
                 -- engine-gated in SQL as well as by the domain's Platforms scoping, because a
@@ -145,7 +145,7 @@ BEGIN
                 -- listed in the server's innodb_directories or CREATE fails with its own ERROR 3121 -- that
                 -- is user server configuration, like a missing filegroup, not something to gate here.
                 CASE WHEN t.DataDirectory IS NOT NULL AND t.DataDirectory != ''
-                     THEN CONCAT(' DATA DIRECTORY=''', REPLACE(t.DataDirectory, '''', ''''''), '''')
+                     THEN CONCAT(' DATA DIRECTORY=', QUOTE(t.DataDirectory), '')
                      ELSE '' END,
                 -- System versioning (MariaDB WITH SYSTEM VERSIONING, F1S1). A table option, so it comes before
                 -- PARTITION BY: MariaDB refuses it after (1064), so a versioned partitioned table could not be created.
@@ -176,10 +176,11 @@ BEGIN
                                            IF(t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 1, ' AUTO', '')),
                                     CONCAT(CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
                                                 THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
-                                           ' (', t.PartitionExpression, ')',
+                                           -- KEY () is a valid empty list (the primary key); NULL would empty the whole statement.
+                                           ' (', COALESCE(t.PartitionExpression, ''), ')',
                                            -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
                                            CASE WHEN t.SubpartitionMethod IS NOT NULL
-                                                THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
+                                                THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', COALESCE(t.SubpartitionExpression, ''), ')',
                                                             CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
                                                 ELSE '' END)),
                                  -- The named list, in declared order: RANGE and LIST with their boundaries, SYSTEM_TIME as HISTORY or
@@ -268,10 +269,10 @@ BEGIN
 
     -- A CustomTableRestore hook restores tables being added in case they were custom-dropped
     -- (recycled) previously; mirrors the SQL Server / PostgreSQL hook.
-    SET @has_custom_restore = (SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES
+    SELECT (SELECT COUNT(*) FROM INFORMATION_SCHEMA.ROUTINES
                                WHERE ROUTINE_SCHEMA = v_DbCi AND SchemaSmith_IdentifierKey(ROUTINE_SCHEMA) = v_DbKey
                                  AND ROUTINE_NAME = 'SchemaSmith_CustomTableRestore'
-                                 AND ROUTINE_TYPE = 'PROCEDURE');
+                                 AND ROUTINE_TYPE = 'PROCEDURE') INTO @has_custom_restore;
 
     -- =========================================================================
     -- Degrade column DEFAULT expressions below MySQL 8.0.13 (extraction already recognises this stored
@@ -600,17 +601,17 @@ BEGIN
 
         -- Declarative renames would run here (before add-columns). Log the statements only.
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('RENAME TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`',
-                      SchemaSmith_StripBacktickWrapping(t.OldName), '` TO `',
-                      CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_StripBacktickWrapping(t.TableName), '`')
+        SELECT CONNECTION_ID(), CONCAT('RENAME TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`',
+                      SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(t.OldName)), '` TO `',
+                      SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(t.TableName)), '`')
         FROM _SchemaSmith_Tables t
         WHERE t.RowId IN (SELECT RowId FROM _SchemaSmith_TableRenameReady);
 
         -- Descriptive (version-agnostic) preview: the executed DDL is RENAME COLUMN or, below MySQL 8.0 /
         -- MariaDB 10.5.2, CHANGE COLUMN preserving the current definition (see the real-path block below).
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Rename column `', r.LiveName,
-                      '` to `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` on `', SchemaSmith_StripBacktickWrapping(c.TableName), '`')
+        SELECT CONNECTION_ID(), CONCAT('  Rename column `', SchemaSmith_EscapeBackticks(r.LiveName),
+                      '` to `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '` on `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.TableName)), '`')
         FROM _SchemaSmith_Columns c
         JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId;
 
@@ -626,7 +627,7 @@ BEGIN
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message) VALUES (CONNECTION_ID(), 'Create missing tables');
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT(
-                      'CREATE TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' (',
+                      'CREATE TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', t.TableName, ' (',
                       GROUP_CONCAT(c.ColumnScript ORDER BY c.OrdinalPosition SEPARATOR ', '),
                       COALESCE(t.AutoIncrementKeyClause, ''),
                       COALESCE(
@@ -684,7 +685,7 @@ BEGIN
                            THEN CONCAT(' AUTO_INCREMENT=', t.AutoIncrementValue)
                            ELSE '' END,
                       CASE WHEN t.Comment IS NOT NULL AND t.Comment != ''
-                           THEN CONCAT(' COMMENT=''', REPLACE(t.Comment, '''', ''''''), '''')
+                           THEN CONCAT(' COMMENT=', QUOTE(t.Comment), '')
                            ELSE '' END,
                       -- General tablespace placement (F2b) -- must match the real-path cur_NewTables CONCAT above exactly.
                       CASE WHEN t.Tablespace IS NOT NULL AND t.Tablespace != '' AND VERSION() NOT LIKE '%MariaDB%'
@@ -692,7 +693,7 @@ BEGIN
                            ELSE '' END,
                       -- DATA DIRECTORY placement (F2c) -- must match the real-path cur_NewTables CONCAT above exactly.
                       CASE WHEN t.DataDirectory IS NOT NULL AND t.DataDirectory != ''
-                           THEN CONCAT(' DATA DIRECTORY=''', REPLACE(t.DataDirectory, '''', ''''''), '''')
+                           THEN CONCAT(' DATA DIRECTORY=', QUOTE(t.DataDirectory), '')
                            ELSE '' END,
                       -- System versioning (MariaDB WITH SYSTEM VERSIONING, F1S1). A table option, so it comes before
                       -- PARTITION BY: MariaDB refuses it after (1064), so a versioned partitioned table could not be created.
@@ -715,10 +716,11 @@ BEGIN
                                                  IF(t.SystemTimeAuto = 1 AND SchemaSmith_SupportsSystemTimeAutoPartitions() = 1, ' AUTO', '')),
                                           CONCAT(CASE WHEN t.PartitionMethod IN ('KEY', 'LINEAR KEY') AND t.PartitionKeyAlgorithm IS NOT NULL
                                                       THEN CONCAT(' ALGORITHM=', t.PartitionKeyAlgorithm) ELSE '' END,
-                                                 ' (', t.PartitionExpression, ')',
+                                                 -- KEY () is a valid empty list (the primary key); NULL would empty the whole statement.
+                                           ' (', COALESCE(t.PartitionExpression, ''), ')',
                                                  -- RANGE and LIST only; the engine names each subpartition <partition>sp<n>.
                                                  CASE WHEN t.SubpartitionMethod IS NOT NULL
-                                                      THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', t.SubpartitionExpression, ')',
+                                                      THEN CONCAT(' SUBPARTITION BY ', t.SubpartitionMethod, ' (', COALESCE(t.SubpartitionExpression, ''), ')',
                                                                   CASE WHEN t.SubpartitionCount IS NOT NULL THEN CONCAT(' SUBPARTITIONS ', t.SubpartitionCount) ELSE '' END)
                                                       ELSE '' END)),
                                        -- The named list, in declared order: RANGE and LIST with their boundaries, SYSTEM_TIME as HISTORY or
@@ -760,7 +762,7 @@ BEGIN
         CALL SchemaSmith_StageOnlineApply();
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+        SELECT CONNECTION_ID(), CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                       ' ADD COLUMN ',
                       -- WhatIf preview must match the real run: strip WITHOUT SYSTEM VERSIONING on a
                       -- not-yet-versioned table exactly as the ELSE branch's exec does (MariaDB 4124).
@@ -814,25 +816,25 @@ BEGIN
         INSERT INTO _SchemaSmith_TableRenameStmts (Stmt)
         SELECT CONCAT('RENAME TABLE ',
                       GROUP_CONCAT(
-                          CONCAT('`', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_StripBacktickWrapping(t.OldName), '` TO `',
-                                 CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_StripBacktickWrapping(t.TableName), '`')
+                          CONCAT('`', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(t.OldName)), '` TO `',
+                                 SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.`', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(t.TableName)), '`')
                           ORDER BY t.TableName SEPARATOR ', '))
         FROM _SchemaSmith_Tables t
         WHERE t.RowId IN (SELECT RowId FROM _SchemaSmith_TableRenameReady)
         HAVING COUNT(*) > 0;
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Rename table `', SchemaSmith_StripBacktickWrapping(t.OldName), '` to `', SchemaSmith_StripBacktickWrapping(t.TableName), '`')
+        SELECT CONNECTION_ID(), CONCAT('  Rename table `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(t.OldName)), '` to `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(t.TableName)), '`')
         FROM _SchemaSmith_Tables t
         WHERE t.RowId IN (SELECT RowId FROM _SchemaSmith_TableRenameReady);
 
-        SET @v_tablerename_id := (SELECT MIN(RowId) FROM _SchemaSmith_TableRenameStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_TableRenameStmts) INTO @v_tablerename_id;
         WHILE @v_tablerename_id IS NOT NULL DO
             SELECT Stmt INTO @exec_sql FROM _SchemaSmith_TableRenameStmts WHERE RowId = @v_tablerename_id;
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
-            SET @v_tablerename_id := (SELECT MIN(RowId) FROM _SchemaSmith_TableRenameStmts WHERE RowId > @v_tablerename_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_TableRenameStmts WHERE RowId > @v_tablerename_id) INTO @v_tablerename_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_TableRenameStmts;
 
@@ -858,10 +860,11 @@ BEGIN
         -- restored by ModifiedTableQuench's ON UPDATE compare against the new column name in the same deploy.
         CALL SchemaSmith_MarkColumnRenames(p_DatabaseName);
 
-        -- MySQL refuses to rename a column that a functional key part (3837) or a generated column (3108) reads;
-        -- MariaDB rewrites both itself. A declared functional index is dropped ahead of the rename and rebuilt by the
-        -- index pass; a declared generated column is re-stated over the new name in the rename's own ALTER. One the
-        -- package does not declare could not be put back, so the deploy stops by name before anything is renamed.
+        -- MySQL refuses to rename a column that a functional key part (3837), a generated column (3108) or a check
+        -- constraint (3959) reads; MariaDB rewrites all three itself. A declared functional index or check is dropped
+        -- ahead of the rename and put back by the index or check pass; a declared generated column is re-stated over the
+        -- new name in the rename's own ALTER. One the package does not declare could not be put back, so the deploy
+        -- stops by name before anything is renamed.
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RenameDependents;
         CREATE TEMPORARY TABLE _SchemaSmith_RenameDependents (
             Kind VARCHAR(16) COLLATE utf8mb4_bin NOT NULL,
@@ -878,7 +881,7 @@ BEGIN
               JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId
               JOIN _SchemaSmith_CatColumns g ON g.TableKey = c.TableKey
              WHERE CONVERT(g.EXTRA USING utf8mb4) LIKE '%GENERATED%'
-               AND LOCATE(CAST(CONCAT('`', r.LiveName, '`') AS BINARY), CAST(g.GENERATION_EXPRESSION AS BINARY)) > 0;
+               AND LOCATE(CAST(CONCAT('`', SchemaSmith_EscapeBackticks(r.LiveName), '`') AS BINARY), CAST(g.GENERATION_EXPRESSION AS BINARY)) > 0;
             -- STATISTICS.EXPRESSION is 8.0.13, and a catalog column is resolved when the procedure is created, so it is
             -- only ever named in a prepared statement.
             IF SchemaSmith_ServerVersionPatchNum() >= 80013 THEN
@@ -894,11 +897,32 @@ BEGIN
                 EXECUTE stmt USING @ss_rename_db;
                 DEALLOCATE PREPARE stmt;
             END IF;
+            -- CHECK_CONSTRAINTS is 8.0.16, named in a prepared statement for the same reason. MySQL names a check per
+            -- database, so its name alone pairs it with the table's TABLE_CONSTRAINTS row.
+            IF SchemaSmith_SupportsCheckConstraints() = 1 THEN
+                SET @ss_rename_db = p_DatabaseName;
+                SET @ss_rename_sql = CONCAT(
+                    'INSERT IGNORE INTO _SchemaSmith_RenameDependents (Kind, TableName, TableKey, DependentName) ',
+                    'SELECT ''check'', c.TableName, c.TableKey, tc.CONSTRAINT_NAME FROM _SchemaSmith_Columns c ',
+                    'JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId ',
+                    'JOIN INFORMATION_SCHEMA.TABLE_CONSTRAINTS tc ON tc.TABLE_SCHEMA = ? AND SchemaSmith_IdentifierKey(tc.TABLE_NAME) = c.TableKey ',
+                    'AND tc.CONSTRAINT_TYPE = ''CHECK'' ',
+                    'JOIN INFORMATION_SCHEMA.CHECK_CONSTRAINTS cc ON cc.CONSTRAINT_SCHEMA = tc.TABLE_SCHEMA AND cc.CONSTRAINT_NAME = tc.CONSTRAINT_NAME ',
+                    'WHERE LOCATE(CAST(CONCAT(''`'', SchemaSmith_EscapeBackticks(r.LiveName), ''`'') AS BINARY), ',
+                    'CAST(SchemaSmith_CheckClauseText(CONVERT(cc.CHECK_CLAUSE USING utf8mb4)) AS BINARY)) > 0');
+                PREPARE stmt FROM @ss_rename_sql;
+                EXECUTE stmt USING @ss_rename_db;
+                DEALLOCATE PREPARE stmt;
+            END IF;
         END IF;
         UPDATE _SchemaSmith_RenameDependents d SET d.Declared = 1
          WHERE d.Kind = 'index'
            AND EXISTS (SELECT 1 FROM _SchemaSmith_Indexes i
                         WHERE i.TableKey = d.TableKey AND i.IndexKey = SchemaSmith_NameKeyCI(d.DependentName));
+        UPDATE _SchemaSmith_RenameDependents d SET d.Declared = 1
+         WHERE d.Kind = 'check'
+           AND EXISTS (SELECT 1 FROM _SchemaSmith_CheckConstraints k
+                        WHERE k.TableKey = d.TableKey AND k.ConstraintKey = SchemaSmith_NameKeyCI(d.DependentName));
         UPDATE _SchemaSmith_RenameDependents d SET d.Declared = 1
          WHERE d.Kind = 'column'
            AND EXISTS (SELECT 1 FROM _SchemaSmith_Columns c
@@ -909,30 +933,40 @@ BEGIN
             SELECT CONNECTION_ID(), CONCAT('  A column rename would break ', Kind, ' ', SchemaSmith_StripBacktickWrapping(TableName), '.', DependentName,
                                            ', which the package does not declare. Declare it in the table''s JSON, or drop it in a Before script.')
               FROM _SchemaSmith_RenameDependents WHERE Declared = 0;
-            SET @ss_msg = (SELECT LEFT(CONCAT('A column rename would break undeclared ', Kind, ' ', DependentName, ' on ',
+            SELECT (SELECT LEFT(CONCAT('A column rename would break undeclared ', Kind, ' ', DependentName, ' on ',
                                               SchemaSmith_StripBacktickWrapping(TableName), '; see the deploy log.'), 128)
-                             FROM _SchemaSmith_RenameDependents WHERE Declared = 0 ORDER BY TableName, DependentName LIMIT 1);
+                             FROM _SchemaSmith_RenameDependents WHERE Declared = 0 ORDER BY TableName, DependentName LIMIT 1) INTO @ss_msg;
             SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT = @ss_msg;
         END IF;
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Drop functional index `', DependentName, '` on ', TableName, ' ahead of a column rename')
+        SELECT CONNECTION_ID(), CONCAT('  Drop functional index `', SchemaSmith_EscapeBackticks(DependentName), '` on ', TableName, ' ahead of a column rename')
           FROM _SchemaSmith_RenameDependents WHERE Kind = 'index';
         INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
         SELECT CONNECTION_ID(), 'index', CONCAT(SchemaSmith_StripBacktickWrapping(TableName), '.', DependentName), 'dropped'
           FROM _SchemaSmith_RenameDependents WHERE Kind = 'index';
         INSERT INTO _SchemaSmith_ColRenameStmts (Stmt)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', TableName,
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', TableName,
                       ' DROP INDEX `', REPLACE(DependentName, '`', '``'), '`')
           FROM _SchemaSmith_RenameDependents WHERE Kind = 'index';
+        INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
+        SELECT CONNECTION_ID(), CONCAT('  Drop check `', SchemaSmith_EscapeBackticks(DependentName), '` on ', TableName, ' ahead of a column rename')
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'check';
+        INSERT INTO SchemaSmith_ChangeAudit (SessionId, ObjectType, ObjectName, ActionType)
+        SELECT CONNECTION_ID(), 'constraint', CONCAT(SchemaSmith_StripBacktickWrapping(TableName), '.', DependentName), 'dropped'
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'check';
+        INSERT INTO _SchemaSmith_ColRenameStmts (Stmt)
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', TableName,
+                      ' DROP CHECK `', SchemaSmith_EscapeBackticks(DependentName), '`')
+          FROM _SchemaSmith_RenameDependents WHERE Kind = 'check';
 
         INSERT INTO _SchemaSmith_ColRenameStmts (Stmt, TableKey)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
                       GROUP_CONCAT(
                           IF(SchemaSmith_SupportsRenameColumn() = 1,
-                             CONCAT('RENAME COLUMN `', r.LiveName,
-                                    '` TO `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '`'),
-                             CONCAT('CHANGE COLUMN `', r.LiveName,
-                                    '` `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` ',
+                             CONCAT('RENAME COLUMN `', SchemaSmith_EscapeBackticks(r.LiveName),
+                                    '` TO `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '`'),
+                             CONCAT('CHANGE COLUMN `', SchemaSmith_EscapeBackticks(r.LiveName),
+                                    '` `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '` ',
                                     CONVERT(isc.COLUMN_TYPE USING utf8mb4) COLLATE utf8mb4_unicode_ci,
                                     IF(isc.CHARACTER_SET_NAME IS NOT NULL,
                                        CONCAT(' CHARACTER SET ', CONVERT(isc.CHARACTER_SET_NAME USING utf8mb4) COLLATE utf8mb4_unicode_ci,
@@ -965,18 +999,18 @@ BEGIN
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RenameDependents;
 
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
-        SELECT CONNECTION_ID(), CONCAT('  Rename column `', r.LiveName,
-                      '` to `', SchemaSmith_StripBacktickWrapping(c.ColumnName), '` on `', SchemaSmith_StripBacktickWrapping(c.TableName), '`')
+        SELECT CONNECTION_ID(), CONCAT('  Rename column `', SchemaSmith_EscapeBackticks(r.LiveName),
+                      '` to `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.ColumnName)), '` on `', SchemaSmith_EscapeBackticks(SchemaSmith_StripBacktickWrapping(c.TableName)), '`')
         FROM _SchemaSmith_Columns c
         JOIN _SchemaSmith_ColRenameReady r ON r.RowId = c.RowId;
 
-        SET @v_colrename_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColRenameStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_ColRenameStmts) INTO @v_colrename_id;
         WHILE @v_colrename_id IS NOT NULL DO
             SELECT Stmt INTO @exec_sql FROM _SchemaSmith_ColRenameStmts WHERE RowId = @v_colrename_id;
             PREPARE stmt FROM @exec_sql;
             EXECUTE stmt;
             DEALLOCATE PREPARE stmt;
-            SET @v_colrename_id := (SELECT MIN(RowId) FROM _SchemaSmith_ColRenameStmts WHERE RowId > @v_colrename_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_ColRenameStmts WHERE RowId > @v_colrename_id) INTO @v_colrename_id;
         END WHILE;
         DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_ColRenameStmts;
 
@@ -1008,13 +1042,13 @@ BEGIN
             FROM _SchemaSmith_Tables t
             WHERE t.NewTable = 1;
 
-            SET @v_restore_id := (SELECT MIN(RowId) FROM _SchemaSmith_RestoreStmts);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_RestoreStmts) INTO @v_restore_id;
             WHILE @v_restore_id IS NOT NULL DO
                 SELECT Stmt INTO @exec_sql FROM _SchemaSmith_RestoreStmts WHERE RowId = @v_restore_id;
                 PREPARE stmt FROM @exec_sql;
                 EXECUTE stmt;
                 DEALLOCATE PREPARE stmt;
-                SET @v_restore_id := (SELECT MIN(RowId) FROM _SchemaSmith_RestoreStmts WHERE RowId > @v_restore_id);
+                SELECT (SELECT MIN(RowId) FROM _SchemaSmith_RestoreStmts WHERE RowId > @v_restore_id) INTO @v_restore_id;
             END WHILE;
             DROP TEMPORARY TABLE IF EXISTS _SchemaSmith_RestoreStmts;
 
@@ -1113,7 +1147,7 @@ BEGIN
         CALL SchemaSmith_SnapshotCatalogTables(p_DatabaseName);
         INSERT INTO SchemaSmith_StatusMessages (SessionId, Message)
         SELECT CONNECTION_ID(), CONCAT('  Add column: ',
-                      CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
+                      CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName,
                              ' ADD COLUMN ',
                              -- Match the exec below: strip WITHOUT SYSTEM VERSIONING on a not-yet-versioned table.
                              CASE WHEN ist.TABLE_TYPE = 'SYSTEM VERSIONED' THEN c.ColumnScript
@@ -1137,7 +1171,7 @@ BEGIN
                                                             TableName VARCHAR(128) COLLATE utf8mb4_bin, Mode VARCHAR(8), Form VARCHAR(16))
             ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
         INSERT INTO _SchemaSmith_AddColumnStmts (Stmt, TableName, Mode)
-        SELECT CONCAT('ALTER TABLE `', CONVERT(p_DatabaseName USING utf8mb4) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
+        SELECT CONCAT('ALTER TABLE `', SchemaSmith_EscapeBackticks(CONVERT(p_DatabaseName USING utf8mb4)) COLLATE utf8mb4_unicode_ci, '`.', c.TableName, ' ',
                       -- Strip WITHOUT SYSTEM VERSIONING from the ADD COLUMN clause when the target table is
                       -- not (yet) system-versioned: MariaDB refuses that clause on an ALTER ADD COLUMN
                       -- against a non-versioned table (ERROR 4124), which aborts the whole deploy for a table
@@ -1164,13 +1198,13 @@ BEGIN
           AND NOT (c.IsAutoIncrement = 0 AND c.DefaultValue IS NOT NULL AND TRIM(c.DefaultValue) LIKE '(%' AND SchemaSmith_SupportsDefaultExpression() = 0)
         GROUP BY c.TableName, ist.TABLE_TYPE, t.OnlineMode;
 
-        SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts);
+        SELECT (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts) INTO @v_addcol_id;
         WHILE @v_addcol_id IS NOT NULL DO
             SELECT Stmt, Mode, SchemaSmith_StripBacktickWrapping(TableName) INTO @exec_sql, @ss_online_mode, @ss_online_table
               FROM _SchemaSmith_AddColumnStmts WHERE RowId = @v_addcol_id;
             CALL SchemaSmith_ExecuteOnline(@exec_sql, @ss_online_mode, 1, 0, p_DatabaseName, @ss_online_table, @ss_online_form);
             UPDATE _SchemaSmith_AddColumnStmts SET Form = @ss_online_form WHERE RowId = @v_addcol_id;
-            SET @v_addcol_id := (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts WHERE RowId > @v_addcol_id);
+            SELECT (SELECT MIN(RowId) FROM _SchemaSmith_AddColumnStmts WHERE RowId > @v_addcol_id) INTO @v_addcol_id;
         END WHILE;
 
         -- Object-change audit (#243 E5): one row per physical column added to an existing table.

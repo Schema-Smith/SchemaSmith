@@ -138,6 +138,54 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
         conn.Close();
     }
 
+    // KEY () with no columns partitions on the primary key. The empty list read as NULL and emptied the whole CREATE
+    // TABLE ("Query was empty"); MySQL reports the deployed expression as NULL and MariaDB as '', which must both match.
+    [TestCase("KEY")]
+    [TestCase("LINEAR KEY")]
+    public void TableQuench_KeyPartitioningWithNoColumns_IsCreated_AndRedeploysAsANoOp(string method)
+    {
+        var uid = Guid.NewGuid().ToString("N")[..8];
+        var product = $"PartKeyEmptyProduct_{uid}";
+        var table = $"PartKeyEmptyTable_{uid}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+
+        try
+        {
+            RunTableQuenchProc(cmd, WithHashPartitioning(table, 2, method, expression: null), productName: product);
+            Assert.Multiple(() =>
+            {
+                Assert.That(LiveMethod(cmd, table), Is.EqualTo(method));
+                Assert.That(LivePartitionCount(cmd, table), Is.EqualTo(2));
+            });
+            ClearChanges(cmd);
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithHashPartitioning(table, 2, method, expression: null), productName: product),
+                "an unchanged KEY () table redeploys without a repartitioning refusal");
+            Assert.That(Changes(cmd, table), Is.Empty, "and changes nothing");
+        }
+        finally
+        {
+            DropTable(cmd, table);
+        }
+        conn.Close();
+    }
+
+    private static void ClearChanges(IDbCommand cmd)
+    {
+        cmd.CommandText = "DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static string Changes(IDbCommand cmd, string table)
+    {
+        cmd.CommandText = "SELECT COALESCE(GROUP_CONCAT(CONCAT(ObjectType, ' ', ObjectName, ' ', ActionType) SEPARATOR '; '), '') "
+                          + $"FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID() AND ObjectName LIKE '%{table}%'";
+        return cmd.ExecuteScalar()?.ToString();
+    }
+
     [Test]
     public void TableQuench_RedeployingAPartitionedTable_IsANoOp()
     {
@@ -186,9 +234,11 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
         {
             RunTableQuenchProc(cmd, WithRangePartitioning(table), productName: product);
 
+            ClearChanges(cmd);
             Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithRangePartitioning(table, expression: " ID "), productName: product),
                 "backticks, whitespace and case are normalized away before comparing -- otherwise the same "
                 + "package would deploy on one engine and be refused on another");
+            Assert.That(Changes(cmd, table), Is.Empty, "and the table is left as it is");
         }
         finally
         {
@@ -919,7 +969,7 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
 ]
 """;
 
-    private static string WithHashPartitioning(string table, int count, string method = "HASH") => $$"""
+    private static string WithHashPartitioning(string table, int count, string method = "HASH", string expression = "Id") => $$"""
 [
   {
     "Name": "{{table}}",
@@ -928,7 +978,7 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
       { "Name": "`Val`", "DataType": "varchar(50)", "Nullable": true }
     ],
     "Indexes": [ { "Name": "PRIMARY", "PrimaryKey": true, "Unique": true, "IndexColumns": "`Id`" } ],
-    "Partitioning": { "Method": "{{method}}", "Expression": "Id", "PartitionCount": {{count}} }
+    "Partitioning": { "Method": "{{method}}", {{(expression == null ? "" : $"\"Expression\": \"{expression}\", ")}}"PartitionCount": {{count}} }
   }
 ]
 """;
@@ -950,8 +1000,10 @@ public abstract class TableQuench_PartitioningSharedTests : BaseTableQuenchTests
         try
         {
             RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'east'"), productName: product);
+            ClearChanges(cmd);
             Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'east'"), productName: product),
                 "an unchanged list redeploys");
+            Assert.That(Changes(cmd, table), Is.Empty, "and changes nothing");
 
             Assert.Throws<MySqlException>(() => RunTableQuenchProc(cmd, WithListColumnsPartitions(table, "'EAST'"), productName: product));
         }

@@ -57,7 +57,7 @@ public class FolderGateIntegrationTests
                 var folder = new ProductFolder { FolderPath = "Notices", QuenchSlot = ProductQuenchSlot.After };
                 folder.Scripts.Add(SqlScript.Load(path, [], Platform.PostgreSQL));
 
-                new ProductQuench().QuenchProductScriptsWithCheckpoint([folder], "After Product", false);
+                new ProductQuench().QuenchProductScripts([folder], "After Product", false);
 
                 Assert.That(progress.Any(l => l.EndsWith("product script says hello")), Is.EqualTo(logged), string.Join(Environment.NewLine, progress));
             }
@@ -137,8 +137,7 @@ public class FolderGateIntegrationTests
         folder.Scripts.Add(new SqlScript { Name = "parity.sql" });
         template.ScriptFolders.Add(folder);
 
-        var quench = new DatabaseQuench("srv", product, template, "db",
-            false, "0", false, "0", "1", "1", "1", "1", "1", "1", "0", false, false, null);
+        var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "srv", DatabaseName = "db", UpdateTables = false, DeliverData = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, null);
         quench.PrepareIterationContent();
         quench.PrepareVersionScriptTokens(info.ServerComparable, info.CompatibilityLevel);
         quench.ApplyFolderGates(cmd);

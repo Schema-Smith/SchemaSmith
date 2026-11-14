@@ -512,19 +512,15 @@ INSERT INTO public."TestTable" ("Id", "Name") VALUES (1, 'Test');
         cmd.ExecuteNonQuery();
     }
 
+    // Two commands: PostgreSQL refuses DROP DATABASE inside a multi-statement batch.
     private void DropTestDatabases()
     {
-        try
-        {
-            using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
-            conn.Open();
-            using var cmd = conn.CreateCommand();
-            cmd.CommandText = $@"
-SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{_integrationDb}' AND pid <> pg_backend_pid();
-DROP DATABASE IF EXISTS ""{_integrationDb}"";
-";
-            cmd.ExecuteNonQuery();
-        }
-        catch { }
+        using var conn = DbConnectionFactory.ForPlatform(Platform.PostgreSQL).GetDbConnection(_connectionString);
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = $"SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '{_integrationDb}' AND pid <> pg_backend_pid()";
+        cmd.ExecuteNonQuery();
+        cmd.CommandText = $@"DROP DATABASE IF EXISTS ""{_integrationDb}""";
+        cmd.ExecuteNonQuery();
     }
 }

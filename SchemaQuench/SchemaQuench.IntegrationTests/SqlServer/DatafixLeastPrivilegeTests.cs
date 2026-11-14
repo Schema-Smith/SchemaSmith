@@ -35,10 +35,37 @@ public class DatafixLeastPrivilegeTests : ObjectScriptDeployFixture
         Exec("DROP TABLE IF EXISTS [dbo].[df_price]");
         Exec($"IF SCHEMA_ID('df_lp') IS NOT NULL DROP SCHEMA [df_lp]");
         // Clearing the pool closes the connections, but the server can still hold the session when the DROP LOGIN arrives.
+        // A session can also end between the SELECT and its KILL (error 6106), which is the outcome we wanted.
         Exec($"""
-            DECLARE @kill NVARCHAR(MAX) = N'';
-            SELECT @kill += N'KILL ' + CAST(session_id AS NVARCHAR(10)) + N';' FROM sys.dm_exec_sessions WHERE login_name = N'{Login}';
-            EXEC (@kill);
+            DECLARE @id INT, @kill NVARCHAR(30), @error NVARCHAR(4000);
+            DECLARE sessions CURSOR LOCAL FAST_FORWARD FOR
+                SELECT session_id FROM sys.dm_exec_sessions WHERE login_name = N'{Login}';
+            OPEN sessions;
+            FETCH NEXT FROM sessions INTO @id;
+            WHILE @@FETCH_STATUS = 0
+            BEGIN
+                SET @kill = N'KILL ' + CAST(@id AS NVARCHAR(10));
+                BEGIN TRY
+                    EXEC (@kill);
+                END TRY
+                BEGIN CATCH
+                    IF ERROR_NUMBER() <> 6106
+                    BEGIN
+                        SET @error = ERROR_MESSAGE();
+                        RAISERROR(N'%s', 16, 1, @error);
+                    END
+                END CATCH
+                FETCH NEXT FROM sessions INTO @id;
+            END
+            CLOSE sessions;
+            DEALLOCATE sessions;
+            -- KILL returns before the session has gone, and DROP LOGIN refuses a login still connected (15434).
+            DECLARE @waits INT = 0;
+            WHILE EXISTS (SELECT 1 FROM sys.dm_exec_sessions WHERE login_name = N'{Login}') AND @waits < 100
+            BEGIN
+                WAITFOR DELAY '00:00:00.100';
+                SET @waits += 1;
+            END
             """);
         Exec($"IF USER_ID('{Login}') IS NOT NULL DROP USER [{Login}]");
         Exec($"IF SUSER_ID('{Login}') IS NOT NULL DROP LOGIN [{Login}]");

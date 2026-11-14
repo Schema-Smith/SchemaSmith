@@ -1,0 +1,60 @@
+{
+  "Schema": "SchemaSmith",
+  "Name": "RebuildSetAsideForeignKeys",
+  "Columns": [
+    {
+      "Name": "ChildSchema",
+      "DataType": "VARCHAR(63)",
+      "Nullable": false
+    },
+    {
+      "Name": "ChildTable",
+      "DataType": "VARCHAR(63)",
+      "Nullable": false
+    },
+    {
+      "Name": "KeyName",
+      "DataType": "VARCHAR(63)",
+      "Nullable": false
+    },
+    {
+      "Name": "ParentSchema",
+      "DataType": "VARCHAR(63)",
+      "Nullable": false
+    },
+    {
+      "Name": "ParentTable",
+      "DataType": "VARCHAR(63)",
+      "Nullable": false
+    },
+    {
+      "Name": "Definition",
+      "DataType": "TEXT",
+      "Nullable": false
+    },
+    {
+      "Name": "WasTrusted",
+      "DataType": "BOOLEAN",
+      "Nullable": false
+    },
+    {
+      "Name": "Declared",
+      "DataType": "BOOLEAN",
+      "Nullable": false
+    },
+    {
+      "Name": "CapturedAt",
+      "DataType": "TIMESTAMP",
+      "Nullable": false,
+      "Default": "NOW()"
+    }
+  ],
+  "Indexes": [
+    {
+      "Name": "PK_RebuildSetAsideForeignKeys",
+      "PrimaryKey": true,
+      "Unique": true,
+      "IndexColumns": "\"ChildSchema\",\"ChildTable\",\"KeyName\""
+    }
+  ]
+}

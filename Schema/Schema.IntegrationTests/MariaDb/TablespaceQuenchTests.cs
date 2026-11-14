@@ -97,7 +97,16 @@ public class TablespaceQuenchTests
         // would compare as "different from deployed" on EVERY redeploy and refuse forever -- for a
         // property MariaDB can never satisfy in the first place.
         Deploy(", \"Tablespace\": \"some_mysql_tablespace\"");
+        Exec("DELETE FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()");
 
         Assert.DoesNotThrow(() => Deploy(", \"Tablespace\": \"some_mysql_tablespace\""));
+        Assert.That(Changes(), Is.Empty, "an unchanged redeploy changes nothing");
+    }
+
+    private string Changes()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "SELECT COALESCE(GROUP_CONCAT(CONCAT(ObjectType, ' ', ObjectName, ' ', ActionType) SEPARATOR '; '), '') FROM SchemaSmith_ChangeAudit WHERE SessionId = CONNECTION_ID()";
+        return cmd.ExecuteScalar()?.ToString();
     }
 }

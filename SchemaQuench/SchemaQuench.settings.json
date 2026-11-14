@@ -20,8 +20,24 @@
                                         // last applied AND the server still renders the object as it was left.
                                         // A hand change on the server, an edited script, or an [ALWAYS] name
                                         // runs it again. false re-runs every object script on every deploy.
+        // "DestructiveChangePolicy": "warn", // allow | warn (default) | fail -- what to do about a change that removes
+                                            // data: a table or column dropped because the package no longer declares
+                                            // it, a type change that rounds or cuts values, a column dropped and added
+                                            // again. fail refuses the step before anything in it is changed.
+        // "AcceptDestructive": "sales.Orders.Region; sales.LegacyOrders", // Changes that are intended, by schema.table
+                                            // or schema.table.column; they go ahead under fail. Set per run.
+        // "DriftHelperDatabase": "schemasmith_drift", // MySQL and MariaDB: where --Drift kindles its helpers when
+                                            // KindleTheForge is on, so the target is left untouched. An existing
+                                            // database the drift account owns; SchemaQuench does not create it.
+        // "CommandTimeoutSeconds": 0, // How long one deploy command may run. 0 (default) = no limit.
+        // "LockTimeoutSeconds": 10, // How long a deploy waits for a lock another session holds before giving up.
+                                     // Blank (default) = the engine's own wait, which on SQL Server and PostgreSQL
+                                     // is forever. Set on every connection, so it bounds the procedures too.
+        // "ContentionRetryAttempts": 20, // How many times a statement that lost a deadlock or timed out waiting
+                                         // for a lock is tried (1 = no retry). Generated changes only, never
+                                         // your scripts or data delivery.
         // "CompatEncoding": "", // Override the model-payload encoding chosen for the target's compatibility
-                                 // level (Json | Xml). Blank = choose automatically. Diagnostic escape hatch.
+                                 // level: auto | legacy (XML) | modern (JSON). Blank = auto. Diagnostic escape hatch.
         "ConnectionProperties": {}, // Driver-level properties passed through verbatim, e.g.
                                     // { "TrustServerCertificate": "True", "Encrypt": "True" }.
                                     // The --Encrypt / --NoEncrypt switches write the right one of these per platform.
@@ -42,8 +58,10 @@
     "ScriptTokens": {},
 
     // ---------------------------------------------------------------------------------------------
-    // ADVANCED — everything else SchemaQuench accepts. Commented entries show the default; uncomment
-    // to change it. Grouped rather than hidden: the power is discoverable without burying the basics.
+    // ADVANCED — everything else SchemaQuench accepts. A commented entry shows a value you might set, not
+    // necessarily the default; its comment says what the default is. Grouped rather than hidden: the power
+    // is discoverable without burying the basics. Leave a drop entry commented to inherit the product,
+    // template or table value: uncommented as false, it turns that drop off whatever they say.
     // ---------------------------------------------------------------------------------------------
 
     // --- Drop control -----------------------------------------------------------------------------
@@ -59,7 +77,7 @@
     // "DropSchemaBoundDependents": false, // SQL Server. When a column change is blocked by a schema-bound view/function, drop the blocking module then recreate it from your package — absent = inherit the product/template value (default off); you re-grant any permissions on the recreated module
     // "PreventDrop": true, // No-drop protection tier: this environment never drops an object for being absent from the product (every Drop…RemovedFromProduct pass + DropUnknownIndexes is suppressed); each skipped drop is logged and reported in a PreventDropSummary manifest, and the run completes normally. Transient drop-then-recreate that applies a declared change is unaffected. Default off.
     // "DropPeriodsRemovedFromProduct": true, // MariaDB. Drop an application-time period that is on the
-    //     table but not in the package. THE ONE DROP FLAG THAT DEFAULTS TO OFF: extraction omits the
+    //     table but not in the package. Defaults to OFF, because extraction omits the
     //     Periods key when a table has none, so a package written before periods were supported -- or
     //     extracted from MariaDB 10.4.3-11.3, where the catalog cannot report them -- carries no periods
     //     even when the table has one. Turning this on says the package is genuinely the authority.
@@ -102,12 +120,27 @@
     "RunScriptsTwice": false, // Run object/[ALWAYS] scripts twice; both passes must succeed — an idempotency check, NOT dependency resolution (the retry loop handles dependencies)
     "CheckpointDirectory": "", // Directory for checkpoint files to enable resuming interrupted quenches
 
+    // --- Deployment record ---------------------------------------------------------------------------
+    // Each deployment writes one row in the target's SchemaSmith DeploymentHistory table: when, from what, by whom, how it ended.
+    // "DeploymentHistory": "on", // on, or off to write nothing.
+    // "DeploymentHistoryRetentionDays": 400, // Rows of this product older than this are removed after each deployment; 0 keeps all.
+
+    // --- Run identity ------------------------------------------------------------------------------
+    // Written into the deployment summary's run block. Detected on GitHub Actions, Azure DevOps, GitLab and Jenkins; set
+    // these to override what was detected or to supply it elsewhere. Usually passed per run: --RunLabel:2026.11.3
+    // or the SmithySettings_RunLabel environment variable.
+    // "RunLabel": "", // Free text naming the run: a release number, a ticket.
+    // "RunCommit": "", "RunBranch": "", "RunRepository": "", // Where the package came from. Otherwise the CI system's, then the package's own .git.
+    // "RunPipeline": "", "RunPipelineRunId": "", "RunUrl": "", "RunActor": "", "RunEnvironment": "", // The pipeline run.
+
     // --- Diagnostics --------------------------------------------------------------------------------
     "FailureContextLines": 25, // Lines of per-scope context captured and shown for each failure in SchemaQuench - Failures.log (0 = disable capture)
     "BottleneckThresholdMs": 30000, // Slot operations slower than this (ms) are highlighted as bottlenecks in the deployment summary report
     // "WriteDebugSql": false, // Write the resolved SQL of each step to ArtifactPath, to reproduce a failure. Holds real values: local debugging only, never to share. Also the --WriteDebugSql switch.
     // "ArtifactPath": "", // Where WriteDebugSql writes those files. Blank = the working folder.
-    // "ScrubArtifacts": false // Deprecated and ignored: debug SQL is never scrubbed.
+    // "ScrubArtifacts": false // Deprecated and ignored (setting it draws a warning): debug SQL is never scrubbed.
     // "LogHygiene": { "LogTokens": true, "ScrubTokens": [ "ApiKey" ] }, // LogTokens false keeps script token values out of the log; ScrubTokens masks the values of extra setting and token names, beyond the built-in sensitive-name list.
     // "ExitNonZeroOnWarning": false // Exit 1 instead of 0 when the run logged a warning, for pipelines that treat warnings as failures. Also the --ExitNonZeroOnWarning switch.
+    // "ExitZeroOnDowngrade": false // Exit 0 instead of 1 when the run finished but downgraded a feature the target lacks; the summary still lists each one. Also --ExitZeroOnDowngrade.
+    // "LogFormat": "text" // text, or json: one JSON object per line on the console and in the log files, for a log platform to read with no parse rules. Also --LogFormat:json.
 }

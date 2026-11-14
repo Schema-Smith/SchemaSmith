@@ -144,6 +144,37 @@ BEGIN
                       AND si.[name] COLLATE DATABASE_DEFAULT = x.[Index])
        AND ISNULL(OBJECTPROPERTYEX(OBJECT_ID(i.[Schema] + '.' + i.[TableName], 'U'), 'TableIsMemoryOptimized'), 0) = 0
 
+  -- An XML, spatial or JSON index carries a Description and a bag as any index does, read from its own working set so a
+  -- variant its ShouldApplyExpression pruned takes them with it. A package written before these had a Description kept
+  -- an XML index's MS_Description in the bag; it stands in for an omitted Description.
+  INSERT INTO #DeclaredProperties ([ObjectType], [Schema], [Table], [Level2Name], [Name], [Declared])
+    SELECT 'index', x.[Schema], x.[Table], x.[Index], p.[Name], p.[Declared]
+      FROM (SELECT [Schema], [TableName], [IndexName], [Description] FROM #XmlIndexes WITH (NOLOCK)
+            UNION ALL SELECT [Schema], [TableName], [IndexName], [Description] FROM #SpatialIndexes WITH (NOLOCK)
+            UNION ALL SELECT [Schema], [TableName], [IndexName], [Description] FROM #JsonIndexes WITH (NOLOCK)) ti
+      CROSS APPLY (SELECT SchemaSmith.fn_StripBracketWrapping(ti.[Schema]) AS [Schema], SchemaSmith.fn_StripBracketWrapping(ti.[TableName]) AS [Table],
+                          SchemaSmith.fn_StripBracketWrapping(ti.[IndexName]) AS [Index]) x
+      CROSS APPLY (SELECT N'MS_Description' AS [Name], NULLIF(r.[Raw], '') AS [Declared]
+                     FROM (SELECT COALESCE(ti.[Description],
+                                           (SELECT TOP 1 ep.[Value] FROM #ExtendedProperties ep WITH (NOLOCK)
+                                             WHERE ep.[ObjectType] = 'index' AND ep.[Name] = N'MS_Description'
+                                               AND SchemaSmith.fn_StripBracketWrapping(ep.[Schema]) = x.[Schema]
+                                               AND SchemaSmith.fn_StripBracketWrapping(ep.[TableName]) = x.[Table]
+                                               AND SchemaSmith.fn_StripBracketWrapping(ep.[ObjectName]) = x.[Index])) AS [Raw]) r
+                    WHERE r.[Raw] IS NOT NULL
+                   UNION ALL
+                   SELECT ep.[Name], NULLIF(ep.[Value], '')
+                     FROM #ExtendedProperties ep WITH (NOLOCK)
+                    WHERE ep.[ObjectType] = 'index'
+                      AND SchemaSmith.fn_StripBracketWrapping(ep.[Schema]) = x.[Schema]
+                      AND SchemaSmith.fn_StripBracketWrapping(ep.[TableName]) = x.[Table]
+                      AND SchemaSmith.fn_StripBracketWrapping(ep.[ObjectName]) = x.[Index]
+                      AND ep.[Name] <> N'MS_Description'
+                      AND ep.[Name] NOT IN (SELECT [Name] FROM @InternalNames)) p
+     WHERE EXISTS (SELECT 1 FROM sys.indexes si
+                    WHERE si.[object_id] = OBJECT_ID(ti.[Schema] + '.' + ti.[TableName], 'U')
+                      AND si.[name] COLLATE DATABASE_DEFAULT = x.[Index])
+
   -- What the database already says, read once. An index's property may sit on the index itself (class 7)
   -- or, for a key constraint, on the constraint (class 1); whichever holds it is the one updated or
   -- dropped, and a new one goes on the constraint when the index backs one.
@@ -191,16 +222,16 @@ BEGIN
 
   RAISERROR('Converge extended properties', 10, 100) WITH NOWAIT
   SELECT @v_SQL = STUFF((SELECT CHAR(13) + CHAR(10) + CAST(
-      'RAISERROR(''  ' + CASE WHEN d.[Declared] IS NULL THEN 'Removing' ELSE 'Setting' END +
+      'RAISERROR(''  ' + REPLACE(REPLACE(CASE WHEN d.[Declared] IS NULL THEN 'Removing' ELSE 'Setting' END, '''', ''''''), '%', '%%') +
           CASE WHEN d.[Name] = N'MS_Description' THEN ' the description of '
                ELSE ' extended property ' + REPLACE(REPLACE(d.[Name], '''', ''''''), '%', '%%') + CASE WHEN d.[Declared] IS NULL THEN ' from ' ELSE ' on ' END END +
-          x.[Kind] + ' ' + REPLACE(REPLACE(x.[QualifiedName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT' + CHAR(13) + CHAR(10) +
+          REPLACE(REPLACE(x.[Kind], '''', ''''''), '%', '%%') + ' ' + REPLACE(REPLACE(x.[QualifiedName], '''', ''''''), '%', '%%') + ''', 10, 100) WITH NOWAIT' + CHAR(13) + CHAR(10) +
       CASE WHEN d.[Declared] IS NULL THEN 'EXEC sp_dropextendedproperty @name = N''' + REPLACE(d.[Name], '''', '''''') + ''', '
            WHEN d.[ExistingFound] = 1 THEN 'EXEC sp_updateextendedproperty @name = N''' + REPLACE(d.[Name], '''', '''''') + ''', @value = N''' + REPLACE(d.[Declared], '''', '''''') + ''', '
            ELSE 'EXEC sp_addextendedproperty @name = N''' + REPLACE(d.[Name], '''', '''''') + ''', @value = N''' + REPLACE(d.[Declared], '''', '''''') + ''', ' END +
       '@level0type = N''SCHEMA'', @level0name = N''' + REPLACE(d.[Schema], '''', '''''') + ''', @level1type = N''TABLE'', @level1name = N''' + REPLACE(d.[Table], '''', '''''') + '''' +
-      CASE WHEN d.[Level2Type] IS NULL THEN '' ELSE ', @level2type = N''' + d.[Level2Type] + ''', @level2name = N''' + REPLACE(d.[Level2Name], '''', '''''') + '''' END + CHAR(13) + CHAR(10) +
-      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, ''' + d.[ObjectType] + ''', ''' + REPLACE(x.[QualifiedName], '''', '''''') + ''', ''modified'')'
+      CASE WHEN d.[Level2Type] IS NULL THEN '' ELSE ', @level2type = N''' + REPLACE(d.[Level2Type], '''', '''''') + ''', @level2name = N''' + REPLACE(d.[Level2Name], '''', '''''') + '''' END + CHAR(13) + CHAR(10) +
+      'INSERT INTO SchemaSmith.ChangeAudit (SessionId, ObjectType, ObjectName, ActionType) VALUES (@@SPID, N''' + REPLACE(d.[ObjectType], '''', '''''') + ''', ''' + REPLACE(x.[QualifiedName], '''', '''''') + ''', ''modified'')'
       AS NVARCHAR(MAX))
     FROM #DeclaredProperties d
     CROSS APPLY (SELECT d.[Schema] + '.' + d.[Table] + ISNULL('.' + d.[Level2Name], '') AS [QualifiedName],

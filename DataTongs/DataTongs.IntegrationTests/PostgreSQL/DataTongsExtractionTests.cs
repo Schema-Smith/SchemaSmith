@@ -3,6 +3,7 @@
 using System;
 using System.Collections.Generic;
 using System.Data;
+using System.Linq;
 using Schema.DataAccess;
 using Schema.Domain;
 using Schema.Utility;
@@ -87,6 +88,38 @@ public class DataTongsExtractionTests
         var exists = _dataTongs.TableExists(command, "public", "non_existent_table_xyz");
 
         Assert.That(exists, Is.False);
+    }
+
+    // R4: the read used FROM ONLY, which on a partitioned table returns nothing (every row is in a partition), so a
+    // partitioned table extracted as empty. Its rows are read now; a legacy inheritance parent still reads only its own.
+    [Test]
+    public void APartitionedTable_ExtractsItsRows_AndAnInheritanceParentOnlyItsOwn()
+    {
+        using var command = _connection.CreateCommand();
+        void Exec(string sql) { command.CommandText = sql; command.ExecuteNonQuery(); }
+        Exec("CREATE TABLE pt_data (id integer NOT NULL, d date NOT NULL) PARTITION BY RANGE (d); " +
+             "CREATE TABLE pt_data_2026 PARTITION OF pt_data FOR VALUES FROM ('2026-01-01') TO ('2027-01-01'); " +
+             "INSERT INTO pt_data VALUES (1, '2026-02-01'), (2, '2026-03-01'); " +
+             "CREATE TABLE inh_parent (id integer NOT NULL); CREATE TABLE inh_child () INHERITS (inh_parent); " +
+             "INSERT INTO inh_parent VALUES (10); INSERT INTO inh_child VALUES (20);");
+        try
+        {
+            var partitioned = _dataTongs.GetTableDataJson(command, "\"id\"", "public", "pt_data", "\"id\"", null);
+            var filtered = _dataTongs.GetTableDataJson(command, "\"id\"", "public", "pt_data", "\"id\"", "\"id\" = 2");
+            var inherited = _dataTongs.GetTableDataJson(command, "\"id\"", "public", "inh_parent", "\"id\"", null);
+            static int[] Ids(string json) => string.IsNullOrWhiteSpace(json) ? [] :
+                Newtonsoft.Json.Linq.JArray.Parse(json).Select(r => (int)r["id"]!).ToArray();
+            Assert.Multiple(() =>
+            {
+                Assert.That(Ids(partitioned), Is.EqualTo(new[] { 1, 2 }), "both rows, which live in the partition");
+                Assert.That(Ids(filtered), Is.EqualTo(new[] { 2 }), "the filter still applies");
+                Assert.That(Ids(inherited), Is.EqualTo(new[] { 10 }), "an inheritance child's rows are not the parent's");
+            });
+        }
+        finally
+        {
+            Exec("DROP TABLE IF EXISTS pt_data CASCADE; DROP TABLE IF EXISTS inh_parent CASCADE;");
+        }
     }
 
     #endregion
@@ -260,8 +293,10 @@ INSERT INTO public.""{parent}_c"" VALUES ('CHILD', 1);";
 
         var json = _dataTongs.GetTableDataJson(command, selectColumns, "public", "TestNullable", "\"Id\"", "\"OptionalText\" IS NULL");
 
-        Assert.That(json, Is.Not.Null);
-        // JSON should handle null values properly
+        var rows = Newtonsoft.Json.Linq.JArray.Parse(json);
+        Assert.That(rows, Is.Not.Empty, "the filter selects the rows with no OptionalText");
+        Assert.That(rows.Select(r => r["OptionalText"]?.Type), Is.All.EqualTo(Newtonsoft.Json.Linq.JTokenType.Null),
+            "each one carries the column as a JSON null, not dropped and not a string");
     }
 
     #endregion

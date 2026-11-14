@@ -463,7 +463,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                STUFF((SELECT ',' + CASE WHEN g.column_id IS NULL THEN QUOTENAME(COL_NAME(ic.[object_id], ic.column_id)) COLLATE DATABASE_DEFAULT ELSE g.PseudoName END + CASE WHEN ic.is_descending_key = 1 THEN ' DESC' ELSE '' END
                   FROM sys.index_columns ic
                   LEFT JOIN #GraphKeyParts g ON g.[object_id] = ic.[object_id] AND g.column_id = ic.column_id
-                  WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0
+                  WHERE si.[object_id] = ic.[object_id] AND si.index_id = ic.index_id AND is_included_column = 0 AND (ic.key_ordinal > 0 OR si.[type] NOT IN (1, 2))
                   ORDER BY key_ordinal FOR XML PATH(''), TYPE).value('.', 'NVARCHAR(MAX)'), 1, 1, '') AS [IndexColumns],
                STUFF((SELECT ',' + QUOTENAME(COL_NAME(ic.[object_id], ic.column_id))
                   FROM sys.index_columns ic
@@ -507,9 +507,10 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                   WHERE EXISTS (SELECT 1 FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id AND s.[ForPath] IS NULL)
                   FOR XML PATH('Selective'), TYPE),
                (SELECT s.[ForPath] FROM #SelectiveXmlIndexes s WHERE s.[object_id] = i.[object_id] AND s.index_id = i.index_id) AS [ForPath],
+               (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Index', i.[Name])) AS [Description],
                (SELECT ep.[Name] AS [@n], CONVERT(NVARCHAR(MAX), ep.[Value]) AS [*]
                   FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[Name]) ep
-                  WHERE ep.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames)
+                  WHERE ep.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND ep.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description'
                   FOR XML PATH('p'), ROOT('ExtendedProperties'), TYPE) AS [Extensions]
           FROM sys.xml_indexes i
           JOIN sys.index_columns ic ON i.[object_id] = ic.[object_id] AND i.index_id = ic.index_id
@@ -528,7 +529,12 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                tz.cells_per_object AS [CellsPerObject],
                NULLIF(i.fill_factor, 0) AS [FillFactor],
                NULLIF((SELECT MAX(p.data_compression_desc) FROM sys.internal_tables it JOIN sys.partitions p ON p.[object_id] = it.[object_id] AND p.index_id = 1
-                        WHERE it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id) COLLATE DATABASE_DEFAULT, 'NONE') AS [CompressionType]
+                        WHERE it.parent_object_id = i.[object_id] AND it.parent_minor_id = i.index_id) COLLATE DATABASE_DEFAULT, 'NONE') AS [CompressionType],
+               (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Index', i.[name])) AS [Description],
+               (SELECT ep.[Name] AS [@n], CONVERT(NVARCHAR(MAX), ep.[Value]) AS [*]
+                  FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', i.[name]) ep
+                  WHERE ep.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND ep.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description'
+                  FOR XML PATH('p'), ROOT('ExtendedProperties'), TYPE) AS [Extensions]
           FROM sys.spatial_indexes i
           JOIN sys.spatial_index_tessellations tz ON tz.[object_id] = i.[object_id] AND tz.index_id = i.index_id
           JOIN sys.index_columns ic ON ic.[object_id] = i.[object_id] AND ic.index_id = i.index_id
@@ -545,7 +551,12 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
                   FOR XML PATH('Paths'), TYPE),
                CASE WHEN l.[OptimizeForArraySearch] = 1 THEN 'true' END AS [OptimizeForArraySearch],
                l.[FillFactor] AS [FillFactor],
-               NULLIF(l.[Compression], 'NONE') AS [CompressionType]
+               NULLIF(l.[Compression], 'NONE') AS [CompressionType],
+               (SELECT CONVERT(NVARCHAR(MAX), [value]) FROM fn_listextendedproperty(N'MS_Description', N'Schema', @p_Schema, N'Table', @p_Table, N'Index', l.[Name])) AS [Description],
+               (SELECT ep.[Name] AS [@n], CONVERT(NVARCHAR(MAX), ep.[Value]) AS [*]
+                  FROM fn_listextendedproperty(default, 'Schema', @p_Schema, 'Table', @p_Table, 'Index', l.[Name]) ep
+                  WHERE ep.[Name] COLLATE DATABASE_DEFAULT NOT IN (SELECT [Name] FROM @InternalEPNames) AND ep.[Name] COLLATE DATABASE_DEFAULT <> N'MS_Description'
+                  FOR XML PATH('p'), ROOT('ExtendedProperties'), TYPE) AS [Extensions]
           FROM #LiveJsonIndexes l
           WHERE l.[object_id] = st.[object_id]
           ORDER BY l.[Name]
@@ -628,7 +639,7 @@ SELECT QUOTENAME(TABLE_SCHEMA) AS [Schema],
        (SELECT FullTextCatalog = QUOTENAME((SELECT c.[name] FROM sys.fulltext_catalogs c WHERE c.fulltext_catalog_id = fi.fulltext_catalog_id)),
                KeyIndex = QUOTENAME((SELECT i.[Name] FROM sys.indexes i WHERE i.[object_id] = fi.[object_id] AND i.[index_id] = fi.[unique_index_id])),
                ChangeTracking = change_tracking_state_desc,
-               [StopList] = QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)),
+               [StopList] = CASE WHEN fi.stoplist_id IS NULL THEN 'OFF' ELSE QUOTENAME((SELECT fs.[name] FROM sys.fulltext_stoplists fs WHERE fs.stoplist_id = fi.stoplist_id)) END,
                STUFF((SELECT ',' + QUOTENAME(COL_NAME(fc.[object_id], fc.column_id)) +
                                        CASE WHEN fc.type_column_id IS NOT NULL
                                             THEN ' TYPE COLUMN ' + QUOTENAME(COL_NAME(fc.[object_id], fc.type_column_id)) + ''

@@ -48,6 +48,9 @@ public static class DeploymentSummaryText
         RenderObjectChanges(summary, lines);
         RenderPreventDrop(summary, lines);
         RenderUnsupportedDowngrade(summary, lines);
+        RenderDestructive(summary, lines);
+        RenderSettings(summary, lines);
+        RenderDrift(summary, lines);
 
         return string.Join("\n", lines);
     }
@@ -65,8 +68,23 @@ public static class DeploymentSummaryText
         lines.Add($"- Duration: {run.DurationMs}ms");
         lines.Add($"- Started (UTC): {FormatUtc(run.StartedUtc)}");
         lines.Add($"- Finished (UTC): {FormatUtc(run.FinishedUtc)}");
+        if (run.Id != null) lines.Add($"- Run: {RunLine(run)}");
         lines.Add("");
     }
+
+    // The host is left out: this file is what gets pasted into pull requests and tickets.
+    private static string RunLine(RunInfo run)
+    {
+        var parts = new List<string> { Short(run.Id.ToString(), 8) };
+        if (run.Label != null) parts.Add(run.Label);
+        if (run.Source is { } source && (Short(source.Commit, 7) ?? source.Branch) is { } where)
+            parts.Add(source.Repository == null ? where : $"{source.Repository}@{where}");
+        if (run.Ci?.Pipeline != null) parts.Add(run.Ci.RunId == null ? run.Ci.Pipeline : $"{run.Ci.Pipeline} #{run.Ci.RunId}");
+        if (run.ResumesRunId != null) parts.Add($"resumes {Short(run.ResumesRunId.ToString(), 8)}");
+        return string.Join(" · ", parts);
+    }
+
+    private static string Short(string value, int length) => value == null || value.Length <= length ? value : value[..length];
 
     private static void RenderTargets(DeploymentSummary summary, List<string> lines)
     {
@@ -193,7 +211,7 @@ public static class DeploymentSummaryText
         var dropped = objectChanges.Dropped;
         lines.Add($"- Created: tables={created.Tables}, columns={created.Columns}, indexes={created.Indexes}, constraints={created.Constraints}, foreignKeys={created.ForeignKeys}, procedures={created.Procedures}, views={created.Views}, functions={created.Functions}");
         lines.Add($"- Modified: tables={modified.Tables}, columns={modified.Columns}");
-        lines.Add($"- Dropped: tables={dropped.Tables}, indexes={dropped.Indexes}, constraints={dropped.Constraints}, foreignKeys={dropped.ForeignKeys}");
+        lines.Add($"- Dropped: tables={dropped.Tables}, columns={dropped.Columns}, indexes={dropped.Indexes}, constraints={dropped.Constraints}, foreignKeys={dropped.ForeignKeys}");
         lines.Add($"- Ran (object scripts): {objectChanges.ScriptsRan}");
         lines.Add($"- Unchanged (object scripts): {objectChanges.ScriptsUnchanged}");
     }
@@ -228,6 +246,67 @@ public static class DeploymentSummaryText
         foreach (var entry in downgrade.Downgrades)
             lines.Add($"  - {entry.Feature}: {entry.ObjectName}");
     }
+
+    private static void RenderDestructive(DeploymentSummary summary, List<string> lines)
+    {
+        var destructive = summary.Destructive;
+        if (destructive == null)
+            return;
+
+        lines.Add("");
+        lines.Add("## Destructive Changes");
+        lines.Add($"- DestructiveChangePolicy: {destructive.Policy}");
+        foreach (var change in destructive.Changes)
+        {
+            var what = change.Kind switch
+            {
+                "tableDrop" => "table dropped", "columnDrop" => "column dropped", "typeChange" => "type change", "columnReplaced" => "column replaced",
+                _ => change.Kind,
+            };
+            var rows = change.EstimatedRows is { } n ? $", about {DestructiveLog.Rows(n)}" : "";
+            var accepted = change.Accepted ? ", accepted" : "";
+            lines.Add($"  - {change.ObjectName}: {what}{rows} -- {change.Outcome}{accepted} ({FormatScope(change.Server, change.Database, null)})");
+        }
+    }
+
+    private static void RenderSettings(DeploymentSummary summary, List<string> lines)
+    {
+        if (summary.SettingOutcomes == null) return;
+        lines.Add("");
+        lines.Add("## Settings");
+        foreach (var (label, counts) in new[] { ("Server", summary.SettingOutcomes.Server), ("Database", summary.SettingOutcomes.Database) })
+        {
+            if (counts == null) continue;
+            var parts = new[]
+            {
+                (counts.Changed, "changed"), (counts.PendingRestart, "waiting for a restart"), (counts.Drift, "drifted (not fixed)"),
+                (counts.FixFailed, "fix failed"), (counts.Unfixable, "cannot be fixed"), (counts.WouldChange, "would change")
+            }.Where(p => p.Item1 > 0).Select(p => $"{p.Item1} {p.Item2}").ToList();
+            if (parts.Count > 0) lines.Add($"- {label}: {string.Join(", ", parts)}");
+        }
+    }
+
+    private static void RenderDrift(DeploymentSummary summary, List<string> lines)
+    {
+        var drift = summary.Drift;
+        if (drift == null)
+            return;
+
+        lines.Add("");
+        lines.Add("## Drift");
+        lines.Add($"- Drifted: {(drift.Drifted ? "yes" : "no")} (tier {summary.Run.DriftTier}; counts {string.Join(", ", drift.FailOn)})");
+        foreach (var target in drift.Targets)
+            lines.Add($"  - {FormatScope(target.Server, target.Database, NullIfEmpty(target.Schema))}: {target.Status}"
+                      + (target.Counted > 0 ? $", {target.Counted} change(s), plan {target.Plan}" : ""));
+        foreach (var item in drift.PendingMigrations)
+            lines.Add($"  - pending migration: {item.ObjectName} ({FormatScope(item.Server, item.Database, NullIfEmpty(item.Schema))})");
+        foreach (var item in drift.Unverifiable)
+            lines.Add($"  - cannot be compared: {item.ObjectName} ({FormatScope(item.Server, item.Database, NullIfEmpty(item.Schema))})");
+        foreach (var item in drift.Extra)
+            lines.Add($"  - kept by PreventDrop: {item.ObjectType} {item.ObjectName} ({FormatScope(item.Server, item.Database, NullIfEmpty(item.Schema))})");
+    }
+
+    private static string NullIfEmpty(string value) => string.IsNullOrEmpty(value) ? null : value;
 
     private static string FormatScope(string server, string database, string schema)
     {

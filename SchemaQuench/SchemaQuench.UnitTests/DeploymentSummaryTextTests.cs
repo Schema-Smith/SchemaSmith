@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using NUnit.Framework;
 using SchemaQuench.Reporting;
 
@@ -18,6 +19,94 @@ namespace SchemaQuench.UnitTests;
 [TestFixture]
 public class DeploymentSummaryTextTests
 {
+    private static DeploymentSummary WithIdentity(RunSource source, CiInfo ci, string label = null, Guid? resumes = null)
+    {
+        var summary = BuildFullyPopulatedSummary();
+        return summary with
+        {
+            Run = summary.Run with
+            {
+                Id = Guid.Parse("5d2c1a0e-7f3b-4a55-9a0c-1c2f6f0e8b11"), Label = label, ResumesRunId = resumes, Source = source, Ci = ci,
+                Package = new PackageIdentity("sha256:9b1f", 4), Host = new RunHost("BUILD01", "ACME\\svc-deploy")
+            }
+        };
+    }
+
+    private static string RunLine(DeploymentSummary summary) =>
+        DeploymentSummaryText.Render(summary).Split('\n').SingleOrDefault(l => l.StartsWith("- Run: ", StringComparison.Ordinal));
+
+    [Test]
+    public void Render_TheRunLine_NamesTheRunLabelSourceAndPipeline()
+    {
+        var line = RunLine(WithIdentity(new RunSource("acme/billing-db", "4f2a9c1e0b7d", "main", "ci"),
+            new CiInfo("GitHubActions", "Deploy production", "9912345678", "1", "https://x", "octocat", "production"), "2026.11.3"));
+
+        Assert.That(line, Is.EqualTo("- Run: 5d2c1a0e · 2026.11.3 · acme/billing-db@4f2a9c1 · Deploy production #9912345678"));
+    }
+
+    [Test]
+    public void Render_TheRunLine_ShowsOnlyWhatIsPresent_AndAResume()
+    {
+        var resumed = Guid.Parse("aaaabbbb-0000-0000-0000-000000000000");
+
+        Assert.That(RunLine(WithIdentity(null, null)), Is.EqualTo("- Run: 5d2c1a0e"));
+        Assert.That(RunLine(WithIdentity(new RunSource(null, null, "main", "git"), null)), Is.EqualTo("- Run: 5d2c1a0e · main"));
+        Assert.That(RunLine(WithIdentity(new RunSource(null, "4f2a9c1e0b7d", null, "git"), null, resumes: resumed)),
+            Is.EqualTo("- Run: 5d2c1a0e · 4f2a9c1 · resumes aaaabbbb"));
+    }
+
+    // Summary.md is what gets pasted into pull requests and tickets.
+    [Test]
+    public void Render_NeverPrintsTheHost()
+    {
+        var text = DeploymentSummaryText.Render(WithIdentity(null, null));
+
+        Assert.That(text, Does.Not.Contain("BUILD01"));
+        Assert.That(text, Does.Not.Contain("svc-deploy"));
+    }
+
+    [Test]
+    public void Render_NoIdentity_NoRunLine()
+    {
+        Assert.That(RunLine(BuildFullyPopulatedSummary()), Is.Null);
+    }
+
+    [Test]
+    public void Render_Settings_OneLinePerScope_NamingEachOutcome()
+    {
+        var summary = BuildFullyPopulatedSummary() with
+        {
+            SettingOutcomes = new SettingsSummary(new SettingsScopeCounts(1, 1, 0, 0, 0, 0), new SettingsScopeCounts(0, 0, 2, 1, 1, 0))
+        };
+
+        var text = DeploymentSummaryText.Render(summary);
+
+        Assert.That(text, Does.Contain("## Settings"));
+        Assert.That(text, Does.Contain("- Server: 1 changed, 1 waiting for a restart"));
+        Assert.That(text, Does.Contain("- Database: 2 drifted (not fixed), 1 fix failed, 1 cannot be fixed"));
+    }
+
+    [Test]
+    public void Render_NoSettings_NoSection()
+    {
+        Assert.That(DeploymentSummaryText.Render(BuildFullyPopulatedSummary() with { SettingOutcomes = null }), Does.Not.Contain("## Settings"));
+    }
+
+    // A scope whose only rows count for nothing here (a setting that matched, say) has no line, not an empty one.
+    [Test]
+    public void Render_AScopeWithNothingToCount_HasNoLine()
+    {
+        var text = DeploymentSummaryText.Render(BuildFullyPopulatedSummary() with
+        {
+            SettingOutcomes = new SettingsSummary(new SettingsScopeCounts(0, 0, 0, 0, 0, 0), new SettingsScopeCounts(1, 0, 0, 0, 0, 0))
+        });
+        Assert.Multiple(() =>
+        {
+            Assert.That(text, Does.Not.Contain("- Server:"));
+            Assert.That(text, Does.Contain("- Database: 1 changed"));
+        });
+    }
+
     private static DeploymentSummary BuildFullyPopulatedSummary()
     {
         var run = new RunInfo(
@@ -88,7 +177,7 @@ public class DeploymentSummaryTextTests
             Instrumented: false,
             Created: new CreatedCounts(0, 0, 0, 0, 0, 0, 0, 0),
             Modified: new ModifiedCounts(0, 0),
-            Dropped: new DroppedCounts(0, 0, 0, 0),
+            Dropped: new DroppedCounts(0, 0, 0, 0, 0),
             ScriptsRan: 0,
             Details: new List<ObjectChangeDetail>());
 

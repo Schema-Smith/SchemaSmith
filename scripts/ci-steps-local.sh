@@ -3,7 +3,7 @@
 # setup a local band gets is the setup a CI leg gets. Needs TEST_USER and TEST_PASSWORD.
 #
 # The runner's clients are ubuntu-latest's: MySQL 8.0 (built against OpenSSL 3) and PostgreSQL 16. A client inside
-# the server container is not that client: MySQL 5.7.22's TLS 1.1 passed a grant there and failed CI's.
+# the server container is not that client: MySQL 5.7's TLS 1.1 passed a grant there and failed CI's.
 CI_MYSQL_CLIENT_IMAGE='mysql:8.0'
 CI_PSQL_IMAGE='postgres:16'
 export CI_PSQL_IMAGE

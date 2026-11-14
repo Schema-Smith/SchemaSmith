@@ -428,6 +428,17 @@ public abstract class ScriptObjectFidelitySharedTests
         Assert.That(json, Does.Not.Contain("\"TimeZone\""), json);
     }
 
+    // ---- sequences (MariaDB) -----------------------------------------------------------------------------------
+
+    [Test]
+    public void Sequence_CarriesItsComment()
+    {
+        if (!IsMariaDb || !AtLeast(100300)) Assert.Ignore("Sequences are MariaDB 10.3 and later.");
+        var json = Script("Sequences", "sq_commented");
+        Assert.That(json, Does.Contain("\"Description\": \"Order numbers, 'quoted'\""), json);
+        Assert.That(Script("Sequences", "sq_plain"), Does.Not.Contain("\"Description\""), "no comment, no Description");
+    }
+
     // ---- privileges ------------------------------------------------------------------------------------------
 
     // An account that cannot see a definition gets a warning and a skipped object, not a 0-byte script and not a
@@ -521,7 +532,7 @@ public abstract class ScriptObjectFidelitySharedTests
             var parts = path.Split('/');
             if (parts.Length < 2) return;
             var folder = parts[^2];
-            if (folder is "Views" or "Functions" or "Procedures" or "Triggers" or "Events" or "Packages")
+            if (folder is "Views" or "Functions" or "Procedures" or "Triggers" or "Events" or "Packages" or "Sequences")
                 _scripts[$"{folder}/{System.IO.Path.GetFileNameWithoutExtension(parts[^1])}"] = ci.ArgAt<string>(1);
         });
         lock (FactoryContainer.SharedLockObject)
@@ -584,6 +595,11 @@ public abstract class ScriptObjectFidelitySharedTests
         cmd.ExecuteNonQuery();
         ForgeKindler.KindleTheForge(cmd, Platform);
 
+        if (IsMariaDb && AtLeast(100300))
+        {
+            Run(cmd, "CREATE SEQUENCE sq_commented COMMENT='Order numbers, ''quoted'''");
+            Run(cmd, "CREATE SEQUENCE sq_plain");
+        }
         Run(cmd, "CREATE VIEW v_unq AS SELECT x FROM t");
         Run(cmd, $"CREATE VIEW v_cross AS SELECT y FROM `{_otherDb}`.o");
         Run(cmd, "CREATE ALGORITHM=MERGE SQL SECURITY INVOKER VIEW v_opts (a) AS SELECT x FROM t WHERE x > 0 WITH CHECK OPTION");

@@ -1,0 +1,21 @@
+name: Release Scripts Self-Test
+
+# Tests the release gate's helpers (scripts/release-gate): which commits' CI results hold for a release commit, and the
+# release body that fits GitHub's limit. Throwaway git repositories only; publishes and tags nothing.
+
+on:
+  pull_request:
+    paths: ['scripts/release-gate/**', 'scripts/ci_path_filter.py', '.github/ci-tested-paths.txt', '.github/workflows/release-scripts-selftest.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Release script tests
+        run: bash scripts/release-gate/tests/run-tests.sh

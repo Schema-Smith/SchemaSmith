@@ -74,8 +74,7 @@ public class VersionCompatTokenIntegrationTests
         template.ScriptFolders.Add(syntaxGate);
         template.ScriptFolders.Add(featureGate);
 
-        var quench = new DatabaseQuench("srv", product, template, compat100Db,
-            false, "0", false, "0", "1", "1", "1", "1", "1", "1", "0", false, false, null);
+        var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "srv", DatabaseName = compat100Db, UpdateTables = false, DeliverData = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, null);
         quench.PrepareIterationContent();
         quench.PrepareVersionScriptTokens(info.ServerComparable, info.CompatibilityLevel);
 

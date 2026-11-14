@@ -38,19 +38,23 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             """;
 
         using var conn = Open(out var cmd);
-        CleanUp(cmd, product, table);
-        Exec(cmd, $"CREATE TABLE `{table}` (`id` INT NOT NULL PRIMARY KEY, `CustomerName` VARCHAR(50) NULL)");
-        Exec(cmd, $"INSERT INTO `{table}` VALUES (1, 'first'), (2, 'second')");
+        void Start()
+        {
+            CleanUp(cmd, product, table);
+            Exec(cmd, $"CREATE TABLE `{table}` (`id` INT NOT NULL PRIMARY KEY, `CustomerName` VARCHAR(50) NULL)");
+            Exec(cmd, $"INSERT INTO `{table}` VALUES (1, 'first'), (2, 'second')");
+            ClearStatusMessages(cmd);
+        }
+        Start();
 
         try
         {
-            ClearStatusMessages(cmd);
-            RunTableQuenchProc(cmd, json, productName: product);
+            RunTableQuenchProc(cmd, json, productName: product, beforeRetry: Start);
             AssertColumnSurvived(cmd, table, "after the first deploy");
             Assert.That(MessagesLike(cmd, "%Rename column%"), Is.EqualTo(1), "the first deploy renames the column once");
 
             ClearStatusMessages(cmd);
-            RunTableQuenchProc(cmd, json, productName: product);
+            RunTableQuenchProc(cmd, json, productName: product, beforeRetry: () => ClearStatusMessages(cmd));
             AssertColumnSurvived(cmd, table, "after a redeploy");
             Assert.That(MessagesLike(cmd, "%Rename column%") + MessagesLike(cmd, "%Drop column%"), Is.EqualTo(0),
                 "a redeploy must leave the converged column alone");
@@ -79,12 +83,16 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             """;
 
         using var conn = Open(out var cmd);
-        CleanUp(cmd, product, table);
-        Exec(cmd, $"CREATE TABLE `{table}` (`id` INT NOT NULL PRIMARY KEY, `email` VARCHAR(50) NULL)");
+        void Start()
+        {
+            CleanUp(cmd, product, table);
+            Exec(cmd, $"CREATE TABLE `{table}` (`id` INT NOT NULL PRIMARY KEY, `email` VARCHAR(50) NULL)");
+            ClearStatusMessages(cmd);
+        }
+        Start();
         try
         {
-            ClearStatusMessages(cmd);
-            RunTableQuenchProc(cmd, json, productName: product);
+            RunTableQuenchProc(cmd, json, productName: product, beforeRetry: Start);
             Assert.That(Scalar(cmd, "SELECT GROUP_CONCAT(Message SEPARATOR ' | ') FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID() AND Message LIKE '%Rename column%'"),
                 Is.EqualTo($"  Rename column `email` to `mail` on `{table}`"));
         }
@@ -122,7 +130,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
 
         try
         {
-            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product));
+            Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product, beforeRetry: () => ClearStatusMessages(cmd)));
             cmd.CommandText = $"SELECT CONCAT(COLUMN_NAME, ' ', UPPER(COALESCE(COLUMN_DEFAULT, 'none'))) FROM INFORMATION_SCHEMA.COLUMNS " +
                               $"WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{table}' AND LOWER(COLUMN_NAME) = 'stamp'";
             Assert.That(cmd.ExecuteScalar()?.ToString(), Does.StartWith("stamp CURRENT_TIMESTAMP"),
@@ -166,7 +174,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             for (var deploy = 1; deploy <= 2; deploy++)
             {
                 Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
-                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product, beforeRetry: () => ClearStatusMessages(cmd)),
                     $"deploy {deploy}: re-spelling a generated column must not abort the deploy");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CONCAT(id, ':', plusone, ':', twice, ':', triple) ORDER BY id) FROM `{table}`"),
                     Is.EqualTo("1:11:20:30,2:21:40:60"), $"deploy {deploy}: every generated column must keep computing");
@@ -228,7 +236,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             for (var deploy = 1; deploy <= 2; deploy++)
             {
                 Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
-                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product, beforeRetry: () => ClearStatusMessages(cmd)),
                     $"deploy {deploy}: re-spelling the index a foreign key references must not abort the deploy");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
                     Is.EqualTo("fk_fkref_code"), $"deploy {deploy}: the foreign key must survive");
@@ -285,8 +293,13 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             """;
 
         using var conn = Open(out var cmd);
-        CleanUp(cmd, product, table);
-        Exec(cmd, $"CREATE TABLE `{table}` (`id` INT NOT NULL PRIMARY KEY, `v` INT NULL, KEY `IX_CaseOnly_V` (`v`))");
+        void Start()
+        {
+            CleanUp(cmd, product, table);
+            Exec(cmd, $"CREATE TABLE `{table}` (`id` INT NOT NULL PRIMARY KEY, `v` INT NULL, KEY `IX_CaseOnly_V` (`v`))");
+            ClearStatusMessages(cmd);
+        }
+        Start();
 
         var isMariaDb = Scalar(cmd, "SELECT VERSION() LIKE '%MariaDB%'") == "1";
         try
@@ -294,8 +307,8 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             for (var deploy = 1; deploy <= 2; deploy++)
             {
                 ClearStatusMessages(cmd);
-                Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
-                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
+                Action beforeRetry = deploy == 1 ? Start : () => ClearStatusMessages(cmd);
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product, beforeRetry: beforeRetry),
                     $"deploy {deploy}: an index spelled differently only in case is the same index, not a duplicate to create");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(DISTINCT CAST(INDEX_NAME AS BINARY)) FROM INFORMATION_SCHEMA.STATISTICS WHERE {TableIs(table)} AND INDEX_NAME <> 'PRIMARY'"),
                     Is.EqualTo("ix_caseonly_v"), $"deploy {deploy}: exactly one secondary index, with the package's spelling");
@@ -344,7 +357,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             for (var deploy = 1; deploy <= 2; deploy++)
             {
                 Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
-                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product, beforeRetry: () => ClearStatusMessages(cmd)),
                     $"deploy {deploy}: a CHECK spelled differently only in case is the same constraint, not a duplicate to create");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(table)} AND CONSTRAINT_TYPE = 'CHECK'"),
                     Is.EqualTo("ck_caseonly_v"), $"deploy {deploy}: exactly one CHECK, with the package's spelling");
@@ -383,18 +396,23 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             """;
 
         using var conn = Open(out var cmd);
-        CleanUp(cmd, product, child, parent);
-        Exec(cmd, $"CREATE TABLE `{parent}` (`id` INT NOT NULL PRIMARY KEY)");
-        Exec(cmd, $"CREATE TABLE `{child}` (`id` INT NOT NULL PRIMARY KEY, `parent_id` INT NULL, KEY `ix_caseonlyfk_parent` (`parent_id`), " +
-                  $"CONSTRAINT `FK_CaseOnly_Parent` FOREIGN KEY (`parent_id`) REFERENCES `{parent}` (`id`))");
+        void Start()
+        {
+            CleanUp(cmd, product, child, parent);
+            Exec(cmd, $"CREATE TABLE `{parent}` (`id` INT NOT NULL PRIMARY KEY)");
+            Exec(cmd, $"CREATE TABLE `{child}` (`id` INT NOT NULL PRIMARY KEY, `parent_id` INT NULL, KEY `ix_caseonlyfk_parent` (`parent_id`), " +
+                      $"CONSTRAINT `FK_CaseOnly_Parent` FOREIGN KEY (`parent_id`) REFERENCES `{parent}` (`id`))");
+            ClearStatusMessages(cmd);
+        }
+        Start();
 
         try
         {
             for (var deploy = 1; deploy <= 2; deploy++)
             {
                 ClearStatusMessages(cmd);
-                Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
-                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
+                Action beforeRetry = deploy == 1 ? Start : () => ClearStatusMessages(cmd);
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product, beforeRetry: beforeRetry),
                     $"deploy {deploy}: a foreign key spelled differently only in case is the same constraint, not a duplicate to create");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
                     Is.EqualTo("fk_caseonly_parent"), $"deploy {deploy}: exactly one foreign key, with the package's spelling");
@@ -449,7 +467,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             for (var deploy = 1; deploy <= 2; deploy++)
             {
                 Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
-                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product),
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product, beforeRetry: () => ClearStatusMessages(cmd)),
                     $"deploy {deploy}: re-spelling the index a foreign key depends on must not abort the deploy");
                 Assert.That(Scalar(cmd, $"SELECT GROUP_CONCAT(CAST(CONSTRAINT_NAME AS BINARY)) FROM INFORMATION_SCHEMA.TABLE_CONSTRAINTS WHERE {TableIs(child)} AND CONSTRAINT_TYPE = 'FOREIGN KEY'"),
                     Is.EqualTo("fk_fkback_parent"), $"deploy {deploy}: the foreign key must survive");
@@ -514,7 +532,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
             for (var deploy = 1; deploy <= 2; deploy++)
             {
                 Exec(cmd, "DELETE FROM SchemaSmith_StatusMessages WHERE SessionId = CONNECTION_ID()");
-                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product), $"deploy {deploy}");
+                Assert.DoesNotThrow(() => RunTableQuenchProc(cmd, json, productName: product, beforeRetry: () => ClearStatusMessages(cmd)), $"deploy {deploy}");
 
                 // Ownership records the package's spelling on every setting, so the expectation is exact.
                 var owned = Scalar(cmd, $"SELECT GROUP_CONCAT(CONCAT(ObjectType, ':', ObjectName) ORDER BY ObjectType, LOWER(ObjectName) SEPARATOR ' | ') " +
@@ -550,7 +568,7 @@ public abstract class TableQuench_CaseOnlyNameDifferenceSharedTests : BaseTableQ
     {
         foreach (var table in tables)
             TryExec(cmd, $"DROP TABLE IF EXISTS `{table}`");
-        TryExec(cmd, $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}'");
+        TransientRetry.Run(() => Exec(cmd, $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{product}'"));
     }
 
     private static void Exec(IDbCommand cmd, string sql)

@@ -156,6 +156,7 @@ public abstract class WhatIfParityTestsSharedTests
     {
         var path = Path.Join(logDir, "SchemaQuench - Summary.json");
         Assert.That(File.Exists(path), Is.True, $"no deployment summary was written to '{logDir}'");
+        SummaryConformance.AssertConforms(path);
         var summary = JObject.Parse(File.ReadAllText(path));
         Assert.That(summary.SelectToken("run.mode")?.Value<string>(), Is.EqualTo(expectedMode));
         Assert.That(summary.SelectToken("objectChanges.instrumented")?.Value<bool>(), Is.True,
@@ -477,7 +478,7 @@ public abstract class WhatIfParityTestsSharedTests
             Platform.PostgreSQL => $"DELETE FROM \"SchemaSmith\".\"ProductOwnership\" WHERE \"ProductName\" = '{ProductName}'",
             _ => $"DELETE FROM SchemaSmith_ProductOwnership WHERE ProductName = '{ProductName}'"
         };
-        cmd.ExecuteNonQuery();
+        TransientRetry.Run(() => cmd.ExecuteNonQuery());
     }
 
     private static string LogDirFor(string tempDir, string run)

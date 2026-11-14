@@ -1,6 +1,7 @@
 // Copyright (c) SchemaSmith Contributors. Licensed under the SSCL v2.0.
 
 using System.Collections.Generic;
+using Microsoft.Extensions.Configuration;
 using Schema.DataAccess;
 using Schema.Domain;
 
@@ -376,5 +377,80 @@ public class ConnectionStringTests
     {
         Assert.Throws<System.ArgumentOutOfRangeException>(() =>
             ConnectionString.RetargetDatabase("data source=s;Initial Catalog=db;", "tenant1", (Platform)999));
+    }
+
+    // ---- RetargetServer: --ConnectionString on a secondary server (B18) ----------------------------------------------
+
+    [TestCase("Data Source=primary,1440;Initial Catalog=db;User ID=u;Password=p", "secondary", "secondary,1440")]
+    [TestCase("Data Source=primary;Initial Catalog=db;User ID=u;Password=p", "secondary", "secondary")]
+    [TestCase("Data Source=primary,1440;Initial Catalog=db;User ID=u;Password=p", "secondary,2000", "secondary,2000")]
+    public void RetargetServer_SqlServer_ChangesOnlyTheServer(string original, string server, string dataSource)
+    {
+        var builder = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(ConnectionString.RetargetServer(original, server, Platform.SqlServer));
+        Assert.Multiple(() =>
+        {
+            Assert.That(builder.DataSource, Is.EqualTo(dataSource));
+            Assert.That(builder.UserID, Is.EqualTo("u"));
+            Assert.That(builder.Password, Is.EqualTo("p"));
+            Assert.That(builder.InitialCatalog, Is.EqualTo("db"));
+        });
+    }
+
+    [Test]
+    public void RetargetServer_PostgreSqlAndMySql_ChangeOnlyTheHost()
+    {
+        var pg = new Npgsql.NpgsqlConnectionStringBuilder(ConnectionString.RetargetServer("Host=primary;Port=5433;Database=db;Username=u;Password=p", "secondary", Platform.PostgreSQL));
+        var my = new MySqlConnector.MySqlConnectionStringBuilder(ConnectionString.RetargetServer("Server=primary;Port=3307;Database=db;Uid=u;Pwd=p;AllowUserVariables=true", "secondary", Platform.MySQL));
+        Assert.Multiple(() =>
+        {
+            Assert.That((pg.Host, pg.Port, pg.Username), Is.EqualTo(("secondary", 5433, "u")));
+            Assert.That((my.Server, my.Port, my.UserID, my.AllowUserVariables), Is.EqualTo(("secondary", 3307u, "u", true)));
+            Assert.That(ConnectionString.RetargetServer("", "secondary", Platform.MySQL), Is.EqualTo(""));
+        });
+    }
+
+    // An extraction connection's commands took the client library's 30 seconds, so DataTongs failed a large table's data
+    // and exited 2. Source:CommandTimeoutSeconds sets it, 0 (no limit) by default; one already in the string wins.
+    private static IConfigurationRoot Config(string seconds) => new ConfigurationBuilder()
+        .AddInMemoryCollection(seconds == null ? new Dictionary<string, string>() : new Dictionary<string, string> { ["Source:CommandTimeoutSeconds"] = seconds })
+        .Build();
+
+    [TestCase(null, 0)]
+    [TestCase("120", 120)]
+    public void WithSourceCommandTimeout_SetsEveryEnginesCommandTimeout(string setting, int expected)
+    {
+        var sql = new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(ConnectionString.WithSourceCommandTimeout(
+            ConnectionString.Build(Platform.SqlServer, "s", "d", "u", "p"), Platform.SqlServer, Config(setting)));
+        var pg = new Npgsql.NpgsqlConnectionStringBuilder(ConnectionString.WithSourceCommandTimeout(
+            ConnectionString.Build(Platform.PostgreSQL, "s", "d", "u", "p"), Platform.PostgreSQL, Config(setting)));
+        var my = new MySqlConnector.MySqlConnectionStringBuilder(ConnectionString.WithSourceCommandTimeout(
+            ConnectionString.Build(Platform.MariaDb, "s", "d", "u", "p"), Platform.MariaDb, Config(setting)));
+        Assert.Multiple(() =>
+        {
+            Assert.That(sql.CommandTimeout, Is.EqualTo(expected));
+            Assert.That(pg.CommandTimeout, Is.EqualTo(expected));
+            Assert.That(my.DefaultCommandTimeout, Is.EqualTo((uint)expected));
+        });
+    }
+
+    [Test]
+    public void WithSourceCommandTimeout_LeavesATimeoutTheConnectionAlreadyStates()
+    {
+        var sql = ConnectionString.WithSourceCommandTimeout("Server=s;Database=d;Command Timeout=7", Platform.SqlServer, Config("120"));
+        var my = ConnectionString.WithSourceCommandTimeout("Server=s;Database=d;Default Command Timeout=7", Platform.MySQL, Config("120"));
+        Assert.Multiple(() =>
+        {
+            Assert.That(new Microsoft.Data.SqlClient.SqlConnectionStringBuilder(sql).CommandTimeout, Is.EqualTo(7));
+            Assert.That(new MySqlConnector.MySqlConnectionStringBuilder(my).DefaultCommandTimeout, Is.EqualTo(7u));
+        });
+    }
+
+    [TestCase("-1")]
+    [TestCase("ten")]
+    public void WithSourceCommandTimeout_RefusesAValueThatIsNotWholeSeconds(string setting)
+    {
+        var ex = Assert.Throws<Schema.Utility.RunFailedException>(() =>
+            ConnectionString.WithSourceCommandTimeout("Server=s", Platform.SqlServer, Config(setting)));
+        Assert.That(ex!.Message, Does.Contain("Source:CommandTimeoutSeconds").And.Contain(setting));
     }
 }

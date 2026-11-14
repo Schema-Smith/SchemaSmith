@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Data;
 using System.Linq;
 using System.Text;
+using Schema.Domain;
 using Schema.Utility;
 
 namespace Schema.Delivery;
@@ -45,32 +46,43 @@ internal static class DeferredMergeBuilder
 
     #region SQL Server
 
+    private static string SqlQuote(string name) => $"[{Identifier.EscapeDelimited(name, Platform.SqlServer)}]";
+
     private static string BuildSqlServer(IMergeScriptHelper helper, IDbCommand cmd,
         string schemaOrDb, string tableName, string tableData, string keyColumns,
         bool disableTriggers, List<string> deferredColumns, bool isXml = false)
     {
-        var schema = schemaOrDb.Trim().Trim('[', ']');
-        var table = tableName.Trim().Trim('[', ']');
-        var deferredSet = new HashSet<string>(deferredColumns.Select(c => c.Trim().Trim('[', ']')), StringComparer.InvariantCultureIgnoreCase);
+        var schema = Identifier.Unwrap(schemaOrDb.Trim(), Platform.SqlServer);
+        var table = Identifier.Unwrap(tableName.Trim(), Platform.SqlServer);
+        var target = $"[{Identifier.EscapeDelimited(schema, Platform.SqlServer)}].[{Identifier.EscapeDelimited(table, Platform.SqlServer)}]";
+        var deferredSet = new HashSet<string>(deferredColumns.Select(c => Identifier.Unwrap(c.Trim(), Platform.SqlServer)), StringComparer.InvariantCultureIgnoreCase);
 
         var matchColumns = helper.GetMatchColumns(keyColumns);
         var insertColumns = helper.GetInsertColumns(cmd, schemaOrDb, tableName);
         var identityInsert = helper.NeedsIdentityInsert(cmd, schemaOrDb, tableName);
 
         var columns = helper.GetColumnMetadata(cmd, schemaOrDb, tableName);
+        // An insert-only pass, written as INSERT ... WHERE NOT EXISTS rather than MERGE: SQL Server refuses MERGE on a
+        // memory-optimized table and on an append-only ledger table, which the first pass delivers without one. A
+        // memory-optimized table needs the SNAPSHOT hint to be read inside an explicit transaction.
+        var hint = (MergeScriptHelper.SqlServerTargetFlags(cmd, schema, table) & 2) != 0 ? " WITH (SNAPSHOT)" : "";
 
         var sb = new StringBuilder();
         // XML data type methods (.nodes()/.value()) require QUOTED_IDENTIFIER ON; emit it so the script is
         // self-sufficient regardless of the executing session's setting (verified on SQL Server 2008 R2).
         if (isXml) sb.AppendLine("SET QUOTED_IDENTIFIER ON;").AppendLine();
         sb.AppendLine(isXml
-            ? $"DECLARE @v_xml XML = '{tableData?.Replace("'", "''")}';"
-            : $"DECLARE @v_json NVARCHAR(MAX) = '{tableData?.Replace("'", "''")}';");
+            ? $"DECLARE @v_xml XML = N'{MergeScriptHelper.SqlServerDataLiteralBody(tableData, true)}';"
+            : $"DECLARE @v_json NVARCHAR(MAX) = N'{MergeScriptHelper.SqlServerDataLiteralBody(tableData, false)}';");
         sb.AppendLine();
-        if (disableTriggers) sb.AppendLine($"ALTER TABLE [{schema}].[{table}] DISABLE TRIGGER ALL;");
-        if (identityInsert) sb.AppendLine($"SET IDENTITY_INSERT [{schema}].[{table}] ON;");
-        sb.AppendLine($"MERGE INTO [{schema}].[{table}] AS Target");
-        sb.AppendLine("USING (");
+        if (disableTriggers) sb.AppendLine($"ALTER TABLE {target} DISABLE TRIGGER ALL;");
+        if (identityInsert) sb.AppendLine($"SET IDENTITY_INSERT {target} ON;");
+        sb.AppendLine($"INSERT INTO {target} (");
+        sb.AppendLine($" {insertColumns}");
+        sb.AppendLine(")");
+        sb.AppendLine("SELECT");
+        sb.AppendLine(string.Join(",\r\n", Identifier.SplitDelimitedList(insertColumns, Platform.SqlServer).Select(c => $"        Source.{c}")));
+        sb.AppendLine("  FROM (");
         if (isXml)
         {
             sb.AppendLine($"  SELECT {BuildDeferredXmlSelectColumnsSqlServer(columns, deferredSet)}");
@@ -85,17 +97,9 @@ internal static class DeferredMergeBuilder
             sb.AppendLine("    )");
         }
         sb.AppendLine(") AS Source");
-        sb.AppendLine($"ON {matchColumns}");
-        sb.AppendLine();
-        sb.AppendLine(" WHEN NOT MATCHED BY TARGET THEN");
-        sb.AppendLine("   INSERT (");
-        sb.AppendLine($" {insertColumns}");
-        sb.AppendLine("   ) VALUES (");
-        sb.AppendLine($" {insertColumns?.Replace("[", "Source.[")}");
-        sb.AppendLine("   )");
-        sb.AppendLine(";");
-        if (identityInsert) sb.AppendLine($"SET IDENTITY_INSERT [{schema}].[{table}] OFF;");
-        if (disableTriggers) sb.AppendLine($"ALTER TABLE [{schema}].[{table}] ENABLE TRIGGER ALL;");
+        sb.AppendLine($" WHERE NOT EXISTS (SELECT 1 FROM {target} AS Target{hint} WHERE {matchColumns});");
+        if (identityInsert) sb.AppendLine($"SET IDENTITY_INSERT {target} OFF;");
+        if (disableTriggers) sb.AppendLine($"ALTER TABLE {target} ENABLE TRIGGER ALL;");
 
         return sb.ToString();
     }
@@ -107,12 +111,12 @@ internal static class DeferredMergeBuilder
         return string.Join(",", columns.Select(c =>
         {
             if (deferredSet.Contains(c.Name))
-                return $"CAST(NULL AS {c.JsonParseType}) AS [{c.Name}]";
+                return $"CAST(NULL AS {c.JsonParseType}) AS {SqlQuote(c.Name)}";
             if (c.IsGeometry)
-                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText([{c.Name}], COALESCE([{c.Name}.STSrid], {MergeScriptHelper.DefaultSridSqlServer(c.DataType)})) AS [{c.Name}]";
+                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText({SqlQuote(c.Name)}, COALESCE({SqlQuote(c.Name + ".STSrid")}, {MergeScriptHelper.DefaultSridSqlServer(c.DataType)})) AS {SqlQuote(c.Name)}";
             if (MergeScriptHelper.IsSqlServerCharacterType(c.DataType))
-                return $"COALESCE([{c.Name}], [{c.Name}{MergeScriptHelper.AsJsonSuffix}]) AS [{c.Name}]";
-            return $"[{c.Name}]";
+                return $"COALESCE({SqlQuote(c.Name)}, {SqlQuote(c.Name + MergeScriptHelper.AsJsonSuffix)}) AS {SqlQuote(c.Name)}";
+            return $"{SqlQuote(c.Name)}";
         }));
     }
 
@@ -123,19 +127,19 @@ internal static class DeferredMergeBuilder
     {
         if (columns == null || columns.Count == 0) return "*";
 
-        static string Node(string name) => $"(c[@n=\"{name}\"]/text())[1]";
+        static string Node(string name) => $"({MergeScriptHelper.XPathNode(name)})[1]";
 
         return string.Join(",", columns.Select(c =>
         {
             if (deferredSet.Contains(c.Name))
-                return $"CAST(NULL AS {c.JsonParseType}) AS [{c.Name}]";
+                return $"CAST(NULL AS {c.JsonParseType}) AS {SqlQuote(c.Name)}";
             if (c.IsGeometry)
-                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText(Src.n.value('{Node(c.Name)}','NVARCHAR(4000)'), COALESCE(Src.n.value('{Node(c.Name + ".STSrid")}','INT'), {MergeScriptHelper.DefaultSridSqlServer(c.DataType)})) AS [{c.Name}]";
+                return $"{c.DataType.ToLowerInvariant()}::STGeomFromText(Src.n.value(N'{Node(c.Name)}','NVARCHAR(4000)'), COALESCE(Src.n.value(N'{Node(c.Name + ".STSrid")}','INT'), {MergeScriptHelper.DefaultSridSqlServer(c.DataType)})) AS {SqlQuote(c.Name)}";
             if (c.IsBinary)
-                return $"Src.n.value('xs:base64Binary({Node(c.Name)})','{c.JsonParseType}') AS [{c.Name}]";
+                return $"Src.n.value(N'xs:base64Binary({Node(c.Name)})','{c.JsonParseType}') AS {SqlQuote(c.Name)}";
             if (c.IsXml)
-                return $"Src.n.value('{Node(c.Name)}','NVARCHAR(MAX)') AS [{c.Name}]";
-            return $"Src.n.value('{Node(c.Name)}','{c.JsonParseType}') AS [{c.Name}]";
+                return $"Src.n.value(N'{Node(c.Name)}','NVARCHAR(MAX)') AS {SqlQuote(c.Name)}";
+            return $"Src.n.value(N'{Node(c.Name)}','{c.JsonParseType}') AS {SqlQuote(c.Name)}";
         }));
     }
 
@@ -148,9 +152,10 @@ internal static class DeferredMergeBuilder
         bool disableTriggers, List<string> deferredColumns,
         bool disableRules, bool updateDescendents, int pgServerVersionNum = 0, bool isXml = false)
     {
-        var schema = schemaOrDb.Trim().Trim('"');
-        var table = tableName.Trim().Trim('"');
-        var deferredSet = new HashSet<string>(deferredColumns.Select(c => c.Trim().Trim('"')), StringComparer.InvariantCultureIgnoreCase);
+        var schema = Identifier.Unwrap(schemaOrDb.Trim(), Platform.PostgreSQL);
+        var table = Identifier.Unwrap(tableName.Trim(), Platform.PostgreSQL);
+        var target = $"{MergeScriptHelper.PgQuote(schema)}.{MergeScriptHelper.PgQuote(table)}";
+        var deferredSet = new HashSet<string>(deferredColumns.Select(c => Identifier.Unwrap(c.Trim(), Platform.PostgreSQL)), StringComparer.InvariantCultureIgnoreCase);
 
         var matchColumns = helper.GetMatchColumns(keyColumns);
         var insertColumns = helper.GetInsertColumns(cmd, schemaOrDb, tableName);
@@ -181,7 +186,7 @@ internal static class DeferredMergeBuilder
         sb.AppendLine("  nextval BIGINT;");
         sb.AppendLine("BEGIN");
         // ONLY belongs BEFORE the table name on ALTER TABLE (matching DELETE FROM ONLY elsewhere).
-        if (disableTriggers) sb.AppendLine($"ALTER TABLE {only}\"{schema}\".\"{table}\" DISABLE TRIGGER ALL;");
+        if (disableTriggers) sb.AppendLine($"ALTER TABLE {only}{target} DISABLE TRIGGER ALL;");
 
         var xmlRowSource = isXml
             ? $@"SELECT {xmlColumnExprs} FROM xmltable('/rows/row' PASSING XMLPARSE(DOCUMENT '{tableData?.Replace("'", "''")}')
@@ -199,8 +204,8 @@ internal static class DeferredMergeBuilder
             // Insert-only, MERGE-free: INSERT ... WHERE NOT EXISTS, keyed on the NULL-safe match predicate
             // (handles '*' nullable keys, needs no unique constraint). ONLY is not valid on INSERT so it
             // is omitted on the target; the NOT EXISTS check honors it.
-            var selectExprs = string.Join(", ", (insertColumns ?? "").Split(',').Select(c => $"\"Source\".{c.Trim()}"));
-            sb.AppendLine($"INSERT INTO \"{schema}\".\"{table}\" (");
+            var selectExprs = string.Join(", ", Identifier.SplitDelimitedList(insertColumns, Platform.PostgreSQL).Select(c => $"\"Source\".{c}"));
+            sb.AppendLine($"INSERT INTO {target} (");
             sb.AppendLine($" {insertColumns}");
             sb.AppendLine($"   ){overriding}");
             sb.AppendLine($"  SELECT {selectExprs}");
@@ -214,11 +219,11 @@ internal static class DeferredMergeBuilder
                 sb.AppendLine($"          SELECT {jsonSelectColumns}");
                 sb.AppendLine("            FROM my_tables, JSON_ARRAY_ELEMENTS(arr) AS elem) AS \"Source\"");
             }
-            sb.AppendLine($"   WHERE NOT EXISTS (SELECT 1 FROM {only}\"{schema}\".\"{table}\" AS \"Target\" WHERE {matchColumns});");
+            sb.AppendLine($"   WHERE NOT EXISTS (SELECT 1 FROM {only}{target} AS \"Target\" WHERE {matchColumns});");
         }
         else
         {
-            sb.AppendLine($"MERGE INTO {only}\"{schema}\".\"{table}\" AS \"Target\"");
+            sb.AppendLine($"MERGE INTO {only}{target} AS \"Target\"");
             sb.AppendLine("USING (");
             if (isXml)
             {
@@ -253,20 +258,20 @@ internal static class DeferredMergeBuilder
             sb.AppendLine("  VALUES (");
             if (insertColumns != null)
             {
-                sb.AppendLine(string.Join(",\n", insertColumns.Split(',')
-                    .Select(c => $"        \"Source\".{c.Trim()}")));
+                sb.AppendLine(string.Join(",\n", Identifier.SplitDelimitedList(insertColumns, Platform.PostgreSQL)
+                    .Select(c => $"        \"Source\".{c}")));
             }
             sb.AppendLine("   )");
             sb.AppendLine(" ;");
         }
 
-        if (disableTriggers) sb.AppendLine($"ALTER TABLE {only}\"{schema}\".\"{table}\" ENABLE TRIGGER ALL;");
+        if (disableTriggers) sb.AppendLine($"ALTER TABLE {only}{target} ENABLE TRIGGER ALL;");
 
         if (!string.IsNullOrEmpty(identAndSeq))
         {
             var parts = identAndSeq.Split('=');
             if (parts.Length >= 2)
-                sb.AppendLine($"SELECT SETVAL('{parts[1]}', (SELECT MAX(\"{parts[0]}\") FROM \"{schema}\".\"{table}\")) INTO nextval;");
+                sb.AppendLine($"SELECT SETVAL('{parts[1].Replace("'", "''")}', (SELECT MAX({MergeScriptHelper.PgQuote(parts[0])}) FROM {target})) INTO nextval;");
         }
 
         sb.AppendLine();
@@ -283,12 +288,21 @@ internal static class DeferredMergeBuilder
         return string.Join(",\n           ", columns.Select(c =>
         {
             if (deferredSet.Contains(c.Name))
-                return $"CAST(NULL AS {c.JsonParseType}) AS \"{c.Name}\"";
+                return $"CAST(NULL AS {c.JsonParseType}) AS {MergeScriptHelper.PgQuote(c.Name)}";
+            // The main path's transforms, on the JSON value: the geometry with its SRID companion and through the schema
+            // PostGIS lives in, the array and "char" forms. This path had drifted to a bare ST_GeomFromText (SRID 0,
+            // and "function does not exist" off the search_path) and no array or "char" handling.
+            var raw = $"(elem ->> '{c.Name.Replace("'", "''")}')";
             if (c.IsGeometry)
-                return $"ST_GeomFromText(elem ->> '{c.Name}') AS \"{c.Name}\"";
+                return $"{MergeScriptHelper.TypeSchemaPrefix(c.JsonParseType)}ST_GeomFromText({raw}, COALESCE(NULLIF(elem ->> '{(c.Name + ".STSrid").Replace("'", "''")}', '')::int, 0)) AS {MergeScriptHelper.PgQuote(c.Name)}";
             if (c.IsBinary)
-                return $"decode(elem ->> '{c.Name}', 'base64') AS \"{c.Name}\"";
-            return $"(elem ->> '{c.Name}')::{c.JsonParseType} AS \"{c.Name}\"";
+                return $"decode({raw}, 'base64') AS {MergeScriptHelper.PgQuote(c.Name)}";
+            if (c.DataType.StartsWith("_", StringComparison.Ordinal))
+                return $"CASE WHEN LEFT({raw}, 1) IN ('{{', '[') THEN {raw}::{c.JsonParseType} " +
+                       $"ELSE STRING_TO_ARRAY({raw}, '*,*', '*NULL_VALUE_REPRESENTATION*')::{c.JsonParseType} END AS {MergeScriptHelper.PgQuote(c.Name)}";
+            if (c.DataType == "char")
+                return $"CASE WHEN {raw} ~ '^-[0-9]+$' THEN ({raw}::int)::\"char\" ELSE {raw}::\"char\" END AS {MergeScriptHelper.PgQuote(c.Name)}";
+            return $"{raw}::{c.JsonParseType} AS {MergeScriptHelper.PgQuote(c.Name)}";
         }));
     }
 
@@ -304,10 +318,10 @@ internal static class DeferredMergeBuilder
 
         return string.Join(",\n         ", columns.Select(c =>
             deferredSet.Contains(c.Name)
-                ? $"\"{c.Name}\" {c.JsonParseType} PATH 'NULL'"
+                ? $"{MergeScriptHelper.PgQuote(c.Name)} {c.JsonParseType} PATH 'NULL'"
                 : MergeScriptHelper.RequiresXmlColumnTransformPostgreSql(c)
-                    ? $"\"{c.Name}\" text PATH 'c[@n=\"{c.Name}\"]/text()'"
-                    : $"\"{c.Name}\" {c.JsonParseType} PATH 'c[@n=\"{c.Name}\"]/text()'"));
+                    ? $"{MergeScriptHelper.PgQuote(c.Name)} text PATH '{MergeScriptHelper.XPathNode(c.Name)}'"
+                    : $"{MergeScriptHelper.PgQuote(c.Name)} {c.JsonParseType} PATH '{MergeScriptHelper.XPathNode(c.Name)}'"));
     }
 
     // B1: the outer SELECT list wrapping xmltable() for the deferred pass. A deferred column is already
@@ -321,8 +335,8 @@ internal static class DeferredMergeBuilder
 
         return string.Join(",\n         ", columns.Select(c =>
             deferredSet.Contains(c.Name)
-                ? $"\"x\".\"{c.Name}\" AS \"{c.Name}\""
-                : $"{MergeScriptHelper.BuildXmlColumnExpressionPostgreSql(c, "x")} AS \"{c.Name}\""));
+                ? $"\"x\".{MergeScriptHelper.PgQuote(c.Name)} AS {MergeScriptHelper.PgQuote(c.Name)}"
+                : $"{MergeScriptHelper.BuildXmlColumnExpressionPostgreSql(c, "x")} AS {MergeScriptHelper.PgQuote(c.Name)}"));
     }
 
     #endregion
@@ -336,9 +350,9 @@ internal static class DeferredMergeBuilder
     private static string BuildMySql(IDbCommand cmd, string schemaOrDb, string tableName, string tableData,
         List<string> deferredColumns, string keyColumns = null, bool insertMissingOnly = false)
     {
-        var db = schemaOrDb.Trim().Trim('`');
-        var table = tableName.Trim().Trim('`');
-        var deferredSet = new HashSet<string>(deferredColumns, StringComparer.OrdinalIgnoreCase);
+        var db = Identifier.Unwrap(schemaOrDb.Trim(), Platform.MySQL);
+        var table = Identifier.Unwrap(tableName.Trim(), Platform.MySQL);
+        var deferredSet = new HashSet<string>(deferredColumns.Select(c => Identifier.Unwrap(c.Trim(), Platform.MySQL)), StringComparer.OrdinalIgnoreCase);
 
         // DeferredMergeBuilder is integration-only (no mocked unit tests), so detecting from the live command
         // is safe here.
@@ -350,15 +364,15 @@ internal static class DeferredMergeBuilder
         if (columns.Count == 0)
             throw new InvalidOperationException($"No columns found for table `{db}`.`{table}`.");
 
-        var columnList = string.Join(", ", columns.Select(c => $"`{c.Name}`"));
+        var columnList = string.Join(", ", columns.Select(c => $"{MergeScriptHelper.MyQuote(c.Name)}"));
         var selectExpressions = string.Join(", ", columns.Select(c =>
             deferredSet.Contains(c.Name) ? "NULL" : MergeScriptHelper.BuildSingleSelectExpressionMySql(c)));
-        var jsonSource = MergeScriptHelper.BuildJsonRowSourceMySql(columns, versionNum);
+        var jsonSource = MergeScriptHelper.BuildJsonRowSourceMySql(columns, versionNum, MergeScriptHelper.JsonTableMisreadsScalarsMySql(cmd, versionNum));
         tableData = MergeScriptHelper.DecodeSurrogateEscapesMySql(MergeScriptHelper.QuoteDecimalNumbersMySql(
             MergeScriptHelper.StringifyStructuredTextValuesMySql(tableData, columns), versionNum, columns), versionNum);
 
         var updateCols = columns.Where(c => !c.IsAutoIncrement).Select(c =>
-            deferredSet.Contains(c.Name) ? $"`{c.Name}` = NULL" : $"`{c.Name}` = VALUES(`{c.Name}`)");
+            deferredSet.Contains(c.Name) ? $"{MergeScriptHelper.MyQuote(c.Name)} = NULL" : $"{MergeScriptHelper.MyQuote(c.Name)} = VALUES({MergeScriptHelper.MyQuote(c.Name)})");
         var onDuplicate = $"ON DUPLICATE KEY UPDATE {string.Join(", ", updateCols)};";
 
         var sb = new StringBuilder();
@@ -377,7 +391,7 @@ internal static class DeferredMergeBuilder
         {
             sb.AppendLine($"SET @json_data = '{MergeScriptHelper.EscapeMySqlPayload(payload)}';");
             sb.AppendLine();
-            sb.AppendLine($"INSERT INTO `{db}`.`{table}` ({columnList})");
+            sb.AppendLine($"INSERT INTO {MergeScriptHelper.MyQuote(db)}.{MergeScriptHelper.MyQuote(table)} ({columnList})");
             sb.AppendLine($"SELECT {selectExpressions}");
             sb.AppendLine($"FROM {jsonSource}");
             var missingRowsFilter = insertMissingOnly ? MergeScriptHelper.BuildMissingRowsFilterMySql(db, table, columns, keyColumns) : null;

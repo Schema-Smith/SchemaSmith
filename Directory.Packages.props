@@ -27,33 +27,17 @@
     <PackageVersion Include="NJsonSchema" Version="11.6.1" />
     <PackageVersion Include="Npgsql" Version="10.0.3" />
 
-    <!-- Microsoft.Extensions — Configuration.* on 10.0.11 (latest); other sub-packages on 10.0.5 (latest published) -->
-    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.13" />
-    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="10.0.5" />
+    <!-- Microsoft.Extensions: Configuration.* is referenced directly. DependencyInjection.Abstractions and Logging.Abstractions
+         arrive transitively (the database drivers) and are pinned here. -->
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Abstractions" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Json" Version="10.0.14" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.UserSecrets" Version="10.0.14" />
     <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.5" />
-    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="10.0.5" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
-
-    <!-- UI (Avalonia) -->
-    <PackageVersion Include="Avalonia" Version="11.3.12" />
-    <PackageVersion Include="Avalonia.AvaloniaEdit" Version="11.4.1" />
-    <PackageVersion Include="Avalonia.Controls.DataGrid" Version="11.3.12" />
-    <PackageVersion Include="Avalonia.Desktop" Version="11.3.12" />
-    <PackageVersion Include="Avalonia.Fonts.Inter" Version="11.3.12" />
-    <PackageVersion Include="Avalonia.Headless.NUnit" Version="11.3.12" />
-    <PackageVersion Include="Avalonia.Themes.Fluent" Version="11.3.12" />
-    <PackageVersion Include="MessageBox.Avalonia" Version="3.3.1.1" />
+    <!-- Transitive, pinned. -->
     <PackageVersion Include="System.Security.Cryptography.ProtectedData" Version="10.0.5" />
-
-    <!-- CLI -->
-    <!-- System.CommandLine has no stable release — held at current beta -->
-    <PackageVersion Include="System.CommandLine" Version="2.0.0-beta4.22272.1" />
-    <PackageVersion Include="Spectre.Console" Version="0.54.0" />
-    <PackageVersion Include="Spectre.Console.Testing" Version="0.54.0" />
 
     <!-- Static analysis (dev-only; PrivateAssets=all in Directory.Build.props keeps it out of the packed NuGet) -->
     <PackageVersion Include="SonarAnalyzer.CSharp" Version="10.35.0.4138" />

@@ -31,6 +31,9 @@ public abstract class GenerateTableJsonSharedTests
 
     private int? _serverPatchNum;
 
+    /// <summary>The source's major/minor/patch comparable (80011 for 8.0.11); null when it could not be read.</summary>
+    protected int? ServerPatchNum => _serverPatchNum;
+
     /// <summary>Whether CHECK constraints are deployed and read on the source: MySQL 8.0.16 and MariaDB 10.2.22, where
     /// INFORMATION_SCHEMA.CHECK_CONSTRAINTS arrived.</summary>
     protected bool TargetSupportsCheckConstraints =>
@@ -703,6 +706,7 @@ CREATE TABLE `{_integrationDb}`.`DefaultKinds` (
     `ELit` VARCHAR(40) NULL DEFAULT ('abc'),
     `SParen` VARCHAR(40) NULL DEFAULT 'n/a (unknown)',
     `SQuote` VARCHAR(40) NULL DEFAULT 'it''s',
+    `SBack` VARCHAR(40) NULL DEFAULT 'a\\d+\\b',
     `TStamp` DATETIME NULL DEFAULT CURRENT_TIMESTAMP,
     PRIMARY KEY (`Id`)
 )";
@@ -721,6 +725,8 @@ CREATE TABLE `{_integrationDb}`.`DefaultKinds` (
             // a literal is a literal whatever it contains
             AssertColumnProperties(ColumnNamed(result, "SParen"), "SParen", "varchar(40)", true, "'n/a (unknown)'");
             AssertColumnProperties(ColumnNamed(result, "SQuote"), "SQuote", "varchar(40)", true, "'it''s'");
+            // a backslash written so a deploy reads it back as a backslash, not as an escape
+            AssertColumnProperties(ColumnNamed(result, "SBack"), "SBack", "varchar(40)", true, @"'a\\d+\\b'");
             AssertColumnProperties(ColumnNamed(result, "TStamp"), "TStamp", "datetime", true, "CURRENT_TIMESTAMP");
         });
     }

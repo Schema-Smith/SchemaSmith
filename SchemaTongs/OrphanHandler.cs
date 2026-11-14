@@ -51,6 +51,20 @@ public class OrphanHandler
                 _log.Info($"  Retained {excludedCount} file(s) in {folderName} for objects in the SchemaSmith namespace, which extraction does not read (not treated as orphans)");
             }
 
+            // A script beside the declared form this run wrote for the same object (X.sql next to X.json) is superseded,
+            // not orphaned: the object is still declared. It is deleted with the orphans, but never dropped.
+            var superseded = orphans.Where(path => path.EndsWith(".sql", StringComparison.OrdinalIgnoreCase)
+                                                && index.WasWritten(Path.ChangeExtension(path, ".json"))).ToList();
+            if (superseded.Count > 0)
+            {
+                orphans = orphans.Except(superseded).ToList();
+                foreach (var path in superseded)
+                    _log.Info($"  {Path.GetFileName(path)} in {folderName} is superseded by the declared form ({Path.GetFileNameWithoutExtension(path)}.json); delete it");
+                if (mode == OrphanHandlingMode.DetectDeleteAndCleanup)
+                    foreach (var path in superseded)
+                        FileWrapper.GetFromFactory().Delete(path);
+            }
+
             if (orphans.Count > 0)
                 allOrphans[folderName] = orphans;
         }

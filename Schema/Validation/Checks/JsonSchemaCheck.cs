@@ -8,6 +8,7 @@ using Newtonsoft.Json.Linq;
 using NJsonSchema;
 using NJsonSchema.Validation;
 using Schema.Domain;
+using Schema.Domain.Settings;
 using Schema.Domain.MariaDb;
 using Schema.Domain.MySQL;
 using Schema.Domain.PostgreSQL;
@@ -80,7 +81,7 @@ public sealed class JsonSchemaCheck : ISchemaCheck
         var findings = new List<Finding>();
         var schemaByType = new Dictionary<string, JsonSchema>(StringComparer.OrdinalIgnoreCase);
 
-        foreach (var fileName in RepositoryHelper.GetSchemaFileNames(ctx.Platform))
+        foreach (var fileName in RepositoryHelper.GetSchemaFileNames(ctx.Platform).Concat(RepositoryHelper.GetSettingsSchemaFileNames(ctx.Platform)))
         {
             var typeName = fileName.Split('.')[0];
             var domainType = GetTypeForSchemaFile(fileName, ctx.Platform);
@@ -400,6 +401,8 @@ public sealed class JsonSchemaCheck : ISchemaCheck
         var fileName = Path.GetFileName(jsonFilePath);
         if (fileName.Equals("Product.json", StringComparison.OrdinalIgnoreCase)) return "products";
         if (fileName.Equals("Template.json", StringComparison.OrdinalIgnoreCase)) return "templates";
+        if (fileName.Equals(SettingsFile.ServerFileName, StringComparison.OrdinalIgnoreCase)) return "serversettings";
+        if (fileName.Equals(SettingsFile.DatabaseFileName, StringComparison.OrdinalIgnoreCase)) return "databasesettings";
         return null;
     }
 
@@ -427,6 +430,7 @@ public sealed class JsonSchemaCheck : ISchemaCheck
         return (objectPart, platform.GetBasePlatform()) switch
         {
             ("products", _) => typeof(Product),
+            ("serversettings", _) or ("databasesettings", _) => typeof(SettingsFile),
             ("templates", Platform.SqlServer) => typeof(SqlServerTemplate),
             ("templates", Platform.PostgreSQL) => typeof(PostgreSqlTemplate),
             ("templates", Platform.MySQL) => typeof(MySqlTemplate),
@@ -439,6 +443,7 @@ public sealed class JsonSchemaCheck : ISchemaCheck
             ("domaintypes", Platform.PostgreSQL) => typeof(PostgreSqlDomainType),
             ("enumtypes", Platform.PostgreSQL) => typeof(PostgreSqlEnumType),
             ("sequences", Platform.PostgreSQL) => typeof(PostgreSqlSequence),
+            ("sequences", Platform.SqlServer) => typeof(SqlServerSequence),
             _ => throw new ArgumentException($"Unknown schema file mapping: {fileName} for platform {platform}")
         };
     }

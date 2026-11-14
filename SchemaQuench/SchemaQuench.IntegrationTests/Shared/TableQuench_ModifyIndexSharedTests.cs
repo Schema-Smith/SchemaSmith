@@ -206,7 +206,7 @@ VALUES ('{_productName}', '', '{db}', 'TABLE', 'Parent'), ('{_productName}', '',
                          })
                 {
                     cmd.CommandText = $"CALL `{_mainDb}`.{call}";
-                    cmd.ExecuteNonQuery();
+                    TransientRetry.Run(() => cmd.ExecuteNonQuery());
                 }
             }, "changing an index a foreign key uses must not stop the deploy");
 
@@ -222,8 +222,8 @@ VALUES ('{_productName}', '', '{db}', 'TABLE', 'Parent'), ('{_productName}', '',
         finally
         {
             cmd.CommandText = $@"DROP DATABASE IF EXISTS `{db}`;
-DELETE FROM `{_mainDb}`.SchemaSmith_ProductOwnership WHERE ObjectSchema = '{db}';";
-            cmd.ExecuteNonQuery();
+DELETE FROM `{_mainDb}`.SchemaSmith_ProductOwnership WHERE ObjectType IN ('TABLE', 'INDEX', 'EVENT') AND ObjectSchema = '{db}';";
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
             conn.Close();
         }
     }

@@ -22,6 +22,33 @@ public class ScriptValidatorTests
         _validator = new ScriptValidator();
     }
 
+    #region RewriteWithTempName — comments and names that need quoting
+
+    // A comment's apostrophe hid the CREATE behind a fake literal, and a name class of \w+ refused any name with a space,
+    // hyphen or dot: each case reported "Could not rewrite" and wrote a valid module as .sqlerror.
+    [TestCase("-- don't run this by hand\nCREATE PROCEDURE [dbo].[usp_X] AS SELECT 'a'", "CREATE PROCEDURE [dbo].[_validate_", "[usp_X]")]
+    [TestCase("/* CREATE VIEW [dbo].[old] */\nCREATE VIEW [dbo].[vNew] AS SELECT 1 AS x", "CREATE VIEW [dbo].[_validate_", "[vNew]")]
+    [TestCase("CREATE VIEW [dbo].[My View] AS SELECT 1 AS x", "CREATE VIEW [dbo].[_validate_", "[My View]")]
+    [TestCase("CREATE VIEW [my-schema].[v.1] AS SELECT 1 AS x", "CREATE VIEW [my-schema].[_validate_", "[v.1]")]
+    [TestCase("CREATE VIEW dbo.vPlain AS SELECT 1 AS x", "CREATE VIEW dbo.[_validate_", "vPlain")]
+    public void RewriteWithTempName_SqlServer_RenamesTheModuleItself(string script, string expectedStart, string ownName)
+    {
+        var result = _validator.RewriteWithTempName(script, Platform.SqlServer);
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.RewrittenScript, Does.Contain(expectedStart).And.Not.Contain(ownName), "the module's own name is the one replaced");
+    }
+
+    [TestCase("-- don't\nCREATE OR REPLACE VIEW \"my schema\".\"my view\" AS SELECT 1", "CREATE OR REPLACE VIEW \"my schema\".\"_validate_", "\"my view\"")]
+    [TestCase("CREATE VIEW public.v AS SELECT 1", "CREATE VIEW public.\"_validate_", "public.v ")]
+    public void RewriteWithTempName_PostgreSql_RenamesTheModuleItself(string script, string expectedStart, string ownName)
+    {
+        var result = _validator.RewriteWithTempName(script, Platform.PostgreSQL);
+        Assert.That(result.Success, Is.True);
+        Assert.That(result.RewrittenScript, Does.Contain(expectedStart).And.Not.Contain(ownName), "the module's own name is the one replaced");
+    }
+
+    #endregion
+
     #region RewriteWithTempName — SQL Server
 
     [Test]
@@ -371,6 +398,25 @@ public class ScriptValidatorTests
 
         Assert.That(result.IsValid, Is.True);
         Assert.That(result.ErrorMessage, Is.Null);
+    }
+
+    // A batch error can end the transaction on the server (SQL Server dooms it on some errors). Rolling back an ended one
+    // throws, and a throw from the finally replaced the failure being returned: the check crashed instead of reporting.
+    [Test]
+    public void ValidateScript_ATransactionTheErrorAlreadyEnded_StillReportsTheError()
+    {
+        var connection = Substitute.For<IDbConnection>();
+        var transaction = Substitute.For<IDbTransaction>();
+        var command = Substitute.For<IDbCommand>();
+        connection.BeginTransaction().Returns(transaction);
+        connection.CreateCommand().Returns(command);
+        command.ExecuteNonQuery().Throws(new ServerErrorException("Invalid object name 'dbo.Missing'."));
+        transaction.When(t => t.Rollback()).Do(_ => throw new InvalidOperationException("This SqlTransaction has completed; it is no longer usable."));
+
+        var result = _validator.ValidateScript(connection, "CREATE VIEW [dbo].[vw_Test]\nAS\nSELECT * FROM dbo.Missing", ScriptObjectType.Views, Platform.SqlServer);
+
+        Assert.That(result.IsValid, Is.False);
+        Assert.That(result.ErrorMessage, Does.Contain("Invalid object name 'dbo.Missing'."));
     }
 
     [Test]

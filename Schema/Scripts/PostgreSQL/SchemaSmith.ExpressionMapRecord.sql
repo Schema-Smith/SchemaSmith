@@ -23,6 +23,7 @@ AS $$
 DECLARE
   v_version TEXT := current_setting('server_version');
   v_rebaselined INTEGER := 0;
+  v_zone TEXT;
 BEGIN
   IF p_WhatIf THEN
     -- #508: a preview leaves the map as it found it, including what ExpressionMapAdopt verified for the preview.
@@ -84,6 +85,18 @@ BEGIN
       JOIN information_schema.columns a
         ON a.table_schema = col."TableSchema" AND a.table_name = col."TableName" AND a.column_name = col."Name"
      WHERE COALESCE(col."GenerationExpression", '') != '';
+
+  -- Column defaults, read as ModifiedTableQuench reads them (information_schema). A serial column's default is built
+  -- from the catalog and never authored; an identity or generated column has no default to record.
+  INSERT INTO temp_expression_map_declared
+    SELECT col."TableSchema", col."TableName", 'COLUMN', col."Name", 'default', col."Default", a.column_default::TEXT
+      FROM temp_columns col
+      JOIN information_schema.columns a
+        ON a.table_schema = col."TableSchema" AND a.table_name = col."TableName" AND a.column_name = col."Name"
+     WHERE COALESCE(col."Default", '') != '' AND a.column_default IS NOT NULL
+       AND NOT col."IsSerial"
+       AND COALESCE(col."Generated", 'NEVER') NOT LIKE 'GENERATED%IDENTITY%'
+       AND COALESCE(col."GenerationExpression", '') = '';
   END IF;
 
   IF to_regclass('pg_temp.temp_indexes') IS NOT NULL THEN
@@ -105,6 +118,40 @@ BEGIN
       JOIN pg_catalog.pg_class ic
         ON ic.oid = idx.indexrelid AND ic.relname = i."Name" AND ic.relkind IN ('i', 'I')
      WHERE COALESCE(i."FilterExpression", '') != '';
+
+  -- Expression index keys: the declared list as the compare consumes it, against IndexKeyList, as the snapshot reads it.
+  -- A list of plain columns already compares equal and needs no row.
+  INSERT INTO temp_expression_map_declared
+    SELECT i."TableSchema", i."TableName", 'INDEX', i."Name", 'keys',
+           "SchemaSmith"."NormalizeIndexColumnList"(i."TableSchema", i."TableName", i."AccessMethod", i."IndexColumns"),
+           "SchemaSmith"."IndexKeyList"(idx.indexrelid)
+      FROM temp_indexes i
+      JOIN pg_catalog.pg_index idx
+        ON idx.indrelid = to_regclass("SchemaSmith"."QuoteName"(i."TableSchema") || '.' || "SchemaSmith"."QuoteName"(i."TableName"))
+      JOIN pg_catalog.pg_class ic
+        ON ic.oid = idx.indexrelid AND ic.relname = i."Name" AND ic.relkind IN ('i', 'I')
+     WHERE i."IndexColumns" LIKE '%(%';
+  END IF;
+
+  -- Exclusion constraints, keys and predicate, read as ModifiedTableQuench's snapshot reads them.
+  IF to_regclass('pg_temp.temp_excludes') IS NOT NULL THEN
+    INSERT INTO temp_expression_map_declared
+      SELECT c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'keys',
+             "SchemaSmith"."ExcludeKeysDeclared"(c."TableSchema", c."TableName", c."AccessMethod", c."ExcludeColumns"),
+             "SchemaSmith"."ExcludeKeyList"(con.oid)
+        FROM temp_excludes c
+        JOIN pg_catalog.pg_constraint con
+          ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
+         AND con.conname = c."Name" AND con.contype = 'x';
+    INSERT INTO temp_expression_map_declared
+      SELECT c."TableSchema", c."TableName", 'EXCLUDE', c."Name", 'filter', c."FilterExpression",
+             COALESCE("SchemaSmith"."StripParenWrapping"(PG_GET_EXPR(idx.indpred, idx.indrelid)), '')
+        FROM temp_excludes c
+        JOIN pg_catalog.pg_constraint con
+          ON con.conrelid = to_regclass("SchemaSmith"."QuoteName"(c."TableSchema") || '.' || "SchemaSmith"."QuoteName"(c."TableName"))
+         AND con.conname = c."Name" AND con.contype = 'x'
+        JOIN pg_catalog.pg_index idx ON idx.indexrelid = con.conindid
+       WHERE COALESCE(c."FilterExpression", '') != '';
   END IF;
 
   -- Extended statistics carrying an expression: the whole column list, in the normalised live form the
@@ -132,6 +179,32 @@ BEGIN
         FROM temp_policies tp
         JOIN pg_policies pol ON pol.schemaname = tp."TableSchema" AND pol.tablename = tp."TableName" AND pol.policyname = tp."Name"
        WHERE NULLIF(TRIM(tp."WithCheckExpression"), '') IS NOT NULL AND pol.with_check IS NOT NULL;
+  END IF;
+
+  -- Partition keys and bounds, which PartitionVerify probes on a scratch copy when the declared text differs from the
+  -- engine's. A run that reaches here passed that check (it raises otherwise), so the live text is the declared one's.
+  -- Read in UTC, as PartitionVerify reads them: a timestamptz bound renders in the session's time zone.
+  -- An index-only quench builds a temp_tables with no partitioning (and a session's earlier run can leave temp_partitions).
+  IF to_regclass('pg_temp.temp_partitions') IS NOT NULL
+     AND EXISTS (SELECT 1 FROM pg_attribute WHERE attrelid = to_regclass('pg_temp.temp_tables') AND attname = 'PartitionMethod' AND NOT attisdropped) THEN
+    v_zone := current_setting('TimeZone');
+    PERFORM set_config('TimeZone', 'UTC', true);
+    INSERT INTO temp_expression_map_declared
+      SELECT k.sch, k.obj, 'PARTITION', k.obj, 'key', k.declared, pg_get_partkeydef(c.oid)
+        FROM (SELECT t."Schema" AS sch, t."Name" AS obj, t."PartitionMethod" || ' (' || t."PartitionExpression" || ')' AS declared
+                FROM temp_tables t WHERE t."PartitionMethod" <> ''
+              UNION ALL
+              SELECT p."TableSchema", p."Name", p."Method" || ' (' || p."Expression" || ')'
+                FROM temp_partitions p WHERE p."Method" <> '') k
+        JOIN pg_class c ON c.oid = to_regclass("SchemaSmith"."QuoteName"(k.sch) || '.' || "SchemaSmith"."QuoteName"(k.obj))
+       WHERE c.relkind = 'p' AND pg_get_partkeydef(c.oid) <> k.declared;
+    INSERT INTO temp_expression_map_declared
+      SELECT p."TableSchema", p."ParentName", 'PARTITION', p."Name", 'bound', p."Bound", pg_get_expr(c.relpartbound, c.oid)
+        FROM temp_partitions p
+        JOIN pg_class c ON c.oid = to_regclass("SchemaSmith"."QuoteName"(p."TableSchema") || '.' || "SchemaSmith"."QuoteName"(p."Name"))
+       WHERE c.relispartition AND NULLIF(TRIM(p."Bound"), '') IS NOT NULL
+         AND pg_get_expr(c.relpartbound, c.oid) <> p."Bound";
+    PERFORM set_config('TimeZone', v_zone, true);
   END IF;
 
   -- Say so when a re-baseline happens (Paul, 2026-09-08: "re-baseline, and say so in the log -- log the count so

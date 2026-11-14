@@ -245,4 +245,52 @@ EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @l
 
         conn.Close();
     }
+
+    // B7: a column replaced by the data-preserving swap (here, losing its IDENTITY) was rebuilt from its type alone, so
+    // its declared mask was gone until the next deploy put it back.
+    [Test]
+    public void ShouldKeepTheMaskOnAColumnReplacedBySwap()
+    {
+        var productName = Guid.NewGuid().ToString();
+        var tableName = $"SwapMask_{Guid.NewGuid().ToString("N")[..8]}";
+
+        using var conn = DbConnectionFactory.ForPlatform(Platform.SqlServer).GetDbConnection(_connectionString);
+        conn.Open();
+        conn.ChangeDatabase(_mainDb);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandTimeout = 300;
+        try
+        {
+            cmd.CommandText = $@"
+CREATE TABLE dbo.{tableName} (Id INT NOT NULL, Seq INT IDENTITY(1,1) NOT NULL)
+ALTER TABLE dbo.{tableName} ALTER COLUMN Seq ADD MASKED WITH (FUNCTION = 'default()')
+INSERT dbo.{tableName} (Id) VALUES (1)
+EXEC sp_addextendedproperty @name = N'ProductName', @value = '{productName}', @level0type = N'Schema', @level0name = 'dbo', @level1type = N'Table', @level1name = '{tableName}'
+";
+            cmd.ExecuteNonQuery();
+
+            var json = $$"""
+{
+    "Schema": "[dbo]",
+    "Name": "[{{tableName}}]",
+    "Columns": [
+        {"Name": "[Id]", "DataType": "INT", "Nullable": false},
+        {"Name": "[Seq]", "DataType": "INT", "Nullable": false, "DataMaskFunction": "default()"}
+    ]
+}
+""";
+            cmd.CommandText = $"EXEC SchemaSmith.TableQuench @ProductName = '{productName}', @TableDefinitions = '{json.Replace("'", "''")}', @DropTablesRemovedFromProduct = 0, @DropUnknownIndexes = 0";
+            TransientRetry.Run(() => cmd.ExecuteNonQuery());
+
+            cmd.CommandText = $"SELECT COLUMNPROPERTY(OBJECT_ID('dbo.{tableName}'), 'Seq', 'IsIdentity')";
+            Assert.That(Convert.ToInt32(cmd.ExecuteScalar()), Is.EqualTo(0), "setup: the column was replaced without its IDENTITY");
+            cmd.CommandText = $"SELECT masking_function FROM sys.masked_columns WHERE [object_id] = OBJECT_ID('dbo.{tableName}') AND [name] = 'Seq'";
+            Assert.That(cmd.ExecuteScalar()?.ToString(), Is.EqualTo("default()"), "the declared mask is on the replaced column");
+        }
+        finally
+        {
+            cmd.CommandText = $"DROP TABLE IF EXISTS dbo.{tableName}";
+            cmd.ExecuteNonQuery();
+        }
+    }
 }

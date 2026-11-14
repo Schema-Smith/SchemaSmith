@@ -41,6 +41,19 @@ public abstract class ForgeKindlerSharedTests
         _connection?.Dispose();
     }
 
+    // The deployment record's table is kindled with the other helper tables, with the columns the record writes.
+    [Test]
+    public void KindleTheForge_CreatesTheDeploymentHistoryTable()
+    {
+        using var command = _connection.CreateCommand();
+        command.CommandText = "SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'SchemaSmith_DeploymentHistory' ORDER BY ORDINAL_POSITION";
+        var columns = new System.Collections.Generic.List<string>();
+        using (var reader = command.ExecuteReader())
+            while (reader.Read()) columns.Add(reader.GetString(0));
+
+        Assert.That(columns, Is.EqualTo(new[] { "Id", "RunId", "Product", "Template", "SchemaName", "StartedUtc", "FinishedUtc", "Outcome", "ChangesApplied", "ToolVersion", "PackageHash", "SourceCommit", "SourceBranch", "RunLabel", "PipelineUrl", "Actor", "DeployedAs", "ResumedFromRunId" }));
+    }
+
     [Test]
     public void KindleTheForge_CreatesCompletedMigrationScriptsTable()
     {
@@ -356,6 +369,45 @@ public abstract class ForgeKindlerSharedTests
         Assert.That(command.ExecuteScalar(), Is.EqualTo(first), "Skip path must not rewrite the stamp.");
     }
 
+    // #608: a dump made without --routines (the default for mysqldump and mariadb-dump) restores the stamp table and no
+    // routine. A current stamp skipped the kindle, so every deploy failed on a missing helper until --ForceReKindle.
+    // Its own database: dropping the shared one's routines would break every fixture running beside it.
+    [Test]
+    public void Kindle_StampCurrentButTheRoutinesGone_ReKindles()
+    {
+        var db = "probe_kindle_" + System.Guid.NewGuid().ToString("N")[..8];
+        using var command = _connection.CreateCommand();
+        command.CommandText = $"CREATE DATABASE `{db}`";
+        command.ExecuteNonQuery();
+        try
+        {
+            _connection.ChangeDatabase(db);
+            ForgeKindler.KindleTheForge(command, Platform);
+            Assert.That(ForgeKindler.MissingMySqlHelperCount(command, Platform, IngestEncoding.Json), Is.Zero,
+                "after a kindle every routine the scripts create is present, so a current stamp still skips");
+
+            var routines = new List<(string Type, string Name)>();
+            command.CommandText = "SELECT ROUTINE_TYPE, ROUTINE_NAME FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE()";
+            using (var reader = command.ExecuteReader())
+                while (reader.Read()) routines.Add((reader.GetString(0), reader.GetString(1)));
+            foreach (var (type, name) in routines)
+            {
+                command.CommandText = $"DROP {type} `{name}`";
+                command.ExecuteNonQuery();
+            }
+
+            ForgeKindler.KindleTheForge(command, Platform);
+            command.CommandText = "SELECT COUNT(*) FROM information_schema.ROUTINES WHERE ROUTINE_SCHEMA = DATABASE()";
+            Assert.That(System.Convert.ToInt32(command.ExecuteScalar()), Is.EqualTo(routines.Count), "the kindle ran again and put every routine back");
+        }
+        finally
+        {
+            _connection.ChangeDatabase(MainDb);
+            command.CommandText = $"DROP DATABASE IF EXISTS `{db}`";
+            command.ExecuteNonQuery();
+        }
+    }
+
     [Test]
     public void Kindle_ForceReKindle_RewritesStamp()
     {
@@ -431,6 +483,43 @@ public abstract class ForgeKindlerSharedTests
                 $"kindling an EXISTING {table} must converge its identifier columns to a case-sensitive "
                 + "collation. Left case-insensitive, the unique key conflates two tables whose names "
                 + "differ only by case and the second one silently goes unowned.");
+        }
+        finally
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+            command.ExecuteNonQuery();
+            ForgeKindler.KindleTheForge(command, Platform, forceReKindle: true);
+        }
+    }
+
+    [Test]
+    public void KindleTheForge_LegacyNarrowOwnershipName_BootstrapWidensItToHoldATableAndAnIndexName()
+    {
+        // An ownership row names 'table.index': two 64-character names and a dot. An installation created while the
+        // column was 64 wide keeps truncating longer pairs, so a removed index under one is never matched and dropped.
+        using var freshConnection = DbConnectionFactory.ForPlatform(Platform).GetDbConnection(MainConnectionString);
+        freshConnection.Open();
+        using var command = freshConnection.CreateCommand();
+        const string table = "SchemaSmith_ProductOwnership";
+        try
+        {
+            command.CommandText = $"DROP TABLE IF EXISTS `{table}`";
+            command.ExecuteNonQuery();
+            command.CommandText = $@"
+                CREATE TABLE `{table}` (
+                    `Id` INT AUTO_INCREMENT PRIMARY KEY,
+                    `ObjectSchema` VARCHAR(64) COLLATE utf8mb4_bin NOT NULL,
+                    `ObjectName` VARCHAR(64) COLLATE utf8mb4_bin NOT NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci";
+            command.ExecuteNonQuery();
+
+            ForgeKindler.KindleTheForge(command, Platform, forceReKindle: true);
+
+            command.CommandText = $@"
+                SELECT CONCAT(CHARACTER_MAXIMUM_LENGTH, ' ', COLLATION_NAME, ' ', IS_NULLABLE)
+                  FROM INFORMATION_SCHEMA.COLUMNS
+                 WHERE TABLE_SCHEMA = '{MainDb}' AND TABLE_NAME = '{table}' AND COLUMN_NAME = 'ObjectName'";
+            Assert.That(command.ExecuteScalar()?.ToString(), Is.EqualTo("129 utf8mb4_bin NO"));
         }
         finally
         {

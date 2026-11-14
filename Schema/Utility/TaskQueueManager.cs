@@ -37,8 +37,6 @@ public class TaskQueueManager<T> : IDisposable
         _safetyNetMs = missedPulseSafetyNetMs < 1 ? 1 : missedPulseSafetyNetMs;
     }
 
-    ~TaskQueueManager() => Dispose();
-
     public void Dispose()
     {
         lock (_lockObject)
@@ -103,8 +101,8 @@ public class TaskQueueManager<T> : IDisposable
     }
 
     /// <summary>
-    /// Blocks until every queued and running task has finished, waiting <see cref="_pollMilliseconds"/>
-    /// between checks.
+    /// Blocks until every queued and running task has finished: woken when a task completes, and checking again
+    /// after <see cref="_safetyNetMs"/> in case a wake-up was missed.
     /// <para>The interval used to be a hard-coded 100ms, which put a 100ms FLOOR on any queue holding even
     /// one item, however fast the work. Measured over the 515 shipped packages, that floor was
     /// <b>135 of the 140 seconds</b> spent loading them, while the file reading it was waiting on accounted
@@ -151,7 +149,8 @@ public class TaskQueueManager<T> : IDisposable
         public void StartTask()
         {
             if (_task != null) return;
-            _task = new Task(() => workProcedure(item));
+            // A worker blocks on a database for its whole life; the pool would add such threads one per ~500 ms.
+            _task = new Task(() => workProcedure(item), TaskCreationOptions.LongRunning);
             // The continuation runs however the work ends, so TaskComplete is unconditional -- otherwise a throw
             // would leave this WorkerTask in _workingTasks forever and hang WaitForAll -- and a failure is recorded
             // before the waiter can see the queue drain.

@@ -516,7 +516,7 @@ public class DataTongsTests
         cmd.ExecuteScalar().Returns("[]");
 
         dt.GetTableDataJson(cmd, "\"id\"", "public", "users", "\"id\"", "active = true");
-        Assert.That(cmd.CommandText, Does.Contain("WHERE active = true"));
+        Assert.That(cmd.CommandText, Does.Contain("AND (active = true)"), "the filter is added to the table's own-rows condition");
     }
 
     [Test]
@@ -1250,8 +1250,7 @@ public class DataTongsTests
             // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
             if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
             if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
-            // Data delivery detects the server version (TargetVersionDetector) and probes JSON_ARRAYAGG support,
-            // both via SELECT VERSION() — return a modern MySQL version so the JSON_ARRAYAGG path is taken.
+            // Data delivery detects the server version (TargetVersionDetector) via SELECT VERSION().
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
             if (command.CommandText?.Contains("@@SESSION.time_zone") == true) return "SYSTEM";
             if (command.CommandText?.Contains("@@SESSION.sql_mode") == true) return "STRICT_TRANS_TABLES";
@@ -1294,8 +1293,8 @@ public class DataTongsTests
 
     #region CastData — below-floor source
 
-    // DataTongs used to run against a below-floor source; on MySQL 5.7.21, which lacks JSON_ARRAYAGG, it wrote nothing
-    // and still exited 0. It now refuses the source before extracting, as SchemaQuench refuses a target.
+    // DataTongs used to run against a below-floor source, write nothing and still exit 0. It refuses the source before
+    // extracting, as SchemaQuench refuses a target.
     [Test]
     public void CastData_MySqlSourceBelowTheFloor_IsRefusedBeforeExtracting()
     {
@@ -1319,7 +1318,7 @@ public class DataTongsTests
 
         connectionFactory.GetDbConnection(Arg.Any<string>()).Returns(connection);
         connection.CreateCommand().Returns(command);
-        command.ExecuteScalar().Returns(_ => command.CommandText?.Contains("VERSION()") == true ? "5.7.21" : null);
+        command.ExecuteScalar().Returns(_ => command.CommandText?.Contains("VERSION()") == true ? "5.7.15" : null);
 
         lock (FactoryContainer.SharedLockObject)
         {
@@ -1332,7 +1331,7 @@ public class DataTongsTests
             {
                 var dt = new global::DataTongs.DataTongs(Platform.MySQL);
                 var ex = Assert.Throws<RunFailedException>(() => dt.CastData());
-                Assert.That(ex!.Message, Does.Contain("5.7.21").And.Contain("5.7.22"));
+                Assert.That(ex!.Message, Does.Contain("5.7.15").And.Contain("5.7.16"));
                 fileWrapper.DidNotReceive().WriteAllText(Arg.Any<string>(), Arg.Any<string>());
             }
             finally
@@ -1659,7 +1658,7 @@ public class DataTongsTests
             // The source-version probe (encoding choice) is answered by text so it does not shift the sequence.
             if (command.CommandText?.Contains("CONVERT(varchar(50), SERVERPROPERTY") == true) return "16.0.1000.6";
             if (command.CommandText?.Contains("FROM sys.databases WHERE name = N'") == true) return 160;
-            // Data delivery detects the server version and probes JSON_ARRAYAGG support, both via SELECT VERSION().
+            // Data delivery detects the server version via SELECT VERSION().
             if (command.CommandText?.Contains("VERSION()") == true) return "8.0.36";
             if (command.CommandText?.Contains("@@SESSION.time_zone") == true) return "SYSTEM";
             if (command.CommandText?.Contains("@@SESSION.sql_mode") == true) return "STRICT_TRANS_TABLES";
@@ -1705,13 +1704,13 @@ public class DataTongsTests
     [Test]
     public void XmlFragment_NormalColumn_ConvertsToText()
     {
-        Assert.That(Fragment("Amount", "decimal"), Is.EqualTo("('Amount', CONVERT(NVARCHAR(MAX), t.[Amount]))"));
+        Assert.That(Fragment("Amount", "decimal"), Is.EqualTo("(N'Amount', CONVERT(NVARCHAR(MAX), t.[Amount]))"));
     }
 
     [Test]
     public void XmlFragment_Datetime_UsesIso8601Style126()
     {
-        Assert.That(Fragment("When", "datetime2"), Is.EqualTo("('When', CONVERT(NVARCHAR(MAX), t.[When], 126))"));
+        Assert.That(Fragment("When", "datetime2"), Is.EqualTo("(N'When', CONVERT(NVARCHAR(MAX), t.[When], 126))"));
     }
 
     [Test]
@@ -1725,8 +1724,8 @@ public class DataTongsTests
     public void XmlFragment_Geometry_EmitsWktPlusSridCompanion()
     {
         var frag = Fragment("Shape", "geometry");
-        Assert.That(frag, Does.Contain("('Shape', t.[Shape].AsTextZM())"));
-        Assert.That(frag, Does.Contain("('Shape.STSrid', CONVERT(NVARCHAR(MAX), t.[Shape].STSrid))"));
+        Assert.That(frag, Does.Contain("(N'Shape', t.[Shape].AsTextZM())"));
+        Assert.That(frag, Does.Contain("(N'Shape.STSrid', CONVERT(NVARCHAR(MAX), t.[Shape].STSrid))"));
     }
 
     [Test]
@@ -1734,7 +1733,7 @@ public class DataTongsTests
     {
         // A quote in the name is doubled for the SQL string literal; a bracket is doubled for the identifier.
         Assert.That(Fragment("O'Brien]col", "int"),
-            Is.EqualTo("('O''Brien]col', CONVERT(NVARCHAR(MAX), t.[O'Brien]]col]))"));
+            Is.EqualTo("(N'O''Brien]col', CONVERT(NVARCHAR(MAX), t.[O'Brien]]col]))"));
     }
 
     [Test]
@@ -1744,6 +1743,28 @@ public class DataTongsTests
         Assert.That(global::DataTongs.DataTongs.CountXmlRows(xml), Is.EqualTo(2));
         Assert.That(global::DataTongs.DataTongs.CountXmlRows("<rows></rows>"), Is.EqualTo(0));
         Assert.That(global::DataTongs.DataTongs.CountXmlRows(""), Is.EqualTo(0));
+    }
+
+    // B23: the names a DataTongs select list produces, whether an item is a bare column or an aliased conversion.
+    // The list DataTongs writes reads back as the same names on deploy, a name with a comma in it included.
+    [TestCase(Schema.Domain.Platform.SqlServer)]
+    [TestCase(Schema.Domain.Platform.PostgreSQL)]
+    [TestCase(Schema.Domain.Platform.MySQL)]
+    public void SelectListNames_ReadBackOnDeploy_AsTheSameNames(Schema.Domain.Platform platform)
+    {
+        var written = global::DataTongs.DataTongs.SelectListNames("[Id],[Last, First],[We]]ird]", platform);
+        Assert.That(Schema.Utility.MergeScriptHelper.DeclaredColumnNames(written, platform), Is.EqualTo(new[] { "Id", "Last, First", "We]ird" }), written);
+    }
+
+    [Test]
+    public void SelectListNames_ReadsEachItemsOutputName()
+    {
+        Assert.Multiple(() =>
+        {
+            Assert.That(global::DataTongs.DataTongs.SelectListNames("[Id],[Shape].ToString() AS [Shape], [Shape].STSrid AS [Shape.STSrid],[We]]ird]"),
+                Is.EqualTo("Id,Shape,Shape.STSrid,We]ird"));
+            Assert.That(global::DataTongs.DataTongs.SelectListNames(""), Is.Null);
+        });
     }
 
     #endregion

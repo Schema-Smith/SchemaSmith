@@ -838,10 +838,7 @@ public abstract class TableDataDeliverySharedTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform };
-                var quench = new DatabaseQuench("127.0.0.1", product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);
@@ -934,10 +931,7 @@ public abstract class TableDataDeliverySharedTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform };
-                var quench = new DatabaseQuench("127.0.0.1", product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 // "Continues" now means "delivers what it can, then fails the run" (#334):
@@ -1004,10 +998,7 @@ public abstract class TableDataDeliverySharedTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform };
-                var quench = new DatabaseQuench("127.0.0.1", product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.False, "a failed DataDelivery must fail the quench");
@@ -1137,10 +1128,7 @@ public abstract class TableDataDeliverySharedTests
 
                 // updateTables: true so ForeignKeyQuench runs after data delivery
                 var product = new Product { Name = "TestProduct", Platform = Platform };
-                var quench = new DatabaseQuench("127.0.0.1", product, template, _testDb,
-                    suppressKindling: false, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: true,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = _testDb, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);
@@ -1231,10 +1219,7 @@ public abstract class TableDataDeliverySharedTests
 
                 bool Deploy()
                 {
-                    var quench = new DatabaseQuench("127.0.0.1", new Product { Name = "TestProduct", Platform = Platform }, template, _testDb,
-                        suppressKindling: false, whatIfOnly: "0", runScriptsTwice: false,
-                        dropRemovedTables: "0", dropRemovedColumns: "0", dropRemovedForeignKeys: "0", dropRemovedCheckConstraints: "0", dropRemovedExcludeConstraints: "0", dropRemovedStatistics: "0", dropRemovedIndexes: "0", dropUnknownIndexes: false, updateTables: false,
-                        deliverData: true, checkpointing: new FileCheckpointManager(Path.Join(checkpointDir, Guid.NewGuid().ToString("N"))));
+                    var quench = new DatabaseQuench(new Product { Name = "TestProduct", Platform = Platform }, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = _testDb, UpdateTables = false }, new FileCheckpointManager(Path.Join(checkpointDir, Guid.NewGuid().ToString("N"))));
                     quench.Execute();
                     return quench.QuenchSuccessful;
                 }
@@ -1275,10 +1260,10 @@ public abstract class TableDataDeliverySharedTests
 
     // A mixed-case parent must still be found where the server folds table names and reports them in lowercase.
     // WhatIf must refuse it too: a preview that passes where the deploy aborts is the wrong preview.
-    [TestCase("_test_rparent_", "0")]
-    [TestCase("_Test_RParent_", "0")]
-    [TestCase("_test_rparent_", "1")]
-    public void DeliverTableData_ViaQuench_FailsFastOnReplaceCascade(string parentPrefix, string whatIf)
+    [TestCase("_test_rparent_", false)]
+    [TestCase("_Test_RParent_", false)]
+    [TestCase("_test_rparent_", true)]
+    public void DeliverTableData_ViaQuench_FailsFastOnReplaceCascade(string parentPrefix, bool whatIf)
     {
         if (!SupportsDataDelivery)
             Assert.Ignore("Data delivery requires MySQL 8.0; skipped below the floor.");
@@ -1342,10 +1327,7 @@ public abstract class TableDataDeliverySharedTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform };
-                var quench = new DatabaseQuench("127.0.0.1", product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: whatIf, runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = _testDb, SuppressKindling = true, WhatIf = whatIf, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.False, "Should fail due to Insert/Update/Delete+CASCADE");
@@ -1414,10 +1396,7 @@ public abstract class TableDataDeliverySharedTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform };
-                var quench = new DatabaseQuench("127.0.0.1", product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);
@@ -1475,10 +1454,7 @@ public abstract class TableDataDeliverySharedTests
                 LogFactory.Register("ProgressLog", progressLog);
 
                 var product = new Product { Name = "TestProduct", Platform = Platform };
-                var quench = new DatabaseQuench("127.0.0.1", product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);
@@ -1548,10 +1524,7 @@ public abstract class TableDataDeliverySharedTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform };
-                var quench = new DatabaseQuench("127.0.0.1", product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);
@@ -1632,10 +1605,7 @@ public abstract class TableDataDeliverySharedTests
                 RegisterTargetConfig();
 
                 var product = new Product { Name = "TestProduct", Platform = Platform };
-                var quench = new DatabaseQuench("127.0.0.1", product, template, _testDb,
-                    suppressKindling: true, whatIfOnly: "0", runScriptsTwice: false,
-                    dropRemovedTables: "0", dropRemovedColumns: "1", dropRemovedForeignKeys: "1", dropRemovedCheckConstraints: "1", dropRemovedExcludeConstraints: "1", dropRemovedStatistics: "1", dropRemovedIndexes: "1", dropUnknownIndexes: false, updateTables: false,
-                    deliverData: true, checkpointing: new FileCheckpointManager(checkpointDir));
+                var quench = new DatabaseQuench(product, template, new DatabaseQuenchOptions { Server = "127.0.0.1", DatabaseName = _testDb, SuppressKindling = true, UpdateTables = false, Drops = new DropPolicy(Columns: true, ForeignKeys: true, CheckConstraints: true, ExcludeConstraints: true, Statistics: true, Indexes: true) }, new FileCheckpointManager(checkpointDir));
                 quench.Execute();
 
                 Assert.That(quench.QuenchSuccessful, Is.True);
